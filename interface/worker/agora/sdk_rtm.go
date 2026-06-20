@@ -11,11 +11,12 @@ import (
 )
 
 type sdkDataPublisher struct {
-	channel string
-	client  *agorartm.IRtmClient
-	mu      sync.Mutex
-	closed  bool
-	handler DataMessageHandler
+	channel   string
+	client    *agorartm.IRtmClient
+	mu        sync.Mutex
+	callbacks sync.WaitGroup
+	closed    bool
+	handler   DataMessageHandler
 }
 
 func NewSDKDataPublisher(opts Options) (DataPublisher, error) {
@@ -74,16 +75,20 @@ func (p *sdkDataPublisher) handleMessageEvent(event *agorartm.MessageEvent) {
 	if p == nil || event == nil {
 		return
 	}
-	if event.ChannelName != p.channel {
+	if !acceptChannel(p.channel, event.ChannelName) {
 		return
 	}
 	p.mu.Lock()
 	handler := p.handler
 	closed := p.closed
+	if handler != nil && !closed {
+		p.callbacks.Add(1)
+	}
 	p.mu.Unlock()
 	if handler == nil || closed {
 		return
 	}
+	defer p.callbacks.Done()
 	_ = handler(context.Background(), DataMessage{
 		Channel:   event.ChannelName,
 		Publisher: event.Publisher,
@@ -164,5 +169,6 @@ func (p *sdkDataPublisher) Close(context.Context) error {
 	client := p.client
 	channel := p.channel
 	p.mu.Unlock()
+	p.callbacks.Wait()
 	return closeRTMClient(sdkRTMLifecycleClient{client: client}, channel)
 }

@@ -701,11 +701,11 @@ func DefaultConfigFromEnv() AppConfig {
 		Agora: workeragora.Options{
 			AppID:          strings.TrimSpace(os.Getenv("AGORA_APP_ID")),
 			AppCertificate: strings.TrimSpace(os.Getenv("AGORA_APP_CERTIFICATE")),
-			Channel:        strings.TrimSpace(os.Getenv("AGORA_CHANNEL")),
-			UID:            firstTrimmedEnv("AGORA_UID", "AGORA_STREAM_ID"),
-			RemoteStreamID: strings.TrimSpace(os.Getenv("AGORA_REMOTE_STREAM_ID")),
+			Channel:        firstTrimmedEnv("AGORA_CHANNEL", "AGORA_CHANNEL_NAME"),
+			UID:            firstTrimmedEnv("AGORA_UID", "AGORA_STREAM_ID", "AGORA_BOT_UID"),
+			RemoteStreamID: firstTrimmedEnv("AGORA_REMOTE_STREAM_ID", "AGORA_USER_UID"),
 			Token:          strings.TrimSpace(os.Getenv("AGORA_TOKEN")),
-			RTMUserID:      strings.TrimSpace(os.Getenv("AGORA_RTM_USER_ID")),
+			RTMUserID:      firstTrimmedEnv("AGORA_RTM_USER_ID", "AGORA_STREAM_ID", "AGORA_BOT_UID"),
 			RTMToken:       strings.TrimSpace(os.Getenv("AGORA_RTM_TOKEN")),
 			PublishAudio:   getenvOptionalBool("AGORA_PUBLISH_AUDIO"),
 			SubscribeAudio: getenvOptionalBool("AGORA_SUBSCRIBE_AUDIO"),
@@ -1178,6 +1178,7 @@ func (a *App) runAgora(ctx context.Context) error {
 	audioInput := workeragora.NewAudioInput(runCtx, a.Session)
 	transport.SetAudioHandler(audioInput.HandleAudioFrame)
 	agoraEvents := &agoraRuntimeEventHandler{
+		ctx:      runCtx,
 		session:  a.Session,
 		greeting: a.Config.AgoraGreeting,
 	}
@@ -1199,7 +1200,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		var dataSubscriber workeragora.DataMessageSubscriber
 		if subscriber, ok := dataPublisher.(workeragora.DataMessageSubscriber); ok {
 			dataSubscriber = subscriber
-			installAgoraRTMDataMessageHandler(dataSubscriber, a.Session, dataOpts.UID)
+			installAgoraRTMDataMessageHandler(runCtx, dataSubscriber, a.Session, dataOpts.UID)
 		}
 		transcriptForwarder.Start(runCtx)
 		defer func() {
@@ -1246,7 +1247,7 @@ func (a *App) runAgora(ctx context.Context) error {
 		}
 		return err
 	}
-	agoraEvents.FlushPendingGreeting(context.Background())
+	agoraEvents.FlushPendingGreeting(runCtx)
 	<-runCtx.Done()
 	return runContextErr(runCtx)
 }
@@ -1258,9 +1259,19 @@ func runContextErr(ctx context.Context) error {
 	return ctx.Err()
 }
 
-func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string) {
+func normalizeAgoraRuntimeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func installAgoraRTMDataMessageHandler(ctx context.Context, subscriber workeragora.DataMessageSubscriber, responder workeragora.TextResponder, agentUserID string) {
 	if subscriber == nil {
 		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	router := workeragora.RTMMessageRouter{
 		AgentUserID: agentUserID,
@@ -1271,7 +1282,19 @@ func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscri
 			return nil
 		},
 	}
-	subscriber.SetDataMessageHandler(func(ctx context.Context, msg workeragora.DataMessage) error {
+	subscriber.SetDataMessageHandler(func(callbackCtx context.Context, msg workeragora.DataMessage) error {
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if callbackCtx != nil {
+			select {
+			case <-callbackCtx.Done():
+				return nil
+			default:
+			}
+		}
 		if err := router.HandleDataMessage(ctx, msg); err != nil {
 			logutil.Logger.Warnw("failed to handle Agora RTM data message", err, "channel", msg.Channel, "publisher", msg.Publisher)
 		}
@@ -1280,6 +1303,7 @@ func installAgoraRTMDataMessageHandler(subscriber workeragora.DataMessageSubscri
 }
 
 type agoraRuntimeEventHandler struct {
+	ctx                       context.Context
 	session                   *agent.AgentSession
 	greeting                  string
 	publishGreetingTranscript func(context.Context, string) error
@@ -1294,11 +1318,17 @@ func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
 	}
 	switch event.Kind {
 	case workeragora.EventUserJoined:
+		ctx := normalizeAgoraRuntimeContext(h.ctx)
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		h.mu.Lock()
 		h.users++
 		shouldGreet := h.users == 1 && h.greeting != "" && h.session != nil
 		h.mu.Unlock()
-		if shouldGreet && !h.sayAndPublishGreeting(context.Background(), event) {
+		if shouldGreet && !h.sayAndPublishGreeting(ctx, event) {
 			h.mu.Lock()
 			h.pendingGreeting = true
 			h.mu.Unlock()
@@ -1323,6 +1353,12 @@ func (h *agoraRuntimeEventHandler) Handle(event workeragora.Event) {
 func (h *agoraRuntimeEventHandler) FlushPendingGreeting(ctx context.Context) {
 	if h == nil {
 		return
+	}
+	ctx = normalizeAgoraRuntimeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return
+	default:
 	}
 	h.mu.Lock()
 	pending := h.pendingGreeting

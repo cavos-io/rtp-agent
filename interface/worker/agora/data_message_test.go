@@ -60,11 +60,11 @@ func TestRTMMessageRouterDispatchesEmptyInputText(t *testing.T) {
 	}
 }
 
-func TestRTMMessageRouterIgnoresTypeOnlyInputText(t *testing.T) {
-	calls := 0
+func TestRTMMessageRouterDispatchesTypeOnlyInputText(t *testing.T) {
+	var got TextInputEvent
 	router := RTMMessageRouter{
 		TextInput: func(_ context.Context, ev TextInputEvent) error {
-			calls++
+			got = ev
 			return nil
 		},
 	}
@@ -77,8 +77,11 @@ func TestRTMMessageRouterIgnoresTypeOnlyInputText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
 	}
-	if calls != 0 {
-		t.Fatal("type-only RTM message was dispatched; want TEN data_type contract")
+	if got.Text != "hello from ten" || got.Publisher != "caller-7" || got.Channel != "support" {
+		t.Fatalf("TextInputEvent = %#v, want TEN frontend type input_text event", got)
+	}
+	if got.StreamID != "0" {
+		t.Fatalf("StreamID = %q, want TEN default stream id 0", got.StreamID)
 	}
 }
 
@@ -151,6 +154,28 @@ func TestRTMMessageRouterIgnoresSelfPublisher(t *testing.T) {
 	}
 }
 
+func TestRTMMessageRouterIgnoresTrimmedSelfPublisher(t *testing.T) {
+	called := false
+	router := RTMMessageRouter{
+		AgentUserID: " agent-rtm ",
+		TextInput: func(context.Context, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+
+	err := router.HandleDataMessage(context.Background(), DataMessage{
+		Publisher: " agent-rtm ",
+		Payload:   []byte(`{"data_type":"input_text","text":"loop"}`),
+	})
+	if err != nil {
+		t.Fatalf("HandleDataMessage() error = %v, want nil", err)
+	}
+	if called {
+		t.Fatal("trimmed self-published RTM message was dispatched")
+	}
+}
+
 func TestRTMMessageRouterIgnoresNonInputText(t *testing.T) {
 	called := false
 	router := RTMMessageRouter{
@@ -211,6 +236,30 @@ func TestRTMMessageRouterIgnoresEmptyPayload(t *testing.T) {
 	}
 	if called {
 		t.Fatal("empty RTM message was dispatched")
+	}
+}
+
+func TestRTMMessageRouterStopsOnCanceledContextBeforeDispatch(t *testing.T) {
+	called := false
+	router := RTMMessageRouter{
+		TextInput: func(context.Context, TextInputEvent) error {
+			called = true
+			return nil
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := router.HandleDataMessage(ctx, DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"late turn"}`),
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("HandleDataMessage() error = %v, want context canceled", err)
+	}
+	if called {
+		t.Fatal("canceled RTM message was dispatched")
 	}
 }
 
@@ -286,6 +335,23 @@ func TestHandleTextInputEventIgnoresEmptyText(t *testing.T) {
 	}
 	if got := responder.calls; len(got) != 0 {
 		t.Fatalf("calls after direct empty input = %#v, want still ignored", got)
+	}
+}
+
+func TestHandleTextInputEventStopsOnCanceledContextBeforeSideEffects(t *testing.T) {
+	responder := &recordingTextResponder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := HandleTextInputEvent(ctx, responder, TextInputEvent{Text: "hello"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("HandleTextInputEvent() error = %v, want context canceled", err)
+	}
+	if got := responder.calls; len(got) != 0 {
+		t.Fatalf("calls = %#v, want canceled text turn to skip interrupt/generate/transcript", got)
+	}
+	if responder.claimed {
+		t.Fatal("HandleTextInputEvent() claimed user turn after context canceled")
 	}
 }
 

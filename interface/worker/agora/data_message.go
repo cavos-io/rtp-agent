@@ -38,7 +38,13 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	if r.TextInput == nil {
 		return nil
 	}
-	if strings.TrimSpace(r.AgentUserID) != "" && msg.Publisher == strings.TrimSpace(r.AgentUserID) {
+	ctx = normalizeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	if agentUserID := strings.TrimSpace(r.AgentUserID); agentUserID != "" && strings.TrimSpace(msg.Publisher) == agentUserID {
 		return nil
 	}
 	if strings.TrimSpace(string(msg.Payload)) == "" {
@@ -46,15 +52,20 @@ func (r RTMMessageRouter) HandleDataMessage(ctx context.Context, msg DataMessage
 	}
 	var payload struct {
 		DataType string `json:"data_type"`
+		Type     string `json:"type"`
 		Text     string `json:"text"`
 	}
 	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 		return err
 	}
-	if payload.DataType != "input_text" {
+	messageType := payload.DataType
+	if messageType == "" {
+		messageType = payload.Type
+	}
+	if messageType != "input_text" {
 		return nil
 	}
-	return r.TextInput(normalizeContext(ctx), TextInputEvent{
+	return r.TextInput(ctx, TextInputEvent{
 		Text:      payload.Text,
 		StreamID:  defaultRTMStreamID(""),
 		Channel:   msg.Channel,
@@ -83,6 +94,12 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 	if responder == nil {
 		return nil
 	}
+	ctx = normalizeContext(ctx)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	if ev.Text == "" {
 		return nil
 	}
@@ -104,9 +121,9 @@ func HandleTextInputEvent(ctx context.Context, responder TextResponder, ev TextI
 		return nil
 	}
 	if claimer, ok := responder.(TextTurnClaimer); ok {
-		return claimer.ClaimUserTurn(normalizeContext(ctx), run)
+		return claimer.ClaimUserTurn(ctx, run)
 	}
-	return run(normalizeContext(ctx))
+	return run(ctx)
 }
 
 func defaultRTMStreamID(streamID string) string {

@@ -213,7 +213,22 @@ func TestAcceptRemoteStreamMatchesConfiguredStream(t *testing.T) {
 	if !acceptRemoteStream("caller-1", "caller-1") {
 		t.Fatal("acceptRemoteStream(caller-1, caller-1) = false, want true")
 	}
+	if !acceptRemoteStream(" caller-1 ", " caller-1 ") {
+		t.Fatal("acceptRemoteStream(trimmed caller-1, trimmed caller-1) = false, want true")
+	}
 	if acceptRemoteStream("caller-1", "caller-2") {
 		t.Fatal("acceptRemoteStream(caller-1, caller-2) = true, want false")
+	}
+}
+
+func TestAcceptChannelMatchesConfiguredChannel(t *testing.T) {
+	if !acceptChannel("support", "") {
+		t.Fatal("acceptChannel(support, empty) = false, want true for SDK callbacks without channel metadata")
+	}
+	if !acceptChannel(" support ", "support") {
+		t.Fatal("acceptChannel(trimmed support, support) = false, want true")
+	}
+	if acceptChannel("support", "sales") {
+		t.Fatal("acceptChannel(support, sales) = true, want false")
 	}
 }

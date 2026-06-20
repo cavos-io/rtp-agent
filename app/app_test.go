@@ -138,6 +138,11 @@ type fakeAppAgoraDataPublisher struct {
 	handler   workeragora.DataMessageHandler
 }
 
+func appAgoraRTMDisabled() *bool {
+	value := false
+	return &value
+}
+
 func (f *fakeAppAgoraDataPublisher) PublishData(_ context.Context, payload []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -704,6 +709,17 @@ func TestDefaultConfigFromEnvConfiguresAgoraWorkerTransport(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvUsesAgoraChannelNameFallback(t *testing.T) {
+	unsetEnvForTest(t, "AGORA_CHANNEL")
+	t.Setenv("AGORA_CHANNEL_NAME", " support-room ")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.Agora.Channel != "support-room" {
+		t.Fatalf("Agora.Channel = %q, want AGORA_CHANNEL_NAME fallback", cfg.Agora.Channel)
+	}
+}
+
 func TestDefaultConfigFromEnvUsesAgoraStreamIDAsUIDFallback(t *testing.T) {
 	unsetEnvForTest(t, "AGORA_UID")
 	t.Setenv("AGORA_STREAM_ID", " 1234 ")
@@ -723,6 +739,45 @@ func TestDefaultConfigFromEnvPrefersAgoraUIDOverStreamID(t *testing.T) {
 
 	if cfg.Agora.UID != "agent-42" {
 		t.Fatalf("Agora.UID = %q, want AGORA_UID override", cfg.Agora.UID)
+	}
+}
+
+func TestDefaultConfigFromEnvUsesAgoraStreamIDAsRTMUserFallback(t *testing.T) {
+	unsetEnvForTest(t, "AGORA_RTM_USER_ID")
+	t.Setenv("AGORA_UID", " agent-42 ")
+	t.Setenv("AGORA_STREAM_ID", " 1234 ")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.Agora.RTMUserID != "1234" {
+		t.Fatalf("Agora.RTMUserID = %q, want AGORA_STREAM_ID fallback", cfg.Agora.RTMUserID)
+	}
+}
+
+func TestDefaultConfigFromEnvUsesAgoraBotUIDAsStreamFallback(t *testing.T) {
+	unsetEnvForTest(t, "AGORA_UID")
+	unsetEnvForTest(t, "AGORA_RTM_USER_ID")
+	unsetEnvForTest(t, "AGORA_STREAM_ID")
+	t.Setenv("AGORA_BOT_UID", " 4321 ")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.Agora.UID != "4321" {
+		t.Fatalf("Agora.UID = %q, want AGORA_BOT_UID fallback", cfg.Agora.UID)
+	}
+	if cfg.Agora.RTMUserID != "4321" {
+		t.Fatalf("Agora.RTMUserID = %q, want AGORA_BOT_UID fallback", cfg.Agora.RTMUserID)
+	}
+}
+
+func TestDefaultConfigFromEnvUsesAgoraUserUIDAsRemoteStreamFallback(t *testing.T) {
+	unsetEnvForTest(t, "AGORA_REMOTE_STREAM_ID")
+	t.Setenv("AGORA_USER_UID", " 5678 ")
+
+	cfg := DefaultConfigFromEnv()
+
+	if cfg.Agora.RemoteStreamID != "5678" {
+		t.Fatalf("Agora.RemoteStreamID = %q, want AGORA_USER_UID fallback", cfg.Agora.RemoteStreamID)
 	}
 }
 
@@ -764,10 +819,11 @@ func TestAppRunUsesAgoraTransportWhenConfigured(t *testing.T) {
 			Transport: worker.WorkerTransportAgora,
 		},
 		Agora: workeragora.Options{
-			AppID:   "app",
-			Channel: "support",
-			UID:     "agent",
-			Token:   "token",
+			AppID:      "app",
+			Channel:    "support",
+			UID:        "agent",
+			Token:      "token",
+			RTMEnabled: appAgoraRTMDisabled(),
 		},
 	})
 	if err != nil {
@@ -854,10 +910,11 @@ func TestRunAgoraLogsConnectedTransportEvent(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -943,10 +1000,11 @@ func TestRunAgoraSaysGreetingWhenFirstParticipantJoins(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 			AgoraGreeting: "TEN Agent connected. How can I help you today?",
 		},
@@ -1206,6 +1264,42 @@ func TestAgoraRuntimeEventHandlerCancelsPendingGreetingWhenUserLeaves(t *testing
 	}
 }
 
+func TestAgoraRuntimeEventHandlerDropsGreetingAfterContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	session.Assistant = &fakeAppSessionAssistant{}
+	session.TTS = &fakeAppTTS{}
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("session.Start() error = %v", err)
+	}
+	t.Cleanup(func() { session.Shutdown() })
+	speechEvents := session.SpeechCreatedEvents()
+	published := make(chan string, 1)
+	handler := &agoraRuntimeEventHandler{
+		ctx:      ctx,
+		session:  session,
+		greeting: "TEN Agent connected. How can I help you today?",
+		publishGreetingTranscript: func(_ context.Context, text string) error {
+			published <- text
+			return nil
+		},
+	}
+
+	handler.Handle(workeragora.Event{Kind: workeragora.EventUserJoined, Channel: "support", UserID: "caller-1"})
+
+	select {
+	case ev := <-speechEvents:
+		t.Fatalf("Handle() emitted greeting speech after runtime context canceled: %#v", ev)
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case text := <-published:
+		t.Fatalf("Handle() published greeting transcript after runtime context canceled: %q", text)
+	default:
+	}
+}
+
 func TestRunAgoraStopsSessionOnTransportDisconnect(t *testing.T) {
 	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
 	oldNewAgoraChannelClient := appNewAgoraChannelClient
@@ -1221,10 +1315,11 @@ func TestRunAgoraStopsSessionOnTransportDisconnect(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1290,10 +1385,11 @@ func TestRunAgoraWaitsForDisconnectEventOnShutdown(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1367,10 +1463,11 @@ func TestRunAgoraLogsJoinErrorTransportEvent(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1431,10 +1528,11 @@ func TestRunAgoraDoesNotLeaveChannelWhenJoinFailsBeforeStart(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1470,10 +1568,11 @@ func TestRunAgoraPublishesAssistantAudioToChannel(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -1625,6 +1724,79 @@ func TestRunAgoraPublishesTranscriptDataWhenPublishDataEnabled(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAgora() did not publish transcript data")
+	}
+
+	cancel()
+	select {
+	case err := <-doneCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runAgora() error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not return after cancellation")
+	}
+	if !dataPublisher.isClosed() {
+		t.Fatal("data publisher was not closed")
+	}
+}
+
+func TestRunAgoraPublishesTranscriptDataWithDefaultRTMEnabled(t *testing.T) {
+	client := &fakeAppAgoraChannelClient{joinedCh: make(chan struct{}, 1)}
+	dataPublisher := &fakeAppAgoraDataPublisher{published: make(chan []byte, 1)}
+	oldNewAgoraChannelClient := appNewAgoraChannelClient
+	appNewAgoraChannelClient = func() (workeragora.ChannelClient, error) {
+		return client, nil
+	}
+	oldNewAgoraDataPublisher := appNewAgoraDataPublisher
+	appNewAgoraDataPublisher = func(workeragora.Options) (workeragora.DataPublisher, error) {
+		return dataPublisher, nil
+	}
+	t.Cleanup(func() {
+		appNewAgoraChannelClient = oldNewAgoraChannelClient
+		appNewAgoraDataPublisher = oldNewAgoraDataPublisher
+	})
+
+	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
+	rtpApp := &App{
+		Session: session,
+		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
+		Config: AppConfig{
+			Agora: workeragora.Options{
+				AppID:          "app",
+				Channel:        "support",
+				UID:            "agent",
+				RemoteStreamID: "caller-7",
+				Token:          "token",
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- rtpApp.runAgora(ctx)
+	}()
+
+	select {
+	case <-client.joinedCh:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not join Agora channel")
+	}
+	if dataPublisher.dataHandler() == nil {
+		t.Fatal("runAgora() did not subscribe to default Agora RTM data messages")
+	}
+
+	session.EmitUserInputTranscribed(agent.UserInputTranscribedEvent{
+		Transcript: "default rtm",
+		IsFinal:    true,
+		CreatedAt:  time.UnixMilli(1710000000789),
+	})
+
+	select {
+	case <-dataPublisher.published:
+	case <-time.After(time.Second):
+		t.Fatal("runAgora() did not publish transcript data with default RTM enabled")
 	}
 
 	cancel()
@@ -2050,7 +2222,7 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{}
 
-	installAgoraRTMDataMessageHandler(dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {
@@ -2059,14 +2231,19 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	err := handler(context.Background(), workeragora.DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
-		Payload:   []byte(`{"type":"input_text","text":"wrong discriminator"}`),
+		Payload:   []byte(`{"type":"input_text","text":"hello from TEN frontend"}`),
 	})
 	if err != nil {
-		t.Fatalf("type-only RTM data handler error = %v, want nil ignored", err)
+		t.Fatalf("type-only RTM data handler error = %v, want nil", err)
 	}
-	if len(responder.calls) != 0 || len(responder.userTranscripts) != 0 {
-		t.Fatalf("type-only RTM payload entered text turn: calls=%#v transcripts=%#v", responder.calls, responder.userTranscripts)
+	if got := strings.Join(responder.calls, ","); got != "claim,interrupt:false,generate:hello from TEN frontend" {
+		t.Fatalf("responder calls after type-only payload = %q, want TEN frontend input_text dispatch", got)
 	}
+	if len(responder.userTranscripts) != 1 || responder.userTranscripts[0].Transcript != "hello from TEN frontend" {
+		t.Fatalf("user transcripts after type-only payload = %#v, want TEN frontend input transcript", responder.userTranscripts)
+	}
+	responder.calls = nil
+	responder.userTranscripts = nil
 	err = handler(context.Background(), workeragora.DataMessage{
 		Channel:   "support",
 		Publisher: "caller-7",
@@ -2090,6 +2267,31 @@ func TestInstallAgoraRTMDataMessageHandlerDispatchesInputText(t *testing.T) {
 	}
 }
 
+func TestInstallAgoraRTMDataMessageHandlerDropsAfterRuntimeContextCanceled(t *testing.T) {
+	dataPublisher := &fakeAppAgoraDataPublisher{}
+	responder := &recordingAppTextResponder{}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	installAgoraRTMDataMessageHandler(ctx, dataPublisher, responder, "agent-rtm")
+
+	handler := dataPublisher.dataHandler()
+	if handler == nil {
+		t.Fatal("installAgoraRTMDataMessageHandler() did not install handler")
+	}
+	cancel()
+	err := handler(context.Background(), workeragora.DataMessage{
+		Channel:   "support",
+		Publisher: "caller-7",
+		Payload:   []byte(`{"data_type":"input_text","text":"hello from chat"}`),
+	})
+	if err != nil {
+		t.Fatalf("RTM data handler error = %v, want nil after runtime cancellation", err)
+	}
+	if len(responder.calls) != 0 || len(responder.userTranscripts) != 0 {
+		t.Fatalf("canceled RTM callback entered text turn: calls=%#v transcripts=%#v", responder.calls, responder.userTranscripts)
+	}
+}
+
 func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) {
 	previousLogger := logutil.Logger
 	recorder := &appRecordingLogger{entriesCh: make(chan appLogEntry, 8)}
@@ -2101,7 +2303,7 @@ func TestInstallAgoraRTMDataMessageHandlerLogsTextInputErrorsOnce(t *testing.T) 
 	dataPublisher := &fakeAppAgoraDataPublisher{}
 	responder := &recordingAppTextResponder{err: errors.New("interrupt failed")}
 
-	installAgoraRTMDataMessageHandler(dataPublisher, responder, "agent-rtm")
+	installAgoraRTMDataMessageHandler(context.Background(), dataPublisher, responder, "agent-rtm")
 
 	handler := dataPublisher.dataHandler()
 	if handler == nil {
@@ -2156,6 +2358,7 @@ func TestRunAgoraDoesNotWireAssistantAudioWhenPublishDisabled(t *testing.T) {
 				UID:          "agent",
 				Token:        "token",
 				PublishAudio: &disabled,
+				RTMEnabled:   appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -2210,9 +2413,10 @@ func TestRunAgoraForwardsChannelAudioToSession(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -2286,6 +2490,7 @@ func TestRunAgoraDoesNotForwardChannelAudioWhenSubscribeDisabled(t *testing.T) {
 				UID:            "agent",
 				Token:          "token",
 				SubscribeAudio: &disabled,
+				RTMEnabled:     appAgoraRTMDisabled(),
 			},
 		},
 	}
@@ -2336,10 +2541,11 @@ func TestRunAgoraStartsSessionWithWorkerContext(t *testing.T) {
 		Server:  worker.NewAgentServer(worker.WorkerOptions{}),
 		Config: AppConfig{
 			Agora: workeragora.Options{
-				AppID:   "app",
-				Channel: "support",
-				UID:     "agent",
-				Token:   "token",
+				AppID:      "app",
+				Channel:    "support",
+				UID:        "agent",
+				Token:      "token",
+				RTMEnabled: appAgoraRTMDisabled(),
 			},
 		},
 	}

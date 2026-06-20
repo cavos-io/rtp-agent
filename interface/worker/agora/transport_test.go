@@ -20,7 +20,9 @@ type fakeChannelClient struct {
 	publishCtx              context.Context
 	joinErr                 error
 	leaveErr                error
+	leaveErrs               []error
 	publishErr              error
+	leaveHook               func()
 	blockJoin               bool
 	joinAfterCancelSucceeds bool
 	joinCount               int
@@ -53,6 +55,16 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 
 func (f *fakeChannelClient) Leave(ctx context.Context) error {
 	f.leaveCount++
+	if f.leaveHook != nil {
+		f.leaveHook()
+	}
+	if len(f.leaveErrs) > 0 {
+		err := f.leaveErrs[0]
+		f.leaveErrs = f.leaveErrs[1:]
+		if err != nil {
+			return err
+		}
+	}
 	if f.leaveErr != nil {
 		return f.leaveErr
 	}
@@ -84,6 +96,27 @@ func TestTransportJoinValidatesOptions(t *testing.T) {
 	err := tr.Join(context.Background())
 	if err == nil {
 		t.Fatal("Join() error = nil, want validation error")
+	}
+}
+
+func TestOptionsValidateRejectsUnsafeTENChannelNames(t *testing.T) {
+	for _, channel := range []string{
+		"../support",
+		"support/room",
+		`support\room`,
+		"support\x00room",
+		".support",
+		strings.Repeat("a", 101),
+	} {
+		t.Run(fmt.Sprintf("%q", channel), func(t *testing.T) {
+			err := (Options{AppID: "app", Channel: channel}).Validate()
+			if err == nil {
+				t.Fatalf("Validate() error = nil, want unsafe channel %q rejected", channel)
+			}
+			if !strings.Contains(err.Error(), "AGORA_CHANNEL") {
+				t.Fatalf("Validate() error = %q, want AGORA_CHANNEL context", err.Error())
+			}
+		})
 	}
 }
 
@@ -216,6 +249,30 @@ func TestTransportDropsClientEventsAfterLeave(t *testing.T) {
 	case event := <-tr.Events():
 		t.Fatalf("stale event forwarded after Leave(): %#v", event)
 	case <-time.After(10 * time.Millisecond):
+	}
+}
+
+func TestTransportDropsClientEventsDuringClose(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	client.leaveHook = func() {
+		client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "late-user"})
+		client.emit(Event{Kind: EventDisconnected, Channel: "support", Reason: 17})
+	}
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case event, ok := <-tr.Events():
+		if ok && event.Kind != EventDisconnected {
+			t.Fatalf("stale event forwarded during Close(): %#v", event)
+		}
+	default:
 	}
 }
 
@@ -417,6 +474,55 @@ func TestTransportForwardsClientEvents(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for event")
+	}
+}
+
+func TestTransportDropsForeignChannelEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "other", UserID: "user-1"})
+	client.emit(Event{Kind: EventConnected, Channel: "other"})
+	client.emit(Event{Kind: EventDisconnected, Channel: "other", Reason: 17})
+
+	select {
+	case event := <-tr.Events():
+		t.Fatalf("foreign channel event forwarded: %#v", event)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+	if err := tr.PublishPCM(context.Background(), frame); err != nil {
+		t.Fatalf("PublishPCM() after foreign disconnect error = %v, want still joined", err)
+	}
+	if client.publishCount != 1 {
+		t.Fatalf("publish count = %d, want 1 after ignored foreign events", client.publishCount)
+	}
+}
+
+func TestTransportAcceptsEventsForTrimmedConfiguredChannel(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: " support "}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventConnected, Channel: "support"})
+
+	select {
+	case event := <-tr.Events():
+		if event.Kind != EventConnected || event.Channel != "support" {
+			t.Fatalf("event = %#v, want connected event for trimmed channel", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for trimmed channel event")
 	}
 }
 
@@ -677,6 +783,31 @@ func TestTransportCloseLeavesClientAndClosesEvents(t *testing.T) {
 	}
 	if _, ok := <-tr.Events(); ok {
 		t.Fatal("events channel open after Close(), want closed")
+	}
+}
+
+func TestTransportCloseRetriesLeaveAfterFailure(t *testing.T) {
+	leaveErr := errors.New("leave failed")
+	client := &fakeChannelClient{leaveErrs: []error{leaveErr, nil}}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.Close(context.Background()); !errors.Is(err, leaveErr) {
+		t.Fatalf("Close() error = %v, want leave failure", err)
+	}
+	if _, ok := <-tr.Events(); ok {
+		t.Fatal("events channel open after failed Close(), want closed")
+	}
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("second Close() error = %v, want retry success", err)
+	}
+	if client.leaveCount != 2 {
+		t.Fatalf("leave count = %d, want retry after failure", client.leaveCount)
+	}
+	if !client.left {
+		t.Fatal("client left = false, want retry success")
 	}
 }
 

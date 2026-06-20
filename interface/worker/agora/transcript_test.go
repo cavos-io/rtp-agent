@@ -45,6 +45,9 @@ func TestTranscriptForwarderPublishesTENAssistantTranscript(t *testing.T) {
 	if got["data_type"] != "transcribe" {
 		t.Fatalf("data_type = %#v, want transcribe", got["data_type"])
 	}
+	if got["type"] != "transcribe" {
+		t.Fatalf("type = %#v, want transcribe for TEN playground clients", got["type"])
+	}
 	if got["role"] != "assistant" {
 		t.Fatalf("role = %#v, want assistant", got["role"])
 	}
@@ -57,8 +60,25 @@ func TestTranscriptForwarderPublishesTENAssistantTranscript(t *testing.T) {
 	if got["text_ts"] != float64(1710000000123) {
 		t.Fatalf("text_ts = %#v, want event millis", got["text_ts"])
 	}
+	if got["ts"] != float64(1710000000123) {
+		t.Fatalf("ts = %#v, want event millis for TEN playground clients", got["ts"])
+	}
 	if got["stream_id"] != float64(100) {
 		t.Fatalf("stream_id = %#v, want numeric assistant stream", got["stream_id"])
+	}
+}
+
+func TestPublishTranscriptNormalizesStreamID(t *testing.T) {
+	publisher := &recordingDataPublisher{}
+
+	err := PublishTranscript(context.Background(), publisher, "assistant", "hello there", true, " 100 ", time.UnixMilli(1710000000123))
+	if err != nil {
+		t.Fatalf("PublishTranscript() error = %v, want nil", err)
+	}
+
+	got := publishedJSON(t, publisher, 0)
+	if got["stream_id"] != float64(100) {
+		t.Fatalf("stream_id = %#v, want normalized numeric stream id", got["stream_id"])
 	}
 }
 

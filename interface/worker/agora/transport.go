@@ -281,16 +281,15 @@ func (t *Transport) Close(ctx context.Context) error {
 	if t == nil {
 		return nil
 	}
-	var err error
+	t.mu.Lock()
+	cancelJoin := t.joinCancel
+	t.closing = true
+	t.mu.Unlock()
+	if cancelJoin != nil {
+		cancelJoin()
+	}
+	err := t.Leave(normalizeContext(ctx))
 	t.closeOnce.Do(func() {
-		t.mu.Lock()
-		cancelJoin := t.joinCancel
-		t.closing = true
-		t.mu.Unlock()
-		if cancelJoin != nil {
-			cancelJoin()
-		}
-		err = t.Leave(normalizeContext(ctx))
 		t.mu.Lock()
 		if !t.closed {
 			t.closed = true
@@ -335,6 +334,15 @@ func eventNeedsPriority(event Event) bool {
 }
 
 func (t *Transport) acceptEventLocked(event Event) bool {
+	if t.closed {
+		return false
+	}
+	if !acceptChannel(t.opts.Channel, event.Channel) {
+		return false
+	}
+	if t.closing {
+		return event.Kind == EventDisconnected || event.Kind == EventError
+	}
 	if t.joinCanceled {
 		return false
 	}

@@ -172,8 +172,27 @@ func TestSDKDataPublisherDropsForeignChannelMessages(t *testing.T) {
 	if nextFunc := strings.Index(handlerBody[len("func "):], "\nfunc "); nextFunc >= 0 {
 		handlerBody = handlerBody[:len("func ")+nextFunc]
 	}
-	if !strings.Contains(handlerBody, "event.ChannelName != p.channel") {
+	if !strings.Contains(handlerBody, "!acceptChannel(p.channel, event.ChannelName)") {
 		t.Fatal("handleMessageEvent must drop SDK messages from channels other than the subscribed channel")
+	}
+}
+
+func TestSDKDataPublisherUsesNormalizedChannelFilter(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	handlerIndex := strings.Index(text, "func (p *sdkDataPublisher) handleMessageEvent")
+	if handlerIndex < 0 {
+		t.Fatal("sdk_rtm.go missing sdkDataPublisher.handleMessageEvent")
+	}
+	handlerBody := text[handlerIndex:]
+	if nextFunc := strings.Index(handlerBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		handlerBody = handlerBody[:len("func ")+nextFunc]
+	}
+	if !strings.Contains(handlerBody, "if !acceptChannel(p.channel, event.ChannelName)") {
+		t.Fatal("handleMessageEvent must use normalized channel filtering for RTM callbacks")
 	}
 }
 
@@ -208,6 +227,40 @@ func TestSDKDataPublisherCloseReleasesLockBeforeNativeCleanup(t *testing.T) {
 	}
 	if strings.Contains(closeBody, "defer p.mu.Unlock()") {
 		t.Fatal("Close must not defer unlock across native RTM cleanup")
+	}
+}
+
+func TestSDKDataPublisherCloseWaitsForAcceptedCallbacks(t *testing.T) {
+	source, err := os.ReadFile("sdk_rtm.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk_rtm.go) error = %v", err)
+	}
+	text := string(source)
+	if !strings.Contains(text, "callbacks sync.WaitGroup") {
+		t.Fatal("sdkDataPublisher must track accepted RTM message callbacks")
+	}
+	handlerIndex := strings.Index(text, "func (p *sdkDataPublisher) handleMessageEvent")
+	closeIndex := strings.Index(text, "func (p *sdkDataPublisher) Close")
+	if handlerIndex < 0 || closeIndex < 0 {
+		t.Fatal("sdk_rtm.go missing handleMessageEvent or Close")
+	}
+	handlerBody := text[handlerIndex:closeIndex]
+	for _, want := range []string{
+		"p.callbacks.Add(1)",
+		"defer p.callbacks.Done()",
+	} {
+		if !strings.Contains(handlerBody, want) {
+			t.Fatalf("handleMessageEvent missing %q", want)
+		}
+	}
+	closeBody := text[closeIndex:]
+	if nextFunc := strings.Index(closeBody[len("func "):], "\nfunc "); nextFunc >= 0 {
+		closeBody = closeBody[:len("func ")+nextFunc]
+	}
+	waitIndex := strings.Index(closeBody, "p.callbacks.Wait()")
+	cleanupIndex := strings.Index(closeBody, "closeRTMClient")
+	if waitIndex < 0 || cleanupIndex < 0 || waitIndex > cleanupIndex {
+		t.Fatal("Close must wait for accepted RTM callbacks before native cleanup returns")
 	}
 }
 
@@ -294,27 +347,34 @@ func TestSDKClientImplementationRequiresPCM16InboundAudio(t *testing.T) {
 }
 
 func TestSDKClientImplementationValidatesInboundPCMBufferShape(t *testing.T) {
-	source, err := os.ReadFile("sdk.go")
+	source, err := os.ReadFile("audio_frame.go")
 	if err != nil {
-		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+		t.Fatalf("ReadFile(audio_frame.go) error = %v", err)
 	}
 	text := string(source)
-	helperIndex := strings.Index(text, "func sdkAudioFrameToModel")
+	helperIndex := strings.Index(text, "func pcm16AudioFrameToModel")
 	if helperIndex < 0 {
-		t.Fatal("sdk.go missing sdkAudioFrameToModel")
+		t.Fatal("audio_frame.go missing pcm16AudioFrameToModel")
 	}
 	helperBody := text[helperIndex:]
 	if nextFunc := strings.Index(helperBody[len("func "):], "\nfunc "); nextFunc >= 0 {
 		helperBody = helperBody[:len("func ")+nextFunc]
 	}
 	for _, want := range []string{
-		"len(frame.Buffer)%bytesPerInterleavedSample != 0",
+		"len(frame.Data)%bytesPerInterleavedSample != 0",
 		"samplesPerChannel < 0",
-		"len(frame.Buffer) != samplesPerChannel*bytesPerInterleavedSample",
+		"len(frame.Data) != samplesPerChannel*bytesPerInterleavedSample",
 	} {
 		if !strings.Contains(helperBody, want) {
-			t.Fatalf("sdkAudioFrameToModel missing %q", want)
+			t.Fatalf("pcm16AudioFrameToModel missing %q", want)
 		}
+	}
+	sdkSource, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	if !strings.Contains(string(sdkSource), "pcm16AudioFrameToModel(pcm16AudioFrame{") {
+		t.Fatal("sdkAudioFrameToModel must delegate native SDK frame validation to pcm16AudioFrameToModel")
 	}
 }
 
@@ -783,6 +843,31 @@ func TestSDKClientImplementationFiltersRemoteStreamID(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("sdk.go missing %q", want)
 		}
+	}
+}
+
+func TestSDKClientImplementationFiltersAudioByChannel(t *testing.T) {
+	source, err := os.ReadFile("sdk.go")
+	if err != nil {
+		t.Fatalf("ReadFile(sdk.go) error = %v", err)
+	}
+	text := string(source)
+	callbackIndex := strings.Index(text, "OnPlaybackAudioFrameBeforeMixing")
+	if callbackIndex < 0 {
+		t.Fatal("sdk.go missing OnPlaybackAudioFrameBeforeMixing callback")
+	}
+	callbackBody := text[callbackIndex:]
+	if nextCallback := strings.Index(callbackBody[len("OnPlaybackAudioFrameBeforeMixing"):], "\n\t\t\t},"); nextCallback >= 0 {
+		callbackBody = callbackBody[:len("OnPlaybackAudioFrameBeforeMixing")+nextCallback]
+	}
+	channelFilterIndex := strings.Index(callbackBody, "if !acceptChannel(opts.Channel, channelID)")
+	remoteFilterIndex := strings.Index(callbackBody, "if !acceptRemoteStream(opts.RemoteStreamID, userID)")
+	forwardIndex := strings.Index(callbackBody, "c.forwardActiveAudioFrame(connection, audioHandler, frame)")
+	if channelFilterIndex < 0 || remoteFilterIndex < 0 || forwardIndex < 0 {
+		t.Fatal("audio callback must filter channel and remote stream before forwarding audio")
+	}
+	if !(channelFilterIndex < remoteFilterIndex && remoteFilterIndex < forwardIndex) {
+		t.Fatal("audio callback must drop foreign channels before remote stream filtering and audio forwarding")
 	}
 }
 
