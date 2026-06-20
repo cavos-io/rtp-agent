@@ -2320,6 +2320,26 @@ func TestRoomIOPublishesUserInputLegacyTranscriptionPacket(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishTranscriptionPacketNoopsWhenRoomDisconnected(t *testing.T) {
+	rio := &RoomIO{
+		Room: &lksdk.Room{LocalParticipant: &lksdk.LocalParticipant{}},
+	}
+
+	err := rio.publishTranscriptionPacket(&livekit.Transcription{
+		TranscribedParticipantIdentity: "caller-a",
+		TrackId:                        "TR_user_audio",
+		Segments: []*livekit.TranscriptionSegment{{
+			Id:    "SG_test",
+			Text:  "hello",
+			Final: true,
+		}},
+	})
+
+	if err != nil {
+		t.Fatalf("publishTranscriptionPacket() error = %v, want nil disconnected no-op", err)
+	}
+}
+
 func TestRoomIOSetParticipantClearsStaleUserTranscriptionTarget(t *testing.T) {
 	session := agent.NewAgentSession(agent.NewAgent("test"), nil, agent.AgentSessionOptions{})
 	published := make(chan *livekit.Transcription, 1)

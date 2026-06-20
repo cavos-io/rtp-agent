@@ -748,6 +748,9 @@ func (rio *RoomIO) publishTranscriptionPacket(transcription *livekit.Transcripti
 	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil || transcription == nil {
 		return nil
 	}
+	if rio.Room.ConnectionState() != lksdk.ConnectionStateConnected {
+		return nil
+	}
 	return rio.Room.LocalParticipant.PublishDataPacket(roomIOTranscriptionPacket{transcription: transcription})
 }
 
