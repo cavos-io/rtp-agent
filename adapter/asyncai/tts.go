@@ -122,6 +122,17 @@ func (t *AsyncAITTS) NumChannels() int { return asyncAITTSNumChannels }
 func (t *AsyncAITTS) Model() string    { return t.model }
 func (t *AsyncAITTS) Provider() string { return "AsyncAI" }
 
+func (t *AsyncAITTS) UpdateOptions(opts ...AsyncAITTSOption) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, opt := range opts {
+		opt(t)
+	}
+}
+
 func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	return nil, fmt.Errorf("asyncai tts supports streaming only; use tts.stream()")
 }
