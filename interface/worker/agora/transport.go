@@ -337,6 +337,9 @@ func (t *Transport) acceptEventLocked(event Event) bool {
 	if t.closed {
 		return false
 	}
+	if event.Channel != "" && event.Channel != t.opts.Channel {
+		return false
+	}
 	if t.closing {
 		return event.Kind == EventDisconnected || event.Kind == EventError
 	}

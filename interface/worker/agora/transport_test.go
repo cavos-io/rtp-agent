@@ -456,6 +456,36 @@ func TestTransportForwardsClientEvents(t *testing.T) {
 	}
 }
 
+func TestTransportDropsForeignChannelEvents(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	client.emit(Event{Kind: EventUserJoined, Channel: "other", UserID: "user-1"})
+	client.emit(Event{Kind: EventConnected, Channel: "other"})
+	client.emit(Event{Kind: EventDisconnected, Channel: "other", Reason: 17})
+
+	select {
+	case event := <-tr.Events():
+		t.Fatalf("foreign channel event forwarded: %#v", event)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	frame := PCMFrame{
+		Data:       []byte{1, 2, 3, 4},
+		SampleRate: 100,
+		Channels:   2,
+	}
+	if err := tr.PublishPCM(context.Background(), frame); err != nil {
+		t.Fatalf("PublishPCM() after foreign disconnect error = %v, want still joined", err)
+	}
+	if client.publishCount != 1 {
+		t.Fatalf("publish count = %d, want 1 after ignored foreign events", client.publishCount)
+	}
+}
+
 func TestTransportFiltersDuplicateParticipantJoinEvents(t *testing.T) {
 	client := &fakeChannelClient{}
 	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
