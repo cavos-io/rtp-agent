@@ -139,7 +139,7 @@ func (f *TranscriptForwarder) forwardAgentReasoning(ctx context.Context, events 
 }
 
 func (f *TranscriptForwarder) publishTranscript(ctx context.Context, role string, text string, final bool, streamID string, createdAt time.Time) {
-	if text == "" || f == nil || f.publisher == nil {
+	if f == nil || f.publisher == nil || !shouldPublishTENTranscript(role, text, final) {
 		return
 	}
 	_ = PublishTranscript(ctx, f.publisher, role, text, final, streamID, createdAt)
@@ -163,7 +163,7 @@ func userTranscriptStreamID(ev agent.UserInputTranscribedEvent, fallback string)
 }
 
 func PublishTranscript(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {
-	if text == "" || publisher == nil {
+	if publisher == nil || !shouldPublishTENTranscript(role, text, final) {
 		return nil
 	}
 	payload, err := marshalTENTranscript(role, text, final, streamID, createdAt)
@@ -171,6 +171,10 @@ func PublishTranscript(ctx context.Context, publisher DataPublisher, role string
 		return err
 	}
 	return publisher.PublishData(normalizeContext(ctx), payload)
+}
+
+func shouldPublishTENTranscript(role string, text string, final bool) bool {
+	return text != "" || (role == "assistant" && final)
 }
 
 func PublishReasoning(ctx context.Context, publisher DataPublisher, role string, text string, final bool, streamID string, createdAt time.Time) error {
