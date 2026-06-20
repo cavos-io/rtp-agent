@@ -1259,6 +1259,39 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream := &deepgramStream{
+		ctx:         ctx,
+		events:      make(chan *stt.SpeechEvent, 2),
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeJSON: func(any) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 2000),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.05)
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.0125)
+}
+
 func TestDeepgramSTTStreamChunksReferenceAudioUsingStreamFormat(t *testing.T) {
 	var binaryWrites [][]byte
 	stream := &deepgramStream{
@@ -1568,6 +1601,24 @@ func nextDeepgramTestSpeechEvent(t *testing.T, stream stt.RecognizeStream) *stt.
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Deepgram STT event")
 		return nil
+	}
+}
+
+func assertDeepgramRecognitionUsageEvent(t *testing.T, events <-chan *stt.SpeechEvent, wantDuration float64) {
+	t.Helper()
+	select {
+	case event := <-events:
+		if event.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %s, want %s", event.Type, stt.SpeechEventRecognitionUsage)
+		}
+		if event.RecognitionUsage == nil {
+			t.Fatal("RecognitionUsage = nil")
+		}
+		if event.RecognitionUsage.AudioDuration != wantDuration {
+			t.Fatalf("AudioDuration = %v, want %v", event.RecognitionUsage.AudioDuration, wantDuration)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recognition usage event")
 	}
 }
 

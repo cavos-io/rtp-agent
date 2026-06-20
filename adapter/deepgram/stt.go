@@ -848,6 +848,22 @@ func (s *deepgramStream) sendEvent(ev *stt.SpeechEvent) {
 	}
 }
 
+func (s *deepgramStream) sendRecognitionUsage(frame *model.AudioFrame) {
+	if s.ctx == nil || s.events == nil || frame == nil {
+		return
+	}
+	duration := audio.CalculateFrameDuration(frame)
+	if duration <= 0 {
+		return
+	}
+	s.sendEvent(&stt.SpeechEvent{
+		Type: stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: duration,
+		},
+	})
+}
+
 func (s *deepgramStream) sendError(err error) {
 	select {
 	case s.errCh <- err:
@@ -909,6 +925,7 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
+		s.sendRecognitionUsage(chunk)
 	}
 	return nil
 }
@@ -925,6 +942,7 @@ func (s *deepgramStream) Flush() error {
 				s.closeAfterWriteFailureLocked()
 				return err
 			}
+			s.sendRecognitionUsage(chunk)
 		}
 	}
 	if err := s.writeJSONData(map[string]string{"type": "Finalize"}); err != nil {
