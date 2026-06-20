@@ -22,6 +22,7 @@ type fakeChannelClient struct {
 	leaveErr                error
 	leaveErrs               []error
 	publishErr              error
+	leaveHook               func()
 	blockJoin               bool
 	joinAfterCancelSucceeds bool
 	joinCount               int
@@ -54,6 +55,9 @@ func (f *fakeChannelClient) Join(ctx context.Context, opts Options, handler Even
 
 func (f *fakeChannelClient) Leave(ctx context.Context) error {
 	f.leaveCount++
+	if f.leaveHook != nil {
+		f.leaveHook()
+	}
 	if len(f.leaveErrs) > 0 {
 		err := f.leaveErrs[0]
 		f.leaveErrs = f.leaveErrs[1:]
@@ -224,6 +228,30 @@ func TestTransportDropsClientEventsAfterLeave(t *testing.T) {
 	case event := <-tr.Events():
 		t.Fatalf("stale event forwarded after Leave(): %#v", event)
 	case <-time.After(10 * time.Millisecond):
+	}
+}
+
+func TestTransportDropsClientEventsDuringClose(t *testing.T) {
+	client := &fakeChannelClient{}
+	tr := NewTransport(Options{AppID: "app", Channel: "support"}, client)
+	client.leaveHook = func() {
+		client.emit(Event{Kind: EventUserJoined, Channel: "support", UserID: "late-user"})
+		client.emit(Event{Kind: EventDisconnected, Channel: "support", Reason: 17})
+	}
+
+	if err := tr.Join(context.Background()); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	if err := tr.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case event, ok := <-tr.Events():
+		if ok && event.Kind != EventDisconnected {
+			t.Fatalf("stale event forwarded during Close(): %#v", event)
+		}
+	default:
 	}
 }
 

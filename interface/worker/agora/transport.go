@@ -334,6 +334,12 @@ func eventNeedsPriority(event Event) bool {
 }
 
 func (t *Transport) acceptEventLocked(event Event) bool {
+	if t.closed {
+		return false
+	}
+	if t.closing {
+		return event.Kind == EventDisconnected || event.Kind == EventError
+	}
 	if t.joinCanceled {
 		return false
 	}
