@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -180,13 +182,16 @@ func (t *HumeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("hume tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Hume TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &humeTTSChunkedStream{

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -394,6 +395,46 @@ func TestHumeTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
+func TestHumeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: humeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limit"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewHumeTTS("test-key", "", WithHumeTTSBaseURL("https://hume.example"))
+	_, err := provider.Synthesize(context.Background(), "hello")
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"rate limit"}` {
+		t.Fatalf("body = %#v, want provider body", statusErr.Body)
+	}
+}
+
+func TestHumeTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: humeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+
+	provider := NewHumeTTS("test-key", "", WithHumeTTSBaseURL("https://hume.example"))
+	_, err := provider.Synthesize(context.Background(), "hello")
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
