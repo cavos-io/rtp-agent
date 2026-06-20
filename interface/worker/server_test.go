@@ -3764,6 +3764,30 @@ func TestRunRequiresAgoraTransportRunFunc(t *testing.T) {
 	}
 }
 
+func TestRunDelegatesAgoraTransportToRunFunc(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		Transport: WorkerTransportAgora,
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+	called := false
+	server.SetTransportRunFunc(func(ctx context.Context) error {
+		called = true
+		return ctx.Err()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := server.Run(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() error = %v, want context canceled from Agora transport runner", err)
+	}
+	if !called {
+		t.Fatal("Run() did not call Agora transport runner")
+	}
+}
+
 func TestRunRequiresAgoraTransportRunnerWithoutProviderValidation(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		Transport: WorkerTransportAgora,
