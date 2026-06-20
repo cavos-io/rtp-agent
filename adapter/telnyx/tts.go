@@ -28,6 +28,8 @@ const (
 )
 
 type TelnyxTTS struct {
+	mu         sync.Mutex
+	streams    map[*telnyxTTSStream]struct{}
 	apiKey     string
 	baseURL    string
 	voice      string
@@ -52,6 +54,7 @@ func NewTelnyxTTS(apiKey string, voice string, opts ...TelnyxTTSOption) *TelnyxT
 		voice = defaultTelnyxTTSVoice
 	}
 	provider := &TelnyxTTS{
+		streams:    make(map[*telnyxTTSStream]struct{}),
 		apiKey:     apiKey,
 		baseURL:    defaultTelnyxTTSBaseURL,
 		voice:      voice,
@@ -71,6 +74,46 @@ func (t *TelnyxTTS) SampleRate() int  { return t.sampleRate }
 func (t *TelnyxTTS) NumChannels() int { return telnyxTTSNumChannels }
 func (t *TelnyxTTS) Model() string    { return t.voice }
 func (t *TelnyxTTS) Provider() string { return "telnyx" }
+
+func (t *TelnyxTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*telnyxTTSStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*telnyxTTSStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *TelnyxTTS) registerStream(stream *telnyxTTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = make(map[*telnyxTTSStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.owner = t
+	t.mu.Unlock()
+}
+
+func (t *TelnyxTTS) unregisterStream(stream *telnyxTTSStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	delete(t.streams, stream)
+	t.mu.Unlock()
+}
 
 func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	stream, err := t.Stream(ctx)
@@ -113,6 +156,7 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeTTSMessage
 	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -159,6 +203,7 @@ func (s *telnyxTTSChunkedStream) Close() error {
 }
 
 type telnyxTTSStream struct {
+	owner      *TelnyxTTS
 	conn       *websocket.Conn
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -212,11 +257,14 @@ func (s *telnyxTTSStream) Close() error {
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}
-	if s.conn == nil {
-		return nil
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.closeConnection()
+	err := s.closeConnection()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *telnyxTTSStream) writeMessageData(message map[string]string) error {
@@ -256,6 +304,9 @@ func (s *telnyxTTSStream) closeAfterWriteFailureLocked() {
 		_ = s.decoder.Close()
 	}
 	_ = s.closeConnection()
+	if s.owner != nil {
+		s.owner.unregisterStream(s)
+	}
 }
 
 func (s *telnyxTTSStream) Next() (*tts.SynthesizedAudio, error) {

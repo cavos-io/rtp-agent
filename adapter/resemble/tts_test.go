@@ -5,14 +5,19 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestResembleTTSDefaultsMatchReference(t *testing.T) {
@@ -256,6 +261,122 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatal("error message returned nil error, want stream error")
 	}
 }
+
+func TestResembleTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	conn, closed := newResembleClosingWebsocketConn(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := NewResembleTTS("test-key", "")
+	stream := &resembleTTSSynthesizeStream{
+		conn:     conn,
+		ctx:      ctx,
+		cancel:   cancel,
+		provider: provider,
+		events:   make(chan *coretts.SynthesizedAudio, 1),
+		errCh:    make(chan error, 1),
+	}
+	provider.registerStream(stream)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket close")
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+}
+
+func newResembleClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	closed := make(chan struct{})
+	listener := newResembleSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		close(closed)
+	})}
+	serverErr := make(chan error, 1)
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://resemble.test/stream", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn, closed
+}
+
+type resembleSingleConnListener struct {
+	conn   net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newResembleSingleConnListener(conn net.Conn) *resembleSingleConnListener {
+	return &resembleSingleConnListener{conn: conn, closed: make(chan struct{})}
+}
+
+func (l *resembleSingleConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() {
+		conn = l.conn
+	})
+	if conn != nil {
+		return conn, nil
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *resembleSingleConnListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *resembleSingleConnListener) Addr() net.Addr {
+	return resembleTestAddr("resemble.test:443")
+}
+
+type resembleTestAddr string
+
+func (a resembleTestAddr) Network() string { return "tcp" }
+
+func (a resembleTestAddr) String() string { return string(a) }
 
 func assertResemblePayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()

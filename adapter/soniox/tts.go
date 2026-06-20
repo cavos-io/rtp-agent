@@ -29,6 +29,8 @@ const (
 )
 
 type SonioxTTS struct {
+	mu           sync.Mutex
+	streams      map[*sonioxTTSSynthesizeStream]struct{}
 	apiKey       string
 	websocketURL string
 	model        string
@@ -102,6 +104,7 @@ func NewSonioxTTS(apiKey string, opts ...SonioxTTSOption) *SonioxTTS {
 		apiKey = os.Getenv(sonioxAPIKeyEnv)
 	}
 	provider := &SonioxTTS{
+		streams:      make(map[*sonioxTTSSynthesizeStream]struct{}),
 		apiKey:       apiKey,
 		websocketURL: defaultSonioxTTSWebsocketURL,
 		model:        defaultSonioxTTSModel,
@@ -124,6 +127,46 @@ func (t *SonioxTTS) SampleRate() int  { return t.sampleRate }
 func (t *SonioxTTS) NumChannels() int { return sonioxTTSNumChannels }
 func (t *SonioxTTS) Model() string    { return t.model }
 func (t *SonioxTTS) Provider() string { return "Soniox" }
+
+func (t *SonioxTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*sonioxTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*sonioxTTSSynthesizeStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *SonioxTTS) registerStream(stream *sonioxTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = make(map[*sonioxTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.provider = t
+	t.mu.Unlock()
+}
+
+func (t *SonioxTTS) unregisterStream(stream *sonioxTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	delete(t.streams, stream)
+	t.mu.Unlock()
+}
 
 func (t *SonioxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	stream, err := t.Stream(ctx)
@@ -163,6 +206,8 @@ func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		localDone:  make(chan struct{}),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
+	stream.closeConn = stream.closeWebsocketConn
+	t.registerStream(stream)
 	go stream.readLoop()
 	go stream.keepAliveLoop()
 	return stream, nil
@@ -196,6 +241,7 @@ type sonioxTTSSynthesizeStream struct {
 	localDone  chan struct{}
 
 	writeMessage func(map[string]any) error
+	closeConn    func() error
 }
 
 func (s *sonioxTTSSynthesizeStream) PushText(text string) error {
@@ -263,11 +309,14 @@ func (s *sonioxTTSSynthesizeStream) Close() error {
 	if s.configSent {
 		_ = s.writeMessageData(buildSonioxTTSCancelMessage(s.streamID))
 	}
-	if s.conn == nil {
-		return nil
+	if s.conn != nil {
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	err := s.closeConnection()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *sonioxTTSSynthesizeStream) writeMessageData(message map[string]any) error {
@@ -279,6 +328,20 @@ func (s *sonioxTTSSynthesizeStream) writeMessageData(message map[string]any) err
 
 func (s *sonioxTTSSynthesizeStream) writeWebsocketMessage(message map[string]any) error {
 	return writeSonioxTTSMessage(s.conn, message)
+}
+
+func (s *sonioxTTSSynthesizeStream) closeConnection() error {
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *sonioxTTSSynthesizeStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
+	return s.conn.Close()
 }
 
 func (s *sonioxTTSSynthesizeStream) closeLocalDoneLocked() {
@@ -299,6 +362,9 @@ func (s *sonioxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	}
 	if s.conn != nil {
 		_ = s.conn.Close()
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
 	}
 }
 

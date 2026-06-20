@@ -16,6 +16,8 @@ import (
 )
 
 type SpeechmaticsSTT struct {
+	mu                   sync.Mutex
+	streams              map[*speechmaticsSTTStream]struct{}
 	apiKey               string
 	baseURL              string
 	language             string
@@ -242,8 +244,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
 		state:  &speechmaticsStreamState{},
+		owner:  s,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
+	stream.closeConn = stream.closeWebsocketConn
 
 	initMsg := buildSpeechmaticsSTTStartMessage(s, language)
 
@@ -252,6 +256,7 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		return nil, err
 	}
 
+	s.registerStream(stream)
 	go stream.readLoop()
 
 	return stream, nil
@@ -259,6 +264,45 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 
 func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return nil, fmt.Errorf("speechmatics offline recognize is not implemented")
+}
+
+func (s *SpeechmaticsSTT) Close() error {
+	s.mu.Lock()
+	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (s *SpeechmaticsSTT) registerStream(stream *speechmaticsSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streams == nil {
+		s.streams = make(map[*speechmaticsSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+	stream.owner = s
+}
+
+func (s *SpeechmaticsSTT) unregisterStream(stream *speechmaticsSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.streams, stream)
 }
 
 func buildSpeechmaticsSTTStreamURL(s *SpeechmaticsSTT) string {
@@ -346,6 +390,8 @@ type speechmaticsSTTStream struct {
 	closed bool
 
 	writeBinary func([]byte) error
+	closeConn   func() error
+	owner       *SpeechmaticsSTT
 	state       *speechmaticsStreamState
 	audioBuf    *audio.AudioByteStream
 }
@@ -585,8 +631,27 @@ func (s *speechmaticsSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	s.conn.WriteJSON(map[string]interface{}{"message": "EndOfStream"})
-	return s.conn.Close()
+	defer func() {
+		if s.owner != nil {
+			s.owner.unregisterStream(s)
+		}
+	}()
+	if s.closeConn != nil {
+		return s.closeConn()
+	}
+	return s.closeWebsocketConn()
+}
+
+func (s *speechmaticsSTTStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
+	writeErr := s.conn.WriteJSON(map[string]interface{}{"message": "EndOfStream"})
+	closeErr := s.conn.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {

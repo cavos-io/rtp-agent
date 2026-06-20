@@ -27,6 +27,8 @@ const (
 )
 
 type ResembleTTS struct {
+	mu         sync.Mutex
+	streams    map[*resembleTTSSynthesizeStream]struct{}
 	apiKey     string
 	voice      string
 	sampleRate int
@@ -62,6 +64,7 @@ func NewResembleTTS(apiKey string, voice string, opts ...ResembleTTSOption) *Res
 		apiKey = os.Getenv("RESEMBLE_API_KEY")
 	}
 	provider := &ResembleTTS{
+		streams:    make(map[*resembleTTSSynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		voice:      voice,
 		sampleRate: defaultResembleSampleRate,
@@ -88,6 +91,46 @@ func (t *ResembleTTS) Model() string {
 	return t.model
 }
 func (t *ResembleTTS) Provider() string { return "Resemble" }
+
+func (t *ResembleTTS) Close() error {
+	t.mu.Lock()
+	streams := make([]*resembleTTSSynthesizeStream, 0, len(t.streams))
+	for stream := range t.streams {
+		streams = append(streams, stream)
+	}
+	t.streams = make(map[*resembleTTSSynthesizeStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *ResembleTTS) registerStream(stream *resembleTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.streams == nil {
+		t.streams = make(map[*resembleTTSSynthesizeStream]struct{})
+	}
+	t.streams[stream] = struct{}{}
+	stream.provider = t
+	t.mu.Unlock()
+}
+
+func (t *ResembleTTS) unregisterStream(stream *resembleTTSSynthesizeStream) {
+	if t == nil || stream == nil {
+		return
+	}
+	t.mu.Lock()
+	delete(t.streams, stream)
+	t.mu.Unlock()
+}
 
 func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateResembleAPIKey(t.apiKey); err != nil {
@@ -157,6 +200,7 @@ func (t *ResembleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		events:   make(chan *tts.SynthesizedAudio, 100),
 		errCh:    make(chan error, 1),
 	}
+	t.registerStream(stream)
 	go stream.readLoop()
 	return stream, nil
 }
@@ -287,7 +331,11 @@ func (s *resembleTTSSynthesizeStream) Close() error {
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	err := s.conn.Close()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return err
 }
 
 func (s *resembleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
