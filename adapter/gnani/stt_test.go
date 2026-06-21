@@ -301,6 +301,17 @@ func TestGnaniSTTResponseMapsTranscriptRequestIDAndLanguage(t *testing.T) {
 	if alt.Confidence != 1.0 {
 		t.Fatalf("confidence = %f, want 1.0", alt.Confidence)
 	}
+
+	empty, err := gnaniSpeechEventFromResponse(gnaniSTTResponse{
+		Transcript: "",
+		RequestID:  "req-empty",
+	}, "en-IN")
+	if err != nil {
+		t.Fatalf("empty speech event: %v", err)
+	}
+	if got := empty.Alternatives[0].Confidence; got != 0 {
+		t.Fatalf("empty transcript confidence = %f, want default zero confidence", got)
+	}
 }
 
 type multipartFile struct {

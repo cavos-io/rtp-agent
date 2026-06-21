@@ -236,7 +236,7 @@ func gnaniSpeechEventFromResponse(resp gnaniSTTResponse, language string) (*stt.
 			{
 				Language:   language,
 				Text:       resp.Transcript,
-				Confidence: 1.0,
+				Confidence: stt.DefaultTranscriptConfidence(resp.Transcript),
 			},
 		},
 	}, nil
