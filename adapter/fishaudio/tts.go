@@ -578,7 +578,7 @@ func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format s
 		if reason, _ := message["reason"].(string); reason == "error" {
 			return nil, false, fmt.Errorf("fishaudio tts stream finished with error")
 		}
-		return nil, true, nil
+		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	default:
 		return nil, false, nil
 	}
