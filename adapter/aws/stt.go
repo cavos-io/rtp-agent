@@ -315,6 +315,9 @@ func (s *awsSTTStream) readLoop() {
 		switch v := event.(type) {
 		case *types.TranscriptResultStreamMemberTranscriptEvent:
 			for _, result := range v.Value.Transcript.Results {
+				if result.StartTime == 0 && result.EndTime > 0 {
+					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
+				}
 				if len(result.Alternatives) == 0 {
 					continue
 				}

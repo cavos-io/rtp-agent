@@ -339,6 +339,8 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 				Results: []types.Result{
 					{
 						IsPartial: false,
+						StartTime: 0.0,
+						EndTime:   0.2,
 						Alternatives: []types.Alternative{
 							{
 								Transcript: awsconfig.String("hello"),
@@ -361,6 +363,14 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	close(reader.events)
 
 	event, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want start-of-speech event", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event type = %q, want start_of_speech", event.Type)
+	}
+
+	event, err = providerStream.Next()
 	if err != nil {
 		t.Fatalf("Next error = %v, want transcript event", err)
 	}
