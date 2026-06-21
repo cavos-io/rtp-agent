@@ -175,8 +175,11 @@ func TestGradiumTTSWebsocketMessageMapsAudioAndEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("end from message: %v", err)
 	}
-	if audio != nil || !done {
-		t.Fatalf("audio=%v done=%v, want done only", audio, done)
+	if audio == nil || !audio.IsFinal || !done {
+		t.Fatalf("audio=%v done=%v, want final marker and done", audio, done)
+	}
+	if audio.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want no audio frame", audio.Frame)
 	}
 }
 

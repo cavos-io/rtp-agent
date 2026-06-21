@@ -210,9 +210,13 @@ func validateGradiumAPIKey(apiKey string) error {
 type gradiumTTSWebsocketChunkedStream struct {
 	conn       *websocket.Conn
 	sampleRate int
+	completed  bool
 }
 
 func (s *gradiumTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.completed {
+		return nil, io.EOF
+	}
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
@@ -228,11 +232,15 @@ func (s *gradiumTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 		if err != nil {
 			return nil, err
 		}
-		if done {
-			return nil, io.EOF
-		}
 		if audio != nil {
+			if done {
+				s.completed = true
+			}
 			return audio, nil
+		}
+		if done {
+			s.completed = true
+			return nil, io.EOF
 		}
 	}
 }
@@ -249,6 +257,7 @@ type gradiumTTSSynthesizeStream struct {
 	mu         sync.Mutex
 	closed     bool
 	sampleRate int
+	finalDone  bool
 }
 
 func (s *gradiumTTSSynthesizeStream) PushText(text string) error {
@@ -256,6 +265,9 @@ func (s *gradiumTTSSynthesizeStream) PushText(text string) error {
 }
 
 func (s *gradiumTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	s.finalDone = false
+	s.mu.Unlock()
 	return writeGradiumTTSMessage(s.conn, buildGradiumTTSEndMessage())
 }
 
@@ -277,7 +289,25 @@ func (s *gradiumTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, s.ctx.Err()
 	default:
 	}
-	return (&gradiumTTSWebsocketChunkedStream{conn: s.conn, sampleRate: s.sampleRate}).Next()
+	s.mu.Lock()
+	if s.finalDone {
+		s.mu.Unlock()
+		return nil, io.EOF
+	}
+	conn := s.conn
+	sampleRate := s.sampleRate
+	s.mu.Unlock()
+
+	audio, err := (&gradiumTTSWebsocketChunkedStream{conn: conn, sampleRate: sampleRate}).Next()
+	if err != nil {
+		return nil, err
+	}
+	if audio != nil && audio.IsFinal {
+		s.mu.Lock()
+		s.finalDone = true
+		s.mu.Unlock()
+	}
+	return audio, nil
 }
 
 func gradiumTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
@@ -296,7 +326,7 @@ func gradiumTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesize
 		}
 		return gradiumTTSAudioFrame(audio, sampleRate), false, nil
 	case "end_of_stream":
-		return nil, true, nil
+		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	default:
 		return nil, false, nil
 	}
