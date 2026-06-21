@@ -128,7 +128,7 @@ func NewFallbackAdapterWithOptions(ttss []TTS, options FallbackAdapterOptions) *
 }
 
 func (f *FallbackAdapter) Label() string {
-	return fmt.Sprintf("FallbackAdapter(%s)", f.ttss[0].Label())
+	return "tts.FallbackAdapter"
 }
 
 func (f *FallbackAdapter) Model() string {

@@ -182,7 +182,7 @@ func initialAvailability(size int) []bool {
 }
 
 func (f *FallbackAdapter) Label() string {
-	return fmt.Sprintf("FallbackAdapter(%s)", f.stts[0].Label())
+	return "stt.FallbackAdapter"
 }
 
 func (f *FallbackAdapter) Model() string {

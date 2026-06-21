@@ -844,6 +844,9 @@ func TestFallbackAdapterExposesReferenceMetadata(t *testing.T) {
 		capabilities: STTCapabilities{Streaming: true},
 	}})
 
+	if got := adapter.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("FallbackAdapter Label = %q, want adapter label", got)
+	}
 	if got := Model(adapter); got != "FallbackAdapter" {
 		t.Fatalf("FallbackAdapter Model = %q, want FallbackAdapter", got)
 	}
