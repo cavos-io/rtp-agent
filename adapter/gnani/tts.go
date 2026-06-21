@@ -449,7 +449,7 @@ func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChanne
 		return gnaniTTSAudioFrame(audio, sampleRate, numChannels, false), false, nil
 	case "complete":
 		if message.Data.Audio == "" {
-			return nil, true, nil
+			return gnaniTTSFinalAudio(), true, nil
 		}
 		audio, err := base64.StdEncoding.DecodeString(message.Data.Audio)
 		if err != nil {
@@ -457,7 +457,7 @@ func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChanne
 		}
 		audio = stripWAVHeader(audio)
 		if len(audio) == 0 {
-			return nil, true, nil
+			return gnaniTTSFinalAudio(), true, nil
 		}
 		return gnaniTTSAudioFrame(audio, sampleRate, numChannels, true), true, nil
 	case "error":
@@ -468,6 +468,10 @@ func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChanne
 	default:
 		return nil, false, nil
 	}
+}
+
+func gnaniTTSFinalAudio() *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{IsFinal: true}
 }
 
 func gnaniTTSAudioFrame(audio []byte, sampleRate int, numChannels int, final bool) *tts.SynthesizedAudio {
