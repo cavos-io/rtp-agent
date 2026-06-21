@@ -374,6 +374,14 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 		t.Fatalf("words = %#v, want hello word timing", event.Alternatives[0].Words)
 	}
 
+	end, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want end-of-speech event", err)
+	}
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end event type = %q, want end_of_speech", end.Type)
+	}
+
 	_, err = providerStream.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next EOF error = %v, want io.EOF", err)

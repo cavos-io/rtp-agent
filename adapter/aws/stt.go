@@ -331,6 +331,9 @@ func (s *awsSTTStream) readLoop() {
 						awsSpeechDataFromAlternative(alt),
 					},
 				}
+				if !result.IsPartial {
+					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+				}
 			}
 		}
 	}
