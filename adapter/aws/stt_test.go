@@ -398,6 +398,43 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamIgnoresReferenceZeroEndResults(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+
+	go providerStream.readLoop()
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{
+					{
+						IsPartial: false,
+						StartTime: 0.0,
+						EndTime:   0.0,
+						Alternatives: []types.Alternative{{
+							Transcript: awsconfig.String("not ready"),
+						}},
+					},
+				},
+			},
+		},
+	}
+	close(reader.events)
+
+	_, err := providerStream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF without zero-end transcript event", err)
+	}
+}
+
 func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}

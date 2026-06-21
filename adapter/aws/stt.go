@@ -318,6 +318,9 @@ func (s *awsSTTStream) readLoop() {
 				if result.StartTime == 0 && result.EndTime > 0 {
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 				}
+				if result.EndTime <= 0 {
+					continue
+				}
 				if len(result.Alternatives) == 0 {
 					continue
 				}
