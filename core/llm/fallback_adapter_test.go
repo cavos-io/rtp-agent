@@ -176,8 +176,11 @@ func TestFallbackAdapterReportsReferenceMetadata(t *testing.T) {
 		&fakeFallbackLLM{label: "primary.LLM"},
 	})
 
-	if got := adapter.Label(); got != "FallbackAdapter(primary.LLM)" {
-		t.Fatalf("Label() = %q, want FallbackAdapter(primary.LLM)", got)
+	if got := adapter.Label(); got != "llm.FallbackAdapter" {
+		t.Fatalf("Label() = %q, want adapter label", got)
+	}
+	if got := adapter.Label(); got == "FallbackAdapter(primary.LLM)" {
+		t.Fatal("Label() used wrapped provider label, want concrete adapter label")
 	}
 	if got := adapter.Model(); got != "FallbackAdapter" {
 		t.Fatalf("Model() = %q, want FallbackAdapter", got)

@@ -1758,7 +1758,7 @@ func (f *FallbackAdapter) allUnavailable() bool {
 }
 
 func (f *FallbackAdapter) Label() string {
-	return fmt.Sprintf("FallbackAdapter(%s)", Label(f.llms[0]))
+	return "llm.FallbackAdapter"
 }
 
 func (f *FallbackAdapter) Model() string {
