@@ -588,6 +588,51 @@ func TestMultiSpeakerAdapterWrapperForwardsEndInput(t *testing.T) {
 	}
 }
 
+func TestMultiSpeakerAdapterSuppressesReferenceEndInputRuntimeError(t *testing.T) {
+	endInputErr := errors.New("stream input ended")
+	inner := &fakeMultiSpeakerStream{
+		endInputErr: endInputErr,
+		waitCalls:   2,
+		callCh:      make(chan struct{}, 2),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    inner,
+		ctx:      ctx,
+		cancel:   cancel,
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 1),
+	}
+	go wrapper.run()
+	defer wrapper.Close()
+
+	if err := wrapper.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+	select {
+	case <-inner.callCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for inner EndInput")
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := wrapper.Next()
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if errors.Is(err, endInputErr) {
+			t.Fatalf("Next returned inner EndInput error %v, want suppressed like reference RuntimeError", err)
+		}
+		t.Fatalf("Next returned early with %v, want no end-input failure", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 type fakeMultiSpeakerStream struct {
 	nextErr         error
 	pushErr         error

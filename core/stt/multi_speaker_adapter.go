@@ -339,7 +339,7 @@ func (w *multiSpeakerAdapterWrapper) run() {
 				}
 				if input.end {
 					if ending, ok := w.inner.(InputEnding); ok {
-						if err := ending.EndInput(); err != nil {
+						if err := ending.EndInput(); err != nil && !isReferenceEndInputRuntimeError(err) {
 							w.sendErr(err)
 						}
 					}
@@ -371,6 +371,14 @@ func (w *multiSpeakerAdapterWrapper) run() {
 			})
 		}
 	}
+}
+
+func isReferenceEndInputRuntimeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "input ended") || strings.Contains(msg, "stream closed")
 }
 
 func (w *multiSpeakerAdapterWrapper) markClosedFromRun() {
