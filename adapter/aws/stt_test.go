@@ -45,8 +45,8 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 	if data.Text != "hello world" {
 		t.Fatalf("text = %q, want hello world", data.Text)
 	}
-	if data.Confidence != 1.0 {
-		t.Fatalf("confidence = %v, want 1", data.Confidence)
+	if data.Confidence != 0.94 {
+		t.Fatalf("confidence = %v, want first pronunciation confidence", data.Confidence)
 	}
 	if len(data.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(data.Words))
@@ -56,6 +56,17 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 	}
 	if got := data.Words[1]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.91 || got.SpeakerID != "spk_1" {
 		t.Fatalf("second word = %+v, want world timing with speaker", got)
+	}
+
+	punctuationOnly := awsSpeechDataFromAlternative(types.Alternative{
+		Transcript: awsconfig.String(""),
+		Items: []types.Item{{
+			Type:    types.ItemTypePunctuation,
+			Content: awsconfig.String("."),
+		}},
+	})
+	if punctuationOnly.Confidence != 0 {
+		t.Fatalf("punctuation-only confidence = %v, want reference zero confidence", punctuationOnly.Confidence)
 	}
 }
 

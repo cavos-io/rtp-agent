@@ -339,9 +339,18 @@ func (s *awsSTTStream) readLoop() {
 func awsSpeechDataFromAlternative(alt types.Alternative) stt.SpeechData {
 	return stt.SpeechData{
 		Text:       aws.ToString(alt.Transcript),
-		Confidence: 1.0, // Confidence is not uniformly provided at the top level.
+		Confidence: awsAlternativeConfidence(alt.Items),
 		Words:      awsTimedStrings(alt.Items),
 	}
+}
+
+func awsAlternativeConfidence(items []types.Item) float64 {
+	for _, item := range items {
+		if item.Type == types.ItemTypePronunciation {
+			return aws.ToFloat64(item.Confidence)
+		}
+	}
+	return 0
 }
 
 func awsTimedStrings(items []types.Item) []stt.TimedString {
