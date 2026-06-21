@@ -361,8 +361,15 @@ func TestXaiTTSStreamReconnectsBetweenFlushSegments(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush(first) error = %v", err)
 	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v, want final marker after audio.done", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("first Next() = %#v, want final marker after audio.done", final)
+	}
 	if audio, err := stream.Next(); err != io.EOF {
-		t.Fatalf("first Next() = (%#v, %v), want EOF after audio.done", audio, err)
+		t.Fatalf("first Next() after final marker = (%#v, %v), want EOF", audio, err)
 	}
 
 	if err := stream.PushText("second segment"); err != nil {
@@ -435,8 +442,36 @@ func TestXaiTTSStreamIgnoresAudioDoneBeforeTextDone(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() after text.done error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("Next() after text.done = %#v, want final marker", final)
+	}
 	if audio, err := stream.Next(); err != io.EOF {
-		t.Fatalf("Next() after text.done = (%#v, %v), want EOF", audio, err)
+		t.Fatalf("Next() after final marker = (%#v, %v), want EOF", audio, err)
+	}
+}
+
+func TestXaiTTSStreamMarksFinalAudioOnReferenceAudioDone(t *testing.T) {
+	stream := &xaiTTSSynthesizeStream{
+		inputEnded: true,
+	}
+	audio, done, err := xaiTTSAudioFromMessage([]byte(`{"type":"audio.done"}`))
+	if err != nil {
+		t.Fatalf("audio done parse error = %v", err)
+	}
+	if audio != nil || !done {
+		t.Fatalf("audio done parse = (%#v, %v), want done with no audio", audio, done)
+	}
+
+	final := stream.finalAudioDone()
+	if final == nil || !final.IsFinal {
+		t.Fatalf("finalAudioDone() = %#v, want IsFinal marker", final)
+	}
+	if final.Frame != nil {
+		t.Fatalf("finalAudioDone frame = %#v, want no audio frame", final.Frame)
 	}
 }
 

@@ -237,6 +237,9 @@ type xaiTTSWebsocketChunkedStream struct {
 
 func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
+		if s.conn == nil {
+			return nil, io.EOF
+		}
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			return nil, xaiTTSUnexpectedCloseError(err)
@@ -249,7 +252,9 @@ func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		if done {
-			return nil, io.EOF
+			_ = s.conn.Close()
+			s.conn = nil
+			return xaiTTSFinalAudioDone(), nil
 		}
 		if audio != nil {
 			return audio, nil
@@ -448,12 +453,20 @@ func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 				continue
 			}
 			s.clearCurrentConn(conn)
-			return nil, io.EOF
+			return s.finalAudioDone(), nil
 		}
 		if audio != nil {
 			return audio, nil
 		}
 	}
+}
+
+func (s *xaiTTSSynthesizeStream) finalAudioDone() *tts.SynthesizedAudio {
+	return xaiTTSFinalAudioDone()
+}
+
+func xaiTTSFinalAudioDone() *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{IsFinal: true}
 }
 
 func (s *xaiTTSSynthesizeStream) currentConn() *websocket.Conn {
