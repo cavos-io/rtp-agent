@@ -460,7 +460,7 @@ func asyncAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.S
 		return nil, false, fmt.Errorf("asyncai tts error: %s", message.Error)
 	}
 	if message.Final {
-		return nil, true, nil
+		return &tts.SynthesizedAudio{IsFinal: true, SegmentID: message.ContextID}, true, nil
 	}
 	if message.Audio == "" {
 		return nil, false, nil

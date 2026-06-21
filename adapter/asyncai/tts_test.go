@@ -239,8 +239,14 @@ func TestAsyncAITTSAudioFromWebsocketMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("final message: %v", err)
 	}
-	if audio != nil || !done {
-		t.Fatalf("audio=%+v done=%v, want final marker", audio, done)
+	if !done {
+		t.Fatalf("done=%v, want true for final message", done)
+	}
+	if audio == nil || !audio.IsFinal || audio.SegmentID != "ctx-1" {
+		t.Fatalf("audio=%+v, want reference final marker with segment", audio)
+	}
+	if audio.Frame != nil {
+		t.Fatalf("final frame = %+v, want boundary-only final marker", audio.Frame)
 	}
 }
 
