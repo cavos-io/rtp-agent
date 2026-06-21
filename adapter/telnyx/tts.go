@@ -380,6 +380,7 @@ func (s *telnyxTTSStream) decodeLoop() {
 		frame, err := s.decoder.Next()
 		if err != nil {
 			if strings.Contains(err.Error(), "decoder closed") {
+				s.events <- &tts.SynthesizedAudio{IsFinal: true}
 				return
 			}
 			s.errCh <- err
