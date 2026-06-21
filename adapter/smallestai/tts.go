@@ -309,9 +309,13 @@ type smallestaiTTSWebsocketChunkedStream struct {
 	conn       *websocket.Conn
 	sampleRate int
 	segmentID  string
+	completed  bool
 }
 
 func (s *smallestaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.completed {
+		return nil, io.EOF
+	}
 	if s.conn == nil {
 		return nil, io.EOF
 	}
@@ -331,7 +335,8 @@ func (s *smallestaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, err
 			return nil, err
 		}
 		if done {
-			return nil, io.EOF
+			s.completed = true
+			return smallestAITTSFinalAudioDone(s.segmentID), nil
 		}
 		if audio != nil {
 			return audio, nil
@@ -349,6 +354,7 @@ type smallestaiTTSSynthesizeStream struct {
 	pendingText bytes.Buffer
 	mu          sync.Mutex
 	closed      bool
+	finalDone   bool
 }
 
 func (s *smallestaiTTSSynthesizeStream) PushText(text string) error {
@@ -378,6 +384,7 @@ func (s *smallestaiTTSSynthesizeStream) Flush() error {
 	if s.conn == nil || s.provider == nil {
 		return nil
 	}
+	s.finalDone = false
 	s.segmentID = fmt.Sprintf("seg-%d", time.Now().UnixNano())
 	payload, err := buildSmallestAITTSStreamMessage(s.provider, text)
 	if err != nil {
@@ -410,7 +417,26 @@ func (s *smallestaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		default:
 		}
 	}
-	return (&smallestaiTTSWebsocketChunkedStream{conn: s.conn, sampleRate: s.sampleRate, segmentID: s.segmentID}).Next()
+	s.mu.Lock()
+	if s.finalDone {
+		s.mu.Unlock()
+		return nil, io.EOF
+	}
+	conn := s.conn
+	sampleRate := s.sampleRate
+	segmentID := s.segmentID
+	s.mu.Unlock()
+
+	audio, err := (&smallestaiTTSWebsocketChunkedStream{conn: conn, sampleRate: sampleRate, segmentID: segmentID}).Next()
+	if err != nil {
+		return nil, err
+	}
+	if audio != nil && audio.IsFinal {
+		s.mu.Lock()
+		s.finalDone = true
+		s.mu.Unlock()
+	}
+	return audio, nil
 }
 
 func closeSmallestAIWebsocket(conn *websocket.Conn) error {
@@ -463,6 +489,10 @@ func smallestAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int, segm
 	default:
 		return nil, false, nil
 	}
+}
+
+func smallestAITTSFinalAudioDone(segmentID string) *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{SegmentID: segmentID, IsFinal: true}
 }
 
 func defaultSmallestAIVoice(model string) string {

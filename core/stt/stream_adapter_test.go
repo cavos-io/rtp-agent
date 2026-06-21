@@ -81,6 +81,15 @@ func TestStreamAdapterExposesWrappedSTT(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterLabelUsesAdapterIdentity(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+
+	if got := adapter.Label(); got != "stt.StreamAdapter" {
+		t.Fatalf("Label = %q, want adapter label", got)
+	}
+}
+
 func TestStreamAdapterForwardsWrappedSTTMetrics(t *testing.T) {
 	wrapped := &fakeStreamAdapterSTT{}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
@@ -422,6 +431,32 @@ func TestStreamAdapterCloseClosesVADStream(t *testing.T) {
 	case <-closedCh:
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for VAD Close")
+	}
+}
+
+func TestStreamAdapterReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		stream: &fakeStreamAdapterVADStream{done: make(chan struct{})},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	ending, ok := stream.(InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement InputEnding")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	for name, err := range map[string]error{
+		"PushFrame": stream.PushFrame(&model.AudioFrame{Data: []byte{0, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}),
+		"Flush":     stream.Flush(),
+		"EndInput":  ending.EndInput(),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("%s after Close error = %v, want input ended", name, err)
+		}
 	}
 }
 

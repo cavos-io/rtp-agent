@@ -585,6 +585,23 @@ func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
 	}
 }
 
+func TestParseWorkerArgsSupportsReferenceSimulationOption(t *testing.T) {
+	args, drainTimeout, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--simulation",
+	}, false)
+	if err != nil {
+		t.Fatalf("parseWorkerArgs() error = %v", err)
+	}
+	if drainTimeout != nil {
+		t.Fatalf("drainTimeout = %v, want nil", drainTimeout)
+	}
+
+	if !args.Simulation {
+		t.Fatal("Simulation = false, want true")
+	}
+}
+
 func TestParseWorkerArgsSupportsReferenceDevOptions(t *testing.T) {
 	args, drainTimeout, err := parseWorkerArgs([]string{
 		"worker", "dev",

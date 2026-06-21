@@ -783,8 +783,8 @@ func apiStatusDefaultRetryable(statusCode int) bool {
 }
 
 func applyAPIStatusRetryableOverride(statusCode int, retryable bool) bool {
-	if statusCode >= 400 && statusCode < 500 {
-		return statusCode == 408 || statusCode == 429 || statusCode == 499
+	if statusCode >= 400 && statusCode < 500 && statusCode != 408 && statusCode != 429 && statusCode != 499 {
+		return false
 	}
 	return retryable
 }
@@ -1758,7 +1758,7 @@ func (f *FallbackAdapter) allUnavailable() bool {
 }
 
 func (f *FallbackAdapter) Label() string {
-	return fmt.Sprintf("FallbackAdapter(%s)", Label(f.llms[0]))
+	return "llm.FallbackAdapter"
 }
 
 func (f *FallbackAdapter) Model() string {

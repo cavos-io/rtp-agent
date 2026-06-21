@@ -3,7 +3,8 @@ package worker
 import livekitlogger "github.com/livekit/protocol/logger"
 
 type roomIORecordingLogger struct {
-	warnMessages []string
+	warnMessages  []string
+	errorMessages []string
 }
 
 func (l *roomIORecordingLogger) Debugw(string, ...any) {}
@@ -11,7 +12,9 @@ func (l *roomIORecordingLogger) Infow(string, ...any)  {}
 func (l *roomIORecordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
 	l.warnMessages = append(l.warnMessages, msg)
 }
-func (l *roomIORecordingLogger) Errorw(string, error, ...any) {}
+func (l *roomIORecordingLogger) Errorw(msg string, err error, keysAndValues ...any) {
+	l.errorMessages = append(l.errorMessages, msg)
+}
 func (l *roomIORecordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
 	return l
 }

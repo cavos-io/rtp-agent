@@ -49,6 +49,9 @@ func TestFallbackAdapterReportsModelProvider(t *testing.T) {
 		&metadataTTS{label: "primary", sampleRate: 24000, numChannels: 1},
 	})
 
+	if got := adapter.Label(); got != "tts.FallbackAdapter" {
+		t.Fatalf("Label = %q, want adapter label", got)
+	}
 	if got := adapter.Model(); got != "FallbackAdapter" {
 		t.Fatalf("Model = %q, want FallbackAdapter", got)
 	}

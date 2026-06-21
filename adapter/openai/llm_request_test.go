@@ -1863,6 +1863,20 @@ func TestOpenAIStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
+	err := openAIStreamRecvError(llm.NewAPIStatusError("client closed", 499, "req_499", nil))
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("openAIStreamRecvError(499) = %v, want EOF", err)
+	}
+
+	statusErr := llm.NewAPIStatusError("rate limited", http.StatusTooManyRequests, "req_429", nil)
+	err = openAIStreamRecvError(statusErr)
+	var gotStatusErr *llm.APIStatusError
+	if !errors.As(err, &gotStatusErr) || gotStatusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("openAIStreamRecvError(429) = %T %v, want APIStatusError 429", err, err)
+	}
+}
+
 type sequenceHTTPClient struct {
 	responses []*http.Response
 	calls     int
@@ -2205,6 +2219,36 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamResponseFormat(t *test
 	}
 }
 
+func TestOpenAIChatAppliesExtraParamPromptCacheOptions(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+	)
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		llm.WithExtraParams(map[string]any{
+			"prompt_cache_key":       "room-123",
+			"prompt_cache_retention": "24h",
+		}),
+	)
+
+	if !strings.Contains(capture.requestBody, `"prompt_cache_key":"room-123"`) {
+		t.Fatalf("request body = %s, want call prompt_cache_key", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"prompt_cache_retention":"24h"`) {
+		t.Fatalf("request body = %s, want call prompt_cache_retention", capture.requestBody)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestDropsUnsupportedReasoningParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("openai/gpt-5", llm.NewChatContext(), &llm.ChatOptions{
 		ParallelToolCalls: true,
@@ -2245,8 +2289,11 @@ func TestBuildOpenAIChatCompletionRequestDefaultsReasoningEffort(t *testing.T) {
 	}{
 		{model: "gpt-5", want: "minimal"},
 		{model: "gpt-5-mini", want: "minimal"},
+		{model: "gpt-5-nano", want: "minimal"},
 		{model: "gpt-5.1", want: "none"},
 		{model: "gpt-5.2", want: "none"},
+		{model: "gpt-5.4", want: "none"},
+		{model: "gpt-5.4-mini", want: "minimal"},
 		{model: "gpt-4.1", want: ""},
 	}
 

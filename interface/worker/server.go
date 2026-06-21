@@ -87,6 +87,8 @@ var uploadSessionReport = agent.UploadSessionReport
 const workerStatusUpdateInterval = 2500 * time.Millisecond
 const WorkerProtocolVersion = 1
 
+var errWorkerWebSocketNotConnected = errors.New("worker websocket is not connected")
+
 var defaultWorkerLoadMu sync.Mutex
 
 var defaultWorkerLoadCalc *workerLoadCalculator
@@ -153,6 +155,7 @@ type WorkerOptions struct {
 	HTTPProxySet                       bool
 	UserArguments                      any
 	DevMode                            bool
+	Simulation                         bool
 	LogLevel                           string
 	PrometheusPort                     int
 	PrometheusPortSet                  bool
@@ -680,6 +683,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	}
 	if next.DevMode {
 		current.DevMode = true
+	}
+	if next.Simulation {
+		current.Simulation = true
 	}
 	if next.LogLevel != "" {
 		current.LogLevel = next.LogLevel
@@ -1215,6 +1221,9 @@ func (s *AgentServer) availableForJob() bool {
 	if s.Draining() {
 		return false
 	}
+	if s.Options.Simulation {
+		return true
+	}
 	threshold := s.Options.LoadThreshold
 	if threshold <= 0 {
 		return true
@@ -1228,6 +1237,9 @@ func (s *AgentServer) availableForJob() bool {
 func (s *AgentServer) availableForJobWithLoad(load float64) bool {
 	if s.Draining() {
 		return false
+	}
+	if s.Options.Simulation {
+		return true
 	}
 	threshold := s.Options.LoadThreshold
 	if threshold <= 0 {
@@ -1641,9 +1653,13 @@ func (s *AgentServer) sendWorkerMessage(msg *WorkerMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.conn == nil {
-		return fmt.Errorf("worker websocket is not connected")
+		return errWorkerWebSocketNotConnected
 	}
 	return livekitWriteServerWorkerMessageWebSocket(s.conn, msg)
+}
+
+func isWorkerWebSocketDisconnected(err error) bool {
+	return errors.Is(err, errWorkerWebSocketNotConnected)
 }
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
@@ -1727,6 +1743,10 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 				SendStatus: func(status JobStatus) error {
 					err := s.sendWorkerMessage(livekitServerJobStatusMessage(jobID, status))
 					if err != nil {
+						if isWorkerWebSocketDisconnected(err) {
+							logger.Logger.Debugw("skipping job status update after worker websocket disconnect", jobLogValues(jobCtx, "jobId", jobID)...)
+							return nil
+						}
 						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 					}
 					return err

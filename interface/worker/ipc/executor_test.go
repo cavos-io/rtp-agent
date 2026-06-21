@@ -100,6 +100,42 @@ func TestThreadJobExecutorCloseWaitsForEntrypoint(t *testing.T) {
 	}
 }
 
+func TestThreadJobExecutorRejectsDuplicateLaunchWithReferenceError(t *testing.T) {
+	release := make(chan struct{})
+	executor := NewThreadJobExecutor("exec-duplicate", func() error {
+		<-release
+		return nil
+	})
+	defer close(release)
+
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("first LaunchJob() error = %v", err)
+	}
+
+	err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-b"})
+	if err == nil {
+		t.Fatal("second LaunchJob() error = nil, want duplicate running job error")
+	}
+	if got, want := err.Error(), "executor already has a running job"; got != want {
+		t.Fatalf("second LaunchJob() error = %q, want %q", got, want)
+	}
+}
+
+func TestProcessJobExecutorRejectsDuplicateLaunchWithReferenceError(t *testing.T) {
+	executor := NewProcessJobExecutor("exec-process-duplicate")
+	executor.started = true
+	executor.status = JobStatusRunning
+	executor.runningJob = &RunningJobInfo{Job: &livekit.Job{Id: "job-a"}}
+
+	err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-b"})
+	if err == nil {
+		t.Fatal("second LaunchJob() error = nil, want duplicate running job error")
+	}
+	if got, want := err.Error(), "process already has a running job"; got != want {
+		t.Fatalf("second LaunchJob() error = %q, want %q", got, want)
+	}
+}
+
 func TestProcessJobEnvCarriesRunningJobInfo(t *testing.T) {
 	info := RunningJobInfo{
 		AcceptArguments: JobAcceptArguments{
