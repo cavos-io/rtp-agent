@@ -538,6 +538,9 @@ func neuphonicAudioFromStreamMessage(payload []byte, contextID string, sampleRat
 			return neuphonicTTSAudioFrame(audio, sampleRate), false, nil
 		}
 	}
+	if message.Data.Stop {
+		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
+	}
 	return nil, message.Data.Stop, nil
 }
 
