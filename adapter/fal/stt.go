@@ -94,7 +94,8 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		buf.Write(f.Data)
 	}
 
-	req, err := buildFalSTTRequest(ctx, s, buf.Bytes(), language)
+	resolvedLanguage := s.resolveLanguage(language)
+	req, err := buildFalSTTRequest(ctx, s, buf.Bytes(), resolvedLanguage)
 	if err != nil {
 		return nil, err
 	}
@@ -110,19 +111,36 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		return nil, fmt.Errorf("fal stt error: %s", string(respBody))
 	}
 
-	var result struct {
-		Text string `json:"text"`
-	}
+	var result falSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
+	return falSTTResponseToEvent(result, resolvedLanguage), nil
+}
+
+type falSTTResponse struct {
+	Text string `json:"text"`
+}
+
+func falSTTResponseToEvent(result falSTTResponse, language string) *stt.SpeechEvent {
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
-			{Text: result.Text, Confidence: stt.DefaultTranscriptConfidence(result.Text)},
+			{
+				Text:       result.Text,
+				Language:   language,
+				Confidence: stt.DefaultTranscriptConfidence(result.Text),
+			},
 		},
-	}, nil
+	}
+}
+
+func (s *FalSTT) resolveLanguage(language string) string {
+	if language != "" {
+		return language
+	}
+	return s.language
 }
 
 func validateFalSTTAPIKey(apiKey string) error {

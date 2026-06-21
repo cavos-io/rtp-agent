@@ -496,7 +496,7 @@ func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampl
 		}
 		return respeecherTTSAudioFrame(audio, sampleRate), false, nil
 	case "done":
-		return nil, true, nil
+		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	case "error":
 		return nil, false, fmt.Errorf("respeecher tts stream error: %v", message.Error)
 	default:

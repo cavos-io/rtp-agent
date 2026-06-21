@@ -416,6 +416,15 @@ type smResponse struct {
 		StartTime float64 `json:"start_time"`
 		EndTime   float64 `json:"end_time"`
 	} `json:"results"`
+	Segments []struct {
+		Text      string `json:"text"`
+		Language  string `json:"language"`
+		SpeakerID string `json:"speaker_id"`
+		Metadata  struct {
+			StartTime float64 `json:"start_time"`
+			EndTime   float64 `json:"end_time"`
+		} `json:"metadata"`
+	} `json:"segments"`
 }
 
 func (s *speechmaticsSTTStream) readLoop() {
@@ -453,6 +462,8 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 		if event := speechmaticsTranscriptEvent(resp); event != nil {
 			return []*stt.SpeechEvent{event}
 		}
+	case "AddPartialSegment", "AddSegment":
+		return speechmaticsSegmentEvents(resp)
 	case "StartOfTurn":
 		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
 	case "EndOfTurn":
@@ -463,6 +474,33 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 		return events
 	}
 	return nil
+}
+
+func speechmaticsSegmentEvents(resp smResponse) []*stt.SpeechEvent {
+	if len(resp.Segments) == 0 {
+		return nil
+	}
+	eventType := stt.SpeechEventInterimTranscript
+	if resp.Message == "AddSegment" {
+		eventType = stt.SpeechEventFinalTranscript
+	}
+
+	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
+	for _, segment := range resp.Segments {
+		events = append(events, &stt.SpeechEvent{
+			Type: eventType,
+			Alternatives: []stt.SpeechData{
+				{
+					Text:      segment.Text,
+					Language:  segment.Language,
+					SpeakerID: segment.SpeakerID,
+					StartTime: segment.Metadata.StartTime,
+					EndTime:   segment.Metadata.EndTime,
+				},
+			},
+		})
+	}
+	return events
 }
 
 func speechmaticsRecognitionUsageEvent(state *speechmaticsStreamState) *stt.SpeechEvent {

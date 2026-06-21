@@ -129,6 +129,18 @@ func TestFalSTTOptionsAndRecognizeLanguageOverrideMatchReference(t *testing.T) {
 	assertFalSTTPayload(t, payload, "version", "2")
 }
 
+func TestFalSTTResponsePreservesReferenceLanguage(t *testing.T) {
+	event := falSTTResponseToEvent(falSTTResponse{Text: "bonjour"}, "fr")
+
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	got := event.Alternatives[0]
+	if got.Text != "bonjour" || got.Language != "fr" {
+		t.Fatalf("alternative = %+v, want reference text and language", got)
+	}
+}
+
 func assertFalSTTPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {

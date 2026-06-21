@@ -338,8 +338,14 @@ func TestRespeecherTTSAudioFromStreamMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("done message: %v", err)
 	}
-	if finished != nil || !done {
-		t.Fatalf("finished=%+v done=%v, want done with no audio", finished, done)
+	if !done {
+		t.Fatalf("done=%v, want true for done message", done)
+	}
+	if finished == nil || !finished.IsFinal {
+		t.Fatalf("finished=%+v, want reference final marker", finished)
+	}
+	if finished.Frame != nil {
+		t.Fatalf("finished frame = %+v, want boundary-only final marker", finished.Frame)
 	}
 
 	if _, _, err := respeecherTTSAudioFromStreamMessage([]byte(`{"context_id":"ctx-1","type":"error","error":"bad text"}`), "ctx-1", 24000); err == nil {

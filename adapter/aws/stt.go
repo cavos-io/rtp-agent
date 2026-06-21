@@ -315,6 +315,12 @@ func (s *awsSTTStream) readLoop() {
 		switch v := event.(type) {
 		case *types.TranscriptResultStreamMemberTranscriptEvent:
 			for _, result := range v.Value.Transcript.Results {
+				if result.StartTime == 0 && result.EndTime > 0 {
+					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
+				}
+				if result.EndTime <= 0 {
+					continue
+				}
 				if len(result.Alternatives) == 0 {
 					continue
 				}
@@ -331,6 +337,9 @@ func (s *awsSTTStream) readLoop() {
 						awsSpeechDataFromAlternative(alt),
 					},
 				}
+				if !result.IsPartial {
+					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+				}
 			}
 		}
 	}
@@ -339,9 +348,18 @@ func (s *awsSTTStream) readLoop() {
 func awsSpeechDataFromAlternative(alt types.Alternative) stt.SpeechData {
 	return stt.SpeechData{
 		Text:       aws.ToString(alt.Transcript),
-		Confidence: 1.0, // Confidence is not uniformly provided at the top level.
+		Confidence: awsAlternativeConfidence(alt.Items),
 		Words:      awsTimedStrings(alt.Items),
 	}
+}
+
+func awsAlternativeConfidence(items []types.Item) float64 {
+	for _, item := range items {
+		if item.Type == types.ItemTypePronunciation {
+			return aws.ToFloat64(item.Confidence)
+		}
+	}
+	return 0
 }
 
 func awsTimedStrings(items []types.Item) []stt.TimedString {

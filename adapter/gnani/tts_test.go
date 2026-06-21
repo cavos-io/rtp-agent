@@ -272,6 +272,20 @@ func TestGnaniTTSAudioFromWebsocketMessageStripsWAVAndDetectsComplete(t *testing
 		t.Fatalf("complete audio data = %#v, want stripped WAV payload", audio.Frame.Data)
 	}
 
+	final, done, err := gnaniTTSAudioFromWebsocketMessage([]byte(`{"type":"complete","data":{"audio":""}}`), 16000, 1)
+	if err != nil {
+		t.Fatalf("parse empty complete message: %v", err)
+	}
+	if !done {
+		t.Fatal("done = false, want true for empty complete message")
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final=%+v, want reference final marker", final)
+	}
+	if final.Frame != nil {
+		t.Fatalf("final frame = %+v, want boundary-only final marker", final.Frame)
+	}
+
 	if _, _, err := gnaniTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 16000, 1); err == nil {
 		t.Fatal("error message returned nil error, want stream error")
 	}

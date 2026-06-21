@@ -45,8 +45,8 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 	if data.Text != "hello world" {
 		t.Fatalf("text = %q, want hello world", data.Text)
 	}
-	if data.Confidence != 1.0 {
-		t.Fatalf("confidence = %v, want 1", data.Confidence)
+	if data.Confidence != 0.94 {
+		t.Fatalf("confidence = %v, want first pronunciation confidence", data.Confidence)
 	}
 	if len(data.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(data.Words))
@@ -56,6 +56,17 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 	}
 	if got := data.Words[1]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.91 || got.SpeakerID != "spk_1" {
 		t.Fatalf("second word = %+v, want world timing with speaker", got)
+	}
+
+	punctuationOnly := awsSpeechDataFromAlternative(types.Alternative{
+		Transcript: awsconfig.String(""),
+		Items: []types.Item{{
+			Type:    types.ItemTypePunctuation,
+			Content: awsconfig.String("."),
+		}},
+	})
+	if punctuationOnly.Confidence != 0 {
+		t.Fatalf("punctuation-only confidence = %v, want reference zero confidence", punctuationOnly.Confidence)
 	}
 }
 
@@ -328,6 +339,8 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 				Results: []types.Result{
 					{
 						IsPartial: false,
+						StartTime: 0.0,
+						EndTime:   0.2,
 						Alternatives: []types.Alternative{
 							{
 								Transcript: awsconfig.String("hello"),
@@ -351,6 +364,14 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 
 	event, err := providerStream.Next()
 	if err != nil {
+		t.Fatalf("Next error = %v, want start-of-speech event", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event type = %q, want start_of_speech", event.Type)
+	}
+
+	event, err = providerStream.Next()
+	if err != nil {
 		t.Fatalf("Next error = %v, want transcript event", err)
 	}
 	if event.Type != stt.SpeechEventFinalTranscript {
@@ -363,9 +384,54 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 		t.Fatalf("words = %#v, want hello word timing", event.Alternatives[0].Words)
 	}
 
+	end, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want end-of-speech event", err)
+	}
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("end event type = %q, want end_of_speech", end.Type)
+	}
+
 	_, err = providerStream.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next EOF error = %v, want io.EOF", err)
+	}
+}
+
+func TestAWSSTTStreamIgnoresReferenceZeroEndResults(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+
+	go providerStream.readLoop()
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{
+					{
+						IsPartial: false,
+						StartTime: 0.0,
+						EndTime:   0.0,
+						Alternatives: []types.Alternative{{
+							Transcript: awsconfig.String("not ready"),
+						}},
+					},
+				},
+			},
+		},
+	}
+	close(reader.events)
+
+	_, err := providerStream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF without zero-end transcript event", err)
 	}
 }
 

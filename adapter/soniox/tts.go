@@ -428,6 +428,9 @@ func (s *sonioxTTSSynthesizeStream) handleSonioxTTSMessage(payload []byte) (bool
 	if terminated && !s.audioEnded {
 		return false, fmt.Errorf("soniox tts stream terminated without producing audio")
 	}
+	if terminated {
+		s.events <- &tts.SynthesizedAudio{IsFinal: true}
+	}
 	return terminated, nil
 }
 

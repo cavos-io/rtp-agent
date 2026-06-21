@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -223,6 +225,57 @@ func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
 	}
 	if bytes.HasPrefix(mp3Data, audio.Frame.Data) {
 		t.Fatal("frame data still contains raw mp3 bytes")
+	}
+}
+
+func TestTelnyxTTSStreamEmitsReferenceFinalMarkerAfterMP3Decode(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream := &telnyxTTSStream{
+		ctx:    ctx,
+		events: make(chan *tts.SynthesizedAudio, 10),
+		errCh:  make(chan error, 1),
+	}
+	stream.startDecoder()
+	defer stream.Close()
+
+	go func() {
+		stream.pushAudioData(mp3Data)
+		stream.endAudioInput()
+	}()
+
+	frames := 0
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			t.Fatalf("stream ended after %d frames without final marker", frames)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("timed out after %d frames waiting for final marker", frames)
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v, want decoded audio or final marker", err)
+		}
+		if audio == nil {
+			t.Fatal("audio = nil, want decoded audio or final marker")
+		}
+		if audio.IsFinal {
+			if audio.Frame != nil {
+				t.Fatal("final marker included frame, want boundary-only marker")
+			}
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded MP3 frames")
+			}
+			return
+		}
+		if audio.Frame == nil {
+			t.Fatal("non-final event missing decoded frame")
+		}
+		frames++
 	}
 }
 

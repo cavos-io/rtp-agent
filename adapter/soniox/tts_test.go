@@ -341,6 +341,32 @@ func TestSonioxTTSStreamRejectsBareTerminationLikeReference(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSStreamTerminationEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &sonioxTTSSynthesizeStream{
+		streamID:   "stream-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+	}
+
+	done, err := stream.handleSonioxTTSMessage([]byte(`{"stream_id":"stream-1","audio_end":true}`))
+	if err != nil || done {
+		t.Fatalf("audio_end handling = done %v error %v, want open stream", done, err)
+	}
+	done, err = stream.handleSonioxTTSMessage([]byte(`{"stream_id":"stream-1","terminated":true}`))
+	if err != nil || !done {
+		t.Fatalf("terminated handling = done %v error %v, want clean completion", done, err)
+	}
+
+	select {
+	case final := <-stream.events:
+		if final == nil || !final.IsFinal {
+			t.Fatalf("final event = %#v, want reference final marker", final)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reference final marker")
+	}
+}
+
 func TestSonioxTTSAudioFrameClonesAudioData(t *testing.T) {
 	input := []byte{0x01, 0x02, 0x03, 0x04}
 

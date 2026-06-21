@@ -276,6 +276,51 @@ func TestBasetenSTTStreamSendsReferenceMetadataAndAudio(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTStreamLanguageOverrideDoesNotMutateDefault(t *testing.T) {
+	metadataCh := make(chan map[string]any, 2)
+	errCh := make(chan error, 1)
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		_, metadataPayload, err := conn.ReadMessage()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(metadataPayload, &metadata); err != nil {
+			errCh <- err
+			return
+		}
+		metadataCh <- metadata
+	})
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+		WithBasetenSTTLanguage("auto"),
+	)
+	first, err := provider.Stream(context.Background(), "es")
+	if err != nil {
+		t.Fatalf("first Stream error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close error = %v", err)
+	}
+	second, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("second Stream error = %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+
+	firstMetadata := readBasetenTestChan(t, metadataCh, errCh)
+	firstWhisper := firstMetadata["whisper_params"].(map[string]any)
+	assertBasetenPayload(t, firstWhisper, "audio_language", "es")
+	secondMetadata := readBasetenTestChan(t, metadataCh, errCh)
+	secondWhisper := secondMetadata["whisper_params"].(map[string]any)
+	assertBasetenPayload(t, secondWhisper, "audio_language", "auto")
+}
+
 func TestBasetenSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	audioCh := make(chan []byte, 2)
 	terminateCh := make(chan string, 1)
