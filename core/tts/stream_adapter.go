@@ -31,7 +31,7 @@ func NewStreamAdapter(t TTS) *StreamAdapter {
 }
 
 func (a *StreamAdapter) Label() string {
-	return fmt.Sprintf("StreamAdapter(%s)", a.tts.Label())
+	return "tts.StreamAdapter"
 }
 
 func (a *StreamAdapter) Model() string {

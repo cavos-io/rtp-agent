@@ -73,6 +73,15 @@ func TestStreamAdapterForwardsModelProvider(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterLabelUsesAdapterIdentity(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{}
+	adapter := NewStreamAdapter(provider)
+
+	if got := adapter.Label(); got != "tts.StreamAdapter" {
+		t.Fatalf("Label = %q, want adapter label", got)
+	}
+}
+
 func TestStreamAdapterForwardsPrewarm(t *testing.T) {
 	provider := &fakeStreamAdapterTTS{}
 	adapter := NewStreamAdapter(provider)

@@ -81,6 +81,15 @@ func TestStreamAdapterExposesWrappedSTT(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterLabelUsesAdapterIdentity(t *testing.T) {
+	wrapped := &fakeStreamAdapterSTT{}
+	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
+
+	if got := adapter.Label(); got != "stt.StreamAdapter" {
+		t.Fatalf("Label = %q, want adapter label", got)
+	}
+}
+
 func TestStreamAdapterForwardsWrappedSTTMetrics(t *testing.T) {
 	wrapped := &fakeStreamAdapterSTT{}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})

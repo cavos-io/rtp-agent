@@ -33,7 +33,7 @@ func NewStreamAdapter(stt STT, vad vad.VAD) *StreamAdapter {
 }
 
 func (a *StreamAdapter) Label() string {
-	return fmt.Sprintf("StreamAdapter(%s)", a.stt.Label())
+	return "stt.StreamAdapter"
 }
 
 func (a *StreamAdapter) Capabilities() STTCapabilities {
