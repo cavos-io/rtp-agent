@@ -284,6 +284,34 @@ func TestSmallestAITTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSCompleteReturnsReferenceFinalMarker(t *testing.T) {
+	conn := newSmallestAITTSClosingWebsocketConn(t, func(ws *websocket.Conn) {
+		if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"status":"complete"}`)); err != nil {
+			t.Errorf("write complete: %v", err)
+		}
+	})
+	stream := &smallestaiTTSWebsocketChunkedStream{
+		conn:       conn,
+		sampleRate: 24000,
+		segmentID:  "seg-1",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("Next() audio = %#v, want final marker", audio)
+	}
+	if audio.SegmentID != "seg-1" {
+		t.Fatalf("segment id = %q, want seg-1", audio.SegmentID)
+	}
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after final error = %v, want EOF", err)
+	}
+}
+
 func TestSmallestAITTSWebsocketCloseBeforeCompleteReturnsError(t *testing.T) {
 	conn := newSmallestAITTSClosingWebsocketConn(t, func(ws *websocket.Conn) {
 		_ = ws.WriteControl(
