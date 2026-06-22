@@ -228,6 +228,36 @@ func TestCambaiTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestCambaiTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &cambaiTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final audio", audio)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("audio frame is empty")
+	}
+
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
 func assertCambaiPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {

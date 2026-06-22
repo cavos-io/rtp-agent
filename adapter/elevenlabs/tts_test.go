@@ -472,6 +472,45 @@ func TestElevenLabsTTSDecodesReferenceMP3Response(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(mp3Data))},
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	frames := 0
+	for range 5000 {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned error before final marker after %d frames: %v", frames, err)
+		}
+		if audio == nil {
+			t.Fatalf("Next returned nil audio before final marker after %d frames", frames)
+		}
+		if audio.IsFinal {
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded audio")
+			}
+			if _, err := stream.Next(); err != io.EOF {
+				t.Fatalf("Next after final marker err = %v, want EOF", err)
+			}
+			return
+		}
+		if len(audio.Frame.Data) == 0 {
+			t.Fatalf("frame %d is empty", frames)
+		}
+		frames++
+	}
+	t.Fatalf("stream did not emit final marker after %d frames", frames)
+}
+
 func TestElevenLabsTTSReadErrorIncludesProviderOperationContext(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })

@@ -170,8 +170,43 @@ func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	if got, want := audio.Frame.SamplesPerChannel, uint32(2); got != want {
 		t.Fatalf("SamplesPerChannel = %d, want %d", got, want)
 	}
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", audio)
+	}
 	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("second Next() error = %v, want EOF", err)
+		t.Fatalf("third Next() error = %v, want EOF", err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
+	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if audio == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final audio", audio)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("audio frame is empty")
+	}
+
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error before final marker = %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker error = %v, want EOF", err)
 	}
 }
 

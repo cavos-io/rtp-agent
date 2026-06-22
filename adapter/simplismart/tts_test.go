@@ -176,6 +176,34 @@ func TestSimplismartTTSQwenRequestMatchesReference(t *testing.T) {
 	}
 }
 
+func TestSimplismartTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &simplismartTTSChunkedStream{
+		resp: &http.Response{
+			Body: io.NopCloser(strings.NewReader("\x01\x02")),
+		},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
 func assertSimplismartTTSPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {

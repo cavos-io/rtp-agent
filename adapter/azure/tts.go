@@ -448,6 +448,7 @@ type azureTTSChunkedStream struct {
 	sampleRate int
 	carry      byte
 	hasCarry   bool
+	finalSent  bool
 	provider   *AzureTTS
 }
 
@@ -472,7 +473,7 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		n, err := s.body.Read(buf[start:])
 		if err != nil && n == 0 {
 			if err == io.EOF {
-				return nil, io.EOF
+				return s.emitFinal()
 			}
 			return nil, llm.NewAPIConnectionError(err.Error())
 		}
@@ -499,11 +500,29 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 		if err != nil {
 			if err == io.EOF {
-				return nil, io.EOF
+				return s.emitFinal()
 			}
 			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 	}
+}
+
+func (s *azureTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	if s.body != nil {
+		body := s.body
+		s.body = nil
+		s.carry = 0
+		s.hasCarry = false
+		_ = body.Close()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+	}
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
 }
 
 func (s *azureTTSChunkedStream) Close() error {
@@ -513,6 +532,7 @@ func (s *azureTTSChunkedStream) Close() error {
 		}
 		return nil
 	}
+	s.finalSent = true
 	body := s.body
 	s.body = nil
 	s.carry = 0

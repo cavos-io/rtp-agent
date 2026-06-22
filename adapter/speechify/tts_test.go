@@ -217,9 +217,45 @@ func TestSpeechifyTTSChunkedStreamDecodesWAVResponse(t *testing.T) {
 		t.Fatalf("frame shape = rate %d channels %d samples %d, want 48000/1/2", audio.Frame.SampleRate, audio.Frame.NumChannels, audio.Frame.SamplesPerChannel)
 	}
 
-	_, err = stream.Next()
-	if err != io.EOF {
-		t.Fatalf("second Next error = %v, want EOF", err)
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestSpeechifyTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &speechifyTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(speechifyTestWAV([]byte{0x01, 0x00}, 24000, 1)))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final decoded audio", audio)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
 	}
 }
 
