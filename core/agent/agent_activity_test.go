@@ -669,6 +669,38 @@ func TestAgentActivityOnStartOfSpeechReportsActualSpeechStartTime(t *testing.T) 
 	}
 }
 
+func TestAgentActivityPendingFinalKeepsFirstSpeechStartAcrossVADBursts(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+
+	activity.OnStartOfSpeech(&vad.VADEvent{
+		Type:              vad.VADEventStartOfSpeech,
+		SpeechDuration:    0.5,
+		InferenceDuration: 0.01,
+	})
+	firstBurstStart := activity.userSpeechStartedAt
+	activity.OnEndOfSpeech(&vad.VADEvent{Type: vad.VADEventEndOfSpeech, SilenceDuration: 0.05})
+
+	time.Sleep(20 * time.Millisecond)
+	activity.OnStartOfSpeech(&vad.VADEvent{Type: vad.VADEventStartOfSpeech})
+	if !activity.userSpeechStartedAt.After(firstBurstStart) {
+		t.Fatalf("second burst userSpeechStartedAt = %v, want per-burst start after first %v", activity.userSpeechStartedAt, firstBurstStart)
+	}
+	activity.OnFinalTranscript(&stt.SpeechEvent{
+		Alternatives: []stt.SpeechData{{Text: "multi burst turn", Confidence: 0.9}},
+	})
+
+	info := activity.pendingFinalEndOfTurnInfo()
+	if info.StartedSpeakingAt == nil {
+		t.Fatal("StartedSpeakingAt = nil, want first burst start")
+	}
+	got := unixSecondsToTime(*info.StartedSpeakingAt)
+	if got.Sub(firstBurstStart) > 10*time.Millisecond || firstBurstStart.Sub(got) > 10*time.Millisecond {
+		t.Fatalf("StartedSpeakingAt = %v, want first burst start %v", got, firstBurstStart)
+	}
+}
+
 func TestAgentActivityOnStartOfSpeechPausesThinkingSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{
