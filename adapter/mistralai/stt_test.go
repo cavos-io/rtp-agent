@@ -298,6 +298,25 @@ func TestMistralAISTTRealtimeStreamMapsReferenceEvents(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRealtimeStreamLanguageSeedsFinalFallback(t *testing.T) {
+	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
+		[]byte(`{"type":"session.created","session":{"request_id":"req_456"}}`),
+		[]byte(`{"type":"transcription.done","text":"bonjour","language":null,"segments":[{"text":"bonjour","start":0.2,"end":0.7}],"usage":{}}`),
+	}}
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "fr")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	final := nextMistralSTTEvent(t, stream)
+	assertMistralSTTEvent(t, final, stt.SpeechEventFinalTranscript, "bonjour", "fr", "req_456")
+}
+
 func TestMistralAISTTRealtimeStreamAppliesStartTimeOffset(t *testing.T) {
 	readGate := make(chan struct{})
 	conn := &mistralAISTTFakeRealtimeConn{reads: [][]byte{
