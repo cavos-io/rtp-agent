@@ -293,14 +293,9 @@ func (t *OpenAITTS) Prewarm() {
 		close(done)
 		return
 	}
-	previousCancel := t.prewarmCancel
 	t.prewarmCancel = cancel
 	t.prewarmDone = done
 	t.mu.Unlock()
-
-	if previousCancel != nil {
-		previousCancel()
-	}
 
 	go func() {
 		defer close(done)
