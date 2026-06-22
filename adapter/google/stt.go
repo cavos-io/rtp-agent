@@ -18,6 +18,7 @@ type GoogleSTT struct {
 	mu                   sync.Mutex
 	streams              map[*googleSTTStream]struct{}
 	client               googleSpeechClient
+	closed               bool
 	model                string
 	punctuate            bool
 	spokenPunctuation    bool
@@ -126,6 +127,7 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 
 func (s *GoogleSTT) Close() error {
 	s.mu.Lock()
+	s.closed = true
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -140,6 +142,15 @@ func (s *GoogleSTT) Close() error {
 		}
 	}
 	return closeErr
+}
+
+func (s *GoogleSTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *GoogleSTT) registerStream(stream *googleSTTStream) {
@@ -158,6 +169,9 @@ func (s *GoogleSTT) unregisterStream(stream *googleSTTStream) {
 }
 
 func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if language == "" {
 		language = "en-US"
 	}
@@ -165,6 +179,10 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	stream, err := s.client.StreamingRecognize(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if s.isClosed() {
+		_ = stream.CloseSend()
+		return nil, io.ErrClosedPipe
 	}
 
 	err = stream.Send(&speechpb.StreamingRecognizeRequest{
@@ -179,6 +197,10 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 
 	if err != nil {
 		return nil, err
+	}
+	if s.isClosed() {
+		_ = stream.CloseSend()
+		return nil, io.ErrClosedPipe
 	}
 
 	gs := &googleSTTStream{
@@ -195,6 +217,9 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if language == "" {
 		language = "en-US"
 	}
