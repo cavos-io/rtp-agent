@@ -45,6 +45,7 @@ type RimeTTS struct {
 	timeScaleFactor *float64
 	useWebsocket    bool
 	segment         string
+	closed          bool
 }
 
 type RimeTTSOption func(*RimeTTS)
@@ -156,6 +157,9 @@ func (t *RimeTTS) SampleRate() int  { return t.sampleRate }
 func (t *RimeTTS) NumChannels() int { return 1 }
 
 func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if t.useWebsocket {
 		return nil, fmt.Errorf("rime tts one-shot synthesize requires websocket mode disabled")
 	}
@@ -220,6 +224,9 @@ func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Re
 }
 
 func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if !t.useWebsocket {
 		return nil, fmt.Errorf("rime tts streaming requires websocket mode enabled")
 	}
@@ -233,6 +240,10 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial rime tts websocket: %w", err)
 	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rimeTTSSynthesizeStream{
 		conn:      conn,
@@ -245,13 +256,18 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
 
 func (t *RimeTTS) Close() error {
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*rimeTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -267,17 +283,30 @@ func (t *RimeTTS) Close() error {
 	return closeErr
 }
 
-func (t *RimeTTS) registerStream(stream *rimeTTSSynthesizeStream) {
-	if t == nil || stream == nil {
-		return
+func (t *RimeTTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *RimeTTS) registerStream(stream *rimeTTSSynthesizeStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*rimeTTSSynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	stream.provider = t
+	return true
 }
 
 func (t *RimeTTS) unregisterStream(stream *rimeTTSSynthesizeStream) {
