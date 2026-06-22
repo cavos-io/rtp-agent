@@ -22,6 +22,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -560,6 +561,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		voiceSettings:             cloneElevenLabsVoiceSettings(t.voiceSettings),
 		pronunciationDictionaries: append([]ElevenLabsPronunciationDictionaryLocator(nil), t.pronunciationDictionaries...),
 		preferredAlignment:        elevenLabsPreferredAlignment(t.language, t.preferredAlignment),
+		autoMode:                  t.autoMode != nil && *t.autoMode,
 	}
 
 	if !t.registerStream(stream) {
@@ -642,6 +644,8 @@ type elevenLabsStream struct {
 	voiceSettings             *ElevenLabsVoiceSettings
 	pronunciationDictionaries []ElevenLabsPronunciationDictionaryLocator
 	preferredAlignment        string
+	autoMode                  bool
+	pendingText               string
 
 	alignRunes    []rune
 	alignStartsMs []int
@@ -1033,10 +1037,36 @@ func (s *elevenLabsStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	if s.autoMode {
+		s.pendingText += text
+		if err := s.sendCompleteSentencesLocked(); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+		return nil
+	}
+	return s.sendTextLocked(text, false)
+}
+
+func (s *elevenLabsStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTextLocked(sentence, true); err != nil {
+			return err
+		}
+		s.pendingText = strings.TrimPrefix(s.pendingText, sentence)
+	}
+}
+
+func (s *elevenLabsStream) sendTextLocked(text string, flush bool) error {
 	if err := s.sendInitLocked(); err != nil {
 		return err
 	}
-	if err := s.conn.WriteJSON(elevenLabsTextPayload(s.contextID, text)); err != nil {
+	if err := s.conn.WriteJSON(elevenLabsTextPayload(s.contextID, text, flush)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)
 	}
@@ -1048,6 +1078,13 @@ func (s *elevenLabsStream) Flush() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.autoMode && s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendTextLocked(text, true); err != nil {
+			return err
+		}
 	}
 	if err := s.sendInitLocked(); err != nil {
 		return err
@@ -1114,11 +1151,15 @@ func cloneElevenLabsVoiceSettings(settings *ElevenLabsVoiceSettings) *ElevenLabs
 	return &copied
 }
 
-func elevenLabsTextPayload(contextID string, text string) map[string]interface{} {
-	return map[string]interface{}{
+func elevenLabsTextPayload(contextID string, text string, flush bool) map[string]interface{} {
+	payload := map[string]interface{}{
 		"text":       text + " ",
 		"context_id": contextID,
 	}
+	if flush {
+		payload["flush"] = true
+	}
+	return payload
 }
 
 func elevenLabsFlushPayload(contextID string) map[string]interface{} {
