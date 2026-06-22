@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -414,16 +415,17 @@ func (s *rimeTTSChunkedStream) Close() error {
 }
 
 type rimeTTSSynthesizeStream struct {
-	conn      *websocket.Conn
-	ctx       context.Context
-	cancel    context.CancelFunc
-	provider  *RimeTTS
-	contextID string
-	events    chan *tts.SynthesizedAudio
-	errCh     chan error
-	mu        sync.Mutex
-	closed    bool
-	started   bool
+	conn        *websocket.Conn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	provider    *RimeTTS
+	contextID   string
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
+	mu          sync.Mutex
+	closed      bool
+	started     bool
+	pendingText string
 
 	writeMessage func(int, []byte) error
 	closeConn    func() error
@@ -438,12 +440,8 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("rime tts stream is closed")
 	}
-	message, err := buildRimeTTSTextMessage(s.contextID, text)
-	if err != nil {
-		return err
-	}
-	s.started = true
-	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+	s.pendingText += text
+	if err := s.sendCompleteSentencesLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -455,6 +453,14 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("rime tts stream is closed")
+	}
+	if s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendSentenceLocked(text); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
 	}
 	if !s.started {
 		return nil
@@ -468,6 +474,39 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 		return err
 	}
 	return nil
+}
+
+func (s *rimeTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendSentenceLocked(sentence); err != nil {
+			return err
+		}
+		tokenIdx := strings.Index(s.pendingText, sentence)
+		if tokenIdx < 0 {
+			s.pendingText = strings.TrimSpace(strings.TrimPrefix(s.pendingText, sentence))
+			continue
+		}
+		s.pendingText = strings.TrimLeftFunc(s.pendingText[tokenIdx+len(sentence):], func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+	}
+}
+
+func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
+	if text == "" {
+		return nil
+	}
+	message, err := buildRimeTTSTextMessage(s.contextID, text)
+	if err != nil {
+		return err
+	}
+	s.started = true
+	return s.writeMessageData(websocket.TextMessage, message)
 }
 
 func (s *rimeTTSSynthesizeStream) Close() error {
