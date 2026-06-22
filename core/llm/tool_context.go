@@ -60,13 +60,25 @@ func (c *ToolContext) Close() error {
 	}
 	var errs []error
 	for _, tool := range c.tools {
-		if _, ok := tool.(Toolset); !ok {
-			continue
+		if err := closeToolsetValue(tool); err != nil {
+			errs = append(errs, err)
 		}
-		if closeable, ok := tool.(closeableToolset); ok {
-			if err := closeable.Close(); err != nil {
-				errs = append(errs, err)
-			}
+	}
+	return errors.Join(errs...)
+}
+
+func closeToolsetValue(tool interface{}) error {
+	toolset, ok := tool.(Toolset)
+	if !ok {
+		return nil
+	}
+	if closeable, ok := toolset.(closeableToolset); ok {
+		return closeable.Close()
+	}
+	var errs []error
+	for _, child := range toolset.Tools() {
+		if err := closeToolsetValue(child); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)

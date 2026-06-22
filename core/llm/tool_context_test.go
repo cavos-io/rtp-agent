@@ -63,6 +63,13 @@ func (s *closableNestedTestToolset) Close() error {
 	return nil
 }
 
+type nestedTestToolset struct {
+	testTool
+	tools []Tool
+}
+
+func (s *nestedTestToolset) Tools() []Tool { return s.tools }
+
 type nonComparableTool struct {
 	id     string
 	name   string
@@ -222,6 +229,26 @@ func TestToolContextCloseClosesNestedToolsetsOnce(t *testing.T) {
 	}
 	if child.closeCalls != 1 {
 		t.Fatalf("child Close calls = %d, want 1 via parent close", child.closeCalls)
+	}
+}
+
+func TestToolContextCloseRecursesIntoPlainNestedToolsets(t *testing.T) {
+	child := &closableNestedTestToolset{
+		testTool: testTool{id: "child", name: "child"},
+		tools:    []Tool{&testTool{id: "lookup", name: "lookup"}},
+	}
+	parent := &nestedTestToolset{
+		testTool: testTool{id: "parent", name: "parent"},
+		tools:    []Tool{child},
+	}
+	ctx := NewToolContext([]interface{}{parent})
+
+	if err := ctx.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if child.closeCalls != 1 {
+		t.Fatalf("child Close calls = %d, want 1 through plain parent recursion", child.closeCalls)
 	}
 }
 
