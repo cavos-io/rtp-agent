@@ -61,6 +61,7 @@ type STT struct {
 	language                string
 	modelOptions            map[string]any
 	streams                 map[*sttStream]struct{}
+	closed                  bool
 }
 
 type STTOption func(*STT)
@@ -337,6 +338,9 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := s.requireAPIKey(); err != nil {
 		return nil, err
 	}
@@ -352,6 +356,10 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if err != nil {
 			lastErr = fmt.Errorf("failed to dial slng stt websocket: %w", err)
 			continue
+		}
+		if s.isClosed() {
+			conn.Close()
+			return nil, io.ErrClosedPipe
 		}
 		if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(&attempt)); err != nil {
 			conn.Close()
@@ -372,7 +380,10 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 			bufferSizeSeconds: s.bufferSizeSeconds,
 			encoding:          s.encoding,
 		}
-		s.registerStream(stream)
+		if !s.registerStream(stream) {
+			stream.Close()
+			return nil, io.ErrClosedPipe
+		}
 		return stream, nil
 	}
 	if lastErr != nil {
@@ -383,6 +394,11 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 func (s *STT) Close() error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*sttStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -398,17 +414,30 @@ func (s *STT) Close() error {
 	return firstErr
 }
 
-func (s *STT) registerStream(stream *sttStream) {
-	if stream == nil {
-		return
+func (s *STT) isClosed() bool {
+	if s == nil {
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *STT) registerStream(stream *sttStream) bool {
+	if stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*sttStream]struct{})
 	}
 	stream.provider = s
 	s.streams[stream] = struct{}{}
+	return true
 }
 
 func (s *STT) unregisterStream(stream *sttStream) {
