@@ -1941,6 +1941,43 @@ func TestOpenAILLMProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestOpenAILLMChatAfterCloseIsRejected(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK, "data: [DONE]\n\n"),
+		openAITestResponse(http.StatusOK, "data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("initial Chat() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream Close() error = %v", err)
+	}
+	if err := llm.Close(model); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Chat() after Close error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	if capture.calls != 1 {
+		t.Fatalf("HTTP calls after Chat() post-close = %d, want only initial request", capture.calls)
+	}
+}
+
 type sequenceHTTPClient struct {
 	responses []*http.Response
 	calls     int

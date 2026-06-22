@@ -87,6 +87,7 @@ type OpenAILLM struct {
 	extraQuery           map[string]string
 	extraBody            map[string]any
 	mu                   sync.Mutex
+	closed               bool
 	streams              map[*openaiStream]struct{}
 }
 
@@ -822,6 +823,7 @@ func (l *OpenAILLM) Close() error {
 		return nil
 	}
 	l.mu.Lock()
+	l.closed = true
 	streams := make([]*openaiStream, 0, len(l.streams))
 	for stream := range l.streams {
 		streams = append(streams, stream)
@@ -854,6 +856,10 @@ func (l *OpenAILLM) unregisterStream(stream *openaiStream) {
 }
 
 func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	if l.isClosed() {
+		return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+	}
+
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -899,6 +905,13 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
 		stream, err := client.CreateChatCompletionStream(ctx, req)
 		if err == nil {
+			if l.isClosed() {
+				stream.Close()
+				if cancel != nil {
+					cancel()
+				}
+				return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+			}
 			wrapped := &openaiStream{
 				stream:   stream,
 				cancel:   cancel,
@@ -926,6 +939,12 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		cancel()
 	}
 	return nil, lastErr
+}
+
+func (l *OpenAILLM) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
 }
 
 func mapOpenAIError(err error) error {
