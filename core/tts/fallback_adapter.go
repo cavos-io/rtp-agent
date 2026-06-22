@@ -590,6 +590,7 @@ type fallbackChunkedStream struct {
 	activeIndex  int
 	retries      map[int]int
 	requestID    string
+	startedAt    time.Time
 
 	eventCh chan *SynthesizedAudio
 	errCh   chan error
@@ -610,6 +611,7 @@ type fallbackMetricsState struct {
 
 func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedStream, error) {
 	ctx, cancel := context.WithCancel(ctx)
+	startedAt := time.Now()
 	s := &fallbackChunkedStream{
 		adapter:   f,
 		ctx:       ctx,
@@ -621,7 +623,8 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 		doneCh:    make(chan struct{}),
 		retries:   make(map[int]int),
 		requestID: cavosmath.ShortUUID(""),
-		metrics:   fallbackMetricsState{startedAt: time.Now()},
+		startedAt: startedAt,
+		metrics:   fallbackMetricsState{startedAt: startedAt},
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -669,7 +672,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 		}
 	}
 
-	return s.adapter.allFailedError()
+	return s.adapter.allFailedError(s.startedAt)
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
@@ -968,6 +971,7 @@ type fallbackSynthesizeStream struct {
 	inputBuffer  []fallbackSynthesizeInput
 	requestID    string
 	segmentID    string
+	startedAt    time.Time
 
 	eventCh   chan *SynthesizedAudio
 	errCh     chan error
@@ -989,6 +993,7 @@ type fallbackSynthesizeInput struct {
 
 func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) {
 	ctx, cancel := context.WithCancel(ctx)
+	startedAt := time.Now()
 	s := &fallbackSynthesizeStream{
 		adapter:   f,
 		ctx:       ctx,
@@ -1000,7 +1005,8 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 		retries:   make(map[int]int),
 		requestID: cavosmath.ShortUUID(""),
 		segmentID: cavosmath.ShortUUID(""),
-		metrics:   fallbackMetricsState{startedAt: time.Now()},
+		startedAt: startedAt,
+		metrics:   fallbackMetricsState{startedAt: startedAt},
 	}
 
 	if err := s.tryStartStream(0); err != nil {
@@ -1056,11 +1062,11 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 		}
 	}
 
-	return s.adapter.allFailedError()
+	return s.adapter.allFailedError(s.startedAt)
 }
 
-func (f *FallbackAdapter) allFailedError() error {
-	return llm.NewAPIConnectionError(fmt.Sprintf("all TTSs failed (%v) after %s", f.labels(), 0*time.Second))
+func (f *FallbackAdapter) allFailedError(startedAt time.Time) error {
+	return llm.NewAPIConnectionError(fmt.Sprintf("all TTSs failed (%v) after %.9g seconds", f.labels(), time.Since(startedAt).Seconds()))
 }
 
 func (f *FallbackAdapter) labels() []string {

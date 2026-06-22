@@ -2173,11 +2173,14 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 		})
 	case "add_message":
 		role, _ := step.Args["role"].(string)
-		text, _ := step.Args["text"].(string)
 		args := lkllm.ChatMessageArgs{
 			ID:   id,
 			Role: lkllm.ChatRole(role),
-			Text: text,
+		}
+		if text, ok := step.Args["text"].(string); ok {
+			args.Text = text
+		} else {
+			args.Content = []lkllm.ChatContent{}
 		}
 		if createdAt, ok := scenarioIntArg(step.Args, "created_at_unix"); ok {
 			args.CreatedAt = time.Unix(int64(createdAt), 0)
@@ -2185,13 +2188,17 @@ func runLLMChatContextCallStep(state *llmScenarioState, step llmScenarioStepSpec
 		state.vars[step.Assign] = ctx.AddMessage(args)
 	case "add_message_capture_panic":
 		role, _ := step.Args["role"].(string)
-		text, _ := step.Args["text"].(string)
+		args := lkllm.ChatMessageArgs{
+			ID:   id,
+			Role: lkllm.ChatRole(role),
+		}
+		if text, ok := step.Args["text"].(string); ok {
+			args.Text = text
+		} else {
+			args.Content = []lkllm.ChatContent{}
+		}
 		state.vars[step.Assign] = capturePanicString(func() {
-			ctx.AddMessage(lkllm.ChatMessageArgs{
-				ID:   id,
-				Role: lkllm.ChatRole(role),
-				Text: text,
-			})
+			ctx.AddMessage(args)
 		})
 	case "insert_messages":
 		rawItems, ok := step.Args["items"].([]any)

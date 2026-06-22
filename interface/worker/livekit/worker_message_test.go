@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
 	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
@@ -803,6 +804,46 @@ func TestRunWorkerMessageLoopSkipsDecodeErrorsAndContinues(t *testing.T) {
 	}
 	if handled != 1 {
 		t.Fatalf("handled messages = %d, want 1", handled)
+	}
+}
+
+func TestRunWorkerMessageLoopReturnsAPIStatusErrorOnUnexpectedClose(t *testing.T) {
+	tests := []struct {
+		name       string
+		closeCode  int
+		wantStatus int
+	}{
+		{name: "known close code", closeCode: websocket.CloseGoingAway, wantStatus: websocket.CloseGoingAway},
+		{name: "unknown close code", closeCode: 0, wantStatus: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &workerMessageLoopReader{
+				frames: []workerMessageLoopFrame{
+					{err: &websocket.CloseError{Code: tt.closeCode, Text: "server shutting down"}},
+				},
+				closed: make(chan struct{}),
+			}
+
+			err := workerlivekit.RunWorkerMessageLoop(context.Background(), workerlivekit.WorkerMessageLoopOptions{
+				Reader: reader,
+			})
+
+			var statusErr *llm.APIStatusError
+			if !errors.As(err, &statusErr) {
+				t.Fatalf("RunWorkerMessageLoop() error = %T %v, want APIStatusError", err, err)
+			}
+			if statusErr.Message != "worker connection closed unexpectedly" {
+				t.Fatalf("APIStatusError.Message = %q, want worker connection closed unexpectedly", statusErr.Message)
+			}
+			if statusErr.StatusCode != tt.wantStatus {
+				t.Fatalf("APIStatusError.StatusCode = %d, want %d", statusErr.StatusCode, tt.wantStatus)
+			}
+			if !statusErr.Retryable {
+				t.Fatal("APIStatusError.Retryable = false, want retryable unexpected worker close")
+			}
+		})
 	}
 }
 

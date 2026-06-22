@@ -553,6 +553,7 @@ func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
 	args, drainTimeout, err := parseWorkerArgs([]string{
 		"worker", "start",
 		"--log-level", "warn",
+		"--log-format", "colored",
 		"--url", "wss://livekit.example",
 		"--api-key", "api-key",
 		"--api-secret", "api-secret",
@@ -564,6 +565,9 @@ func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
 
 	if args.LogLevel != "WARN" {
 		t.Fatalf("LogLevel = %q, want WARN", args.LogLevel)
+	}
+	if args.LogFormat != "colored" {
+		t.Fatalf("LogFormat = %q, want colored", args.LogFormat)
 	}
 	if args.URL != "wss://livekit.example" {
 		t.Fatalf("URL = %q, want wss://livekit.example", args.URL)
@@ -602,6 +606,19 @@ func TestParseWorkerArgsSupportsReferenceSimulationOption(t *testing.T) {
 	}
 }
 
+func TestParseWorkerArgsRejectsReloadAddrOutsideDev(t *testing.T) {
+	_, _, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--reload-addr", "127.0.0.1:9999",
+	}, false)
+	if err == nil {
+		t.Fatal("parseWorkerArgs() error = nil, want reload addr dev-mode error")
+	}
+	if got, want := err.Error(), "--reload-addr requires --dev"; got != want {
+		t.Fatalf("parseWorkerArgs() error = %q, want %q", got, want)
+	}
+}
+
 func TestParseWorkerArgsSupportsReferenceDevOptions(t *testing.T) {
 	args, drainTimeout, err := parseWorkerArgs([]string{
 		"worker", "dev",
@@ -609,6 +626,7 @@ func TestParseWorkerArgsSupportsReferenceDevOptions(t *testing.T) {
 		"--url", "wss://dev.example",
 		"--api-key", "dev-key",
 		"--api-secret", "dev-secret",
+		"--reload-addr", "127.0.0.1:9999",
 		"--no-reload",
 	}, true)
 	if err != nil {
@@ -632,6 +650,9 @@ func TestParseWorkerArgsSupportsReferenceDevOptions(t *testing.T) {
 	}
 	if args.Reload {
 		t.Fatal("Reload = true, want false after --no-reload")
+	}
+	if args.ReloadAddr != "127.0.0.1:9999" {
+		t.Fatalf("ReloadAddr = %q, want 127.0.0.1:9999", args.ReloadAddr)
 	}
 	if drainTimeout != nil {
 		t.Fatalf("drainTimeout = %v, want nil for dev", drainTimeout)
@@ -830,6 +851,17 @@ func TestCLIProtocolLoggerConfigUsesReferenceProductionJSON(t *testing.T) {
 	}
 	if !cfg.JSON {
 		t.Fatal("JSON = false, want true for production CLI logging")
+	}
+}
+
+func TestCLIProtocolLoggerConfigUsesReferenceColoredLogFormat(t *testing.T) {
+	cfg := cliProtocolLoggerConfig("WARN", false, "colored")
+
+	if cfg.Level != "warn" {
+		t.Fatalf("Level = %q, want warn", cfg.Level)
+	}
+	if cfg.JSON {
+		t.Fatal("JSON = true, want false for colored CLI logging")
 	}
 }
 

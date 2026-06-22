@@ -1674,10 +1674,7 @@ type FallbackAllFailedError struct {
 
 func (e *FallbackAllFailedError) Error() string {
 	if e.APIError != nil {
-		if e.Err == nil {
-			return e.APIError.Error()
-		}
-		return fmt.Sprintf("%s: %v", e.APIError.Error(), e.Err)
+		return e.APIError.Error()
 	}
 	message := fallbackAllFailedMessage(e.Labels, e.Duration)
 	if e.Err == nil {
@@ -1697,7 +1694,7 @@ func (e *FallbackAllFailedError) Unwrap() error {
 }
 
 func fallbackAllFailedMessage(labels []string, duration time.Duration) string {
-	return fmt.Sprintf("all LLMs failed (%v) after %s", labels, duration)
+	return fmt.Sprintf("all LLMs failed (%v) after %.9g seconds", labels, duration.Seconds())
 }
 
 const (

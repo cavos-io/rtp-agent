@@ -510,6 +510,28 @@ func TestChatContextAddMessageAcceptsTextContent(t *testing.T) {
 	}
 }
 
+func TestChatContextAddMessagePreservesEmptyTextContent(t *testing.T) {
+	ctx := NewChatContext()
+
+	message := ctx.AddMessage(ChatMessageArgs{
+		Role: ChatRoleUser,
+		Text: "",
+	})
+
+	if got := len(message.Content); got != 1 {
+		t.Fatalf("AddMessage() content length = %d, want one explicit empty text part", got)
+	}
+	if got := message.Content[0].Text; got != "" {
+		t.Fatalf("AddMessage() text part = %q, want empty string", got)
+	}
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	if len(content) != 1 || content[0] != "" {
+		t.Fatalf("serialized content = %#v, want explicit empty string part", content)
+	}
+}
+
 func TestChatMessageTextContentIncludesInstructionsAndPlainText(t *testing.T) {
 	message := &ChatMessage{
 		Role: ChatRoleSystem,
@@ -2651,6 +2673,29 @@ func TestChatContextToOpenAIResponsesProviderFormat(t *testing.T) {
 	}
 	if items[3]["type"] != "function_call_output" || items[3]["call_id"] != "call_lookup" || items[3]["output"] != "Paris" {
 		t.Fatalf("function output item = %#v", items[3])
+	}
+}
+
+func TestChatContextToOpenAIResponsesProviderFormatOmitsNullPhase(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:      "assistant-turn",
+			Role:    ChatRoleAssistant,
+			Content: []ChatContent{{Text: "checking"}},
+			Extra: map[string]any{
+				"openai": map[string]any{"phase": nil},
+			},
+		},
+	}
+
+	items, _ := ctx.ToProviderFormat("openai.responses")
+
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1: %#v", len(items), items)
+	}
+	if _, ok := items[0]["phase"]; ok {
+		t.Fatalf("assistant phase = %#v, want omitted for null reference phase", items[0]["phase"])
 	}
 }
 
