@@ -349,13 +349,16 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if !s.useRealtime {
 		return nil, fmt.Errorf("openai realtime stt is not enabled")
 	}
+	if language != "" {
+		s.language = language
+	}
 	conn, _, err := s.dialRealtimeSTTWebsocket(ctx)
 	if err != nil {
 		return nil, mapOpenAIError(err)
 	}
 	eventLanguage := s.language
-	if language != "" {
-		eventLanguage = openAISTTRequestLanguage(language)
+	if eventLanguage != "" {
+		eventLanguage = openAISTTRequestLanguage(eventLanguage)
 	}
 	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s)
 	if err != nil {
