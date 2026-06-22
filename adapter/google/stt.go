@@ -153,13 +153,22 @@ func (s *GoogleSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *GoogleSTT) registerStream(stream *googleSTTStream) {
+func (s *GoogleSTT) registerStream(stream *googleSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*googleSTTStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
 	s.mu.Unlock()
+	return true
 }
 
 func (s *GoogleSTT) unregisterStream(stream *googleSTTStream) {
@@ -210,7 +219,9 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		events:        make(chan *stt.SpeechEvent, 10),
 		errCh:         make(chan error, 1),
 	}
-	s.registerStream(gs)
+	if !s.registerStream(gs) {
+		return nil, io.ErrClosedPipe
+	}
 	go gs.readLoop()
 
 	return gs, nil
