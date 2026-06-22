@@ -120,7 +120,7 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		if err := p.validateExecutorType(); err != nil {
 			p.mu.Unlock()
 			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
-			return err
+			return fmt.Errorf("no process became available after %d attempts", maxLaunchAttempts)
 		}
 		executor := p.idleExecutorLocked()
 		executorWarmed := executor != nil

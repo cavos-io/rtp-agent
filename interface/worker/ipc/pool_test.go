@@ -271,16 +271,23 @@ func TestProcPoolTargetIdleProcesses(t *testing.T) {
 
 func TestProcPoolRejectsUnsupportedExecutorType(t *testing.T) {
 	launchPool := NewProcPool(1, ExecutorType("unsupported"), nil)
+	var launchReadyEvents int
+	launchPool.On(ProcPoolEventProcessReady, func(JobExecutor) {
+		launchReadyEvents++
+	})
 
 	err := launchPool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
 	if err == nil {
-		t.Fatal("LaunchJob error = nil, want unsupported job executor error")
+		t.Fatal("LaunchJob error = nil, want process acquisition error")
 	}
-	if got, want := err.Error(), "unsupported job executor: unsupported"; got != want {
+	if got, want := err.Error(), "no process became available after 3 attempts"; got != want {
 		t.Fatalf("LaunchJob error = %q, want %q", got, want)
 	}
 	if executors := launchPool.GetExecutors(); len(executors) != 0 {
 		t.Fatalf("executors len = %d, want none after unsupported executor type", len(executors))
+	}
+	if launchReadyEvents != 0 {
+		t.Fatalf("launch ready events = %d, want none after unsupported executor type", launchReadyEvents)
 	}
 
 	startPool := NewProcPool(1, ExecutorType("unsupported"), nil)
