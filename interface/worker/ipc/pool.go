@@ -85,6 +85,10 @@ func (p *ProcPool) LaunchJob(ctx context.Context, job Job) error {
 
 func (p *ProcPool) Start(ctx context.Context) error {
 	p.mu.Lock()
+	if p.started {
+		p.mu.Unlock()
+		return nil
+	}
 	if p.closed {
 		p.mu.Unlock()
 		return ErrProcPoolClosed

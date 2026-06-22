@@ -585,6 +585,45 @@ func TestProcPoolCloseBeforeStartIsReferenceNoop(t *testing.T) {
 	}
 }
 
+func TestProcPoolStartAfterCloseIsReferenceNoop(t *testing.T) {
+	var created int
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.SetTargetIdleProcesses(1)
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return &fakeJobExecutor{id: id}
+	}
+
+	var readyEvents int
+	pool.On(ProcPoolEventProcessReady, func(executor JobExecutor) {
+		readyEvents++
+	})
+
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := pool.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start after Close: %v", err)
+	}
+
+	if created != 1 {
+		t.Fatalf("created executors = %d, want only initial warm executor", created)
+	}
+	if readyEvents != 1 {
+		t.Fatalf("ready events = %d, want only initial warm event", readyEvents)
+	}
+	if got := len(pool.GetExecutors()); got != 0 {
+		t.Fatalf("executors len = %d, want closed pool to stay empty", got)
+	}
+	err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	if !errors.Is(err, ErrProcPoolClosed) {
+		t.Fatalf("LaunchJob after close error = %v, want ErrProcPoolClosed", err)
+	}
+}
+
 func TestProcPoolLaunchReusesCapacityAfterExecutorCompletes(t *testing.T) {
 	completed := make(chan struct{}, 2)
 	pool := NewProcPool(1, ExecutorTypeThread, func() error {
