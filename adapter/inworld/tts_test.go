@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestInworldTTSDefaultsMatchReference(t *testing.T) {
@@ -651,6 +653,67 @@ func TestInworldTTSChunkedStreamSkipsMalformedReferenceJSONLines(t *testing.T) {
 	}
 	if string(audio.Frame.Data) != string([]byte{1, 2}) {
 		t.Fatalf("audio data = %#v, want decoded base64 audio after malformed line", audio.Frame.Data)
+	}
+}
+
+func TestInworldTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	originalClient := http.DefaultClient
+	httpCalls := 0
+	http.DefaultClient = &http.Client{Transport: inworldRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return nil, errors.New("unexpected inworld tts request")
+	})}
+	t.Cleanup(func() {
+		http.DefaultClient = originalClient
+	})
+
+	provider := NewInworldTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls after Close = %d, want 0", httpCalls)
+	}
+}
+
+func TestInworldTTSStreamAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected inworld tts dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewInworldTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("websocket dials after Close = %d, want 0", dialCalls)
 	}
 }
 

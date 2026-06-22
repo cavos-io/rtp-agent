@@ -59,6 +59,7 @@ type InworldTTS struct {
 	timestampTransportStrategy string
 	bufferCharThreshold        int
 	maxBufferDelayMS           int
+	closed                     bool
 	streams                    map[*inworldTTSSynthesizeStream]struct{}
 }
 
@@ -244,6 +245,9 @@ func (t *InworldTTS) UpdateOptions(opts ...InworldTTSOption) {
 }
 
 func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	req, err := buildInworldTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -286,9 +290,16 @@ func inworldTTSRequestPayload(t *InworldTTS, text string) map[string]interface{}
 }
 
 func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildInworldTTSWebsocketURL(t), buildInworldTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial inworld tts websocket: %v", err))
+	}
+	if t.isClosed() {
+		_ = conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &inworldTTSSynthesizeStream{
@@ -314,17 +325,26 @@ func (t *InworldTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		cancel()
 		return nil, err
 	}
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		_ = stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
 
 func (t *InworldTTS) Close() error {
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*inworldTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
 	}
+	t.streams = make(map[*inworldTTSSynthesizeStream]struct{})
 	t.mu.Unlock()
 
 	var firstErr error
@@ -336,17 +356,30 @@ func (t *InworldTTS) Close() error {
 	return firstErr
 }
 
-func (t *InworldTTS) registerStream(stream *inworldTTSSynthesizeStream) {
-	if stream == nil {
-		return
+func (t *InworldTTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *InworldTTS) registerStream(stream *inworldTTSSynthesizeStream) bool {
+	if stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*inworldTTSSynthesizeStream]struct{})
 	}
 	stream.provider = t
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *InworldTTS) unregisterStream(stream *inworldTTSSynthesizeStream) {
