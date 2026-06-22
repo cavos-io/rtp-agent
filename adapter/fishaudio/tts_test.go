@@ -6,11 +6,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 	"github.com/vmihailenco/msgpack/v5"
 )
 
@@ -456,6 +458,65 @@ func TestFishAudioTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestFishAudioTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: fishAudioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/mpeg"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	defer func() { http.DefaultClient = oldClient }()
+
+	provider := NewFishAudioTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize error = %v, want io.ErrClosedPipe", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls after Close = %d, want 0", httpCalls)
+	}
+}
+
+func TestFishAudioTTSStreamAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewFishAudioTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("websocket dials after Close = %d, want 0", dialCalls)
+	}
+}
+
 func TestFishAudioTTSAudioFromStreamMessage(t *testing.T) {
 	pcm := []byte{1, 2, 3, 4}
 	audio, done, err := fishAudioTTSAudioFromStreamMessage(mustFishMessage(t, map[string]any{
@@ -549,6 +610,12 @@ func (b *fishAudioCloseCountBody) Close() error {
 		return errors.New("closed twice")
 	}
 	return nil
+}
+
+type fishAudioRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f fishAudioRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func mustFishMessage(t *testing.T, message map[string]any) []byte {
