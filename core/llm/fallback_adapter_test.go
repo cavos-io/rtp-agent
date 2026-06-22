@@ -1130,6 +1130,50 @@ func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterRecoveryTreatsClientClosedAsAvailable(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	primary := &fakeFallbackLLM{streams: []LLMStream{
+		&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{err: NewAPIStatusError("client closed", 499, "req_recovery", nil)},
+		}},
+		&fakeFallbackStream{events: []fakeFallbackEvent{
+			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary active"}}},
+		}},
+	}}
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("fallback content = %q, want fallback", got)
+	}
+
+	waitForFallbackCalls(t, primary, 2)
+	waitForFallbackRecoveryState(t, adapter, 0, true, false)
+
+	stream, err = adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("second Chat returned error: %v", err)
+	}
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "primary active" {
+		t.Fatalf("second stream content = %q, want recovered primary active", got)
+	}
+}
+
 func TestFallbackAdapterRetriesRecoveryAfterFailedProbeOnLaterChat(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	recoveryErr := errors.New("recovery probe failed")
