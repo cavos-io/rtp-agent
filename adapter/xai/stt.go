@@ -43,6 +43,7 @@ type XaiSTT struct {
 	enableDiarization    bool
 	endpointing          int
 	streams              map[*xaiSTTStream]struct{}
+	closed               bool
 }
 
 type XaiSTTOption func(*XaiSTT)
@@ -138,6 +139,11 @@ func (s *XaiSTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*xaiSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -176,6 +182,9 @@ func (s *XaiSTT) UpdateOptions(opts ...XaiSTTOption) {
 }
 
 func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateXaiAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -184,6 +193,10 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiSTTStreamURL(s, streamLanguage), buildXaiSTTHeaders(s))
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &xaiSTTStream{
@@ -203,18 +216,38 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 			diarization:    s.enableDiarization,
 		},
 	}
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
 
-func (s *XaiSTT) registerStream(stream *xaiSTTStream) {
+func (s *XaiSTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *XaiSTT) registerStream(stream *xaiSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*xaiSTTStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
+	return true
 }
 
 func (s *XaiSTT) unregisterStream(stream *xaiSTTStream) {

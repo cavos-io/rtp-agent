@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -33,6 +34,7 @@ type STT struct {
 	apiSecret      string
 	baseURL        string
 	dialWebsocket  inferenceSTTDialer
+	closed         bool
 }
 
 type STTOption func(*STT)
@@ -142,6 +144,11 @@ func (s *STT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*inferenceSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -192,6 +199,9 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 }
 
 func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if s.apiKey == "" {
 		return nil, fmt.Errorf("api_key is required, either as argument or set LIVEKIT_API_KEY environmental variable")
 	}
@@ -225,6 +235,10 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to LiveKit Inference STT: %w", err)
 	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 
 	if err := conn.WriteJSON(createParams); err != nil {
 		conn.Close()
@@ -243,19 +257,38 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		eventCh:   make(chan *stt.SpeechEvent, 100),
 	}
 
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.run()
 
 	return stream, nil
 }
 
-func (s *STT) registerStream(stream *inferenceSTTStream) {
+func (s *STT) isClosed() bool {
+	if s == nil {
+		return true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *STT) registerStream(stream *inferenceSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*inferenceSTTStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
+	return true
 }
 
 func (s *STT) unregisterStream(stream *inferenceSTTStream) {

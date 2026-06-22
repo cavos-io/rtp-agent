@@ -388,6 +388,29 @@ func TestInferenceTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewTTS("cartesia/sonic-3", "key", "secret")
+	dials := 0
+	provider.dialWebsocket = func(context.Context, string, http.Header) (inferenceTTSConn, error) {
+		dials++
+		return nil, errors.New("unexpected inference tts dial")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
+	}
+}
+
 func TestInferenceTTSSessionCreateWriteErrorMatchesReference(t *testing.T) {
 	conn := &recordingTTSConn{writeErr: errors.New("write failed")}
 	provider := NewTTS("cartesia/sonic-3", "key", "secret")

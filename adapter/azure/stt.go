@@ -51,6 +51,7 @@ type AzureSTT struct {
 	dialWebsocket          azureSTTWebsocketDialer
 	mu                     sync.Mutex
 	streams                map[*azureSTTStream]struct{}
+	closed                 bool
 }
 
 type AzureSTTOption func(*AzureSTT)
@@ -248,6 +249,11 @@ func (s *AzureSTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*azureSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -274,11 +280,18 @@ func (s *AzureSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	resolvedLanguage := s.streamLanguage(language)
 	streamURL := buildAzureSTTStreamURL(s, resolvedLanguage)
 	conn, connectionID, err := openAzureSTTStreamConnection(ctx, s, streamURL)
 	if err != nil {
 		return nil, err
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &azureSTTStream{
@@ -294,15 +307,35 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 		cancel:        cancel,
 		maxReconnects: defaultAzureSTTRetries,
 	}
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop(conn)
 	return stream, nil
 }
 
-func (s *AzureSTT) registerStream(stream *azureSTTStream) {
+func (s *AzureSTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *AzureSTT) registerStream(stream *azureSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	s.streams[stream] = struct{}{}
+	return true
 }
 
 func (s *AzureSTT) unregisterStream(stream *azureSTTStream) {

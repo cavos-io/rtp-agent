@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestAsyncAITTSDefaultsMatchReference(t *testing.T) {
@@ -338,6 +340,29 @@ func TestAsyncAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	case <-ctx.Done():
 	default:
 		t.Fatal("stream context still active after provider Close")
+	}
+}
+
+func TestAsyncAITTSStreamAfterCloseIsRejected(t *testing.T) {
+	originalDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("unexpected asyncai tts dial")
+		},
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = originalDialer
+	})
+
+	provider := NewAsyncAITTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := provider.Stream(context.Background())
+
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 

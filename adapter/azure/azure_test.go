@@ -1211,6 +1211,32 @@ func TestAzureSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	receiveAzureTestSignal(t, serverClosed, "server close")
 }
 
+func TestAzureSTTStreamAfterCloseIsRejected(t *testing.T) {
+	dials := 0
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		dials++
+		return nil, nil, errors.New("unexpected azure stt dial")
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
+	}
+}
+
 func TestAzureSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)
@@ -1900,6 +1926,34 @@ func TestAzureTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if body.closed != 1 {
 		t.Fatalf("body Close calls after second Close = %d, want 1", body.closed)
+	}
+}
+
+func TestAzureTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	requests := 0
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return nil, errors.New("unexpected azure tts request")
+		}),
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Synthesize after Close stream = %#v, want nil", stream)
+	}
+	if requests != 0 {
+		t.Fatalf("Synthesize after Close sent %d HTTP requests, want none", requests)
 	}
 }
 

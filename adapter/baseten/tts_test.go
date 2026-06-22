@@ -483,6 +483,53 @@ func TestBasetenTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	called := false
+	client := basetenTTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, errors.New("unexpected baseten tts request")
+	})
+	provider := mustNewBasetenTTS(t, "test-key", "",
+		WithBasetenTTSModelEndpoint("https://baseten.test/predict"),
+		withBasetenTTSHTTPClient(client),
+	)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if called {
+		t.Fatal("Synthesize after Close issued HTTP request")
+	}
+}
+
+func TestBasetenTTSStreamAfterCloseIsRejected(t *testing.T) {
+	called := false
+	provider := mustNewBasetenTTS(t, "test-key", "",
+		WithBasetenTTSModelEndpoint("ws://baseten.test/websocket"),
+		withBasetenTTSWebsocketDialer(func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			called = true
+			return nil, nil, errors.New("unexpected baseten tts dial")
+		}),
+	)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := provider.Stream(context.Background())
+
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if called {
+		t.Fatal("Stream after Close dialed websocket")
+	}
+}
+
 func TestBasetenTTSStreamReturnsBinaryAudioFrames(t *testing.T) {
 	dialer := newBasetenTTSTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {

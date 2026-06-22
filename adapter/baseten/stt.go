@@ -50,6 +50,7 @@ type BasetenSTT struct {
 	dialWebsocket              basetenSTTWebsocketDialer
 	mu                         sync.Mutex
 	streams                    map[*basetenSTTStream]struct{}
+	closed                     bool
 }
 
 type BasetenSTTOption func(*BasetenSTT)
@@ -185,6 +186,10 @@ func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
 
 func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, io.ErrClosedPipe
+	}
 	streamLanguage := s.language
 	if language != "" {
 		streamLanguage = language
@@ -201,6 +206,10 @@ func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial baseten stt websocket: %w", err)
 	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	if err := conn.WriteMessage(websocket.TextMessage, metadata); err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -216,7 +225,11 @@ func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.Recognize
 			language: streamLanguage,
 		},
 	}
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop(conn)
 	return stream, nil
 }
@@ -253,6 +266,11 @@ func (s *BasetenSTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*basetenSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -269,17 +287,30 @@ func (s *BasetenSTT) Close() error {
 	return closeErr
 }
 
-func (s *BasetenSTT) registerStream(stream *basetenSTTStream) {
-	if s == nil || stream == nil {
-		return
+func (s *BasetenSTT) isClosed() bool {
+	if s == nil {
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *BasetenSTT) registerStream(stream *basetenSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = map[*basetenSTTStream]struct{}{}
 	}
 	s.streams[stream] = struct{}{}
 	stream.owner = s
+	return true
 }
 
 func (s *BasetenSTT) unregisterStream(stream *basetenSTTStream) {

@@ -335,6 +335,33 @@ func TestXaiSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestXaiSTTStreamAfterCloseIsRejected(t *testing.T) {
+	dials := 0
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected xai stt dial")
+		},
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background(), "en")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
+	}
+}
+
 func TestXaiSTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	requestURLs := make(chan string, 2)
 	handlerErr := make(chan error, 2)

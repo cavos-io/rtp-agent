@@ -25,6 +25,7 @@ type AWSTTS struct {
 	sampleRate   int
 	mu           sync.Mutex
 	streams      map[*awsTTSChunkedStream]struct{}
+	closed       bool
 }
 
 type AWSTTSOption func(*AWSTTS)
@@ -116,6 +117,9 @@ func (t *AWSTTS) SampleRate() int  { return t.sampleRate }
 func (t *AWSTTS) NumChannels() int { return 1 }
 
 func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if t.client == nil {
 		return nil, fmt.Errorf("aws polly client is not configured")
 	}
@@ -128,7 +132,10 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 		stream:   out.AudioStream,
 		provider: t,
 	}
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	return stream, nil
 }
 
@@ -158,6 +165,11 @@ func (t *AWSTTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*awsTTSChunkedStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -174,10 +186,26 @@ func (t *AWSTTS) Close() error {
 	return closeErr
 }
 
-func (t *AWSTTS) registerStream(stream *awsTTSChunkedStream) {
+func (t *AWSTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *AWSTTS) registerStream(stream *awsTTSChunkedStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *AWSTTS) unregisterStream(stream *awsTTSChunkedStream) {
