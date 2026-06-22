@@ -3188,6 +3188,34 @@ func TestAgentSessionGenerateReplyOptionsAcceptUserMessage(t *testing.T) {
 	}
 }
 
+func TestAgentSessionGenerateReplyLogsSuppliedUserMessageText(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &recordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	userMessage := &llm.ChatMessage{
+		ID:        "custom_user",
+		Role:      llm.ChatRoleUser,
+		Content:   []llm.ChatContent{{Text: "committed audio turn"}},
+		CreatedAt: time.Now(),
+	}
+
+	if _, err := session.GenerateReplyWithOptions(context.Background(), GenerateReplyOptions{
+		UserMessage:   userMessage,
+		InputModality: "audio",
+	}); err != nil {
+		t.Fatalf("GenerateReplyWithOptions error = %v, want nil", err)
+	}
+
+	if got := recorder.infoValue("Generating reply", "userInput"); got != "committed audio turn" {
+		t.Fatalf("logged userInput = %#v, want supplied user message text", got)
+	}
+}
+
 func TestAgentSessionGenerateReplyOptionsCanCreateUnscheduledSpeech(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})

@@ -2451,7 +2451,11 @@ func (s *AgentSession) GenerateReplyWithOptions(ctx context.Context, opts Genera
 	}
 
 	// Trigger the pipeline
-	logger.Logger.Infow("Generating reply", "userInput", opts.UserInput)
+	loggedUserInput := opts.UserInput
+	if loggedUserInput == "" && opts.UserMessage != nil {
+		loggedUserInput = opts.UserMessage.TextContent()
+	}
+	logger.Logger.Infow("Generating reply", "userInput", loggedUserInput)
 
 	allowInterruptions := s.defaultAllowInterruptions()
 	if opts.AllowInterruptions != nil {
