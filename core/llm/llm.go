@@ -1887,6 +1887,8 @@ type fallbackLLMStream struct {
 	activeCancel context.CancelFunc
 	activeIndex  int
 	activeCtxSet bool
+	lastChatCtx  *ChatContext
+	lastTools    []Tool
 	outputSent   bool
 	closed       bool
 }
@@ -1902,6 +1904,9 @@ func (s *fallbackLLMStream) ChatCtx() *ChatContext {
 			}
 		}
 	}
+	if s.lastChatCtx != nil {
+		return s.lastChatCtx
+	}
 	return s.chatCtx
 }
 
@@ -1915,6 +1920,9 @@ func (s *fallbackLLMStream) Tools() []Tool {
 				return append([]Tool(nil), tools...)
 			}
 		}
+	}
+	if s.lastTools != nil {
+		return append([]Tool(nil), s.lastTools...)
 	}
 	return append([]Tool(nil), s.tools...)
 }
@@ -2017,6 +2025,8 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				s.activeCancel = cancel
 				s.activeIndex = i
 				s.activeCtxSet = false
+				s.lastChatCtx = nil
+				s.lastTools = nil
 				return nil
 			}
 			cancel()
@@ -2061,6 +2071,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return chunk, nil
 		}
 		if errors.Is(err, io.EOF) {
+			s.rememberActiveMetadata()
 			s.closeActive()
 			return nil, err
 		}
@@ -2110,6 +2121,20 @@ func (s *fallbackLLMStream) closeActive() {
 	if s.activeCancel != nil {
 		s.activeCancel()
 		s.activeCancel = nil
+	}
+}
+
+func (s *fallbackLLMStream) rememberActiveMetadata() {
+	if !s.activeCtxSet || isNilLLMStream(s.activeStream) {
+		return
+	}
+	if streamWithChatCtx, ok := s.activeStream.(interface{ ChatCtx() *ChatContext }); ok {
+		s.lastChatCtx = streamWithChatCtx.ChatCtx()
+	}
+	if streamWithTools, ok := s.activeStream.(interface{ Tools() []Tool }); ok {
+		if tools := streamWithTools.Tools(); tools != nil {
+			s.lastTools = append([]Tool(nil), tools...)
+		}
 	}
 }
 

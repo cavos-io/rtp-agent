@@ -236,6 +236,12 @@ func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
 	if got := chatCtxStream.ChatCtx(); got != providerChatCtx {
 		t.Fatalf("ChatCtx() after first chunk = %p, want provider context %p", got, providerChatCtx)
 	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider completion error = %v, want EOF", err)
+	}
+	if got := chatCtxStream.ChatCtx(); got != providerChatCtx {
+		t.Fatalf("ChatCtx() after EOF = %p, want provider context %p", got, providerChatCtx)
+	}
 }
 
 func TestFallbackAdapterStreamExposesActiveTools(t *testing.T) {
@@ -269,6 +275,12 @@ func TestFallbackAdapterStreamExposesActiveTools(t *testing.T) {
 	}
 	if got := toolsStream.Tools(); len(got) != 1 || got[0] != providerTools[0] {
 		t.Fatalf("Tools() after first chunk = %#v, want provider stream tools %#v", got, providerTools)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider completion error = %v, want EOF", err)
+	}
+	if got := toolsStream.Tools(); len(got) != 1 || got[0] != providerTools[0] {
+		t.Fatalf("Tools() after EOF = %#v, want provider stream tools %#v", got, providerTools)
 	}
 }
 
