@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
@@ -299,6 +301,35 @@ func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after provider Close = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestSpeechmaticsSTTStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewSpeechmaticsSTT("test-key")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected speechmatics stt dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	stream, err := provider.Stream(context.Background(), "")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
 	}
 }
 

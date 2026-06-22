@@ -40,6 +40,7 @@ type SpeechmaticsSTT struct {
 	speakerSensitivity   *float64
 	maxSpeakers          *int
 	preferCurrentSpeaker *bool
+	closed               bool
 }
 
 const (
@@ -228,6 +229,9 @@ func (s *SpeechmaticsSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if s.apiKey == "" {
 		return nil, fmt.Errorf("speechmatics API key is required. Pass one in via the apiKey parameter, or set SPEECHMATICS_API_KEY")
 	}
@@ -237,6 +241,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSpeechmaticsSTTStreamURL(s), header)
 	if err != nil {
 		return nil, err
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 
 	stream := &speechmaticsSTTStream{
@@ -256,7 +264,10 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		return nil, err
 	}
 
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 
 	return stream, nil
@@ -268,6 +279,11 @@ func (s *SpeechmaticsSTT) Recognize(ctx context.Context, frames []*model.AudioFr
 
 func (s *SpeechmaticsSTT) Close() error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*speechmaticsSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -283,17 +299,30 @@ func (s *SpeechmaticsSTT) Close() error {
 	return closeErr
 }
 
-func (s *SpeechmaticsSTT) registerStream(stream *speechmaticsSTTStream) {
-	if s == nil || stream == nil {
-		return
+func (s *SpeechmaticsSTT) isClosed() bool {
+	if s == nil {
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *SpeechmaticsSTT) registerStream(stream *speechmaticsSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*speechmaticsSTTStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
 	stream.owner = s
+	return true
 }
 
 func (s *SpeechmaticsSTT) unregisterStream(stream *speechmaticsSTTStream) {

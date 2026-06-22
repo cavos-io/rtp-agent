@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestInworldSTTDefaultsMatchReference(t *testing.T) {
@@ -294,6 +296,35 @@ func TestInworldSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after provider Close error = %T %v, want EOF", err, err)
+	}
+}
+
+func TestInworldSTTStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewInworldSTT("test-key")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected inworld stt dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	stream, err := provider.Stream(context.Background(), "")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
 	}
 }
 

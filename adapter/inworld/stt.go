@@ -43,6 +43,7 @@ type InworldSTT struct {
 	minEndOfTurnSilenceWhenConfident int
 	endOfTurnConfidenceThreshold     float64
 	streams                          map[*inworldSTTStream]struct{}
+	closed                           bool
 }
 
 type InworldSTTOption func(*InworldSTT)
@@ -176,6 +177,11 @@ func (s *InworldSTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*inworldSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -193,9 +199,16 @@ func (s *InworldSTT) Close() error {
 }
 
 func (s *InworldSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildInworldSTTStreamURL(s), buildInworldSTTHeaders(s))
 	if err != nil {
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial inworld stt websocket: %v", err))
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	requestLanguage := s.language
 	if language != "" {
@@ -219,7 +232,11 @@ func (s *InworldSTT) Stream(ctx context.Context, language string) (stt.Recognize
 		},
 		provider: s,
 	}
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
@@ -244,16 +261,20 @@ type inworldSTTStream struct {
 	provider *InworldSTT
 }
 
-func (s *InworldSTT) registerStream(stream *inworldSTTStream) {
+func (s *InworldSTT) registerStream(stream *inworldSTTStream) bool {
 	if s == nil || stream == nil {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*inworldSTTStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
+	return true
 }
 
 func (s *InworldSTT) unregisterStream(stream *inworldSTTStream) {
@@ -263,6 +284,15 @@ func (s *InworldSTT) unregisterStream(stream *inworldSTTStream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.streams, stream)
+}
+
+func (s *InworldSTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *inworldSTTStream) unregisterFromProvider() {

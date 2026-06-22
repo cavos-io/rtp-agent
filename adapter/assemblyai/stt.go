@@ -50,6 +50,7 @@ type AssemblyAISTT struct {
 	maxSpeakers        *int
 	domain             string
 	streams            map[*assemblyAISTTStream]struct{}
+	closed             bool
 }
 
 type AssemblyAISTTOption func(*AssemblyAISTT)
@@ -229,17 +230,21 @@ func (s *AssemblyAISTT) UpdateOptions(opts ...AssemblyAISTTOption) {
 	}
 }
 
-func (s *AssemblyAISTT) registerStream(stream *assemblyAISTTStream) {
+func (s *AssemblyAISTT) registerStream(stream *assemblyAISTTStream) bool {
 	if s == nil || stream == nil {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = map[*assemblyAISTTStream]struct{}{}
 	}
 	stream.owner = s
 	s.streams[stream] = struct{}{}
+	return true
 }
 
 func (s *AssemblyAISTT) unregisterStream(stream *assemblyAISTTStream) {
@@ -259,6 +264,11 @@ func (s *AssemblyAISTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*assemblyAISTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -276,6 +286,9 @@ func (s *AssemblyAISTT) Close() error {
 }
 
 func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := s.validateStreamConfig(); err != nil {
 		return nil, err
 	}
@@ -289,6 +302,10 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	if err != nil {
 		return nil, err
 	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 
 	stream := &assemblyAISTTStream{
 		conn:       conn,
@@ -301,11 +318,23 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 
 	go stream.readLoop()
 
 	return stream, nil
+}
+
+func (s *AssemblyAISTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *AssemblyAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {

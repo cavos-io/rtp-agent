@@ -50,6 +50,7 @@ type SmallestAISTT struct {
 	dialWebsocket  smallestAISTTWebsocketDialer
 	mu             sync.Mutex
 	streams        map[*smallestAISTTStream]struct{}
+	closed         bool
 }
 
 type SmallestAISTTOption func(*SmallestAISTT)
@@ -182,6 +183,11 @@ func (s *SmallestAISTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*smallestAISTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -213,6 +219,9 @@ func (s *SmallestAISTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateSmallestAISTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -224,6 +233,10 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	conn, _, err := dialWebsocket(ctx, buildSmallestAISTTStreamURLFromOptions(streamOptions), buildSmallestAISTTHeadersFromAPIKey(streamOptions.apiKey))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial smallestai stt websocket: %w", err)
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &smallestAISTTStream{
@@ -239,19 +252,39 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 		usageLastFlush: time.Now(),
 	}
 	stream.applyOptions(streamOptions)
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	go stream.heartbeatLoop()
 	return stream, nil
 }
 
-func (s *SmallestAISTT) registerStream(stream *smallestAISTTStream) {
+func (s *SmallestAISTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *SmallestAISTT) registerStream(stream *smallestAISTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*smallestAISTTStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
+	return true
 }
 
 func (s *SmallestAISTT) unregisterStream(stream *smallestAISTTStream) {

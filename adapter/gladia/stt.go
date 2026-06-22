@@ -66,6 +66,7 @@ type GladiaSTT struct {
 	preProcessingSpeechThreshold       float64
 	energyFilter                       *gladiaAudioEnergyFilterConfig
 	streams                            map[*gladiaSTTStream]struct{}
+	closed                             bool
 }
 
 type GladiaSTTOption func(*GladiaSTT)
@@ -279,6 +280,11 @@ func (s *GladiaSTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*gladiaSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -295,17 +301,21 @@ func (s *GladiaSTT) Close() error {
 	return closeErr
 }
 
-func (s *GladiaSTT) registerStream(stream *gladiaSTTStream) {
+func (s *GladiaSTT) registerStream(stream *gladiaSTTStream) bool {
 	if s == nil || stream == nil {
-		return
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = map[*gladiaSTTStream]struct{}{}
 	}
 	s.streams[stream] = struct{}{}
 	stream.owner = s
+	return true
 }
 
 func (s *GladiaSTT) unregisterStream(stream *gladiaSTTStream) {
@@ -321,6 +331,9 @@ func (s *GladiaSTT) unregisterStream(stream *gladiaSTTStream) {
 }
 
 func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateGladiaAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -346,9 +359,16 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
 		return nil, err
 	}
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, session.URL, nil)
 	if err != nil {
 		return nil, err
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	var energyFilter *gladiaAudioEnergyFilter
@@ -370,9 +390,22 @@ func (s *GladiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		},
 		energyFilter: energyFilter,
 	}
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (s *GladiaSTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func validateGladiaAPIKey(apiKey string) error {
