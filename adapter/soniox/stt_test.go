@@ -2,12 +2,19 @@ package soniox
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestSonioxSTTDefaultsMatchReference(t *testing.T) {
@@ -104,6 +111,45 @@ func TestSonioxSTTStreamRejectsReferenceEndpointDelayRangeBeforeDial(t *testing.
 	}
 	if strings.Contains(err.Error(), "dial") {
 		t.Fatalf("Stream error = %v, want validation before websocket dial", err)
+	}
+}
+
+func TestSonioxSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read config: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSonioxSTT("test-key", WithSonioxBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil on provider close", event)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want reference reconnect/provider error", err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %v, want reference provider connection error", err)
 	}
 }
 

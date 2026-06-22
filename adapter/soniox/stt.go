@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -311,7 +312,11 @@ func (s *sonioxStream) readLoop() {
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+				if !s.isClosed() {
+					s.errCh <- llm.NewAPIConnectionError("Soniox STT WebSocket closed; reconnect required")
+				}
+			} else {
 				s.errCh <- err
 			}
 			return
@@ -364,6 +369,15 @@ func (s *sonioxStream) Close() error {
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *sonioxStream) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *sonioxStream) Next() (*stt.SpeechEvent, error) {
