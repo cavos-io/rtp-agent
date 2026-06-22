@@ -401,6 +401,29 @@ func TestInferenceSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewSTT("deepgram/nova-3", "key", "secret")
+	dials := 0
+	provider.dialWebsocket = func(context.Context, string, http.Header) (inferenceWebsocketConn, error) {
+		dials++
+		return nil, errors.New("unexpected inference stt dial")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
+	}
+}
+
 func TestSTTWebsocketSendsReferenceInferenceHeaders(t *testing.T) {
 	var captured http.Header
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
