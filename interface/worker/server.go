@@ -1712,7 +1712,11 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 	s.mu.Unlock()
 
 	if err := s.sendWorkerMessage(livekitServerJobRunningMessage(jobID)); err != nil {
-		logger.Logger.Errorw("failed to update job status", err, "jobId", jobID)
+		if isWorkerWebSocketDisconnected(err) {
+			logger.Logger.Debugw("skipping running job status after worker websocket disconnect", jobLogValues(jobCtx, "jobId", jobID)...)
+		} else {
+			logger.Logger.Errorw("failed to update job status", err, "jobId", jobID)
+		}
 	}
 
 	if s.entrypointFnc != nil {

@@ -3331,6 +3331,23 @@ func TestAssignmentSuppressesDisconnectedFinalStatusError(t *testing.T) {
 	}
 }
 
+func TestAssignmentSuppressesDisconnectedRunningStatusError(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &roomIORecordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	server := NewAgentServer(WorkerOptions{})
+	job := &livekit.Job{Id: "job_disconnect_running_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
+
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	if countWarnMessage(recorder.errorMessages, "failed to update job status") != 0 {
+		t.Fatalf("error messages = %#v, want no disconnected running status error", recorder.errorMessages)
+	}
+}
+
 func TestAssignmentCompletionUploadsRecordedSessionReport(t *testing.T) {
 	oldUpload := uploadSessionReport
 	uploadCh := make(chan struct {
