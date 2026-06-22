@@ -274,10 +274,11 @@ func observabilityURLFromLiveKitURL(liveKitURL string) (string, error) {
 	if err != nil {
 		return "", nil
 	}
-	if !utils.IsCloud(liveKitURL) || u.Host == "" {
+	hostname := strings.ToLower(u.Hostname())
+	if !utils.IsCloud(liveKitURL) || hostname == "" {
 		return "", nil
 	}
-	return "https://" + u.Host, nil
+	return "https://" + hostname, nil
 }
 
 func recordingUploadRetryDelay(resp *http.Response, body []byte) (time.Duration, bool) {

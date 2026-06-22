@@ -531,6 +531,31 @@ func TestUploadSessionReportSkipsMalformedCloudURLLikeReference(t *testing.T) {
 	}
 }
 
+func TestUploadSessionReportNormalizesCloudHostnameLikeReference(t *testing.T) {
+	requestCh := make(chan string, 1)
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCh <- r.URL.Host
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_test"
+
+	if err := UploadSessionReport("wss://Tenant.LiveKit.Cloud:443/project-a", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	select {
+	case host := <-requestCh:
+		if host != "tenant.livekit.cloud" {
+			t.Fatalf("upload host = %q, want reference hostname without port", host)
+		}
+	default:
+		t.Fatal("UploadSessionReport did not POST to normalized cloud observability URL")
+	}
+}
+
 func TestUploadSessionReportSanitizesTranscriptChatHistory(t *testing.T) {
 	oldClient := recordingUploadHTTPClient
 	oldRecord := recordUploadTelemetryEvent
