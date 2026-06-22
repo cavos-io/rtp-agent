@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -1962,11 +1963,19 @@ func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatComple
 type openaiStream struct {
 	stream *openai.ChatCompletionStream
 	cancel context.CancelFunc
+	mu     sync.Mutex
+	closed bool
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	resp, err := s.stream.Recv()
 	if err != nil {
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, openAIStreamRecvError(err)
 	}
 
@@ -2036,10 +2045,25 @@ func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
 }
 
 func (s *openaiStream) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	cancel := s.cancel
+	s.cancel = nil
+	s.mu.Unlock()
+
 	s.stream.Close()
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+	if cancel != nil {
+		cancel()
 	}
 	return nil
+}
+
+func (s *openaiStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
