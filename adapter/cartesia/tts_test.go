@@ -582,7 +582,7 @@ func TestCartesiaTTSStreamPushTextAppendsReferenceTrailingSpace(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); err != nil {
+	if err := stream.PushText("hello there dear friend. Tail"); err != nil {
 		t.Fatalf("PushText error = %v", err)
 	}
 
@@ -592,11 +592,48 @@ func TestCartesiaTTSStreamPushTextAppendsReferenceTrailingSpace(t *testing.T) {
 	if writes[0]["context_id"] != "default" {
 		t.Fatalf("context_id = %#v, want default", writes[0]["context_id"])
 	}
-	if writes[0]["transcript"] != "hello " {
+	if writes[0]["transcript"] != "hello there dear friend. " {
 		t.Fatalf("transcript = %#v, want reference trailing space", writes[0]["transcript"])
 	}
 	if writes[0]["continue"] != true {
 		t.Fatalf("continue = %#v, want true", writes[0]["continue"])
+	}
+}
+
+func TestCartesiaTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	var writes []map[string]any
+	stream := &cartesiaTTSStream{
+		writeJSON: func(msg any) error {
+			payload, ok := msg.(map[string]interface{})
+			if !ok {
+				t.Fatalf("message = %T, want map[string]interface{}", msg)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after PushText = %d, want only completed sentence", len(writes))
+	}
+	if writes[0]["transcript"] != "This first sentence is definitely long enough. " || writes[0]["continue"] != true {
+		t.Fatalf("first message = %#v, want completed sentence with continue=true", writes[0])
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 3 {
+		t.Fatalf("writes after Flush = %d, want tail text and end packet", len(writes))
+	}
+	if writes[1]["transcript"] != "Tail " || writes[1]["continue"] != true {
+		t.Fatalf("tail message = %#v, want flushed tail with continue=true", writes[1])
+	}
+	if writes[2]["transcript"] != " " || writes[2]["continue"] != false {
+		t.Fatalf("end message = %#v, want reference end packet", writes[2])
 	}
 }
 
@@ -608,7 +645,7 @@ func TestCartesiaTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	err := stream.PushText("hello")
+	err := stream.PushText("hello there dear friend. Tail")
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("PushText error = %v, want write failure", err)
 	}

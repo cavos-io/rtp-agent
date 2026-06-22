@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -474,6 +475,7 @@ type cartesiaTTSStream struct {
 	writeJSON     func(any) error
 	sentTokens    []string
 	skipAlignment bool
+	pendingText   string
 }
 
 type cartesiaWSResponse struct {
@@ -608,22 +610,44 @@ func (s *cartesiaTTSStream) isFlushed() bool {
 }
 
 func (s *cartesiaTTSStream) PushText(text string) error {
+	if text == "" {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	s.pendingText += text
+	if err := s.sendCompleteSentencesLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
+}
+
+func (s *cartesiaTTSStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTranscriptLocked(sentence); err != nil {
+			return err
+		}
+		s.pendingText = strings.TrimPrefix(s.pendingText, sentence)
+	}
+}
+
+func (s *cartesiaTTSStream) sendTranscriptLocked(text string) error {
 	msg := map[string]interface{}{
 		"context_id": "default",
 		"transcript": text + " ",
 		"continue":   true,
 	}
 	s.sentTokens = append(s.sentTokens, text+" ")
-	if err := s.writeJSONData(msg); err != nil {
-		s.closeAfterWriteFailureLocked()
-		return err
-	}
-	return nil
+	return s.writeJSONData(msg)
 }
 
 func (s *cartesiaTTSStream) Flush() error {
@@ -631,6 +655,14 @@ func (s *cartesiaTTSStream) Flush() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendTranscriptLocked(text); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
 	}
 	msg := map[string]interface{}{
 		"context_id": "default",
