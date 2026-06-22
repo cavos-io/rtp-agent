@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -553,6 +555,41 @@ func TestUploadSessionReportNormalizesCloudHostnameLikeReference(t *testing.T) {
 		}
 	default:
 		t.Fatal("UploadSessionReport did not POST to normalized cloud observability URL")
+	}
+}
+
+func TestUploadSessionReportOmitsEmptyAudioPartLikeReference(t *testing.T) {
+	audioPath := filepath.Join(t.TempDir(), "empty.ogg")
+	if err := os.WriteFile(audioPath, nil, 0o600); err != nil {
+		t.Fatalf("write empty audio file: %v", err)
+	}
+	startedAt := 12.5
+	partsCh := make(chan map[string][]byte, 1)
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		partsCh <- multipartPartsFromRequest(t, r)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Audio: true, Transcript: true}
+	report.RoomID = "RM_test"
+	report.AudioRecordingPath = &audioPath
+	report.AudioRecordingStartedAt = &startedAt
+
+	if err := UploadSessionReport("wss://tenant.livekit.cloud", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v", err)
+	}
+
+	select {
+	case parts := <-partsCh:
+		if _, ok := parts["audio"]; ok {
+			t.Fatalf("multipart parts include empty audio part: %#v", parts)
+		}
+		if _, ok := parts["header"]; !ok {
+			t.Fatalf("multipart parts missing header: %#v", parts)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("UploadSessionReport did not POST recording upload")
 	}
 }
 
