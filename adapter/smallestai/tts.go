@@ -361,6 +361,8 @@ type smallestaiTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	mu         sync.Mutex
+	sentAudio  bool
+	finalSent  bool
 }
 
 func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -374,10 +376,13 @@ func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	n, err := resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
-			return nil, io.EOF
+			return s.emitFinal()
 		}
 		return nil, err
 	}
+	s.mu.Lock()
+	s.sentAudio = true
+	s.mu.Unlock()
 
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
@@ -389,10 +394,21 @@ func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *smallestaiTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.sentAudio || s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
 func (s *smallestaiTTSChunkedStream) Close() error {
 	s.mu.Lock()
 	resp := s.resp
 	s.resp = nil
+	s.finalSent = true
 	s.mu.Unlock()
 	if resp == nil || resp.Body == nil {
 		return nil
