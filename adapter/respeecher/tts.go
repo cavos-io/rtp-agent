@@ -43,6 +43,7 @@ type RespeecherTTS struct {
 	encoding       string
 	sampleRate     int
 	samplingParams map[string]any
+	closed         bool
 }
 
 type RespeecherTTSOption func(*RespeecherTTS)
@@ -127,6 +128,7 @@ func (t *RespeecherTTS) NumChannels() int { return 1 }
 
 func (t *RespeecherTTS) Close() error {
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*respeecherTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -143,17 +145,30 @@ func (t *RespeecherTTS) Close() error {
 	return closeErr
 }
 
-func (t *RespeecherTTS) registerStream(stream *respeecherTTSSynthesizeStream) {
-	if t == nil || stream == nil {
-		return
+func (t *RespeecherTTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *RespeecherTTS) registerStream(stream *respeecherTTSSynthesizeStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*respeecherTTSSynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	stream.provider = t
-	t.mu.Unlock()
+	return true
 }
 
 func (t *RespeecherTTS) unregisterStream(stream *respeecherTTSSynthesizeStream) {
@@ -166,6 +181,9 @@ func (t *RespeecherTTS) unregisterStream(stream *respeecherTTSSynthesizeStream) 
 }
 
 func (t *RespeecherTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateRespeecherAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -214,6 +232,9 @@ func buildRespeecherTTSRequest(ctx context.Context, t *RespeecherTTS, text strin
 }
 
 func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateRespeecherAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -221,6 +242,10 @@ func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRespeecherTTSWebsocketURL(t).String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial respeecher tts websocket: %w", err)
+	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &respeecherTTSSynthesizeStream{
@@ -234,7 +259,11 @@ func (t *RespeecherTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }

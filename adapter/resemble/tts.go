@@ -33,6 +33,7 @@ type ResembleTTS struct {
 	voice      string
 	sampleRate int
 	model      string
+	closed     bool
 }
 
 type ResembleTTSOption func(*ResembleTTS)
@@ -102,6 +103,7 @@ func (t *ResembleTTS) UpdateOptions(opts ...ResembleTTSOption) {
 
 func (t *ResembleTTS) Close() error {
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*resembleTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -118,17 +120,30 @@ func (t *ResembleTTS) Close() error {
 	return closeErr
 }
 
-func (t *ResembleTTS) registerStream(stream *resembleTTSSynthesizeStream) {
-	if t == nil || stream == nil {
-		return
+func (t *ResembleTTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *ResembleTTS) registerStream(stream *resembleTTSSynthesizeStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*resembleTTSSynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	stream.provider = t
-	t.mu.Unlock()
+	return true
 }
 
 func (t *ResembleTTS) unregisterStream(stream *resembleTTSSynthesizeStream) {
@@ -141,6 +156,9 @@ func (t *ResembleTTS) unregisterStream(stream *resembleTTSSynthesizeStream) {
 }
 
 func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateResembleAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -192,12 +210,19 @@ func buildResembleTTSRequest(ctx context.Context, t *ResembleTTS, text string) (
 }
 
 func (t *ResembleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateResembleAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildResembleTTSWebsocketURL(), buildResembleTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial resemble tts websocket: %w", err)
+	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &resembleTTSSynthesizeStream{
@@ -208,7 +233,11 @@ func (t *ResembleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		events:   make(chan *tts.SynthesizedAudio, 100),
 		errCh:    make(chan error, 1),
 	}
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }

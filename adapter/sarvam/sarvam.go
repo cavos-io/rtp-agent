@@ -1131,6 +1131,7 @@ type SarvamTTS struct {
 	dictID                string
 	outputAudioCodec      string
 	streams               map[*sarvamTTSSynthesizeStream]struct{}
+	closed                bool
 }
 
 type SarvamTTSOption func(*SarvamTTS)
@@ -1310,6 +1311,9 @@ func (t *SarvamTTS) SampleRate() int  { return t.sampleRate }
 func (t *SarvamTTS) NumChannels() int { return 1 }
 
 func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	req, err := buildSarvamTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -1368,9 +1372,16 @@ func buildSarvamTTSRequest(ctx context.Context, t *SarvamTTS, text string) (*htt
 }
 
 func (t *SarvamTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSarvamTTSWebsocketURL(t).String(), buildSarvamTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial sarvam tts websocket: %w", err)
+	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	configMessage, err := buildSarvamTTSConfigMessage(t)
 	if err != nil {
@@ -1392,13 +1403,22 @@ func (t *SarvamTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:           make(chan *tts.SynthesizedAudio, 100),
 		errCh:            make(chan error, 1),
 	}
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
 
 func (t *SarvamTTS) Close() error {
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*sarvamTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -1414,17 +1434,30 @@ func (t *SarvamTTS) Close() error {
 	return firstErr
 }
 
-func (t *SarvamTTS) registerStream(stream *sarvamTTSSynthesizeStream) {
-	if stream == nil {
-		return
+func (t *SarvamTTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *SarvamTTS) registerStream(stream *sarvamTTSSynthesizeStream) bool {
+	if stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*sarvamTTSSynthesizeStream]struct{})
 	}
 	stream.provider = t
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *SarvamTTS) unregisterStream(stream *sarvamTTSSynthesizeStream) {
