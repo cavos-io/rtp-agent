@@ -609,11 +609,11 @@ func (s *elevenLabsSTTStream) StartTimeOffset() float64 {
 }
 
 func (s *elevenLabsSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if offset < 0 {
-		offset = 0
-	}
 	if s.state != nil {
 		s.state.startTimeOffset = offset
 	}
@@ -629,11 +629,11 @@ func (s *elevenLabsSTTStream) StartTime() float64 {
 }
 
 func (s *elevenLabsSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if startTime < 0 {
-		startTime = 0
-	}
 	if s.state != nil {
 		s.state.startTime = startTime
 	}

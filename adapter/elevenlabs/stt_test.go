@@ -901,6 +901,27 @@ func TestElevenLabsSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamRejectsNegativeTimingAnchors(t *testing.T) {
+	stream := &elevenLabsSTTStream{state: &elevenLabsSTTStreamState{
+		startTimeOffset: 1.5,
+		startTime:       2.5,
+	}}
+
+	assertElevenLabsPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		stream.SetStartTimeOffset(-0.01)
+	})
+	if got := stream.StartTimeOffset(); got != 1.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 1.5", got)
+	}
+
+	assertElevenLabsPanicsWithMessage(t, "start_time must be non-negative", func() {
+		stream.SetStartTime(-0.01)
+	})
+	if got := stream.StartTime(); got != 2.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 2.5", got)
+	}
+}
+
 func TestElevenLabsSTTStreamEventDefaultsLanguageToEnglish(t *testing.T) {
 	events, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
 		"message_type": "committed_transcript",
@@ -1315,6 +1336,20 @@ func assertElevenLabsSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int
 	if len(events[index].Alternatives) != 1 || events[index].Alternatives[0].Text != text {
 		t.Fatalf("event %d alternatives = %+v, want text %q", index, events[index].Alternatives, text)
 	}
+}
+
+func assertElevenLabsPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := recovered.(string); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
 
 func intPtr(v int) *int { return &v }
