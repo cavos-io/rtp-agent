@@ -305,6 +305,44 @@ func TestNeuphonicTTSStreamTextMessageMatchesReference(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	var writes []map[string]any
+	stream := &neuphonicTTSSynthesizeStream{
+		segmentID: "segment-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after PushText = %d, want one completed sentence", len(writes))
+	}
+	if writes[0]["text"] != "This first sentence is definitely long enough.<STOP>" {
+		t.Fatalf("first text = %#v, want completed sentence only", writes[0]["text"])
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("writes after Flush = %d, want tail flushed", len(writes))
+	}
+	if writes[1]["text"] != "Tail<STOP>" {
+		t.Fatalf("tail text = %#v, want flushed tail", writes[1]["text"])
+	}
+	if writes[0]["context_id"] != writes[1]["context_id"] {
+		t.Fatalf("context IDs = %#v then %#v, want same segment before flush boundary advances", writes[0]["context_id"], writes[1]["context_id"])
+	}
+}
+
 func TestNeuphonicTTSFlushStartsNextReferenceSegment(t *testing.T) {
 	var writes []map[string]any
 	stream := &neuphonicTTSSynthesizeStream{
@@ -327,6 +365,9 @@ func TestNeuphonicTTSFlushStartsNextReferenceSegment(t *testing.T) {
 	}
 	if err := stream.PushText("second"); err != nil {
 		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush second error = %v", err)
 	}
 
 	if len(writes) != 2 {
@@ -355,7 +396,7 @@ func TestNeuphonicTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+	if err := stream.PushText("This sentence is definitely long enough. Tail"); !errors.Is(err, writeErr) {
 		t.Fatalf("PushText error = %v, want write error", err)
 	}
 	if !cancelled {

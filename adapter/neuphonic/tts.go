@@ -18,6 +18,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -390,16 +391,17 @@ func optionalFloat(value *float64) interface{} {
 }
 
 type neuphonicTTSSynthesizeStream struct {
-	owner      *NeuphonicTTS
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	sampleRate int
-	segmentID  string
-	events     chan *tts.SynthesizedAudio
-	errCh      chan error
-	mu         sync.Mutex
-	closed     bool
+	owner       *NeuphonicTTS
+	conn        *websocket.Conn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	sampleRate  int
+	segmentID   string
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
+	mu          sync.Mutex
+	closed      bool
+	pendingText string
 
 	writeMessage func(int, []byte) error
 	closeConn    func() error
@@ -414,11 +416,8 @@ func (s *neuphonicTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("neuphonic tts stream is closed")
 	}
-	message, err := buildNeuphonicTTSTextMessage(text, s.segmentID)
-	if err != nil {
-		return err
-	}
-	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+	s.pendingText += text
+	if err := s.sendCompleteSentencesLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -431,8 +430,48 @@ func (s *neuphonicTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("neuphonic tts stream is closed")
 	}
+	if s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendSentenceLocked(text); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+	}
 	s.segmentID = neuphonicTTSSegmentID()
 	return nil
+}
+
+func (s *neuphonicTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendSentenceLocked(sentence); err != nil {
+			return err
+		}
+		tokenIdx := strings.Index(s.pendingText, sentence)
+		if tokenIdx < 0 {
+			s.pendingText = strings.TrimSpace(strings.TrimPrefix(s.pendingText, sentence))
+			continue
+		}
+		s.pendingText = strings.TrimLeftFunc(s.pendingText[tokenIdx+len(sentence):], func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+	}
+}
+
+func (s *neuphonicTTSSynthesizeStream) sendSentenceLocked(text string) error {
+	if text == "" {
+		return nil
+	}
+	message, err := buildNeuphonicTTSTextMessage(text, s.segmentID)
+	if err != nil {
+		return err
+	}
+	return s.writeMessageData(websocket.TextMessage, message)
 }
 
 func (s *neuphonicTTSSynthesizeStream) Close() error {
