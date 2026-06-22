@@ -266,6 +266,7 @@ type RoomIO struct {
 	agentStateCancel         context.CancelFunc
 	agentStatePublisher      func(map[string]string)
 	agentStatePublishEnabled func() bool
+	agentStatePublishSeq     uint64
 	userStateCancel          context.CancelFunc
 	clientEvents             roomIOClientEvents
 
@@ -538,8 +539,18 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 		attrs := map[string]string{
 			RoomIOAgentStateAttribute: string(ev.NewState),
 		}
+		rio.mu.Lock()
+		rio.agentStatePublishSeq++
+		seq := rio.agentStatePublishSeq
+		rio.mu.Unlock()
 		go func() {
+			if !rio.isCurrentAgentStatePublish(seq) {
+				return
+			}
 			if enabled != nil && !enabled() {
+				return
+			}
+			if !rio.isCurrentAgentStatePublish(seq) {
 				return
 			}
 			publisher(attrs)
@@ -548,6 +559,15 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 	if rio.clientEvents != nil {
 		rio.clientEvents.DispatchAgentState(ev.NewState)
 	}
+}
+
+func (rio *RoomIO) isCurrentAgentStatePublish(seq uint64) bool {
+	if rio == nil {
+		return false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return seq == rio.agentStatePublishSeq
 }
 
 func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {

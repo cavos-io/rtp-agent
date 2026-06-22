@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1888,6 +1889,56 @@ func TestRoomIOHandleAgentStateChangedDoesNotBlockOnAttributePublish(t *testing.
 	}
 	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateThinking {
 		t.Fatalf("dispatched agent states = %#v, want thinking despite slow attribute publish", dispatcher.agentStates)
+	}
+}
+
+func TestRoomIOHandleAgentStateChangedSuppressesStaleAttributePublish(t *testing.T) {
+	enabledCalls := make(chan struct{}, 2)
+	releaseFirst := make(chan struct{})
+	published := make(chan string, 2)
+	var calls atomic.Int32
+	rio := &RoomIO{
+		agentStatePublisher: func(attrs map[string]string) {
+			published <- attrs[RoomIOAgentStateAttribute]
+		},
+		agentStatePublishEnabled: func() bool {
+			if calls.Add(1) == 1 {
+				enabledCalls <- struct{}{}
+				<-releaseFirst
+				return true
+			}
+			enabledCalls <- struct{}{}
+			return true
+		},
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+	select {
+	case <-enabledCalls:
+	case <-time.After(time.Second):
+		t.Fatal("first publish did not reach connection check")
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateSpeaking})
+	select {
+	case <-enabledCalls:
+	case <-time.After(time.Second):
+		t.Fatal("second publish did not reach connection check")
+	}
+	close(releaseFirst)
+
+	select {
+	case got := <-published:
+		if got != string(agent.AgentStateSpeaking) {
+			t.Fatalf("published state = %q, want only latest speaking state", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RoomIO did not publish latest agent state")
+	}
+	select {
+	case got := <-published:
+		t.Fatalf("published stale state %q after newer state", got)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
