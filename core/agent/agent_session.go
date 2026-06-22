@@ -2235,6 +2235,10 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 	backgroundAudio := s.Options.BackgroundAudio
 	endpointing := s.Options.Endpointing
 	activity := s.activity
+	var avatar AvatarProvider
+	if s.Agent != nil && s.Agent.GetAgent() != nil {
+		avatar = s.Agent.GetAgent().Avatar
+	}
 	if state == AgentStateSpeaking {
 		s.llmErrorCount = 0
 		s.ttsErrorCount = 0
@@ -2266,6 +2270,11 @@ func (s *AgentSession) UpdateAgentState(state AgentState) {
 
 	if backgroundAudio != nil {
 		backgroundAudio.AgentStateChanged(state)
+	}
+	if avatar != nil {
+		if err := avatar.UpdateState(avatarStateForAgentState(state)); err != nil {
+			logger.Logger.Warnw("avatar state update failed", err, "state", state)
+		}
 	}
 	s.updateUserAwayTimer()
 
