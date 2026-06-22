@@ -103,6 +103,42 @@ func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamSendsCompletedSentenceBeforeFlushLikeReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
+	provider := newGoogleTTSWithClient(client)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if len(client.stream.sent) != 2 {
+		t.Fatalf("sent after PushText = %d, want config plus completed sentence input", len(client.stream.sent))
+	}
+	if got := client.stream.sent[1].GetInput().GetText(); got != "This first sentence is definitely long enough." {
+		t.Fatalf("first input text = %q, want completed sentence", got)
+	}
+	if client.stream.closed {
+		t.Fatal("stream closed before Flush, want tail to remain in same input stream")
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if len(client.stream.sent) != 3 {
+		t.Fatalf("sent after Flush = %d, want flushed tail input", len(client.stream.sent))
+	}
+	if got := client.stream.sent[2].GetInput().GetText(); got != "Tail" {
+		t.Fatalf("tail input text = %q, want flushed tail", got)
+	}
+	if !client.stream.closed {
+		t.Fatal("stream not closed after Flush")
+	}
+}
+
 func TestGoogleTTSStreamNextWaitsForFlushedAudio(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		stream: &fakeGoogleTTSStream{
