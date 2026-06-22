@@ -54,6 +54,7 @@ type ElevenLabsTTS struct {
 	applyLanguageTextNormalization *bool
 	preferredAlignment             string
 	streams                        map[*elevenLabsStream]struct{}
+	closed                         bool
 }
 
 type ElevenLabsTTSOption func(*ElevenLabsTTS)
@@ -239,6 +240,7 @@ func (t *ElevenLabsTTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*elevenLabsStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -253,6 +255,15 @@ func (t *ElevenLabsTTS) Close() error {
 		}
 	}
 	return closeErr
+}
+
+func (t *ElevenLabsTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
 }
 
 func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) {
@@ -323,6 +334,9 @@ func (t *ElevenLabsTTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, erro
 
 // Synthesize performs a full HTTP POST for non-streaming scenarios.
 func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateElevenLabsAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -494,6 +508,9 @@ func (s *elevenLabsChunkedStream) Close() error {
 
 // Stream establishes a high-performance WebSocket connection to ElevenLabs for low-latency streaming TTS.
 func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateElevenLabsAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -507,6 +524,10 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 			return nil, llm.NewAPITimeoutError(err.Error())
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("could not connect to ElevenLabs: %v", err))
+	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 
 	contextID := "ctx_" + uuid.NewString()[:12]
