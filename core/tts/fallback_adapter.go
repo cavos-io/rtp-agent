@@ -635,7 +635,6 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 }
 
 func (s *fallbackChunkedStream) tryStartStream(index int) error {
-	var lastErr error
 	for i := index; i < len(s.adapter.ttss); i++ {
 		if !s.adapter.shouldTry(i) {
 			continue
@@ -659,7 +658,6 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 			}
 			cancel()
 			logger.Logger.Errorw("Failed to start TTS synthesize stream", err, "tts", tts.Label())
-			lastErr = err
 			if s.canRetryTTS(i) {
 				emitTTSError(s.adapter, err, true)
 				s.retries[i]++
@@ -671,9 +669,6 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 		}
 	}
 
-	if lastErr != nil {
-		return lastErr
-	}
 	return s.adapter.allFailedError()
 }
 
@@ -1019,7 +1014,6 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 }
 
 func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
-	var lastErr error
 	for i := index; i < len(s.adapter.ttss); i++ {
 		if !s.adapter.shouldTry(i) {
 			continue
@@ -1034,7 +1028,6 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 			stream, err := s.startProviderStream(tts)
 			if err != nil {
 				logger.Logger.Errorw("Failed to start TTS stream", err, "tts", tts.Label())
-				lastErr = err
 				if s.canRetryTTS(i) {
 					emitTTSError(s.adapter, err, true)
 					s.retries[i]++
@@ -1047,7 +1040,6 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 
 			if err := s.replayBufferedText(stream); err != nil {
 				stream.Close()
-				lastErr = err
 				if s.canRetryTTS(i) {
 					emitTTSError(s.adapter, err, true)
 					s.retries[i]++
@@ -1064,9 +1056,6 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 		}
 	}
 
-	if lastErr != nil {
-		return lastErr
-	}
 	return s.adapter.allFailedError()
 }
 
