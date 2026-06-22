@@ -1126,6 +1126,71 @@ func TestElevenLabsTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/mpeg"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	defer func() { http.DefaultClient = oldClient }()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("https://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize after Close stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("Synthesize after Close HTTP calls = %d, want 0", httpCalls)
+	}
+}
+
+func TestElevenLabsTTSStreamAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("Stream after Close dial calls = %d, want 0", dialCalls)
+	}
+}
+
 func TestElevenLabsTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	closed := make(chan struct{})
 	serverErr := make(chan error, 1)

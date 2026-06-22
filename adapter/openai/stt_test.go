@@ -1403,6 +1403,60 @@ func TestOpenAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTStreamAfterCloseIsRejected(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	var dialCalls int
+	provider.dialWebsocket = func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		dialCalls++
+		return nil, nil, errors.New("unexpected websocket dial")
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream after Close returned stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("Stream after Close dial calls = %d, want 0", dialCalls)
+	}
+}
+
+func TestOpenAISTTRecognizeAfterCloseIsRejected(t *testing.T) {
+	var httpCalls int
+	client := openAITestHTTPDoer(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return nil, errors.New("unexpected transcription request")
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if event != nil {
+		t.Fatalf("Recognize after Close event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Recognize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("Recognize after Close HTTP calls = %d, want 0", httpCalls)
+	}
+}
+
 func TestOpenAIRealtimeSTTNextAfterCloseReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &openAIRealtimeSTTStream{

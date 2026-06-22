@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -85,6 +86,9 @@ type OpenAILLM struct {
 	extraHeaders         map[string]string
 	extraQuery           map[string]string
 	extraBody            map[string]any
+	mu                   sync.Mutex
+	closed               bool
+	streams              map[*openaiStream]struct{}
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -319,6 +323,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
 		strictToolSchema: true,
+		streams:          make(map[*openaiStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -813,7 +818,48 @@ func (l *OpenAILLM) Provider() string {
 	return u.Host
 }
 
+func (l *OpenAILLM) Close() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	l.closed = true
+	streams := make([]*openaiStream, 0, len(l.streams))
+	for stream := range l.streams {
+		streams = append(streams, stream)
+	}
+	l.streams = make(map[*openaiStream]struct{})
+	l.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (l *OpenAILLM) registerStream(stream *openaiStream) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.streams == nil {
+		l.streams = make(map[*openaiStream]struct{})
+	}
+	l.streams[stream] = struct{}{}
+}
+
+func (l *OpenAILLM) unregisterStream(stream *openaiStream) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.streams, stream)
+}
+
 func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	if l.isClosed() {
+		return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+	}
+
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
@@ -859,10 +905,20 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
 		stream, err := client.CreateChatCompletionStream(ctx, req)
 		if err == nil {
-			return &openaiStream{
-				stream: stream,
-				cancel: cancel,
-			}, nil
+			if l.isClosed() {
+				stream.Close()
+				if cancel != nil {
+					cancel()
+				}
+				return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+			}
+			wrapped := &openaiStream{
+				stream:   stream,
+				cancel:   cancel,
+				provider: l,
+			}
+			l.registerStream(wrapped)
+			return wrapped, nil
 		}
 		lastErr = mapOpenAIError(err)
 		if attempt == connectOptions.MaxRetry || !openAIShouldRetryError(lastErr) {
@@ -883,6 +939,12 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		cancel()
 	}
 	return nil, lastErr
+}
+
+func (l *OpenAILLM) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
 }
 
 func mapOpenAIError(err error) error {
@@ -1960,13 +2022,22 @@ func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatComple
 }
 
 type openaiStream struct {
-	stream *openai.ChatCompletionStream
-	cancel context.CancelFunc
+	stream   *openai.ChatCompletionStream
+	cancel   context.CancelFunc
+	provider *OpenAILLM
+	mu       sync.Mutex
+	closed   bool
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	resp, err := s.stream.Recv()
 	if err != nil {
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, openAIStreamRecvError(err)
 	}
 
@@ -2036,10 +2107,28 @@ func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
 }
 
 func (s *openaiStream) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	cancel := s.cancel
+	s.cancel = nil
+	s.mu.Unlock()
+
 	s.stream.Close()
-	if s.cancel != nil {
-		s.cancel()
-		s.cancel = nil
+	if cancel != nil {
+		cancel()
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
 	}
 	return nil
+}
+
+func (s *openaiStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }

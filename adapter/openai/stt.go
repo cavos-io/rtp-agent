@@ -60,6 +60,7 @@ type OpenAISTT struct {
 	vad             vad.VAD
 	streamsMu       sync.Mutex
 	streams         map[*openAIRealtimeSTTStream]struct{}
+	closed          bool
 }
 
 type OpenAISTTOption func(*OpenAISTT)
@@ -274,6 +275,7 @@ func (s *OpenAISTT) Close() error {
 		return nil
 	}
 	s.streamsMu.Lock()
+	s.closed = true
 	streams := make([]*openAIRealtimeSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -288,6 +290,15 @@ func (s *OpenAISTT) Close() error {
 		}
 	}
 	return closeErr
+}
+
+func (s *OpenAISTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	return s.closed
 }
 
 func (s *OpenAISTT) UpdateOptions(opts ...OpenAISTTOption) {
@@ -349,12 +360,19 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if !s.useRealtime {
 		return nil, fmt.Errorf("openai realtime stt is not enabled")
 	}
+	if s.isClosed() {
+		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
+	}
 	if language != "" {
 		s.language = language
 	}
 	conn, _, err := s.dialRealtimeSTTWebsocket(ctx)
 	if err != nil {
 		return nil, mapOpenAIError(err)
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 	}
 	eventLanguage := s.language
 	if eventLanguage != "" {
@@ -528,6 +546,9 @@ func buildOpenAIRealtimeSTTCommitMessage() ([]byte, error) {
 }
 
 func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
+	}
 	if language != "" {
 		s.language = language
 	}

@@ -17,6 +17,7 @@ type GoogleTTS struct {
 	mu      sync.Mutex
 	streams map[*googleTTSSynthesizeStream]struct{}
 	client  googleTTSClient
+	closed  bool
 	voice   *texttospeechpb.VoiceSelectionParams
 	model   string
 	prompt  *string
@@ -174,6 +175,7 @@ func (t *GoogleTTS) Provider() string { return "Google Cloud Platform" }
 
 func (t *GoogleTTS) Close() error {
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*googleTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -188,6 +190,15 @@ func (t *GoogleTTS) Close() error {
 		}
 	}
 	return closeErr
+}
+
+func (t *GoogleTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
 }
 
 func (t *GoogleTTS) registerStream(stream *googleTTSSynthesizeStream) {
@@ -243,6 +254,9 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	req := &texttospeechpb.SynthesizeSpeechRequest{
 		Input: &texttospeechpb.SynthesisInput{
 			InputSource: &texttospeechpb.SynthesisInput_Text{Text: text},
@@ -263,6 +277,9 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 }
 
 func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	stream := &googleTTSSynthesizeStream{
 		owner:  t,
 		ctx:    ctx,

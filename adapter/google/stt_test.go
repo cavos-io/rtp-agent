@@ -523,19 +523,63 @@ func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamAfterCloseIsRejected(t *testing.T) {
+	client := &fakeGoogleSpeechClient{stream: &fakeGoogleStreamingRecognizeClient{}}
+	provider := newGoogleSTTWithClient(client)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if stream != nil {
+		t.Fatalf("Stream after Close returned stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if client.streamCalls != 0 {
+		t.Fatalf("Stream after Close client calls = %d, want 0", client.streamCalls)
+	}
+}
+
+func TestGoogleSTTRecognizeAfterCloseIsRejected(t *testing.T) {
+	client := &fakeGoogleSpeechClient{recognizeResponse: &speechpb.RecognizeResponse{}}
+	provider := newGoogleSTTWithClient(client)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	event, err := provider.Recognize(context.Background(), nil, "en-US")
+	if event != nil {
+		t.Fatalf("Recognize after Close event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Recognize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if client.recognizeCalls != 0 {
+		t.Fatalf("Recognize after Close client calls = %d, want 0", client.recognizeCalls)
+	}
+}
+
 type fakeGoogleSpeechClient struct {
 	stream            speechpb.Speech_StreamingRecognizeClient
 	streamErr         error
+	streamCalls       int
 	recognizeRequest  *speechpb.RecognizeRequest
+	recognizeCalls    int
 	recognizeResponse *speechpb.RecognizeResponse
 	recognizeErr      error
 }
 
 func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechpb.Speech_StreamingRecognizeClient, error) {
+	c.streamCalls++
 	return c.stream, c.streamErr
 }
 
 func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.RecognizeRequest, opts ...gax.CallOption) (*speechpb.RecognizeResponse, error) {
+	c.recognizeCalls++
 	c.recognizeRequest = req
 	return c.recognizeResponse, c.recognizeErr
 }

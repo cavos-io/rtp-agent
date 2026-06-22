@@ -550,6 +550,72 @@ func TestElevenLabsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if stream != nil {
+		t.Fatalf("Stream after Close returned stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("Stream after Close dial calls = %d, want 0", dialCalls)
+	}
+}
+
+func TestElevenLabsSTTRecognizeAfterCloseIsRejected(t *testing.T) {
+	var httpCalls int
+	oldTransport := http.DefaultClient.Transport
+	http.DefaultClient.Transport = elevenLabsSTTRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello","language_code":"en"}`)),
+		}, nil
+	})
+	defer func() {
+		http.DefaultClient.Transport = oldTransport
+	}()
+
+	provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.test/v1"))
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	event, err := provider.Recognize(context.Background(), nil, "en")
+	if event != nil {
+		t.Fatalf("Recognize after Close event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Recognize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("Recognize after Close HTTP calls = %d, want 0", httpCalls)
+	}
+}
+
 func TestElevenLabsSTTUpdateOptionsReconnectsActiveStreamForServerVAD(t *testing.T) {
 	clientOne, serverOne := net.Pipe()
 	clientTwo, serverTwo := net.Pipe()

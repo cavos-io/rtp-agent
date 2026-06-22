@@ -51,6 +51,7 @@ type ElevenLabsSTT struct {
 	keyterms          []string
 	mu                sync.Mutex
 	streams           map[*elevenLabsSTTStream]struct{}
+	closed            bool
 }
 
 type ElevenLabsSTTOption func(*ElevenLabsSTT)
@@ -160,6 +161,7 @@ func (s *ElevenLabsSTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	s.closed = true
 	streams := make([]*elevenLabsSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -174,6 +176,15 @@ func (s *ElevenLabsSTT) Close() error {
 		}
 	}
 	return closeErr
+}
+
+func (s *ElevenLabsSTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
@@ -198,6 +209,9 @@ func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
 }
 
 func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateElevenLabsAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -208,6 +222,10 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildElevenLabsSTTStreamURL(s, language), buildElevenLabsSTTHeaders(s))
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("Failed to connect to ElevenLabs")
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsSTTStream{
@@ -246,6 +264,9 @@ func (s *ElevenLabsSTT) unregisterStream(stream *elevenLabsSTTStream) {
 }
 
 func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateElevenLabsAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestTelnyxTTSDefaultsMatchReference(t *testing.T) {
@@ -158,6 +160,64 @@ func TestTelnyxTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	}
+}
+
+func TestTelnyxTTSStreamAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewTelnyxTTS("test-key", "", WithTelnyxTTSBaseURL("wss://telnyx.test/v2/tts"))
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("Stream after Close dial calls = %d, want 0", dialCalls)
+	}
+}
+
+func TestTelnyxTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewTelnyxTTS("test-key", "", WithTelnyxTTSBaseURL("wss://telnyx.test/v2/tts"))
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize after Close stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("Synthesize after Close dial calls = %d, want 0", dialCalls)
 	}
 }
 

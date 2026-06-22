@@ -868,6 +868,43 @@ func TestOpenAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	calls := 0
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       &countingOpenAIReadCloser{},
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("initial Synthesize error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream Close error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+
+	_, err = provider.Synthesize(context.Background(), "again")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls after Synthesize post-close = %d, want only initial request", calls)
+	}
+}
+
 type failingReadCloser struct {
 	err error
 }
