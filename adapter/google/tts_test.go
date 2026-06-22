@@ -353,6 +353,46 @@ func TestGoogleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	client := &fakeGoogleTTSClient{response: &texttospeech.SynthesizeSpeechResponse{}}
+	provider := newGoogleTTSWithClient(client)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize after Close stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if client.synthesizeCalls != 0 {
+		t.Fatalf("Synthesize after Close client calls = %d, want 0", client.synthesizeCalls)
+	}
+}
+
+func TestGoogleTTSStreamAfterCloseIsRejected(t *testing.T) {
+	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
+	provider := newGoogleTTSWithClient(client)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if client.streamCalls != 0 {
+		t.Fatalf("Stream after Close client calls = %d, want 0", client.streamCalls)
+	}
+}
+
 func TestGoogleTTSSpeakingRateMatchesReferenceRequests(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
@@ -469,18 +509,22 @@ func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 }
 
 type fakeGoogleTTSClient struct {
-	request  *texttospeech.SynthesizeSpeechRequest
-	response *texttospeech.SynthesizeSpeechResponse
-	stream   *fakeGoogleTTSStream
-	err      error
+	request         *texttospeech.SynthesizeSpeechRequest
+	synthesizeCalls int
+	response        *texttospeech.SynthesizeSpeechResponse
+	stream          *fakeGoogleTTSStream
+	streamCalls     int
+	err             error
 }
 
 func (c *fakeGoogleTTSClient) SynthesizeSpeech(ctx context.Context, req *texttospeech.SynthesizeSpeechRequest, opts ...gax.CallOption) (*texttospeech.SynthesizeSpeechResponse, error) {
+	c.synthesizeCalls++
 	c.request = req
 	return c.response, c.err
 }
 
 func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...gax.CallOption) (texttospeech.TextToSpeech_StreamingSynthesizeClient, error) {
+	c.streamCalls++
 	if c.err != nil {
 		return nil, c.err
 	}
