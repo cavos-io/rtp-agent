@@ -3765,6 +3765,42 @@ func TestFallbackChunkedStreamReportsDoneAndExceptionAfterFailure(t *testing.T) 
 	}
 }
 
+func TestFallbackChunkedStreamReportsAllFailedWhenFinalStreamFailsBeforeAudio(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked:     &metadataChunkedStream{err: providerErr},
+		},
+	}, FallbackAdapterOptions{DisableRetries: true})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want all-failed connection error")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error type = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("APIConnectionError retryable = false, want true")
+	}
+	if !strings.Contains(err.Error(), "all TTSs failed") || !strings.Contains(err.Error(), "primary") {
+		t.Fatalf("Next error = %q, want all-failed message with provider label", err)
+	}
+	if errors.Is(err, providerErr) {
+		t.Fatalf("Next error wraps raw provider error %v, want reference all-failed connection error", providerErr)
+	}
+}
+
 func TestFallbackChunkedStreamReportsDoneAfterEOF(t *testing.T) {
 	adapter := NewFallbackAdapter([]TTS{
 		&metadataTTS{
@@ -3848,6 +3884,51 @@ func TestFallbackSynthesizeStreamReportsDoneAndExceptionAfterFailure(t *testing.
 	}
 	if err := exceptionStream.Exception(); !errors.Is(err, wantErr) {
 		t.Fatalf("Exception() = %v, want %v", err, wantErr)
+	}
+}
+
+func TestFallbackSynthesizeStreamReportsAllFailedWhenFinalStreamFailsBeforeAudio(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	adapter := NewFallbackAdapterWithOptions([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			capabilities: TTSCapabilities{
+				Streaming: true,
+			},
+			stream: &metadataSynthesizeStream{err: providerErr},
+		},
+	}, FallbackAdapterOptions{DisableRetries: true})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput error = %v", err)
+	}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want all-failed connection error")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error type = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("APIConnectionError retryable = false, want true")
+	}
+	if !strings.Contains(err.Error(), "all TTSs failed") || !strings.Contains(err.Error(), "primary") {
+		t.Fatalf("Next error = %q, want all-failed message with provider label", err)
+	}
+	if errors.Is(err, providerErr) {
+		t.Fatalf("Next error wraps raw provider error %v, want reference all-failed connection error", providerErr)
 	}
 }
 

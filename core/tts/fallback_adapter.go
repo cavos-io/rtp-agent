@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -673,7 +674,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 	if lastErr != nil {
 		return lastErr
 	}
-	return fmt.Errorf("all fallback TTS exhausted")
+	return s.adapter.allFailedError()
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
@@ -1066,7 +1067,19 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 	if lastErr != nil {
 		return lastErr
 	}
-	return fmt.Errorf("all fallback TTS exhausted")
+	return s.adapter.allFailedError()
+}
+
+func (f *FallbackAdapter) allFailedError() error {
+	return llm.NewAPIConnectionError(fmt.Sprintf("all TTSs failed (%v) after %s", f.labels(), 0*time.Second))
+}
+
+func (f *FallbackAdapter) labels() []string {
+	labels := make([]string, len(f.ttss))
+	for i, tts := range f.ttss {
+		labels[i] = tts.Label()
+	}
+	return labels
 }
 
 func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStream, error) {
