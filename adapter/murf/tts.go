@@ -33,6 +33,7 @@ const (
 
 type MurfTTS struct {
 	mu         sync.Mutex
+	closed     bool
 	streams    map[*murfTTSSynthesizeStream]struct{}
 	apiKey     string
 	baseURL    string
@@ -146,6 +147,11 @@ func (t *MurfTTS) Provider() string { return "Murf" }
 
 func (t *MurfTTS) Close() error {
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*murfTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -162,17 +168,22 @@ func (t *MurfTTS) Close() error {
 	return closeErr
 }
 
-func (t *MurfTTS) registerStream(stream *murfTTSSynthesizeStream) {
+func (t *MurfTTS) registerStream(stream *murfTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
-		return
+		return false
 	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*murfTTSSynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	stream.provider = t
 	t.mu.Unlock()
+	return true
 }
 
 func (t *MurfTTS) unregisterStream(stream *murfTTSSynthesizeStream) {
@@ -191,6 +202,9 @@ func (t *MurfTTS) UpdateOptions(opts ...MurfTTSOption) {
 }
 
 func (t *MurfTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateMurfAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -246,6 +260,9 @@ func buildMurfTTSRequest(ctx context.Context, t *MurfTTS, text string) (*http.Re
 }
 
 func (t *MurfTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateMurfAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -264,9 +281,21 @@ func (t *MurfTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
+}
+
+func (t *MurfTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
 }
 
 func validateMurfAPIKey(apiKey string) error {
