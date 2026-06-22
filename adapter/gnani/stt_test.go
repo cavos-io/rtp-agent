@@ -2,6 +2,7 @@ package gnani
 
 import (
 	"context"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -235,6 +237,45 @@ func TestGnaniSTTCloseWaitsForFinalTranscriptAfterAudioFlush(t *testing.T) {
 		assertGnaniSTTEvent(t, []*stt.SpeechEvent{event}, 0, stt.SpeechEventFinalTranscript, "seg-final", "final words")
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for final transcript after close")
+	}
+}
+
+func TestGnaniSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"connected"}`)); err != nil {
+			t.Errorf("write connected: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSTT("test-key", WithSTTBaseURL(server.URL))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil on provider close", event)
+	}
+	if errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want reference provider connection error", err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %v, want reference provider connection error", err)
 	}
 }
 
