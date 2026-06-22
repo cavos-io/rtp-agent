@@ -2875,6 +2875,10 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	activity := s.activity
 	ivrActivity := s.ivrActivity
 	assistant := s.Assistant
+	var avatar AvatarProvider
+	if s.Agent != nil && s.Agent.GetAgent() != nil {
+		avatar = s.Agent.GetAgent().Avatar
+	}
 	s.activity = nil
 	s.ivrActivity = nil
 	s.started = false
@@ -2936,6 +2940,11 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 		activity.Stop()
 	}
 	if closer, ok := assistant.(closeableSessionAssistant); ok {
+		if err := closer.Close(); err != nil && stopErr == nil {
+			stopErr = err
+		}
+	}
+	if closer, ok := avatar.(closeableAvatarProvider); ok {
 		if err := closer.Close(); err != nil && stopErr == nil {
 			stopErr = err
 		}

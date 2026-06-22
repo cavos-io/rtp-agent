@@ -4298,6 +4298,25 @@ func TestAgentSessionStopClosesCloseableAssistant(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopClosesCloseableAvatar(t *testing.T) {
+	cause := errors.New("avatar close failed")
+	agent := NewAgent("test")
+	avatar := &fakeAvatarProvider{closeErr: cause}
+	agent.Avatar = avatar
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+
+	err := session.Stop(context.Background())
+
+	if !errors.Is(err, cause) {
+		t.Fatalf("Stop error = %v, want avatar close error", err)
+	}
+	if avatar.closeCalls != 1 {
+		t.Fatalf("avatar close calls = %d, want 1", avatar.closeCalls)
+	}
+}
+
 func TestAgentSessionCurrentSpeechReturnsNilWithoutActivity(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -6881,6 +6900,8 @@ type fakeAvatarProvider struct {
 	startCalls int
 	startErr   error
 	state      AvatarState
+	closeCalls int
+	closeErr   error
 }
 
 func (f *fakeAvatarProvider) Start(ctx context.Context) error {
@@ -6891,6 +6912,11 @@ func (f *fakeAvatarProvider) Start(ctx context.Context) error {
 func (f *fakeAvatarProvider) UpdateState(state AvatarState) error {
 	f.state = state
 	return nil
+}
+
+func (f *fakeAvatarProvider) Close() error {
+	f.closeCalls++
+	return f.closeErr
 }
 
 type blockingCloseTranscriptFlusher struct{}
