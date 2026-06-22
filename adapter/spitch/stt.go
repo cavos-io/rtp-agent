@@ -53,19 +53,54 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		return nil, fmt.Errorf("spitch stt error: %s", string(respBody))
 	}
 
-	var result struct {
-		Text string `json:"text"`
-	}
+	var result spitchSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
+	}
+
+	return spitchSTTResponseToEvent(result, language), nil
+}
+
+type spitchSTTResponse struct {
+	Text     string             `json:"text"`
+	Segments []spitchSTTSegment `json:"segments"`
+}
+
+type spitchSTTSegment struct {
+	Text  string  `json:"text"`
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
+}
+
+func spitchSTTResponseToEvent(result spitchSTTResponse, language string) *stt.SpeechEvent {
+	words := make([]stt.TimedString, 0, len(result.Segments))
+	for _, segment := range result.Segments {
+		words = append(words, stt.TimedString{
+			Text:      segment.Text,
+			StartTime: segment.Start,
+			EndTime:   segment.End,
+		})
+	}
+
+	startTime, endTime := 0.0, 0.0
+	if len(result.Segments) > 0 {
+		startTime = result.Segments[0].Start
+		endTime = result.Segments[len(result.Segments)-1].End
 	}
 
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
-			{Text: result.Text, Confidence: stt.DefaultTranscriptConfidence(result.Text)},
+			{
+				Text:       result.Text,
+				Language:   language,
+				StartTime:  startTime,
+				EndTime:    endTime,
+				Confidence: stt.DefaultTranscriptConfidence(result.Text),
+				Words:      words,
+			},
 		},
-	}, nil
+	}
 }
 
 func buildSpitchSTTRecognizeRequest(ctx context.Context, s *SpitchSTT, frames []*model.AudioFrame, language string) (*http.Request, error) {

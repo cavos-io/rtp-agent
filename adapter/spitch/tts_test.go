@@ -127,6 +127,33 @@ func TestSpitchSTTRecognizeRequestUploadsReferenceWAV(t *testing.T) {
 	}
 }
 
+func TestSpitchSTTResponsePreservesReferenceSegments(t *testing.T) {
+	event := spitchSTTResponseToEvent(spitchSTTResponse{
+		Text: "hello world",
+		Segments: []spitchSTTSegment{
+			{Text: "hello", Start: 0.1, End: 0.3},
+			{Text: "world", Start: 0.4, End: 0.7},
+		},
+	}, "en")
+
+	if event.Type != corestt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	got := event.Alternatives[0]
+	if got.Text != "hello world" || got.Language != "en" || got.StartTime != 0.1 || got.EndTime != 0.7 {
+		t.Fatalf("alternative = %+v, want reference transcript language and segment span", got)
+	}
+	if len(got.Words) != 2 {
+		t.Fatalf("words = %#v, want two timed segment words", got.Words)
+	}
+	if got.Words[0].Text != "hello" || got.Words[0].StartTime != 0.1 || got.Words[0].EndTime != 0.3 {
+		t.Fatalf("first word = %+v, want hello timing", got.Words[0])
+	}
+	if got.Words[1].Text != "world" || got.Words[1].StartTime != 0.4 || got.Words[1].EndTime != 0.7 {
+		t.Fatalf("second word = %+v, want world timing", got.Words[1])
+	}
+}
+
 func TestNewSpitchTTSUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SPITCH_API_KEY", "env-key")
 
