@@ -431,6 +431,27 @@ func TestRunResultUnwatchSpeechHandleRemovesCallbacks(t *testing.T) {
 	}
 }
 
+func TestRunResultMarkDoneAfterAllHandlesUnwatched(t *testing.T) {
+	result := NewRunResult(llm.NewChatContext())
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	if ok := result.WatchSpeechHandle(speech); !ok {
+		t.Fatal("WatchSpeechHandle returned false, want true for first watch")
+	}
+	if ok := result.UnwatchSpeechHandle(speech); !ok {
+		t.Fatal("UnwatchSpeechHandle returned false, want true for watched handle")
+	}
+
+	result.markDoneIfNeeded(nil)
+
+	if !result.Done() {
+		t.Fatal("RunResult Done() = false after all handles were unwatched and completion was re-evaluated")
+	}
+	if err := result.Wait(context.Background()); err != nil {
+		t.Fatalf("RunResult Wait error = %v, want nil after all handles unwatched", err)
+	}
+}
+
 func TestRunAssertUsesRecordedEventsForMessages(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	result := NewRunResult(chatCtx)
