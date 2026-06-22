@@ -244,6 +244,32 @@ func TestGladiaSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGladiaSTTStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewGladiaSTT("test-key")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	originalClient := http.DefaultClient
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: gladiaRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("unexpected gladia init request")
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	stream, err := provider.Stream(context.Background(), "")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if requests != 0 {
+		t.Fatalf("Stream after Close sent %d init requests, want none", requests)
+	}
+}
+
 func TestGladiaTranslationConfigOptionsMatchReference(t *testing.T) {
 	provider := NewGladiaSTT("test-key",
 		WithGladiaTranslationConfig([]string{"es", "fr"}, "enhanced", false, false, true, "medical appointment", true),
@@ -642,4 +668,10 @@ func gladiaConstantPCMFrame(samples int, sample int16) *model.AudioFrame {
 		NumChannels:       1,
 		SamplesPerChannel: uint32(samples),
 	}
+}
+
+type gladiaRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f gladiaRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
