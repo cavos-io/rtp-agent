@@ -121,10 +121,27 @@ func TestGoogleSpeechDataFromAlternativeToleratesMissingWordTimes(t *testing.T) 
 }
 
 func TestGoogleSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
-	provider := &GoogleSTT{}
+	provider := newGoogleSTTWithClient(nil)
 
 	if got := provider.Capabilities().AlignedTranscript; got != "word" {
 		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
+
+func TestGoogleSTTChirp3CapabilitiesDisableWordAlignment(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
+
+	if got := provider.Capabilities().AlignedTranscript; got != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty for chirp_3", got)
+	}
+}
+
+func TestGoogleRecognitionConfigChirp3DisablesWordTimeOffsets(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.EnableWordTimeOffsets {
+		t.Fatal("word time offsets enabled = true, want false for chirp_3")
 	}
 }
 
