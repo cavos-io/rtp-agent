@@ -499,7 +499,10 @@ func murfAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Synthesize
 			return murfTTSAudioFrame(audio, sampleRate), false, nil
 		}
 	}
-	return nil, message.Final, nil
+	if message.Final {
+		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
+	}
+	return nil, false, nil
 }
 
 func murfTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {

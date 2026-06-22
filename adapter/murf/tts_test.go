@@ -518,8 +518,11 @@ func TestMurfTTSAudioFromStreamMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("final message: %v", err)
 	}
-	if finished != nil || !done {
-		t.Fatalf("finished=%+v done=%v, want done with no audio", finished, done)
+	if finished == nil || !finished.IsFinal || !done {
+		t.Fatalf("finished=%+v done=%v, want final marker and done", finished, done)
+	}
+	if finished.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want boundary-only marker", finished.Frame)
 	}
 }
 
