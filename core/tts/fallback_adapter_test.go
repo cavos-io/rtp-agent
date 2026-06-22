@@ -161,6 +161,57 @@ func TestFallbackSynthesizeStreamIgnoresInputAfterCloseLikeReference(t *testing.
 	}
 }
 
+func TestFallbackChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{&metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{},
+	}})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
+func TestFallbackSynthesizeStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{&metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       &metadataSynthesizeStream{},
+	}})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestFallbackAdapterEmitsAvailabilityChanges(t *testing.T) {
 	streamErr := errors.New("primary unavailable")
 	primary := &metadataTTS{

@@ -898,7 +898,7 @@ func (s *fallbackChunkedStream) Next() (*SynthesizedAudio, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.closeCh:
-		return nil, context.Canceled
+		return nil, io.EOF
 	}
 }
 
@@ -1424,7 +1424,7 @@ func (s *fallbackSynthesizeStream) Next() (*SynthesizedAudio, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.closeCh:
-		return nil, context.Canceled
+		return nil, io.EOF
 	}
 }
 
