@@ -44,6 +44,7 @@ type CartesiaTTS struct {
 	pronunciationDictID string
 	mu                  sync.Mutex
 	streams             map[*cartesiaTTSStream]struct{}
+	closed              bool
 }
 
 type CartesiaTTSOption func(*CartesiaTTS)
@@ -182,6 +183,7 @@ func (t *CartesiaTTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*cartesiaTTSStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -197,7 +199,19 @@ func (t *CartesiaTTS) Close() error {
 	return closeErr
 }
 
+func (t *CartesiaTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
 func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateCartesiaTTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -345,6 +359,9 @@ func (s *cartesiaTTSChunkedStream) Close() error {
 }
 
 func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateCartesiaTTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -352,6 +369,10 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaStreamURL(t), buildCartesiaStreamHeaders(t))
 	if err != nil {
 		return nil, err
+	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 
 	// Send context initialization
@@ -369,23 +390,30 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		sampleRate: t.sampleRate,
 	}
 	stream.writeJSON = stream.writeJSONMessage
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 
 	go stream.readLoop()
 
 	return stream, nil
 }
 
-func (t *CartesiaTTS) registerStream(stream *cartesiaTTSStream) {
+func (t *CartesiaTTS) registerStream(stream *cartesiaTTSStream) bool {
 	if t == nil || stream == nil {
-		return
+		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*cartesiaTTSStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *CartesiaTTS) unregisterStream(stream *cartesiaTTSStream) {
