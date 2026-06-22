@@ -40,6 +40,7 @@ type TTS struct {
 	connPoolMu        sync.Mutex
 	connPool          *utils.ConnectionPool[inferenceTTSConn]
 	streams           map[*inferenceTTSStream]struct{}
+	closed            bool
 }
 
 type TTSOption func(*TTS)
@@ -153,6 +154,11 @@ func (t *TTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*inferenceTTSStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -278,9 +284,16 @@ func (t *TTS) Prewarm() {
 }
 
 func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	conn, err := t.connectionPool().Get(ctx, 0)
 	if err != nil {
 		return nil, err
+	}
+	if t.isClosed() {
+		_ = conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -304,22 +317,38 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		eventCh:     make(chan *tts.SynthesizedAudio, 100),
 	}
 
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.run()
 
 	return stream, nil
 }
 
-func (t *TTS) registerStream(stream *inferenceTTSStream) {
-	if t == nil || stream == nil {
-		return
+func (t *TTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *TTS) registerStream(stream *inferenceTTSStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*inferenceTTSStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *TTS) unregisterStream(stream *inferenceTTSStream) {
