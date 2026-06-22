@@ -378,6 +378,60 @@ func TestMurfTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestMurfTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	originalTransport := http.DefaultClient.Transport
+	called := false
+	http.DefaultClient.Transport = murfTTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		called = true
+		return nil, errors.New("unexpected murf tts request")
+	})
+	t.Cleanup(func() {
+		http.DefaultClient.Transport = originalTransport
+	})
+
+	provider := NewMurfTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := provider.Synthesize(context.Background(), "hello")
+
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if called {
+		t.Fatal("Synthesize after Close issued HTTP request")
+	}
+}
+
+func TestMurfTTSStreamAfterCloseIsRejected(t *testing.T) {
+	originalDialer := websocket.DefaultDialer
+	called := false
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			called = true
+			return nil, errors.New("unexpected murf tts dial")
+		},
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = originalDialer
+	})
+
+	provider := NewMurfTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	_, err := provider.Stream(context.Background())
+
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if called {
+		t.Fatal("Stream after Close dialed websocket")
+	}
+}
+
 func newMurfClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
@@ -456,6 +510,12 @@ func newMurfClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}
 		}
 	})
 	return conn, closed
+}
+
+type murfTTSRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f murfTTSRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 type murfSingleConnListener struct {

@@ -2,6 +2,7 @@ package upliftai
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -71,6 +72,84 @@ func TestUpliftAITTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSProviderCloseClosesActiveStreams(t *testing.T) {
+	oldClient := http.DefaultClient
+	body := &upliftAICloseCountBody{reader: strings.NewReader("audio")}
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       body,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if stream == nil {
+		t.Fatal("Synthesize stream = nil, want active stream")
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("active stream close count = %d, want %d", got, want)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("second provider Close close count = %d, want %d", got, want)
+	}
+}
+
+func TestUpliftAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls after Close = %d, want 0", httpCalls)
+	}
+}
+
+func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewUpliftAITTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
@@ -94,4 +173,24 @@ func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("second Next() error = %v, want EOF", err)
 	}
+}
+
+type upliftAIRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f upliftAIRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type upliftAICloseCountBody struct {
+	reader     *strings.Reader
+	closeCount int
+}
+
+func (b *upliftAICloseCountBody) Read(p []byte) (int, error) {
+	return b.reader.Read(p)
+}
+
+func (b *upliftAICloseCountBody) Close() error {
+	b.closeCount++
+	return nil
 }

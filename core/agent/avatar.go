@@ -25,6 +25,10 @@ type AvatarProvider interface {
 	UpdateState(state AvatarState) error
 }
 
+type closeableAvatarProvider interface {
+	Close() error
+}
+
 type AvatarMetricsHandler func(*telemetry.AvatarMetrics)
 
 type AvatarMetricsSource interface {

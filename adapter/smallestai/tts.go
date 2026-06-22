@@ -32,15 +32,19 @@ const (
 )
 
 type SmallestAITTS struct {
-	apiKey       string
-	baseURL      string
-	model        string
-	voice        string
-	sampleRate   int
-	speed        float64
-	language     string
-	outputFormat string
-	wsURL        string
+	apiKey           string
+	baseURL          string
+	model            string
+	voice            string
+	sampleRate       int
+	speed            float64
+	language         string
+	outputFormat     string
+	wsURL            string
+	mu               sync.Mutex
+	closed           bool
+	chunkedStreams   map[*smallestaiTTSChunkedStream]struct{}
+	streamingStreams map[*smallestaiTTSSynthesizeStream]struct{}
 }
 
 type SmallestAITTSOption func(*SmallestAITTS)
@@ -115,15 +119,17 @@ func NewSmallestAITTS(apiKey string, voice string, opts ...SmallestAITTSOption) 
 		apiKey = os.Getenv(smallestAIAPIKeyEnv)
 	}
 	provider := &SmallestAITTS{
-		apiKey:       apiKey,
-		baseURL:      defaultSmallestAIBaseURL,
-		model:        defaultSmallestAIModel,
-		voice:        voice,
-		sampleRate:   defaultSmallestAISampleRate,
-		speed:        defaultSmallestAISpeed,
-		language:     defaultSmallestAILanguage,
-		outputFormat: defaultSmallestAIOutputFormat,
-		wsURL:        defaultSmallestAIWebsocketURL,
+		apiKey:           apiKey,
+		baseURL:          defaultSmallestAIBaseURL,
+		model:            defaultSmallestAIModel,
+		voice:            voice,
+		sampleRate:       defaultSmallestAISampleRate,
+		speed:            defaultSmallestAISpeed,
+		language:         defaultSmallestAILanguage,
+		outputFormat:     defaultSmallestAIOutputFormat,
+		wsURL:            defaultSmallestAIWebsocketURL,
+		chunkedStreams:   make(map[*smallestaiTTSChunkedStream]struct{}),
+		streamingStreams: make(map[*smallestaiTTSSynthesizeStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -161,6 +167,9 @@ func (t *SmallestAITTS) SampleRate() int  { return t.sampleRate }
 func (t *SmallestAITTS) NumChannels() int { return 1 }
 
 func (t *SmallestAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateSmallestAITTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -181,10 +190,16 @@ func (t *SmallestAITTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 		return nil, fmt.Errorf("smallestai tts error: %s", string(respBody))
 	}
 
-	return &smallestaiTTSChunkedStream{
+	stream := &smallestaiTTSChunkedStream{
+		owner:      t,
 		resp:       resp,
 		sampleRate: t.sampleRate,
-	}, nil
+	}
+	if !t.registerChunkedStream(stream) {
+		_ = stream.Close()
+		return nil, io.ErrClosedPipe
+	}
+	return stream, nil
 }
 
 func buildSmallestAITTSRequest(ctx context.Context, t *SmallestAITTS, text string) (*http.Request, error) {
@@ -214,6 +229,9 @@ func buildSmallestAITTSRequest(ctx context.Context, t *SmallestAITTS, text strin
 }
 
 func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateSmallestAITTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -223,13 +241,89 @@ func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		return nil, fmt.Errorf("failed to dial smallestai tts websocket: %w", err)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &smallestaiTTSSynthesizeStream{
+	stream := &smallestaiTTSSynthesizeStream{
 		provider:   t,
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
 		sampleRate: t.sampleRate,
-	}, nil
+	}
+	if !t.registerStreamingStream(stream) {
+		_ = stream.Close()
+		return nil, io.ErrClosedPipe
+	}
+	return stream, nil
+}
+
+func (t *SmallestAITTS) Close() error {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
+	chunkedStreams := make([]*smallestaiTTSChunkedStream, 0, len(t.chunkedStreams))
+	for stream := range t.chunkedStreams {
+		chunkedStreams = append(chunkedStreams, stream)
+	}
+	streamingStreams := make([]*smallestaiTTSSynthesizeStream, 0, len(t.streamingStreams))
+	for stream := range t.streamingStreams {
+		streamingStreams = append(streamingStreams, stream)
+	}
+	t.chunkedStreams = make(map[*smallestaiTTSChunkedStream]struct{})
+	t.streamingStreams = make(map[*smallestaiTTSSynthesizeStream]struct{})
+	t.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range chunkedStreams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	for _, stream := range streamingStreams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (t *SmallestAITTS) isClosed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *SmallestAITTS) registerChunkedStream(stream *smallestaiTTSChunkedStream) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
+	t.chunkedStreams[stream] = struct{}{}
+	return true
+}
+
+func (t *SmallestAITTS) unregisterChunkedStream(stream *smallestaiTTSChunkedStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.chunkedStreams, stream)
+}
+
+func (t *SmallestAITTS) registerStreamingStream(stream *smallestaiTTSSynthesizeStream) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
+	t.streamingStreams[stream] = struct{}{}
+	return true
+}
+
+func (t *SmallestAITTS) unregisterStreamingStream(stream *smallestaiTTSSynthesizeStream) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.streamingStreams, stream)
 }
 
 func validateSmallestAITTSAPIKey(apiKey string) error {
@@ -263,6 +357,7 @@ func buildSmallestAITTSStreamMessage(t *SmallestAITTS, text string) ([]byte, err
 }
 
 type smallestaiTTSChunkedStream struct {
+	owner      *SmallestAITTS
 	resp       *http.Response
 	sampleRate int
 	mu         sync.Mutex
@@ -301,6 +396,9 @@ func (s *smallestaiTTSChunkedStream) Close() error {
 	s.mu.Unlock()
 	if resp == nil || resp.Body == nil {
 		return nil
+	}
+	if s.owner != nil {
+		s.owner.unregisterChunkedStream(s)
 	}
 	return resp.Body.Close()
 }
@@ -403,6 +501,9 @@ func (s *smallestaiTTSSynthesizeStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.provider != nil {
+		s.provider.unregisterStreamingStream(s)
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}
