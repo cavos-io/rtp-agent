@@ -31,8 +31,17 @@ func TestGoogleRecognitionConfigRequestsWordDetails(t *testing.T) {
 	if !config.EnableWordTimeOffsets {
 		t.Fatal("expected word time offsets to be enabled")
 	}
+	if config.EnableWordConfidence {
+		t.Fatal("word confidence enabled = true, want false by default")
+	}
+}
+
+func TestGoogleRecognitionConfigEnablesWordConfidenceWhenConfigured(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTWordConfidence(true))
+	config := googleRecognitionConfig(provider, "en-US")
+
 	if !config.EnableWordConfidence {
-		t.Fatal("expected word confidence to be enabled")
+		t.Fatal("word confidence enabled = false, want true when configured")
 	}
 }
 

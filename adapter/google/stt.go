@@ -69,6 +69,12 @@ func WithGoogleSTTVoiceActivityEvents(enabled bool) GoogleSTTOption {
 	}
 }
 
+func WithGoogleSTTWordConfidence(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.enableWordConfidence = enabled
+	}
+}
+
 func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if sampleRate > 0 {
@@ -111,7 +117,6 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		sampleRate:           16000,
 		minConfidence:        0.65,
 		enableWordTimeOffset: true,
-		enableWordConfidence: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
