@@ -483,6 +483,12 @@ func TestXaiTTSStreamIgnoresAudioDoneBeforeTextDone(t *testing.T) {
 		t.Fatalf("Next() before text.done error = %v, want audio", err)
 	}
 	assertXaiTTSAudio(t, audio, []byte{0x01, 0x02, 0x03, 0x04})
+	if audio.RequestID == "" {
+		t.Fatal("audio RequestID is empty, want stable stream request id")
+	}
+	if audio.SegmentID == "" {
+		t.Fatal("audio SegmentID is empty, want current segment id")
+	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
@@ -492,6 +498,12 @@ func TestXaiTTSStreamIgnoresAudioDoneBeforeTextDone(t *testing.T) {
 	}
 	if final == nil || !final.IsFinal {
 		t.Fatalf("Next() after text.done = %#v, want final marker", final)
+	}
+	if final.RequestID != audio.RequestID {
+		t.Fatalf("final RequestID = %q, want %q", final.RequestID, audio.RequestID)
+	}
+	if final.SegmentID != audio.SegmentID {
+		t.Fatalf("final SegmentID = %q, want %q", final.SegmentID, audio.SegmentID)
 	}
 	if audio, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next() after final marker = (%#v, %v), want EOF", audio, err)

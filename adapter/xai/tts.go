@@ -20,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -147,6 +148,7 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		ctx:           streamCtx,
 		cancel:        cancel,
 		tokenLanguage: t.language,
+		requestID:     uuid.NewString(),
 	}
 	stream.writeMessage = stream.writeTTSMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -313,6 +315,8 @@ type xaiTTSSynthesizeStream struct {
 	tokenBuffer   string
 	tokenLanguage string
 	inputEnded    bool
+	requestID     string
+	segmentID     string
 }
 
 func (s *xaiTTSSynthesizeStream) PushText(text string) error {
@@ -412,6 +416,7 @@ func (s *xaiTTSSynthesizeStream) ensureConnLocked() error {
 	}
 	s.conn = conn
 	s.inputEnded = false
+	s.segmentID = uuid.NewString()
 	return nil
 }
 
@@ -484,17 +489,31 @@ func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			if !s.realtimeInputEnded() {
 				continue
 			}
+			final := s.finalAudioDone()
 			s.clearCurrentConn(conn)
-			return s.finalAudioDone(), nil
+			return final, nil
 		}
 		if audio != nil {
+			s.annotateAudio(audio)
 			return audio, nil
 		}
 	}
 }
 
 func (s *xaiTTSSynthesizeStream) finalAudioDone() *tts.SynthesizedAudio {
-	return xaiTTSFinalAudioDone()
+	audio := xaiTTSFinalAudioDone()
+	s.annotateAudio(audio)
+	return audio
+}
+
+func (s *xaiTTSSynthesizeStream) annotateAudio(audio *tts.SynthesizedAudio) {
+	if audio == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	audio.RequestID = s.requestID
+	audio.SegmentID = s.segmentID
 }
 
 func xaiTTSFinalAudioDone() *tts.SynthesizedAudio {
