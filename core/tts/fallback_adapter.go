@@ -686,9 +686,13 @@ func (s *fallbackChunkedStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
+			clientClosed := isClientClosedStatus(err)
+			if clientClosed {
+				err = io.EOF
+			}
 			if errors.Is(err, io.EOF) || outputSent {
 				_ = stream.Close()
-				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
+				if !clientClosed && errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
 					s.markDone(err)
 					emitTTSError(s.adapter, err, false)
@@ -1103,9 +1107,13 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 
 		ev, err := stream.Next()
 		if err != nil {
+			clientClosed := isClientClosedStatus(err)
+			if clientClosed {
+				err = io.EOF
+			}
 			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
-				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
+				if !clientClosed && errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
 					s.markDone(err)
 					emitTTSError(s.adapter, err, false)

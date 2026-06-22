@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -654,6 +655,52 @@ func TestFallbackAdapterEmitsErrorOnChunkedFailure(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{events: []*SynthesizedAudio{
+			{Frame: &model.AudioFrame{Data: []byte("fallback")}},
+		}},
+	}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked:     &metadataChunkedStream{err: llm.NewAPIStatusError("client closed", 499, "req_499", nil)},
+		},
+		fallback,
+	})
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil when provider returned client closed", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF for APIStatusError 499", err)
+	}
+	if fallback.synthesizeCalls != 0 {
+		t.Fatal("fallback TTS was called for client-closed status, want graceful EOF")
+	}
+	select {
+	case got := <-errCh:
+		t.Fatalf("emitted TTS error for APIStatusError 499: %#v", got)
+	default:
+	}
+}
+
 func TestFallbackAdapterEmitsRecoverableErrorOnChunkedRetry(t *testing.T) {
 	providerErr := errors.New("retryable provider failure")
 	adapter := NewFallbackAdapterWithOptions([]TTS{
@@ -873,6 +920,60 @@ func TestFallbackAdapterEmitsErrorOnStreamFailure(t *testing.T) {
 	}
 	if !errors.Is(got.Err, wantErr) {
 		t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+	}
+}
+
+func TestFallbackSynthesizeStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+	fallback := &metadataTTS{
+		label:        "fallback",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream: &metadataSynthesizeStream{events: []*SynthesizedAudio{
+			{Frame: &model.AudioFrame{Data: []byte("fallback")}},
+		}},
+	}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{err: llm.NewAPIStatusError("client closed", 499, "req_499", nil)},
+		},
+		fallback,
+	})
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil when provider returned client closed", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF for APIStatusError 499", err)
+	}
+	if fallback.streamCalls != 0 {
+		t.Fatal("fallback TTS was called for client-closed status, want graceful EOF")
+	}
+	select {
+	case got := <-errCh:
+		t.Fatalf("emitted TTS error for APIStatusError 499: %#v", got)
+	default:
 	}
 }
 
