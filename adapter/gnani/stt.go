@@ -113,13 +113,15 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &gnaniSTTStream{
-		conn:     conn,
-		ctx:      streamCtx,
-		cancel:   cancel,
-		language: resolveSTTLanguage(s, language),
-		chunker:  newGnaniSTTAudioChunker(),
-		events:   make(chan *stt.SpeechEvent, 100),
-		errCh:    make(chan error, 1),
+		conn:              conn,
+		ctx:               streamCtx,
+		cancel:            cancel,
+		language:          resolveSTTLanguage(s, language),
+		chunker:           newGnaniSTTAudioChunker(),
+		events:            make(chan *stt.SpeechEvent, 100),
+		errCh:             make(chan error, 1),
+		closeDrainTimeout: time.Second,
+		drainEvent:        make(chan struct{}, 1),
 	}
 	go stream.readLoop()
 	return stream, nil
@@ -267,6 +269,9 @@ type gnaniSTTStream struct {
 	errCh    chan error
 	mu       sync.Mutex
 	closed   bool
+
+	closeDrainTimeout time.Duration
+	drainEvent        chan struct{}
 }
 
 func (s *gnaniSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -291,15 +296,29 @@ func (s *gnaniSTTStream) Flush() error {
 
 func (s *gnaniSTTStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	s.cancel()
 	_ = s.writeBufferedChunksLocked()
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	timeout := s.closeDrainTimeout
+	drainEvent := s.drainEvent
+	conn := s.conn
+	cancel := s.cancel
+	s.mu.Unlock()
+
+	if timeout > 0 && drainEvent != nil {
+		select {
+		case <-drainEvent:
+		case <-time.After(timeout):
+		case <-s.ctx.Done():
+		}
+	}
+
+	cancel()
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return conn.Close()
 }
 
 func (s *gnaniSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -341,7 +360,18 @@ func (s *gnaniSTTStream) readLoop() {
 		}
 		for _, event := range events {
 			s.events <- event
+			s.signalDrainEvent()
 		}
+	}
+}
+
+func (s *gnaniSTTStream) signalDrainEvent() {
+	if s.drainEvent == nil {
+		return
+	}
+	select {
+	case s.drainEvent <- struct{}{}:
+	default:
 	}
 }
 
