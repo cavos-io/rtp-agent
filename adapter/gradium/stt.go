@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -248,7 +250,11 @@ func (s *gradiumSTTStream) readLoop() {
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+				if !s.isClosed() {
+					s.errCh <- llm.NewAPIStatusError("Gradium connection closed unexpectedly", gradiumSTTCloseStatusCode(err), "", err.Error())
+				}
+			} else {
 				s.errCh <- err
 			}
 			return
@@ -271,6 +277,14 @@ func (s *gradiumSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func gradiumSTTCloseStatusCode(err error) int {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return closeErr.Code
+	}
+	return -1
 }
 
 func (s *gradiumSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -335,6 +349,15 @@ func (s *gradiumSTTStream) Close() error {
 	_ = writeGradiumSTTMessage(s.conn, buildGradiumSTTCloseMessage())
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *gradiumSTTStream) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func gradiumSTTAudioByteStream() *audio.AudioByteStream {
