@@ -2245,8 +2245,11 @@ func TestBuildOpenAIChatCompletionRequestDefaultsReasoningEffort(t *testing.T) {
 	}{
 		{model: "gpt-5", want: "minimal"},
 		{model: "gpt-5-mini", want: "minimal"},
+		{model: "gpt-5-nano", want: "minimal"},
 		{model: "gpt-5.1", want: "none"},
 		{model: "gpt-5.2", want: "none"},
+		{model: "gpt-5.4", want: "none"},
+		{model: "gpt-5.4-mini", want: "minimal"},
 		{model: "gpt-4.1", want: ""},
 	}
 
