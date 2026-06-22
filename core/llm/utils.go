@@ -1456,6 +1456,9 @@ func CollectStream(stream LLMStream) (*CollectedResponse, error) {
 		if errors.Is(err, io.EOF) {
 			break
 		}
+		if isClientClosedStatus(err) {
+			break
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -1509,6 +1512,9 @@ func (s *TextStream) Next() (string, error) {
 		chunk, err := s.stream.Next()
 		if err != nil {
 			_ = s.Close()
+			if isClientClosedStatus(err) {
+				return "", io.EOF
+			}
 			return "", err
 		}
 		if chunk == nil || chunk.Delta == nil || chunk.Delta.Content == "" {
@@ -1524,6 +1530,11 @@ func (s *TextStream) Close() error {
 	}
 	s.closed = true
 	return s.stream.Close()
+}
+
+func isClientClosedStatus(err error) bool {
+	var statusErr *APIStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == 499
 }
 
 func ExecuteFunctionCall(ctx context.Context, toolCall *FunctionToolCall, toolCtx *ToolContext) FunctionCallResult {

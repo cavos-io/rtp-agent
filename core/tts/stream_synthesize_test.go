@@ -645,6 +645,32 @@ func TestSynthesizeWithStreamCloseDelegatesToStream(t *testing.T) {
 	}
 }
 
+func TestSynthesizeWithStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
+	stream := &fakeSynthesizeStream{
+		events: []*SynthesizedAudio{{Frame: &model.AudioFrame{Data: []byte("late")}}},
+	}
+	provider := &fakeStreamingTTS{stream: stream}
+
+	chunked, err := SynthesizeWithStream(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("SynthesizeWithStream() error = %v", err)
+	}
+	if err := chunked.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	audio, err := chunked.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want io.EOF", err)
+	}
+	if got := len(stream.events); got != 1 {
+		t.Fatalf("remaining provider events after Close = %d, want 1", got)
+	}
+}
+
 func TestSynthesizeWithStreamClosesUnderlyingStreamAfterEOF(t *testing.T) {
 	stream := &fakeSynthesizeStream{
 		events:   []*SynthesizedAudio{{DeltaText: "hello"}},

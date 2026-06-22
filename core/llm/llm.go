@@ -2053,6 +2053,9 @@ func (f *FallbackAdapter) labels() []string {
 }
 
 func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	for {
 		chunk, err := s.activeStream.Next()
 		if err == nil {
@@ -2064,6 +2067,10 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 		}
 		if errors.Is(err, io.EOF) {
 			return nil, err
+		}
+		if s.outputSent && isClientClosedStatus(err) {
+			s.closeActive()
+			return nil, io.EOF
 		}
 		if s.outputSent && !s.adapter.retryOnChunkSent {
 			s.markUnavailable(s.activeIndex, false)

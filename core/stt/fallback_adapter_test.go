@@ -1275,6 +1275,32 @@ func TestFallbackStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream:       &metadataRecognizeStream{},
+		},
+	})
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+	if event != nil {
+		t.Fatalf("Next after Close event = %#v, want nil", event)
+	}
+}
+
 func TestFallbackAdapterAllFailedRecoveryAttemptsOncePerProvider(t *testing.T) {
 	primary := &metadataSTT{
 		label:         "primary",

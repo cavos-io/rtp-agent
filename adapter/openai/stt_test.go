@@ -1403,6 +1403,26 @@ func TestOpenAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &openAIRealtimeSTTStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	cancel()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next after Close event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want io.EOF", err)
+	}
+}
+
 func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              data,

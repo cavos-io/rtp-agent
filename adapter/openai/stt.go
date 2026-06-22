@@ -845,6 +845,18 @@ func (s *openAIRealtimeSTTStream) sendErrorLocked(err error) {
 
 func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 	select {
+	case err := <-s.errCh:
+		return nil, err
+	default:
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil, io.EOF
+	}
+
+	select {
 	case event, ok := <-s.events:
 		if !ok {
 			select {

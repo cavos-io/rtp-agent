@@ -2281,6 +2281,43 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionCloseIsIdempotent(t *testing.T) {
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	var closeMetricCalls atomic.Int32
+	realtimeModel := NewRealtimeModel(
+		"test-key",
+		"gpt-realtime",
+		WithOpenAIRealtimeSessionCloseMetricsHook(func(time.Duration) *telemetry.RealtimeModelMetrics {
+			closeMetricCalls.Add(1)
+			return nil
+		}),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("first Close error = %v", err)
+	}
+	close(releaseServer)
+	if err := session.Close(); err != nil {
+		t.Fatalf("second Close error = %v, want nil like reference aclose", err)
+	}
+	if got := closeMetricCalls.Load(); got != 1 {
+		t.Fatalf("session close metrics calls = %d, want one close cleanup", got)
+	}
+}
+
 func TestRealtimeGenerateReplyMessageMapsPerResponseOptions(t *testing.T) {
 	msg := openAIRealtimeGenerateReplyMessageWithSessionInstructions(llm.RealtimeGenerateReplyOptions{
 		Instructions: "answer briefly",

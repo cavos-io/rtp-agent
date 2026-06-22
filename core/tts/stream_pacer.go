@@ -469,6 +469,13 @@ func (p *SentenceStreamPacer) endUnderlyingInput() {
 }
 
 func (p *SentenceStreamPacer) Next() (*SynthesizedAudio, error) {
+	p.mu.Lock()
+	closed := p.closed
+	p.mu.Unlock()
+	if closed {
+		return nil, io.EOF
+	}
+
 	select {
 	case <-p.ctx.Done():
 		return nil, p.ctx.Err()

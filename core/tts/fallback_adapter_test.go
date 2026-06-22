@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -158,6 +159,57 @@ func TestFallbackSynthesizeStreamIgnoresInputAfterCloseLikeReference(t *testing.
 	}
 	if got := providerStream.calls; len(got) != 0 {
 		t.Fatalf("provider stream calls after close = %#v, want none", got)
+	}
+}
+
+func TestFallbackChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{&metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{},
+	}})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
+func TestFallbackSynthesizeStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	adapter := NewFallbackAdapter([]TTS{&metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       &metadataSynthesizeStream{},
+	}})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
 	}
 }
 
@@ -603,6 +655,52 @@ func TestFallbackAdapterEmitsErrorOnChunkedFailure(t *testing.T) {
 	}
 }
 
+func TestFallbackChunkedStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+	fallback := &metadataTTS{
+		label:       "fallback",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked: &metadataChunkedStream{events: []*SynthesizedAudio{
+			{Frame: &model.AudioFrame{Data: []byte("fallback")}},
+		}},
+	}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:       "primary",
+			sampleRate:  24000,
+			numChannels: 1,
+			chunked:     &metadataChunkedStream{err: llm.NewAPIStatusError("client closed", 499, "req_499", nil)},
+		},
+		fallback,
+	})
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil when provider returned client closed", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF for APIStatusError 499", err)
+	}
+	if fallback.synthesizeCalls != 0 {
+		t.Fatal("fallback TTS was called for client-closed status, want graceful EOF")
+	}
+	select {
+	case got := <-errCh:
+		t.Fatalf("emitted TTS error for APIStatusError 499: %#v", got)
+	default:
+	}
+}
+
 func TestFallbackAdapterEmitsRecoverableErrorOnChunkedRetry(t *testing.T) {
 	providerErr := errors.New("retryable provider failure")
 	adapter := NewFallbackAdapterWithOptions([]TTS{
@@ -822,6 +920,60 @@ func TestFallbackAdapterEmitsErrorOnStreamFailure(t *testing.T) {
 	}
 	if !errors.Is(got.Err, wantErr) {
 		t.Fatalf("emitted error = %v, want %v", got.Err, wantErr)
+	}
+}
+
+func TestFallbackSynthesizeStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+	fallback := &metadataTTS{
+		label:        "fallback",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream: &metadataSynthesizeStream{events: []*SynthesizedAudio{
+			{Frame: &model.AudioFrame{Data: []byte("fallback")}},
+		}},
+	}
+	adapter := NewFallbackAdapter([]TTS{
+		&metadataTTS{
+			label:        "primary",
+			sampleRate:   24000,
+			numChannels:  1,
+			capabilities: TTSCapabilities{Streaming: true},
+			stream:       &metadataSynthesizeStream{err: llm.NewAPIStatusError("client closed", 499, "req_499", nil)},
+		},
+		fallback,
+	})
+	errCh := make(chan TTSError, 1)
+	adapter.OnError(func(err TTSError) {
+		errCh <- err
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil when provider returned client closed", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF for APIStatusError 499", err)
+	}
+	if fallback.streamCalls != 0 {
+		t.Fatal("fallback TTS was called for client-closed status, want graceful EOF")
+	}
+	select {
+	case got := <-errCh:
+		t.Fatalf("emitted TTS error for APIStatusError 499: %#v", got)
+	default:
 	}
 }
 
@@ -1433,7 +1585,7 @@ func TestFallbackSynthesizeStreamFallsBackWhenNormalizationFailsBeforeAudio(t *t
 	}
 }
 
-func TestFallbackSynthesizeStreamErrorsWhenNormalizationFailsAfterAudio(t *testing.T) {
+func TestFallbackSynthesizeStreamIgnoresNormalizationErrorAfterAudio(t *testing.T) {
 	primary := &metadataTTS{
 		label:        "primary",
 		sampleRate:   16000,
@@ -1485,21 +1637,27 @@ func TestFallbackSynthesizeStreamErrorsWhenNormalizationFailsAfterAudio(t *testi
 	if first.IsFinal {
 		t.Fatal("first audio IsFinal = true, want non-final head")
 	}
-	if _, err = stream.Next(); err == nil || !strings.Contains(err.Error(), "audio frame data is shorter than declared sample count") {
-		t.Fatalf("second Next error = %v, want normalization error after partial output", err)
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final tail after partial output", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final tail after partial output")
+	}
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want io.EOF after partial output", err)
 	}
 	if fallback.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0 after partial output", fallback.streamCalls)
 	}
-	if adapter.status[0].available {
-		t.Fatal("primary availability = true, want false after post-output normalization error")
+	if !adapter.status[0].available {
+		t.Fatal("primary availability = false, want unchanged after ignored post-output normalization error")
 	}
-	got := receiveTerminalTTSError(t, errCh)
-	if got.Err == nil || !strings.Contains(got.Err.Error(), "audio frame data is shorter than declared sample count") {
-		t.Fatalf("emitted error = %v, want normalization error", got.Err)
-	}
-	if got.Recoverable {
-		t.Fatal("Recoverable = true, want false after partial audio")
+	select {
+	case got := <-errCh:
+		t.Fatalf("emitted TTS error after partial output: %#v", got)
+	default:
 	}
 }
 
@@ -2371,6 +2529,37 @@ func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayProducesNoAudi
 	}
 }
 
+func TestFallbackChunkedRecoveryMarksClientClosedProviderAvailable(t *testing.T) {
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{err: llm.NewAPIStatusError("client closed", 499, "req_499", nil)},
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+	changes := make(chan AvailabilityChangedEvent, 1)
+	adapter.OnAvailabilityChanged(func(ev AvailabilityChangedEvent) {
+		changes <- ev
+	})
+
+	adapter.tryRecoverChunked(0, "hello")
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if !adapter.status[0].available {
+		t.Fatal("provider available = false after client-closed recovery probe, want true")
+	}
+	available := receiveTTSAvailabilityChange(t, changes)
+	if available.TTS != primary || !available.Available {
+		t.Fatalf("availability event = %#v, want primary available", available)
+	}
+}
+
 func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayAudioInvalid(t *testing.T) {
 	primary := &metadataTTS{
 		label:       "primary",
@@ -2659,22 +2848,27 @@ func TestFallbackSynthesizeStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	if _, err := stream.Next(); err != nil {
 		t.Fatalf("first Next returned error: %v", err)
 	}
+	secondAudio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final tail after partial audio", err)
+	}
+	if !secondAudio.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final tail after partial audio")
+	}
 	_, err = stream.Next()
-	if !errors.Is(err, streamErr) {
-		t.Fatalf("second Next error = %v, want provider error after partial audio", err)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want io.EOF after partial audio", err)
 	}
 	if second.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0", second.streamCalls)
 	}
-	if adapter.status[0].available {
-		t.Fatal("first availability = true, want false after post-output stream error")
+	if !adapter.status[0].available {
+		t.Fatal("first availability = false, want unchanged after ignored post-output stream error")
 	}
-	got := receiveTerminalTTSError(t, errCh)
-	if !errors.Is(got.Err, streamErr) {
-		t.Fatalf("emitted error = %v, want %v", got.Err, streamErr)
-	}
-	if got.Recoverable {
-		t.Fatal("Recoverable = true, want false after partial audio")
+	select {
+	case got := <-errCh:
+		t.Fatalf("emitted TTS error after partial audio: %#v", got)
+	default:
 	}
 }
 
@@ -3239,6 +3433,38 @@ func TestFallbackSynthesizeRecoveryKeepsProviderUnavailableWhenReplayProducesNoA
 
 	if adapter.status[0].available {
 		t.Fatal("provider available = true after no-audio recovery probe, want false")
+	}
+}
+
+func TestFallbackSynthesizeRecoveryMarksClientClosedProviderAvailable(t *testing.T) {
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       &metadataSynthesizeStream{err: llm.NewAPIStatusError("client closed", 499, "req_499", nil)},
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+	changes := make(chan AvailabilityChangedEvent, 1)
+	adapter.OnAvailabilityChanged(func(ev AvailabilityChangedEvent) {
+		changes <- ev
+	})
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if !adapter.status[0].available {
+		t.Fatal("provider available = false after client-closed recovery probe, want true")
+	}
+	available := receiveTTSAvailabilityChange(t, changes)
+	if available.TTS != primary || !available.Available {
+		t.Fatalf("availability event = %#v, want primary available", available)
 	}
 }
 

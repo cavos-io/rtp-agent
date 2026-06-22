@@ -291,6 +291,44 @@ func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterTreatsClientClosedAfterChunkAsEOF(t *testing.T) {
+	primary := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
+		{err: NewAPIStatusError("client closed", 499, "req_499", nil)},
+	}}}
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "partial" {
+		t.Fatalf("first chunk content = %q, want partial", got)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+	if fallback.calls != 0 {
+		t.Fatalf("fallback calls = %d, want no fallback after client-close completion", fallback.calls)
+	}
+	adapter.mu.Lock()
+	available := adapter.available[0]
+	adapter.mu.Unlock()
+	if !available {
+		t.Fatal("primary provider marked unavailable after client-close completion")
+	}
+}
+
 func TestFallbackAdapterRetriesAfterChunkSentWhenEnabled(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	adapter := NewFallbackAdapterWithOptions([]LLM{
@@ -646,6 +684,34 @@ func TestFallbackAdapterFallsBackOnClientClosedStatusBeforeOutput(t *testing.T) 
 	}
 	if second.calls != 1 {
 		t.Fatalf("fallback LLM calls = %d, want 1 for client closed fallback", second.calls)
+	}
+}
+
+func TestFallbackStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
+	providerStream := &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "late"}}},
+	}}
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{stream: providerStream},
+	})
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	chunk, err := stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+	if chunk != nil {
+		t.Fatalf("Next after Close chunk = %#v, want nil", chunk)
+	}
+	if providerStream.index != 0 {
+		t.Fatalf("provider stream reads = %d, want 0 after fallback stream close", providerStream.index)
 	}
 }
 

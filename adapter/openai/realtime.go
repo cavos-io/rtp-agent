@@ -387,6 +387,8 @@ type realtimeSession struct {
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	mu                    sync.Mutex
+	closeOnce             sync.Once
+	closeErr              error
 	chatContextMu         sync.Mutex
 	toolsMu               sync.Mutex
 	eventCh               chan llm.RealtimeEvent
@@ -1780,15 +1782,18 @@ func openAIRealtimeClearAudioMessage() map[string]any {
 }
 
 func (s *realtimeSession) Close() error {
-	if s.model != nil {
-		s.model.unregisterSession(s)
-	}
-	s.emitSessionCloseMetrics()
-	s.closeRealtimeGeneration()
-	s.cancel()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conn.Close()
+	s.closeOnce.Do(func() {
+		if s.model != nil {
+			s.model.unregisterSession(s)
+		}
+		s.emitSessionCloseMetrics()
+		s.closeRealtimeGeneration()
+		s.cancel()
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.closeErr = s.conn.Close()
+	})
+	return s.closeErr
 }
 
 func (s *realtimeSession) emitSessionCloseMetrics() {
