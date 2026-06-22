@@ -2134,13 +2134,17 @@ func TestFallbackStreamPropagatesTimingAnchorsOnRetry(t *testing.T) {
 		t.Fatalf("recovered StartTime = %v, want 42.5", recovered.startTime)
 	}
 
-	timing.SetStartTimeOffset(-1)
-	timing.SetStartTime(-2)
-	if timing.StartTimeOffset() < 0 {
-		t.Fatalf("negative StartTimeOffset was stored: %v", timing.StartTimeOffset())
+	assertPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-1)
+	})
+	assertPanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-2)
+	})
+	if timing.StartTimeOffset() != 3.25 {
+		t.Fatalf("StartTimeOffset = %v after rejected update, want previous 3.25", timing.StartTimeOffset())
 	}
-	if timing.StartTime() < 0 {
-		t.Fatalf("negative StartTime was stored: %v", timing.StartTime())
+	if timing.StartTime() != 42.5 {
+		t.Fatalf("StartTime = %v after rejected update, want previous 42.5", timing.StartTime())
 	}
 }
 
