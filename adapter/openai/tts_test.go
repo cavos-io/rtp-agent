@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -324,6 +325,18 @@ func TestOpenAITTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSUpdateOptionsKeepsReferenceResponseFormat(t *testing.T) {
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+	)
+
+	provider.UpdateOptions(WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatMp3))
+
+	if provider.responseFormat != goopenai.SpeechResponseFormatPcm {
+		t.Fatalf("responseFormat = %q, want constructor format %q", provider.responseFormat, goopenai.SpeechResponseFormatPcm)
+	}
+}
+
 func TestOpenAITTSLabelCapabilitiesAndUnsupportedStream(t *testing.T) {
 	provider := mustNewOpenAITTS(t, "test-key", "", "")
 
@@ -348,6 +361,123 @@ func TestOpenAITTSProviderUsesReferenceBaseURLHost(t *testing.T) {
 
 	if got := provider.Provider(); got != "tts.openai.test" {
 		t.Fatalf("Provider() = %q, want tts.openai.test", got)
+	}
+}
+
+func TestOpenAITTSPrewarmSendsReferenceRootRequest(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		return nil, errors.New("prewarm failed")
+	})
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSBaseURL("https://openai.test/v1"),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	tts.Prewarm(provider)
+
+	select {
+	case req := <-reqCh:
+		if req.Method != http.MethodGet {
+			t.Fatalf("prewarm method = %s, want GET", req.Method)
+		}
+		if got := req.URL.String(); got != "https://openai.test/" {
+			t.Fatalf("prewarm URL = %q, want https://openai.test/", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for OpenAI TTS prewarm request")
+	}
+}
+
+func TestOpenAITTSCloseCancelsReferencePrewarm(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	cancelled := make(chan struct{})
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		<-r.Context().Done()
+		close(cancelled)
+		return nil, r.Context().Err()
+	})
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSBaseURL("https://openai.test/v1"),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	tts.Prewarm(provider)
+
+	select {
+	case <-reqCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for OpenAI TTS prewarm request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Close to cancel OpenAI TTS prewarm")
+	}
+}
+
+func TestOpenAITTSRepeatedPrewarmDoesNotCancelPreviousRequest(t *testing.T) {
+	reqCh := make(chan int, 2)
+	firstRelease := make(chan struct{})
+	firstCancelled := make(chan struct{}, 1)
+	secondCancelled := make(chan struct{}, 1)
+	var calls int32
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		call := int(atomic.AddInt32(&calls, 1))
+		reqCh <- call
+		switch call {
+		case 1:
+			select {
+			case <-r.Context().Done():
+				firstCancelled <- struct{}{}
+				return nil, r.Context().Err()
+			case <-firstRelease:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Body:       io.NopCloser(strings.NewReader("ok")),
+					Request:    r,
+				}, nil
+			}
+		default:
+			<-r.Context().Done()
+			secondCancelled <- struct{}{}
+			return nil, r.Context().Err()
+		}
+	})
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSBaseURL("https://openai.test/v1"),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	tts.Prewarm(provider)
+	if got := receiveOpenAITTSPrewarmCall(t, reqCh); got != 1 {
+		t.Fatalf("first prewarm call = %d, want 1", got)
+	}
+	tts.Prewarm(provider)
+	if got := receiveOpenAITTSPrewarmCall(t, reqCh); got != 2 {
+		t.Fatalf("second prewarm call = %d, want 2", got)
+	}
+
+	select {
+	case <-firstCancelled:
+		t.Fatal("second Prewarm canceled the first in-flight request")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(firstRelease)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-secondCancelled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Close to cancel latest prewarm")
 	}
 }
 
@@ -1151,6 +1281,17 @@ func mustNewOpenAITTS(t *testing.T, apiKey string, model goopenai.SpeechModel, v
 		t.Fatalf("NewOpenAITTS error = %v", err)
 	}
 	return provider
+}
+
+func receiveOpenAITTSPrewarmCall(t *testing.T, reqCh <-chan int) int {
+	t.Helper()
+	select {
+	case call := <-reqCh:
+		return call
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for OpenAI TTS prewarm request")
+		return 0
+	}
 }
 
 func openAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {

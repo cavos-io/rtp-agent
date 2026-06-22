@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -634,7 +635,6 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 }
 
 func (s *fallbackChunkedStream) tryStartStream(index int) error {
-	var lastErr error
 	for i := index; i < len(s.adapter.ttss); i++ {
 		if !s.adapter.shouldTry(i) {
 			continue
@@ -658,7 +658,6 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 			}
 			cancel()
 			logger.Logger.Errorw("Failed to start TTS synthesize stream", err, "tts", tts.Label())
-			lastErr = err
 			if s.canRetryTTS(i) {
 				emitTTSError(s.adapter, err, true)
 				s.retries[i]++
@@ -670,10 +669,7 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 		}
 	}
 
-	if lastErr != nil {
-		return lastErr
-	}
-	return fmt.Errorf("all fallback TTS exhausted")
+	return s.adapter.allFailedError()
 }
 
 func (s *fallbackChunkedStream) monitorStream() {
@@ -699,6 +695,9 @@ func (s *fallbackChunkedStream) monitorStream() {
 				err = io.EOF
 			}
 			if errors.Is(err, io.EOF) || outputSent {
+				if outputSent && !errors.Is(err, io.EOF) {
+					s.adapter.markUnavailable(s.activeIndex)
+				}
 				_ = stream.Close()
 				if !clientClosed && errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
@@ -1015,7 +1014,6 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 }
 
 func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
-	var lastErr error
 	for i := index; i < len(s.adapter.ttss); i++ {
 		if !s.adapter.shouldTry(i) {
 			continue
@@ -1030,7 +1028,6 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 			stream, err := s.startProviderStream(tts)
 			if err != nil {
 				logger.Logger.Errorw("Failed to start TTS stream", err, "tts", tts.Label())
-				lastErr = err
 				if s.canRetryTTS(i) {
 					emitTTSError(s.adapter, err, true)
 					s.retries[i]++
@@ -1043,7 +1040,6 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 
 			if err := s.replayBufferedText(stream); err != nil {
 				stream.Close()
-				lastErr = err
 				if s.canRetryTTS(i) {
 					emitTTSError(s.adapter, err, true)
 					s.retries[i]++
@@ -1060,10 +1056,19 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 		}
 	}
 
-	if lastErr != nil {
-		return lastErr
+	return s.adapter.allFailedError()
+}
+
+func (f *FallbackAdapter) allFailedError() error {
+	return llm.NewAPIConnectionError(fmt.Sprintf("all TTSs failed (%v) after %s", f.labels(), 0*time.Second))
+}
+
+func (f *FallbackAdapter) labels() []string {
+	labels := make([]string, len(f.ttss))
+	for i, tts := range f.ttss {
+		labels[i] = tts.Label()
 	}
-	return fmt.Errorf("all fallback TTS exhausted")
+	return labels
 }
 
 func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStream, error) {
@@ -1144,6 +1149,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				return
 			}
 			if outputSent {
+				s.adapter.markUnavailable(s.activeIndex)
 				_ = stream.Close()
 				if pending != nil {
 					pending = cloneSynthesizedAudio(pending)
