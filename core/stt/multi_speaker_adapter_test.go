@@ -533,6 +533,30 @@ func TestMultiSpeakerAdapterReportsInputEndedAfterCloseLikeReference(t *testing.
 	}
 }
 
+func TestMultiSpeakerAdapterNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:   &fakeMultiSpeakerStream{},
+		ctx:     ctx,
+		cancel:  cancel,
+		eventCh: make(chan *SpeechEvent),
+		errCh:   make(chan error, 1),
+		inputCh: make(chan multiSpeakerInput, 1),
+		doneCh:  make(chan struct{}),
+	}
+	if err := wrapper.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	event, err := wrapper.Next()
+	if event != nil {
+		t.Fatalf("Next after Close event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want io.EOF", err)
+	}
+}
+
 func TestMultiSpeakerAdapterCloseDoesNotPanicBlockedPushFrame(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wrapper := &multiSpeakerAdapterWrapper{

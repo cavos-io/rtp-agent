@@ -464,6 +464,33 @@ func TestStreamAdapterReportsInputEndedAfterCloseLikeReference(t *testing.T) {
 	}
 }
 
+func TestStreamAdapterNextAfterCloseReturnsEOF(t *testing.T) {
+	startedCh := make(chan struct{}, 1)
+	stream, err := NewStreamAdapter(&fakeStreamAdapterSTT{}, &fakeStreamAdapterVAD{
+		startedCh: startedCh,
+		stream:    &fakeStreamAdapterVADStream{done: make(chan struct{})},
+	}).Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	select {
+	case <-startedCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for VAD stream start")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next after Close event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want io.EOF", err)
+	}
+}
+
 func TestStreamAdapterCloseDoesNotPanicBlockedPushFrame(t *testing.T) {
 	pushStartedCh := make(chan struct{}, 1)
 	releasePushCh := make(chan struct{})

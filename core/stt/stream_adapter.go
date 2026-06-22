@@ -2,6 +2,7 @@ package stt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -440,7 +441,7 @@ func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
 	select {
 	case err := <-w.errCh:
 		if err != nil {
-			return nil, err
+			return nil, w.nextClosedErr(err)
 		}
 	default:
 	}
@@ -448,9 +449,9 @@ func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
 	select {
 	case err := <-w.errCh:
 		if err != nil {
-			return nil, err
+			return nil, w.nextClosedErr(err)
 		}
-		return nil, context.Canceled
+		return nil, w.nextClosedErr(nil)
 	case ev, ok := <-w.eventCh:
 		if ok {
 			return ev, nil
@@ -459,16 +460,29 @@ func (w *streamAdapterWrapper) Next() (*SpeechEvent, error) {
 		err := w.terminalErr
 		w.mu.Unlock()
 		if err != nil {
-			return nil, err
+			return nil, w.nextClosedErr(err)
 		}
-		return nil, context.Canceled
+		return nil, w.nextClosedErr(nil)
 	case <-w.ctx.Done():
 		w.mu.Lock()
 		err := w.terminalErr
 		w.mu.Unlock()
 		if err != nil {
-			return nil, err
+			return nil, w.nextClosedErr(err)
 		}
-		return nil, w.ctx.Err()
+		return nil, w.nextClosedErr(w.ctx.Err())
 	}
+}
+
+func (w *streamAdapterWrapper) nextClosedErr(err error) error {
+	w.mu.Lock()
+	closed := w.closed
+	w.mu.Unlock()
+	if closed && (err == nil || errors.Is(err, context.Canceled)) {
+		return io.EOF
+	}
+	if err != nil {
+		return err
+	}
+	return context.Canceled
 }
