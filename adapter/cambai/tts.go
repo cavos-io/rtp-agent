@@ -197,7 +197,6 @@ func (t *CambaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 type cambaiTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
-	hasAudio   bool
 	finalSent  bool
 }
 
@@ -206,7 +205,7 @@ func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
-			if s.hasAudio && !s.finalSent {
+			if !s.finalSent {
 				s.finalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
@@ -214,7 +213,6 @@ func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return nil, err
 	}
-	s.hasAudio = true
 
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
