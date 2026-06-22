@@ -2925,6 +2925,26 @@ func TestAgentSessionCloseSoonClearsEventListeners(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCloseSoonCompletesActiveRunResultWithError(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	result := NewRunResult(session.ChatCtx)
+	session.started = true
+	session.runState = result
+
+	session.CloseSoon(CloseReasonUserInitiated)
+
+	if !result.Done() {
+		t.Fatal("RunResult Done() = false after session close")
+	}
+	err := result.Wait(context.Background())
+	if err == nil {
+		t.Fatal("RunResult Wait error = nil, want session closed error")
+	}
+	if got, want := err.Error(), "session closed"; got != want {
+		t.Fatalf("RunResult Wait error = %q, want %q", got, want)
+	}
+}
+
 func TestAgentSessionCloseSoonEmitsCloseAfterCleanup(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -6472,6 +6492,23 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("UpdateUserState did not emit an event")
+	}
+}
+
+func TestAgentSessionDuplicateUserStateUpdateIsNoopLikeReference(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	session.UpdateUserState(UserStateSpeaking)
+	<-session.UserStateChangedCh
+	session.UpdateUserState(UserStateSpeaking)
+
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() = %q, want speaking", got)
+	}
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("duplicate user state emitted event %q -> %q", ev.OldState, ev.NewState)
+	default:
 	}
 }
 

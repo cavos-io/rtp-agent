@@ -905,6 +905,24 @@ func TestOpenAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+
+	body := &countingOpenAIReadCloser{}
+	stream := &openaiTTSChunkedStream{resp: body, provider: provider}
+
+	provider.registerStream(stream)
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 for late stream cleanup", body.closed)
+	}
+	if !stream.closed {
+		t.Fatal("late stream IsClosed() = false, want true after provider rejected registration")
+	}
+}
+
 type failingReadCloser struct {
 	err error
 }

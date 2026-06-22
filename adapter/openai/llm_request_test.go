@@ -1978,6 +1978,47 @@ func TestOpenAILLMChatAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestOpenAILLMRegisterStreamAfterCloseClosesStream(t *testing.T) {
+	body := newBlockingEOFReadCloser(nil)
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = &sequenceHTTPClient{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Status:     http.StatusText(http.StatusOK),
+		Body:       body,
+		Header:     make(http.Header),
+	}}}
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	wrapped, ok := stream.(*openaiStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *openaiStream", stream)
+	}
+	model.unregisterStream(wrapped)
+	defer wrapped.Close()
+
+	if err := model.Close(); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+	model.registerStream(wrapped)
+
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("late OpenAI chat stream was not closed after provider Close")
+	}
+	if !wrapped.isClosed() {
+		t.Fatal("late OpenAI chat stream closed = false, want true after rejected registration")
+	}
+}
+
 type sequenceHTTPClient struct {
 	responses []*http.Response
 	calls     int

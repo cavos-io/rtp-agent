@@ -255,7 +255,9 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		provider:       t,
 		inputText:      text,
 	}
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		return nil, fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
+	}
 	return stream, nil
 }
 
@@ -297,10 +299,16 @@ func (t *OpenAITTS) Close() error {
 	return closeErr
 }
 
-func (t *OpenAITTS) registerStream(stream *openaiTTSChunkedStream) {
+func (t *OpenAITTS) registerStream(stream *openaiTTSChunkedStream) bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	t.streams[stream] = struct{}{}
+	t.mu.Unlock()
+	return true
 }
 
 func (t *OpenAITTS) unregisterStream(stream *openaiTTSChunkedStream) {

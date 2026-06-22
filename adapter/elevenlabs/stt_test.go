@@ -550,6 +550,81 @@ func TestElevenLabsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	handlerDone := make(chan struct{})
+	serverErr := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer close(handlerDone)
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})}
+	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	conn, _, err := websocket.DefaultDialer.DialContext(context.Background(), "ws://eleven.test/v1/speech-to-text/realtime", nil)
+	if err != nil {
+		t.Fatalf("DialContext error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTModel("scribe_v2_realtime"))
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	stream := &elevenLabsSTTStream{
+		conn:       conn,
+		cancel:     cancel,
+		ctx:        ctx,
+		events:     make(chan *stt.SpeechEvent, 1),
+		errCh:      make(chan error, 1),
+		sampleRate: 16000,
+	}
+
+	if provider.registerStream(stream) {
+		t.Fatal("registerStream after provider Close = true, want false")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after rejected registration error = %v, want io.ErrClosedPipe", err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
+	}
+
+	select {
+	case <-handlerDone:
+	case err := <-serverErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("registerStream after Close did not close websocket stream")
+	}
+}
+
 func TestElevenLabsSTTStreamAfterCloseIsRejected(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	dialCalls := 0

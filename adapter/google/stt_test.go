@@ -523,6 +523,32 @@ func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{})
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	stream := &googleSTTStream{
+		owner:  provider,
+		stream: streamClient,
+		events: make(chan *stt.SpeechEvent, 1),
+	}
+
+	if provider.registerStream(stream) {
+		t.Fatal("registerStream after provider Close = true, want false")
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after rejected registration")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after rejected registration error = %v, want io.ErrClosedPipe", err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
+	}
+}
+
 func TestGoogleSTTStreamAfterCloseIsRejected(t *testing.T) {
 	client := &fakeGoogleSpeechClient{stream: &fakeGoogleStreamingRecognizeClient{}}
 	provider := newGoogleSTTWithClient(client)

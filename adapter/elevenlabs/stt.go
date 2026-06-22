@@ -241,20 +241,31 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 			serverVAD:         s.serverVAD != nil,
 		},
 	}
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	go stream.keepAliveLoop()
 	return stream, nil
 }
 
-func (s *ElevenLabsSTT) registerStream(stream *elevenLabsSTTStream) {
+func (s *ElevenLabsSTT) registerStream(stream *elevenLabsSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*elevenLabsSTTStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
 	stream.unregister = s.unregisterStream
+	s.mu.Unlock()
+	return true
 }
 
 func (s *ElevenLabsSTT) unregisterStream(stream *elevenLabsSTTStream) {

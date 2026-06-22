@@ -1126,6 +1126,82 @@ func TestElevenLabsTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	handlerDone := make(chan struct{})
+	serverErr := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer close(handlerDone)
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})}
+	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	conn, _, err := websocket.DefaultDialer.DialContext(context.Background(), "ws://eleven.test/v1/text-to-speech/voice-1/multi-stream-input", nil)
+	if err != nil {
+		t.Fatalf("DialContext error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	stream := &elevenLabsStream{
+		provider:   provider,
+		conn:       conn,
+		audio:      make(chan *tts.SynthesizedAudio, 1),
+		errCh:      make(chan error, 1),
+		ctx:        ctx,
+		cancel:     cancel,
+		contextID:  "ctx-test",
+		sampleRate: provider.sampleRate,
+		encoding:   provider.encoding,
+	}
+
+	if provider.registerStream(stream) {
+		t.Fatal("registerStream after provider Close = true, want false")
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after rejected registration error = %v, want io.ErrClosedPipe", err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
+	}
+
+	select {
+	case <-handlerDone:
+	case err := <-serverErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("registerStream after Close did not close websocket stream")
+	}
+}
+
 func TestElevenLabsTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	var httpCalls int
 	oldClient := http.DefaultClient

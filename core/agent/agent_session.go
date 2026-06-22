@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -1980,6 +1981,22 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	for _, ch := range closeSubscribers {
 		ch <- *ev
 	}
+	s.finishActiveRunStateWithCloseError(err)
+}
+
+func (s *AgentSession) finishActiveRunStateWithCloseError(err error) {
+	s.mu.Lock()
+	runState := s.runState
+	s.mu.Unlock()
+
+	if runState == nil || runState.Done() {
+		return
+	}
+	if err != nil {
+		runState.markDoneWithError(fmt.Errorf("session closed: %w", err))
+		return
+	}
+	runState.markDoneWithError(errors.New("session closed"))
 }
 
 func (s *AgentSession) Shutdown(drain ...bool) {
@@ -2308,6 +2325,10 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 		return
 	}
 	oldState := s.userState
+	if oldState == state {
+		s.mu.Unlock()
+		return
+	}
 	s.userState = state
 	videoSampler := s.videoSampler
 	s.mu.Unlock()
@@ -2316,31 +2337,27 @@ func (s *AgentSession) updateUserStateAt(state UserState, createdAt time.Time) {
 		videoSampler.SetSpeaking(state == UserStateSpeaking)
 	}
 
-	if oldState != state {
-		s.updateUserAwayTimer()
-	}
+	s.updateUserAwayTimer()
 
-	if oldState != state {
-		if createdAt.IsZero() {
-			createdAt = time.Now()
+	if createdAt.IsZero() {
+		createdAt = time.Now()
+	}
+	logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
+	ev := UserStateChangedEvent{
+		OldState:  oldState,
+		NewState:  state,
+		CreatedAt: createdAt,
+	}
+	s.recordEvent(&ev)
+	primary, subscribers := s.userStateChangedSubscribers()
+	if primary != nil {
+		select {
+		case primary <- ev:
+		default:
 		}
-		logger.Logger.Debugw("User state changed", "old", oldState, "new", state)
-		ev := UserStateChangedEvent{
-			OldState:  oldState,
-			NewState:  state,
-			CreatedAt: createdAt,
-		}
-		s.recordEvent(&ev)
-		primary, subscribers := s.userStateChangedSubscribers()
-		if primary != nil {
-			select {
-			case primary <- ev:
-			default:
-			}
-		}
-		for _, ch := range subscribers {
-			ch <- ev
-		}
+	}
+	for _, ch := range subscribers {
+		ch <- ev
 	}
 }
 

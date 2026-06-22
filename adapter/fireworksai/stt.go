@@ -49,6 +49,7 @@ type FireworksSTT struct {
 	timestampGranularities []string
 	dialWebsocket          fireworksSTTWebsocketDialer
 	streams                map[*fireworksStream]struct{}
+	closed                 bool
 }
 
 type FireworksSTTOption func(*FireworksSTT)
@@ -182,6 +183,9 @@ func (s *FireworksSTT) UpdateOptions(opts ...FireworksSTTOption) {
 }
 
 func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateFireworksAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -216,21 +220,60 @@ func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.Recogni
 			lastFinalSegmentID:  -1,
 		},
 	}
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop(conn)
 	return stream, nil
 }
 
-func (s *FireworksSTT) registerStream(stream *fireworksStream) {
-	if s == nil || stream == nil {
-		return
+func (s *FireworksSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	s.closed = true
+	streams := make([]*fireworksStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*fireworksStream]struct{})
+	s.mu.Unlock()
+
+	var firstErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (s *FireworksSTT) isClosed() bool {
+	if s == nil {
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *FireworksSTT) registerStream(stream *fireworksStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*fireworksStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
+	s.mu.Unlock()
+	return true
 }
 
 func (s *FireworksSTT) unregisterStream(stream *fireworksStream) {

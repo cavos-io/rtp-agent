@@ -125,6 +125,17 @@ func (r *RunResult) MarkDone() {
 	r.markDoneLocked()
 }
 
+func (r *RunResult) markDoneWithError(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.done {
+		return
+	}
+	r.finalOutputErr = err
+	r.markDoneLocked()
+}
+
 func (r *RunResult) markDoneLocked() {
 	if r.done {
 		return
@@ -351,7 +362,7 @@ func (r *RunResult) markDoneIfNeeded(doneSpeech *SpeechHandle) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.done || len(r.watchedSpeech) == 0 {
+	if r.done {
 		return
 	}
 	if doneSpeech != nil {
