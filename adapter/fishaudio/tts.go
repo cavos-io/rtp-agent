@@ -387,6 +387,8 @@ type fishaudioTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	format     string
+	sentAudio  bool
+	finalSent  bool
 }
 
 func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -399,27 +401,42 @@ func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		if len(data) == 0 {
-			return nil, io.EOF
+			return s.emitFinal()
 		}
-		return fishAudioDecodeTTSFrame(data, s.sampleRate, s.format)
+		audio, err := fishAudioDecodeTTSFrame(data, s.sampleRate, s.format)
+		s.sentAudio = err == nil
+		return audio, err
 	}
 
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
-			return nil, io.EOF
+			return s.emitFinal()
 		}
 		return nil, err
 	}
 
-	return fishAudioDecodeTTSFrame(buf[:n], s.sampleRate, s.format)
+	audio, err := fishAudioDecodeTTSFrame(buf[:n], s.sampleRate, s.format)
+	if err == nil {
+		s.sentAudio = true
+	}
+	return audio, err
+}
+
+func (s *fishaudioTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	if !s.sentAudio || s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
 }
 
 func (s *fishaudioTTSChunkedStream) Close() error {
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}
+	s.finalSent = true
 	body := s.resp.Body
 	s.resp = nil
 	return body.Close()
