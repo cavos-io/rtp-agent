@@ -699,6 +699,9 @@ func (s *fallbackChunkedStream) monitorStream() {
 				err = io.EOF
 			}
 			if errors.Is(err, io.EOF) || outputSent {
+				if outputSent && !errors.Is(err, io.EOF) {
+					s.adapter.markUnavailable(s.activeIndex)
+				}
 				_ = stream.Close()
 				if !clientClosed && errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
 					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
@@ -1144,6 +1147,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				return
 			}
 			if outputSent {
+				s.adapter.markUnavailable(s.activeIndex)
 				_ = stream.Close()
 				if pending != nil {
 					pending = cloneSynthesizedAudio(pending)
