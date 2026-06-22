@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -867,6 +868,33 @@ func TestSarvamTTSStreamMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSStreamTokenizesSentencesAndFlushesTailLikeReference(t *testing.T) {
+	conn, messages, closeServer := newSarvamTTSMessageCapture(t)
+	defer closeServer()
+
+	stream := &sarvamTTSSynthesizeStream{
+		conn:   conn,
+		cancel: func() {},
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("This is a complete sen"); err != nil {
+		t.Fatalf("PushText(partial) error = %v", err)
+	}
+	assertNoSarvamTTSMessage(t, messages)
+
+	if err := stream.PushText("tence. Tail"); err != nil {
+		t.Fatalf("PushText(sentence) error = %v", err)
+	}
+	assertSarvamTTSTextMessage(t, receiveSarvamTTSMessage(t, messages), "This is a complete sentence.")
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	assertSarvamTTSTextMessage(t, receiveSarvamTTSMessage(t, messages), "Tail")
+	assertSarvamJSONField(t, decodeSarvamTTSMessage(t, receiveSarvamTTSMessage(t, messages)), "type", "flush")
+}
+
 func TestSarvamTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewSarvamTTS("test-key", "")
 	stream := &sarvamTTSSynthesizeStream{
@@ -937,6 +965,80 @@ func TestSarvamTTSStreamAfterCloseIsRejected(t *testing.T) {
 	if dials != 0 {
 		t.Fatalf("Stream after Close dialed %d times, want none", dials)
 	}
+}
+
+func newSarvamTTSMessageCapture(t *testing.T) (*websocket.Conn, <-chan []byte, func()) {
+	t.Helper()
+	messages := make(chan []byte, 8)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		for {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if msgType == websocket.TextMessage {
+				messages <- append([]byte(nil), payload...)
+			}
+		}
+	}))
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		server.Close()
+		t.Fatalf("dial websocket: %v", err)
+	}
+	return conn, messages, func() {
+		conn.Close()
+		server.Close()
+	}
+}
+
+func assertNoSarvamTTSMessage(t *testing.T, messages <-chan []byte) {
+	t.Helper()
+	select {
+	case payload := <-messages:
+		t.Fatalf("unexpected websocket message %s", string(payload))
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func receiveSarvamTTSMessage(t *testing.T, messages <-chan []byte) []byte {
+	t.Helper()
+	select {
+	case payload := <-messages:
+		return payload
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket message")
+	}
+	return nil
+}
+
+func assertSarvamTTSTextMessage(t *testing.T, payload []byte, want string) {
+	t.Helper()
+	message := decodeSarvamTTSMessage(t, payload)
+	assertSarvamJSONField(t, message, "type", "text")
+	data, ok := message["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("message data = %#v, want object", message["data"])
+	}
+	assertSarvamJSONField(t, data, "text", want)
+}
+
+func decodeSarvamTTSMessage(t *testing.T, payload []byte) map[string]any {
+	t.Helper()
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode websocket message %s: %v", string(payload), err)
+	}
+	return message
 }
 
 func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {

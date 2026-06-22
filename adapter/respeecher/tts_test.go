@@ -244,6 +244,45 @@ func TestRespeecherTTSWebsocketMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestRespeecherTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	var writes []map[string]any
+	stream := &respeecherTTSSynthesizeStream{
+		provider:  NewRespeecherTTS("test-key", ""),
+		contextID: "ctx-1",
+		writeMessage: func(payload []byte) error {
+			var msg map[string]any
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				t.Fatalf("decode websocket payload: %v", err)
+			}
+			writes = append(writes, msg)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after PushText = %d, want only completed sentence", len(writes))
+	}
+	if writes[0]["transcript"] != "This first sentence is definitely long enough." || writes[0]["continue"] != true {
+		t.Fatalf("first message = %#v, want completed sentence with continue=true", writes[0])
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 3 {
+		t.Fatalf("writes after Flush = %d, want tail text and end packet", len(writes))
+	}
+	if writes[1]["transcript"] != "Tail" || writes[1]["continue"] != true {
+		t.Fatalf("tail message = %#v, want flushed tail with continue=true", writes[1])
+	}
+	if writes[2]["transcript"] != " " || writes[2]["continue"] != false {
+		t.Fatalf("end message = %#v, want reference end packet", writes[2])
+	}
+}
+
 func TestRespeecherTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -261,7 +300,7 @@ func TestRespeecherTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+	if err := stream.PushText("hello there dear friend. Tail"); !errors.Is(err, writeErr) {
 		t.Fatalf("PushText error = %v, want write error", err)
 	}
 	if !cancelled {

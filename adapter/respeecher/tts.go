@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -355,6 +356,7 @@ type respeecherTTSSynthesizeStream struct {
 	errCh     chan error
 	mu        sync.Mutex
 	closed    bool
+	pendingText string
 
 	writeMessage func([]byte) error
 	closeConn    func() error
@@ -369,7 +371,24 @@ func (s *respeecherTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("respeecher tts stream is closed")
 	}
-	message, err := buildRespeecherTTSTextMessage(s.provider, s.contextID, text, true)
+	s.pendingText += text
+	return s.sendCompleteSentencesLocked()
+}
+
+func (s *respeecherTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("respeecher tts stream is closed")
+	}
+	if s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendTextLocked(text); err != nil {
+			return err
+		}
+	}
+	message, err := buildRespeecherTTSEndMessage(s.provider, s.contextID)
 	if err != nil {
 		return err
 	}
@@ -380,13 +399,22 @@ func (s *respeecherTTSSynthesizeStream) PushText(text string) error {
 	return nil
 }
 
-func (s *respeecherTTSSynthesizeStream) Flush() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return fmt.Errorf("respeecher tts stream is closed")
+func (s *respeecherTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTextLocked(sentence); err != nil {
+			return err
+		}
+		s.pendingText = strings.TrimPrefix(s.pendingText, sentence)
 	}
-	message, err := buildRespeecherTTSEndMessage(s.provider, s.contextID)
+}
+
+func (s *respeecherTTSSynthesizeStream) sendTextLocked(text string) error {
+	message, err := buildRespeecherTTSTextMessage(s.provider, s.contextID, text, true)
 	if err != nil {
 		return err
 	}
