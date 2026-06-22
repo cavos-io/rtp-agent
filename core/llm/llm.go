@@ -2076,14 +2076,18 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return nil, err
 		}
 		if s.outputSent && isClientClosedStatus(err) {
+			s.rememberActiveMetadata()
 			s.closeActive()
 			return nil, io.EOF
 		}
 		if s.outputSent && !s.adapter.retryOnChunkSent {
+			s.rememberActiveMetadata()
+			s.closeActive()
 			s.markUnavailable(s.activeIndex, false)
 			return nil, err
 		}
 
+		s.rememberActiveMetadata()
 		s.closeActive()
 		s.markUnavailable(s.activeIndex, true)
 		if s.activeIndex+1 >= len(s.adapter.llms) {

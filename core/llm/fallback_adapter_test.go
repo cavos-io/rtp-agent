@@ -286,11 +286,12 @@ func TestFallbackAdapterStreamExposesActiveTools(t *testing.T) {
 
 func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
+	primaryStream := &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
+		{err: firstErr},
+	}}
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
-			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
-			{err: firstErr},
-		}}},
+		&fakeFallbackLLM{stream: primaryStream},
 		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
 		}}},
@@ -312,6 +313,9 @@ func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	_, err = stream.Next()
 	if !errors.Is(err, firstErr) {
 		t.Fatalf("second Next error = %v, want primary stream error", err)
+	}
+	if !primaryStream.closed {
+		t.Fatal("primary stream was not closed after post-chunk failure")
 	}
 }
 
