@@ -532,10 +532,18 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 	if rio == nil || (rio.agentStatePublisher == nil && rio.clientEvents == nil) {
 		return
 	}
-	if rio.agentStatePublisher != nil && (rio.agentStatePublishEnabled == nil || rio.agentStatePublishEnabled()) {
-		rio.agentStatePublisher(map[string]string{
+	if rio.agentStatePublisher != nil {
+		publisher := rio.agentStatePublisher
+		enabled := rio.agentStatePublishEnabled
+		attrs := map[string]string{
 			RoomIOAgentStateAttribute: string(ev.NewState),
-		})
+		}
+		go func() {
+			if enabled != nil && !enabled() {
+				return
+			}
+			publisher(attrs)
+		}()
 	}
 	if rio.clientEvents != nil {
 		rio.clientEvents.DispatchAgentState(ev.NewState)

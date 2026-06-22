@@ -1834,11 +1834,11 @@ func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 }
 
 func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) {
-	var got map[string]string
+	published := make(chan map[string]string, 1)
 	dispatcher := &fakeClientEventsDispatcher{}
 	rio := &RoomIO{
 		agentStatePublisher: func(attrs map[string]string) {
-			got = attrs
+			published <- attrs
 		},
 		agentStatePublishEnabled: func() bool {
 			return true
@@ -1848,11 +1848,46 @@ func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) 
 
 	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
 
-	if got[RoomIOAgentStateAttribute] != string(agent.AgentStateThinking) {
-		t.Fatalf("published agent state attributes = %#v, want %s=%s", got, RoomIOAgentStateAttribute, agent.AgentStateThinking)
+	select {
+	case got := <-published:
+		if got[RoomIOAgentStateAttribute] != string(agent.AgentStateThinking) {
+			t.Fatalf("published agent state attributes = %#v, want %s=%s", got, RoomIOAgentStateAttribute, agent.AgentStateThinking)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RoomIO did not publish the agent state change")
 	}
 	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateThinking {
 		t.Fatalf("dispatched agent states = %#v, want thinking", dispatcher.agentStates)
+	}
+}
+
+func TestRoomIOHandleAgentStateChangedDoesNotBlockOnAttributePublish(t *testing.T) {
+	blockPublish := make(chan struct{})
+	dispatcher := &fakeClientEventsDispatcher{}
+	rio := &RoomIO{
+		agentStatePublisher: func(map[string]string) {
+			<-blockPublish
+		},
+		agentStatePublishEnabled: func() bool {
+			return true
+		},
+		clientEvents: dispatcher,
+	}
+	t.Cleanup(func() { close(blockPublish) })
+
+	done := make(chan struct{})
+	go func() {
+		rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("handleAgentStateChanged blocked on attribute publisher")
+	}
+	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateThinking {
+		t.Fatalf("dispatched agent states = %#v, want thinking despite slow attribute publish", dispatcher.agentStates)
 	}
 }
 
