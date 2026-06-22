@@ -6475,6 +6475,23 @@ func TestAgentSessionUpdateUserStateEmitsTypedTimestampedEvent(t *testing.T) {
 	}
 }
 
+func TestAgentSessionDuplicateUserStateUpdateIsNoopLikeReference(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+
+	session.UpdateUserState(UserStateSpeaking)
+	<-session.UserStateChangedCh
+	session.UpdateUserState(UserStateSpeaking)
+
+	if got := session.UserState(); got != UserStateSpeaking {
+		t.Fatalf("UserState() = %q, want speaking", got)
+	}
+	select {
+	case ev := <-session.UserStateChangedCh:
+		t.Fatalf("duplicate user state emitted event %q -> %q", ev.OldState, ev.NewState)
+	default:
+	}
+}
+
 func TestAgentStateChangedEventMarshalJSONMatchesReferencePayload(t *testing.T) {
 	ev := &AgentStateChangedEvent{
 		OldState:  AgentStateInitializing,
