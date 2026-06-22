@@ -40,6 +40,7 @@ type CartesiaSTT struct {
 	finalTranscriptMode  string
 	mu                   sync.Mutex
 	streams              map[*cartesiaSTTStream]struct{}
+	closed               bool
 }
 
 type CartesiaSTTOption func(*CartesiaSTT)
@@ -147,6 +148,11 @@ func (s *CartesiaSTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*cartesiaSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -179,6 +185,9 @@ func (s *CartesiaSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateCartesiaSTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -190,6 +199,10 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(s, streamLanguage), buildCartesiaSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial cartesia stt websocket: %w", err)
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &cartesiaSTTStream{
@@ -208,21 +221,38 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.writeText = stream.writeTextMessage
 	stream.closeConn = stream.closeWebsocketConn
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
 
-func (s *CartesiaSTT) registerStream(stream *cartesiaSTTStream) {
-	if s == nil || stream == nil {
-		return
+func (s *CartesiaSTT) isClosed() bool {
+	if s == nil {
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *CartesiaSTT) registerStream(stream *cartesiaSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*cartesiaSTTStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
+	return true
 }
 
 func (s *CartesiaSTT) unregisterStream(stream *cartesiaSTTStream) {
