@@ -142,14 +142,15 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 		return nil, err
 	}
 
+	streamLanguage := s.language
 	if language != "" {
-		s.language = language
+		streamLanguage = language
 	}
 	conn, _, err := s.dialWebsocket(ctx, s.modelEndpoint, buildGradiumSTTHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial gradium stt websocket: %w", err)
 	}
-	if err := writeGradiumSTTMessage(conn, buildGradiumSTTSetup(s)); err != nil {
+	if err := writeGradiumSTTMessage(conn, buildGradiumSTTSetupForLanguage(s, streamLanguage)); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -161,7 +162,7 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 		ctx:    streamCtx,
 		cancel: cancel,
 		state: &gradiumSTTMessageState{
-			language:       s.language,
+			language:       streamLanguage,
 			vadBucket:      s.vadBucket,
 			vadThreshold:   s.vadThreshold,
 			delayInTokens:  6,
@@ -190,7 +191,11 @@ func buildGradiumSTTHeaders(s *GradiumSTT) http.Header {
 }
 
 func buildGradiumSTTSetup(s *GradiumSTT) map[string]any {
-	jsonConfig := map[string]any{"language": s.language}
+	return buildGradiumSTTSetupForLanguage(s, s.language)
+}
+
+func buildGradiumSTTSetupForLanguage(s *GradiumSTT, language string) map[string]any {
+	jsonConfig := map[string]any{"language": language}
 	if s.temperature != nil {
 		jsonConfig["temp"] = *s.temperature
 	}
