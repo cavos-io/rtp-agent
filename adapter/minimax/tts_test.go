@@ -545,6 +545,45 @@ func TestMinimaxTTSWebsocketMessagesMatchReference(t *testing.T) {
 	assertMinimaxPayload(t, payload, "event", "task_finish")
 }
 
+func TestMinimaxTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	var writes []string
+	stream := &minimaxTTSSynthesizeStream{
+		writeMessage: func(payload []byte) error {
+			var msg map[string]any
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				t.Fatalf("decode stream write: %v", err)
+			}
+			event, _ := msg["event"].(string)
+			if event == "task_continue" {
+				text, _ := msg["text"].(string)
+				writes = append(writes, "text:"+text)
+				return nil
+			}
+			writes = append(writes, event)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	wantAfterPush := []string{"text:This first sentence is definitely long enough."}
+	if strings.Join(writes, "|") != strings.Join(wantAfterPush, "|") {
+		t.Fatalf("writes after PushText = %#v, want %#v", writes, wantAfterPush)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	wantAfterFlush := []string{
+		"text:This first sentence is definitely long enough.",
+		"text:Tail",
+	}
+	if strings.Join(writes, "|") != strings.Join(wantAfterFlush, "|") {
+		t.Fatalf("writes after Flush = %#v, want %#v", writes, wantAfterFlush)
+	}
+}
+
 func TestMinimaxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -560,7 +599,7 @@ func TestMinimaxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+	if err := stream.PushText("This sentence is definitely long enough. Tail"); !errors.Is(err, writeErr) {
 		t.Fatalf("PushText error = %v, want write error", err)
 	}
 	if !cancelled {

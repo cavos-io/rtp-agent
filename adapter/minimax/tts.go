@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -605,16 +606,17 @@ func buildMinimaxTTSTaskFinishMessage() ([]byte, error) {
 }
 
 type minimaxTTSSynthesizeStream struct {
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	provider   *MinimaxTTS
-	sampleRate int
-	events     chan *tts.SynthesizedAudio
-	errCh      chan error
-	traceID    string
-	mu         sync.Mutex
-	closed     bool
+	conn        *websocket.Conn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	provider    *MinimaxTTS
+	sampleRate  int
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
+	traceID     string
+	mu          sync.Mutex
+	closed      bool
+	pendingText string
 
 	writeMessage func([]byte) error
 	closeConn    func() error
@@ -629,11 +631,8 @@ func (s *minimaxTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("minimax tts stream is closed")
 	}
-	message, err := buildMinimaxTTSTaskContinueMessage(text)
-	if err != nil {
-		return err
-	}
-	if err := s.writeMessageData(message); err != nil {
+	s.pendingText += text
+	if err := s.sendCompleteSentencesLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -646,7 +645,48 @@ func (s *minimaxTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return fmt.Errorf("minimax tts stream is closed")
 	}
+	if s.pendingText == "" {
+		return nil
+	}
+	text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+	s.pendingText = ""
+	if err := s.sendSentenceLocked(text); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
 	return nil
+}
+
+func (s *minimaxTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendSentenceLocked(sentence); err != nil {
+			return err
+		}
+		tokenIdx := strings.Index(s.pendingText, sentence)
+		if tokenIdx < 0 {
+			s.pendingText = strings.TrimSpace(strings.TrimPrefix(s.pendingText, sentence))
+			continue
+		}
+		s.pendingText = strings.TrimLeftFunc(s.pendingText[tokenIdx+len(sentence):], func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+	}
+}
+
+func (s *minimaxTTSSynthesizeStream) sendSentenceLocked(text string) error {
+	if text == "" {
+		return nil
+	}
+	message, err := buildMinimaxTTSTaskContinueMessage(text)
+	if err != nil {
+		return err
+	}
+	return s.writeMessageData(message)
 }
 
 func (s *minimaxTTSSynthesizeStream) Close() error {
