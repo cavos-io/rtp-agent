@@ -49,6 +49,7 @@ type MinimaxTTS struct {
 	pronunciationDict map[string][]string
 	textNormalization bool
 	streams           map[*minimaxTTSSynthesizeStream]struct{}
+	closed            bool
 }
 
 type MinimaxTTSOption func(*MinimaxTTS)
@@ -193,6 +194,9 @@ func (t *MinimaxTTS) SampleRate() int  { return t.sampleRate }
 func (t *MinimaxTTS) NumChannels() int { return 1 }
 
 func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateMinimaxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -289,6 +293,9 @@ func minimaxOptions(t *MinimaxTTS) map[string]interface{} {
 }
 
 func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateMinimaxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -299,6 +306,10 @@ func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildMinimaxTTSWebsocketURL(t).String(), buildMinimaxTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial minimax tts websocket: %w", err)
+	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	startMessage, err := buildMinimaxTTSTaskStartMessage(t)
 	if err != nil {
@@ -322,13 +333,18 @@ func (t *MinimaxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
 
 func (t *MinimaxTTS) Close() error {
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*minimaxTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -344,17 +360,30 @@ func (t *MinimaxTTS) Close() error {
 	return firstErr
 }
 
-func (t *MinimaxTTS) registerStream(stream *minimaxTTSSynthesizeStream) {
-	if stream == nil {
-		return
+func (t *MinimaxTTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *MinimaxTTS) registerStream(stream *minimaxTTSSynthesizeStream) bool {
+	if stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*minimaxTTSSynthesizeStream]struct{})
 	}
 	stream.provider = t
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *MinimaxTTS) unregisterStream(stream *minimaxTTSSynthesizeStream) {
