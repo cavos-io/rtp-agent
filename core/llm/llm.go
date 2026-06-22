@@ -2053,6 +2053,9 @@ func (f *FallbackAdapter) labels() []string {
 }
 
 func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	for {
 		chunk, err := s.activeStream.Next()
 		if err == nil {
