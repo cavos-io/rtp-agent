@@ -104,17 +104,23 @@ func (t *TelnyxTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *TelnyxTTS) registerStream(stream *telnyxTTSStream) {
+func (t *TelnyxTTS) registerStream(stream *telnyxTTSStream) bool {
 	if t == nil || stream == nil {
-		return
+		return false
 	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*telnyxTTSStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	stream.owner = t
 	t.mu.Unlock()
+	return true
 }
 
 func (t *TelnyxTTS) unregisterStream(stream *telnyxTTSStream) {
@@ -179,7 +185,9 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeTTSMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
