@@ -87,6 +87,8 @@ var uploadSessionReport = agent.UploadSessionReport
 const workerStatusUpdateInterval = 2500 * time.Millisecond
 const WorkerProtocolVersion = 1
 
+var errWorkerWebSocketNotConnected = errors.New("worker websocket is not connected")
+
 var defaultWorkerLoadMu sync.Mutex
 
 var defaultWorkerLoadCalc *workerLoadCalculator
@@ -1651,9 +1653,13 @@ func (s *AgentServer) sendWorkerMessage(msg *WorkerMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.conn == nil {
-		return fmt.Errorf("worker websocket is not connected")
+		return errWorkerWebSocketNotConnected
 	}
 	return livekitWriteServerWorkerMessageWebSocket(s.conn, msg)
+}
+
+func isWorkerWebSocketDisconnected(err error) bool {
+	return errors.Is(err, errWorkerWebSocketNotConnected)
 }
 
 func (s *AgentServer) storePendingAccept(jobID string, args JobAcceptArguments) {
@@ -1737,6 +1743,10 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 				SendStatus: func(status JobStatus) error {
 					err := s.sendWorkerMessage(livekitServerJobStatusMessage(jobID, status))
 					if err != nil {
+						if isWorkerWebSocketDisconnected(err) {
+							logger.Logger.Debugw("skipping job status update after worker websocket disconnect", jobLogValues(jobCtx, "jobId", jobID)...)
+							return nil
+						}
 						logger.Logger.Errorw("failed to update job status", err, jobLogValues(jobCtx, "jobId", jobID)...)
 					}
 					return err

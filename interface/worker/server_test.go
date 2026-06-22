@@ -22,6 +22,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/agent"
 	"github.com/cavos-io/rtp-agent/interface/worker/ipc"
 	workerlivekit "github.com/cavos-io/rtp-agent/interface/worker/livekit"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/go-jose/go-jose/v3/jwt"
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
@@ -3284,6 +3285,49 @@ func TestAssignmentReportsSuccessWhenJobContextShutsDown(t *testing.T) {
 	server.mu.Unlock()
 	if exists {
 		t.Fatal("assigned job remained in activeJobs after job context shutdown")
+	}
+}
+
+func TestAssignmentSuppressesDisconnectedFinalStatusError(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &roomIORecordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	server := NewAgentServer(WorkerOptions{})
+	sentCh := make(chan *livekit.WorkerMessage, 1)
+	server.workerMessageSink = func(msg *livekit.WorkerMessage) error {
+		sentCh <- msg
+		return nil
+	}
+	server.entrypointFnc = func(ctx *JobContext) error {
+		server.workerMessageSink = nil
+		ctx.Shutdown("done after disconnect")
+		return nil
+	}
+
+	job := &livekit.Job{Id: "job_disconnect_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	assertJobStatusMessage(t, receiveWorkerMessage(t, sentCh), "job_disconnect_status", livekit.JobStatus_JS_RUNNING)
+	deadline := time.After(time.Second)
+	for {
+		server.mu.Lock()
+		_, exists := server.activeJobs[job.Id]
+		server.mu.Unlock()
+		if !exists {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("assigned job remained in activeJobs after disconnected completion")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	if countWarnMessage(recorder.errorMessages, "failed to update job status") != 0 {
+		t.Fatalf("error messages = %#v, want no disconnected final status error", recorder.errorMessages)
 	}
 }
 
