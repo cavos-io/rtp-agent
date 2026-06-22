@@ -481,11 +481,17 @@ type StreamTiming interface {
 }
 
 func SetStreamStartTimeOffset(stream StreamTiming, offset float64) {
-	stream.SetStartTimeOffset(nonNegativeStreamTime(offset))
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	stream.SetStartTimeOffset(offset)
 }
 
 func SetStreamStartTime(stream StreamTiming, startTime float64) {
-	stream.SetStartTime(nonNegativeStreamTime(startTime))
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	stream.SetStartTime(startTime)
 }
 
 func nonNegativeStreamTime(value float64) float64 {

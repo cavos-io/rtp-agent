@@ -771,15 +771,33 @@ func assertStreamStartTimeSeeded(t *testing.T, timing StreamTiming, before time.
 
 func TestStreamTimingRejectsNegativeReferenceTimingAnchors(t *testing.T) {
 	stream := &fakeStreamTiming{}
-	SetStreamStartTimeOffset(stream, -1)
-	SetStreamStartTime(stream, -2)
+	assertPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		SetStreamStartTimeOffset(stream, -1)
+	})
+	assertPanicsWithMessage(t, "start_time must be non-negative", func() {
+		SetStreamStartTime(stream, -2)
+	})
 
-	if stream.StartTimeOffset() < 0 {
-		t.Fatalf("StartTimeOffset = %v, want non-negative", stream.StartTimeOffset())
+	if stream.StartTimeOffset() != 0 {
+		t.Fatalf("StartTimeOffset = %v, want unchanged zero after rejected update", stream.StartTimeOffset())
 	}
-	if stream.StartTime() < 0 {
-		t.Fatalf("StartTime = %v, want non-negative", stream.StartTime())
+	if stream.StartTime() != 0 {
+		t.Fatalf("StartTime = %v, want unchanged zero after rejected update", stream.StartTime())
 	}
+}
+
+func assertPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := fmt.Sprint(r); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
 
 func TestSampleRateGuardUsesReferenceMismatchError(t *testing.T) {
