@@ -86,6 +86,8 @@ type OpenAILLM struct {
 	extraHeaders         map[string]string
 	extraQuery           map[string]string
 	extraBody            map[string]any
+	mu                   sync.Mutex
+	streams              map[*openaiStream]struct{}
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -320,6 +322,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 		baseURL:          config.BaseURL,
 		defaultReasoning: true,
 		strictToolSchema: true,
+		streams:          make(map[*openaiStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -814,6 +817,42 @@ func (l *OpenAILLM) Provider() string {
 	return u.Host
 }
 
+func (l *OpenAILLM) Close() error {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	streams := make([]*openaiStream, 0, len(l.streams))
+	for stream := range l.streams {
+		streams = append(streams, stream)
+	}
+	l.streams = make(map[*openaiStream]struct{})
+	l.mu.Unlock()
+
+	var closeErr error
+	for _, stream := range streams {
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	return closeErr
+}
+
+func (l *OpenAILLM) registerStream(stream *openaiStream) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.streams == nil {
+		l.streams = make(map[*openaiStream]struct{})
+	}
+	l.streams[stream] = struct{}{}
+}
+
+func (l *OpenAILLM) unregisterStream(stream *openaiStream) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.streams, stream)
+}
+
 func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
@@ -860,10 +899,13 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
 		stream, err := client.CreateChatCompletionStream(ctx, req)
 		if err == nil {
-			return &openaiStream{
-				stream: stream,
-				cancel: cancel,
-			}, nil
+			wrapped := &openaiStream{
+				stream:   stream,
+				cancel:   cancel,
+				provider: l,
+			}
+			l.registerStream(wrapped)
+			return wrapped, nil
 		}
 		lastErr = mapOpenAIError(err)
 		if attempt == connectOptions.MaxRetry || !openAIShouldRetryError(lastErr) {
@@ -1961,10 +2003,11 @@ func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatComple
 }
 
 type openaiStream struct {
-	stream *openai.ChatCompletionStream
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	closed bool
+	stream   *openai.ChatCompletionStream
+	cancel   context.CancelFunc
+	provider *OpenAILLM
+	mu       sync.Mutex
+	closed   bool
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
@@ -2058,6 +2101,9 @@ func (s *openaiStream) Close() error {
 	s.stream.Close()
 	if cancel != nil {
 		cancel()
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
 	}
 	return nil
 }

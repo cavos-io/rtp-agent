@@ -1904,6 +1904,43 @@ func TestOpenAIStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAILLMProviderCloseClosesActiveStreams(t *testing.T) {
+	body := newBlockingEOFReadCloser(nil)
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = &sequenceHTTPClient{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Status:     http.StatusText(http.StatusOK),
+		Body:       body,
+		Header:     make(http.Header),
+	}}}
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := llm.Close(model); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+	select {
+	case <-body.closed:
+	case <-time.After(time.Second):
+		t.Fatal("llm.Close did not close active OpenAI chat stream")
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after provider Close error = %T %v, want EOF", err, err)
+	}
+	if err := llm.Close(model); err != nil {
+		t.Fatalf("second llm.Close error = %v", err)
+	}
+}
+
 type sequenceHTTPClient struct {
 	responses []*http.Response
 	calls     int
