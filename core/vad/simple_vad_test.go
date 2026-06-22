@@ -570,6 +570,28 @@ func TestSimpleVADCloseAfterEndInputDropsQueuedEvents(t *testing.T) {
 	}
 }
 
+func TestSimpleVADReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	stream, err := NewSimpleVAD(0.05).Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	want := "vad stream input ended"
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err == nil || err.Error() != want {
+		t.Fatalf("PushFrame() after Close() error = %v, want %q", err, want)
+	}
+	if err := stream.Flush(); err == nil || err.Error() != want {
+		t.Fatalf("Flush() after Close() error = %v, want %q", err, want)
+	}
+	if err := stream.EndInput(); err == nil || err.Error() != want {
+		t.Fatalf("EndInput() after Close() error = %v, want %q", err, want)
+	}
+}
+
 func TestNewSimpleVADWithAllowsExplicitZeroThreshold(t *testing.T) {
 	detector := NewSimpleVADWith(
 		WithThreshold(0),
