@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -1622,6 +1623,7 @@ type sarvamTTSSynthesizeStream struct {
 	errCh            chan error
 	mu               sync.Mutex
 	closed           bool
+	pendingText      string
 }
 
 func (s *sarvamTTSSynthesizeStream) PushText(text string) error {
@@ -1636,11 +1638,8 @@ func (s *sarvamTTSSynthesizeStream) PushText(text string) error {
 	if s.conn == nil {
 		return fmt.Errorf("sarvam tts stream is closed")
 	}
-	message, err := buildSarvamTTSTextMessage(text)
-	if err != nil {
-		return err
-	}
-	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+	s.pendingText += text
+	if err := s.sendCompleteSentencesLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -1656,6 +1655,14 @@ func (s *sarvamTTSSynthesizeStream) Flush() error {
 	if s.conn == nil {
 		return fmt.Errorf("sarvam tts stream is closed")
 	}
+	if s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendTextLocked(text); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+	}
 	message, err := buildSarvamTTSFlushMessage()
 	if err != nil {
 		return err
@@ -1665,6 +1672,38 @@ func (s *sarvamTTSSynthesizeStream) Flush() error {
 		return err
 	}
 	return nil
+}
+
+func (s *sarvamTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTextLocked(sentence); err != nil {
+			return err
+		}
+		tokenIdx := strings.Index(s.pendingText, sentence)
+		if tokenIdx < 0 {
+			s.pendingText = strings.TrimSpace(strings.TrimPrefix(s.pendingText, sentence))
+			continue
+		}
+		s.pendingText = strings.TrimLeftFunc(s.pendingText[tokenIdx+len(sentence):], func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+	}
+}
+
+func (s *sarvamTTSSynthesizeStream) sendTextLocked(text string) error {
+	if text == "" {
+		return nil
+	}
+	message, err := buildSarvamTTSTextMessage(text)
+	if err != nil {
+		return err
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 
 func (s *sarvamTTSSynthesizeStream) Close() error {
