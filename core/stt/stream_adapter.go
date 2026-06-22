@@ -54,7 +54,6 @@ func (a *StreamAdapter) Provider() string {
 }
 
 func (a *StreamAdapter) Prewarm() {
-	Prewarm(a.stt)
 }
 
 func (a *StreamAdapter) Close() error {

@@ -920,14 +920,15 @@ func TestMultiSpeakerAdapterMetadataMatchesReferenceDefaults(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterForwardsPrewarm(t *testing.T) {
+func TestStreamAdapterPrewarmMatchesReferenceNoop(t *testing.T) {
 	wrapped := &fakeMetadataSTT{}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
 
 	Prewarm(adapter)
+	Prewarm(adapter)
 
-	if !wrapped.prewarmed {
-		t.Fatal("StreamAdapter Prewarm did not call wrapped STT Prewarm")
+	if wrapped.prewarmed {
+		t.Fatal("StreamAdapter Prewarm called wrapped STT, want reference no-op")
 	}
 }
 
