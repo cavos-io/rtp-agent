@@ -153,7 +153,7 @@ func TestBuildPhonicConfigPayloadMatchesReference(t *testing.T) {
 	}
 }
 
-func TestPhonicRealtimeSessionUnsupportedOperationsAreExplicit(t *testing.T) {
+func TestPhonicRealtimeSessionUnsupportedControlsAreReferenceNoops(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -163,14 +163,20 @@ func TestPhonicRealtimeSessionUnsupportedOperationsAreExplicit(t *testing.T) {
 		t.Fatalf("Session error = %v", err)
 	}
 
-	if err := session.CommitAudio(); err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("CommitAudio error = %v, want unsupported error", err)
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{}); err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil reference no-op", err)
 	}
-	if err := session.ClearAudio(); err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("ClearAudio error = %v, want unsupported error", err)
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v, want nil reference no-op", err)
 	}
-	if err := session.Truncate(llm.RealtimeTruncateOptions{}); err == nil || !strings.Contains(err.Error(), "not supported") {
-		t.Fatalf("Truncate error = %v, want unsupported error", err)
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v, want nil reference no-op", err)
+	}
+	if err := session.Truncate(llm.RealtimeTruncateOptions{}); err != nil {
+		t.Fatalf("Truncate error = %v, want nil reference no-op", err)
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v, want nil reference no-op", err)
 	}
 }
 
