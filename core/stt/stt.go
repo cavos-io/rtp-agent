@@ -411,6 +411,10 @@ type prewarmProviderSTT interface {
 	Prewarm()
 }
 
+type closeProviderSTT interface {
+	Close() error
+}
+
 func Model(stt STT) string {
 	if provider, ok := stt.(modelProviderSTT); ok {
 		if model := provider.Model(); model != "" {
@@ -433,6 +437,13 @@ func Prewarm(stt STT) {
 	if provider, ok := stt.(prewarmProviderSTT); ok {
 		provider.Prewarm()
 	}
+}
+
+func Close(stt STT) error {
+	if provider, ok := stt.(closeProviderSTT); ok {
+		return provider.Close()
+	}
+	return nil
 }
 
 type inputSampleRaterSTT interface {

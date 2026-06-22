@@ -827,6 +827,25 @@ func TestSTTMetadataHelpersMatchReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestSTTCloseDefaultNoop(t *testing.T) {
+	stt := &fakeMetadataSTT{}
+
+	if err := Close(stt); err != nil {
+		t.Fatalf("Close error = %v, want nil default close", err)
+	}
+}
+
+func TestSTTCloseDelegatesWhenSupported(t *testing.T) {
+	stt := &closableMetadataSTT{}
+
+	if err := Close(stt); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !stt.closed {
+		t.Fatal("Close did not delegate to provider")
+	}
+}
+
 func TestStreamAdapterForwardsWrappedMetadata(t *testing.T) {
 	wrapped := &fakeMetadataSTT{model: "wrapped-model", provider: "wrapped-provider"}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
@@ -1000,4 +1019,14 @@ func (f *fakeMetadataSTT) Provider() string {
 
 func (f *fakeMetadataSTT) Prewarm() {
 	f.prewarmed = true
+}
+
+type closableMetadataSTT struct {
+	fakeMetadataSTT
+	closed bool
+}
+
+func (f *closableMetadataSTT) Close() error {
+	f.closed = true
+	return nil
 }
