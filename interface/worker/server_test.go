@@ -2160,6 +2160,50 @@ func TestReloadedJobWaitsForShutdownAfterEntrypointCompletes(t *testing.T) {
 	}
 }
 
+func TestReloadedJobSuppressesDisconnectedStatusError(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &roomIORecordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	server := NewAgentServer(WorkerOptions{})
+	entrypointDone := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		entrypointDone <- ctx
+		return nil
+	}
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-reloaded-disconnected", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	server.launchReloadedJob(context.Background(), jobCtx)
+
+	select {
+	case <-entrypointDone:
+	case <-time.After(time.Second):
+		t.Fatal("reloaded job entrypoint did not return")
+	}
+
+	jobCtx.Shutdown("session ended")
+
+	deadline := time.After(time.Second)
+	for {
+		if got := server.ActiveRunningJobs(); len(got) == 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("reloaded job did not finish after shutdown")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	if got := countWarnMessage(recorder.errorMessages, "failed to update reloaded job status"); got != 0 {
+		t.Fatalf("disconnected worker websocket status errors = %d, want 0", got)
+	}
+}
+
 func TestAgentServerProcessReloadIPCMessagesUntilEOF(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	server.workerID = "worker-a"

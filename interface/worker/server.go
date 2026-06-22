@@ -469,6 +469,10 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			},
 			SendStatus: func(status JobStatus) error {
 				if err := s.sendWorkerMessage(livekitServerJobStatusMessage(jobCtx.JobID(), status)); err != nil {
+					if isWorkerWebSocketDisconnected(err) {
+						logger.Logger.Debugw("skipping reloaded job status after worker websocket disconnect", "jobId", jobCtx.JobID())
+						return nil
+					}
 					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
 					return err
 				}
