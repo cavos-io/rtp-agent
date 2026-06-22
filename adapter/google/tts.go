@@ -308,6 +308,7 @@ type googleTTSChunkedStream struct {
 	data           []byte
 	offset         int
 	headerStripped bool
+	finalSent      bool
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -321,7 +322,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 
 	if s.offset >= len(s.data) {
-		return nil, io.EOF
+		return s.emitFinal()
 	}
 
 	chunkSize := 4096
@@ -343,7 +344,16 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *googleTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
 func (s *googleTTSChunkedStream) Close() error {
+	s.finalSent = true
 	return nil
 }
 
