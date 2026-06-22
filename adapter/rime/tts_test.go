@@ -196,6 +196,25 @@ func TestRimeTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: &rimeFinalEOFReader{data: []byte{0x01, 0x02}}},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("Next = %#v, want audio frame", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final bytes", got)
+	}
+}
+
 func TestRimeTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte{0x01, 0x02})}
 	stream := &rimeTTSChunkedStream{
@@ -566,3 +585,18 @@ func (b *rimeCloseCountBody) Close() error {
 	}
 	return nil
 }
+
+type rimeFinalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (r *rimeFinalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *rimeFinalEOFReader) Close() error { return nil }

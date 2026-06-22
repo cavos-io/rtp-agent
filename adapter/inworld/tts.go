@@ -262,7 +262,11 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 		resp.Body.Close()
 		return nil, llm.NewAPIStatusError("Inworld TTS request failed", resp.StatusCode, req.Header.Get("X-Request-Id"), string(respBody))
 	}
-	return &inworldTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
+	return &inworldTTSChunkedStream{
+		resp:            resp,
+		sampleRate:      t.sampleRate,
+		flushAfterAudio: strings.EqualFold(t.encoding, defaultInworldEncoding),
+	}, nil
 }
 
 func buildInworldTTSRequest(ctx context.Context, t *InworldTTS, text string) (*http.Request, error) {
@@ -474,12 +478,18 @@ func inworldTTSBasePayload(t *InworldTTS) map[string]interface{} {
 }
 
 type inworldTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	scanner    *bufio.Scanner
+	resp            *http.Response
+	sampleRate      int
+	scanner         *bufio.Scanner
+	flushAfterAudio bool
+	pendingFinal    bool
 }
 
 func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.pendingFinal {
+		s.pendingFinal = false
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
@@ -504,6 +514,9 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, io.EOF
 		}
 		if audio != nil {
+			if s.flushAfterAudio {
+				s.pendingFinal = true
+			}
 			return audio, nil
 		}
 	}

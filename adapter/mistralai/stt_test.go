@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -120,7 +121,12 @@ func TestMistralAISTTRealtimeStreamSendsReferenceMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream error = %v", err)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err != nil {
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        defaultMistralAISTTSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
 		t.Fatalf("PushFrame error = %v", err)
 	}
 	if err := stream.Flush(); err != nil {
@@ -151,7 +157,12 @@ func TestMistralAISTTRealtimeStreamChunksAudioLikeReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream error = %v", err)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: audio}); err != nil {
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audio,
+		SampleRate:        defaultMistralAISTTSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(audio) / 2),
+	}); err != nil {
 		t.Fatalf("PushFrame error = %v", err)
 	}
 
@@ -422,6 +433,43 @@ func TestMistralAISTTRealtimeStreamUsesVADForEndpointing(t *testing.T) {
 	}
 	assertMistralRealtimeMessage(t, messages[0], "input_audio.append", map[string]any{"audio": "AQI="})
 	assertMistralRealtimeMessage(t, messages[1], "input_audio.flush", nil)
+}
+
+func TestMistralAISTTRealtimeStreamUsesDefaultVADForEndpointing(t *testing.T) {
+	readGate := make(chan struct{})
+	t.Cleanup(func() { close(readGate) })
+	conn := &mistralAISTTFakeRealtimeConn{readGate: readGate}
+	provider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if err := stream.PushFrame(mistralAISTTTestFrame(30000, 160)); err != nil {
+		t.Fatalf("PushFrame speech error = %v", err)
+	}
+	if err := stream.PushFrame(mistralAISTTTestFrame(0, 160)); err != nil {
+		t.Fatalf("PushFrame silence error = %v", err)
+	}
+
+	start := nextMistralSTTEventWithin(t, stream, time.Second)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %s, want start_of_speech", start.Type)
+	}
+	end := nextMistralSTTEventWithin(t, stream, time.Second)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("second event = %s, want end_of_speech", end.Type)
+	}
+	messages := conn.messages()
+	if len(messages) != 3 {
+		t.Fatalf("messages = %v, want two appends then default VAD flush", messages)
+	}
+	assertMistralRealtimeMessage(t, messages[2], "input_audio.flush", nil)
 }
 
 func TestMistralAISTTRealtimeErrorEventReturnsAPIStatusError(t *testing.T) {
@@ -856,6 +904,42 @@ func nextMistralSTTEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEv
 		t.Fatalf("Next error = %v", err)
 	}
 	return event
+}
+
+func nextMistralSTTEventWithin(t *testing.T, stream stt.RecognizeStream, timeout time.Duration) *stt.SpeechEvent {
+	t.Helper()
+	events := make(chan *stt.SpeechEvent, 1)
+	errs := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if err != nil {
+			errs <- err
+			return
+		}
+		events <- event
+	}()
+	select {
+	case event := <-events:
+		return event
+	case err := <-errs:
+		t.Fatalf("Next error = %v", err)
+	case <-time.After(timeout):
+		t.Fatalf("timed out waiting for STT event")
+	}
+	return nil
+}
+
+func mistralAISTTTestFrame(sample int16, samplesPerChannel uint32) *model.AudioFrame {
+	data := make([]byte, int(samplesPerChannel)*2)
+	for i := 0; i < len(data); i += 2 {
+		binary.LittleEndian.PutUint16(data[i:i+2], uint16(sample))
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        defaultMistralAISTTSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: samplesPerChannel,
+	}
 }
 
 func assertMistralSTTEvent(t *testing.T, event *stt.SpeechEvent, eventType stt.SpeechEventType, text string, language string, requestID string) {

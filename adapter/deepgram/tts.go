@@ -278,6 +278,7 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 type deepgramTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	finalSent  bool
 	mu         sync.Mutex
 }
 
@@ -291,7 +292,7 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF && n == 0 {
-			return nil, io.EOF
+			return s.emitFinal()
 		}
 		if err != io.EOF && errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError(err.Error())
@@ -311,6 +312,19 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	if s.resp != nil && s.resp.Body != nil {
+		body := s.resp.Body
+		s.resp = nil
+		_ = body.Close()
+	}
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
 func (s *deepgramTTSChunkedStream) Close() error {
 	s.mu.Lock()
 	if s.resp == nil || s.resp.Body == nil {
@@ -319,6 +333,7 @@ func (s *deepgramTTSChunkedStream) Close() error {
 	}
 	body := s.resp.Body
 	s.resp = nil
+	s.finalSent = true
 	s.mu.Unlock()
 	return body.Close()
 }

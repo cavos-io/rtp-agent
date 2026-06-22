@@ -73,3 +73,21 @@ func TestClovaTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 		t.Fatalf("Next after final marker error = %v, want EOF", err)
 	}
 }
+
+func TestClovaTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &clovaTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("audio = %#v, want boundary-only final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker error = %v, want EOF", err)
+	}
+}

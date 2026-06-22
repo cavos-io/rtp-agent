@@ -318,6 +318,7 @@ type neuphonicTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	scanner    *bufio.Scanner
+	finalSent  bool
 }
 
 func (s *neuphonicTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -351,7 +352,11 @@ func (s *neuphonicTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err := s.scanner.Err(); err != nil {
 		return nil, err
 	}
-	return nil, io.EOF
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
 }
 
 func (s *neuphonicTTSChunkedStream) Close() error {
@@ -360,6 +365,7 @@ func (s *neuphonicTTSChunkedStream) Close() error {
 	}
 	body := s.resp.Body
 	s.resp = nil
+	s.finalSent = true
 	return body.Close()
 }
 

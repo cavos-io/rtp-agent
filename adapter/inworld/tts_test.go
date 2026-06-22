@@ -624,6 +624,33 @@ func TestInworldTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	}
 }
 
+func TestInworldTTSChunkedStreamEmitsReferencePCMFlushMarker(t *testing.T) {
+	stream := &inworldTTSChunkedStream{
+		resp:            &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("{\"result\":{\"audioContent\":\"AQI=\"}}\n")))},
+		sampleRate:      24000,
+		flushAfterAudio: true,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want non-final audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want reference flush final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
 func TestInworldTTSChunkedStreamDecodesLargeReferenceJSONLine(t *testing.T) {
 	audioContent := strings.Repeat("AQID", 20000)
 	body := []byte("{\"result\":{\"audioContent\":\"" + audioContent + "\"}}\n")

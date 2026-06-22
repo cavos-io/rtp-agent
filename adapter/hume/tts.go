@@ -321,6 +321,9 @@ func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
 		s.scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
@@ -345,8 +348,10 @@ func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err != nil {
 				return nil, err
 			}
+			s.hasAudio = true
 			return &tts.SynthesizedAudio{Frame: frame}, nil
 		}
+		s.hasAudio = true
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
 				Data:              audio,
@@ -359,7 +364,8 @@ func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err := s.scanner.Err(); err != nil {
 		return nil, err
 	}
-	return nil, io.EOF
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
 }
 
 func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {

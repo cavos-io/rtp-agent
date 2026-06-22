@@ -302,6 +302,34 @@ func TestHumeTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	}
 }
 
+func TestHumeTTSChunkedStreamEmitsReferencePCMFinalMarker(t *testing.T) {
+	stream := &humeTTSChunkedStream{
+		resp:        &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("{\"audio\":\"AQI=\"}\n\n")))},
+		audioFormat: "pcm",
+		sampleRate:  48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final PCM audio", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
 func TestHumeTTSChunkedStreamDecodesReferenceMP3JSONLines(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -425,6 +453,36 @@ func TestHumeTTSChunkedStreamDecodesReferenceWAVJSONLines(t *testing.T) {
 	}
 	if audio.Frame.NumChannels != 1 {
 		t.Fatalf("channels = %d, want WAV mono", audio.Frame.NumChannels)
+	}
+}
+
+func TestHumeTTSChunkedStreamEmitsReferenceWAVFinalMarker(t *testing.T) {
+	wav := humeTestWAVPCM16(16000, 1, []byte{0x01, 0x02, 0x03, 0x04})
+	line := `{"audio":"` + base64.StdEncoding.EncodeToString(wav) + `"}` + "\n"
+	stream := &humeTTSChunkedStream{
+		resp:        &http.Response{Body: io.NopCloser(strings.NewReader(line))},
+		audioFormat: "wav",
+		sampleRate:  48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final WAV audio", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
 	}
 }
 

@@ -445,6 +445,60 @@ func TestCartesiaTTSChunkedStreamReadErrorReturnsAPIConnectionError(t *testing.T
 	}
 }
 
+func TestCartesiaTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &cartesiaTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(strings.NewReader("\x01\x02"))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestCartesiaTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &cartesiaTTSChunkedStream{
+		resp:       &http.Response{Body: &cartesiaFinalEOFReader{data: []byte{0x01, 0x02}}},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want audio frame", audio)
+	}
+	if got := string(audio.Frame.Data); got != "\x01\x02" {
+		t.Fatalf("audio data = %v, want final bytes", audio.Frame.Data)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+}
+
 func TestCartesiaTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &cartesiaCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &cartesiaTTSChunkedStream{
@@ -524,6 +578,21 @@ func (r cartesiaErrorReadCloser) Read([]byte) (int, error) {
 func (r cartesiaErrorReadCloser) Close() error {
 	return nil
 }
+
+type cartesiaFinalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (r *cartesiaFinalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *cartesiaFinalEOFReader) Close() error { return nil }
 
 type cartesiaCloseCountBody struct {
 	*strings.Reader
