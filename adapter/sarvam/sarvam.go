@@ -94,6 +94,7 @@ type SarvamSTT struct {
 	numInitialIgnoredFrames    *int
 	mu                         sync.Mutex
 	streams                    map[*sarvamSTTRecognizeStream]struct{}
+	closed                     bool
 }
 
 type SarvamSTTOption func(*SarvamSTT)
@@ -283,6 +284,9 @@ func (s *SarvamSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *SarvamSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	requestLanguage := resolveSarvamSTTLanguage(s, language)
 	if err := validateSarvamSTTOptions(s.model, requestLanguage, s.mode); err != nil {
 		return nil, err
@@ -290,6 +294,10 @@ func (s *SarvamSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSarvamSTTWebsocketURL(s, language).String(), buildSarvamSTTWebsocketHeaders(s))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial sarvam stt websocket: %w", err)
+	}
+	if s.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	if sarvamSTTSupportsPrompt(s.model) && s.prompt != "" {
 		configMessage, err := buildSarvamSTTConfigMessage(s)
@@ -303,7 +311,10 @@ func (s *SarvamSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		}
 	}
 	stream := newSarvamSTTRecognizeStream(ctx, conn, s, requestLanguage)
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
@@ -313,6 +324,11 @@ func (s *SarvamSTT) Close() error {
 		return nil
 	}
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
 	streams := make([]*sarvamSTTRecognizeStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -329,17 +345,30 @@ func (s *SarvamSTT) Close() error {
 	return firstErr
 }
 
-func (s *SarvamSTT) registerStream(stream *sarvamSTTRecognizeStream) {
-	if s == nil || stream == nil {
-		return
+func (s *SarvamSTT) isClosed() bool {
+	if s == nil {
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *SarvamSTT) registerStream(stream *sarvamSTTRecognizeStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*sarvamSTTRecognizeStream]struct{})
 	}
 	s.streams[stream] = struct{}{}
 	stream.provider = s
+	return true
 }
 
 func (s *SarvamSTT) unregisterStream(stream *sarvamSTTRecognizeStream) {

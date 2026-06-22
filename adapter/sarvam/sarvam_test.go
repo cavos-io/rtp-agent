@@ -502,6 +502,34 @@ func TestSarvamSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSarvamSTTStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewSarvamSTT("test-key")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected sarvam stt dial")
+		},
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	stream, err := provider.Stream(context.Background(), "en-IN")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
+	}
+}
+
 func TestSarvamSTTImplementsStreamingInterface(t *testing.T) {
 	var _ stt.STT = NewSarvamSTT("test-key")
 }
