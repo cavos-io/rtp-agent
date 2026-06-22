@@ -302,6 +302,45 @@ func TestSpitchTTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
 	}
 }
 
+func TestSpitchTTSChunkedStreamDrainsMP3AndEmitsReferenceFinalMarker(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	stream := &spitchTTSChunkedStream{
+		resp:         &http.Response{Body: io.NopCloser(bytes.NewReader(mp3Data))},
+		outputFormat: "mp3",
+		sampleRate:   24000,
+	}
+	defer stream.Close()
+
+	frames := 0
+	for range 5000 {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned error before final marker after %d frames: %v", frames, err)
+		}
+		if audio == nil {
+			t.Fatalf("Next returned nil audio before final marker after %d frames", frames)
+		}
+		if audio.IsFinal {
+			if frames < 2 {
+				t.Fatalf("final marker arrived after %d frames, want MP3 response drained beyond first frame", frames)
+			}
+			if _, err := stream.Next(); err != io.EOF {
+				t.Fatalf("Next after final marker err = %v, want EOF", err)
+			}
+			return
+		}
+		if len(audio.Frame.Data) == 0 {
+			t.Fatalf("frame %d is empty", frames)
+		}
+		frames++
+	}
+	t.Fatalf("stream did not emit final marker after %d frames", frames)
+}
+
 type spitchRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f spitchRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

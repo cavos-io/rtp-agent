@@ -156,9 +156,15 @@ type spitchTTSChunkedStream struct {
 	sampleRate   int
 	emitted      bool
 	decoder      codecs.AudioStreamDecoder
+	started      bool
+	hasAudio     bool
+	finalSent    bool
 }
 
 func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.outputFormat == "mp3" {
+		return s.nextDecodedMP3()
+	}
 	if s.emitted {
 		return nil, io.EOF
 	}
@@ -171,9 +177,6 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if len(data) == 0 {
 		return nil, io.EOF
 	}
-	if s.outputFormat == "mp3" {
-		return s.decodeMP3(data)
-	}
 	frame, err := decodeSpitchWAVPCM16(data)
 	if err != nil {
 		return nil, err
@@ -184,14 +187,33 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
-func (s *spitchTTSChunkedStream) decodeMP3(data []byte) (*tts.SynthesizedAudio, error) {
-	s.decoder = codecs.NewMP3AudioStreamDecoder()
-	go func() {
-		s.decoder.Push(data)
-		s.decoder.EndInput()
-	}()
+func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if !s.started {
+		s.started = true
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) == 0 {
+			return nil, io.EOF
+		}
+		s.hasAudio = true
+		decoder := s.decoder
+		go func() {
+			decoder.Push(data)
+			decoder.EndInput()
+		}()
+	}
 	frame, err := s.decoder.Next()
 	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			if s.hasAudio && !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
+			return nil, io.EOF
+		}
 		return nil, err
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
