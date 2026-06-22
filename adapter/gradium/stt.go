@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -156,11 +157,12 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &gradiumSTTStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
+		conn:         conn,
+		events:       make(chan *stt.SpeechEvent, 100),
+		errCh:        make(chan error, 1),
+		ctx:          streamCtx,
+		cancel:       cancel,
+		audioBStream: gradiumSTTAudioByteStream(),
 		state: &gradiumSTTMessageState{
 			language:       streamLanguage,
 			vadBucket:      s.vadBucket,
@@ -236,6 +238,8 @@ type gradiumSTTStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *gradiumSTTMessageState
+
+	audioBStream *audio.AudioByteStream
 }
 
 func (s *gradiumSTTStream) readLoop() {
@@ -266,10 +270,32 @@ func (s *gradiumSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return writeGradiumSTTMessage(s.conn, buildGradiumSTTAudioMessage(frame.Data))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("gradium stt stream is closed")
+	}
+	return s.writeAudioFramesLocked(s.audioBStream.Write(frame.Data))
 }
 
 func (s *gradiumSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("gradium stt stream is closed")
+	}
+	return s.writeAudioFramesLocked(s.audioBStream.Flush())
+}
+
+func (s *gradiumSTTStream) writeAudioFramesLocked(frames []*model.AudioFrame) error {
+	for _, frame := range frames {
+		if frame == nil || len(frame.Data) == 0 {
+			continue
+		}
+		if err := writeGradiumSTTMessage(s.conn, buildGradiumSTTAudioMessage(frame.Data)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -284,6 +310,10 @@ func (s *gradiumSTTStream) Close() error {
 	_ = writeGradiumSTTMessage(s.conn, buildGradiumSTTCloseMessage())
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func gradiumSTTAudioByteStream() *audio.AudioByteStream {
+	return audio.NewAudioByteStream(defaultSTTSampleRate, 1, 1920)
 }
 
 func (s *gradiumSTTStream) Next() (*stt.SpeechEvent, error) {

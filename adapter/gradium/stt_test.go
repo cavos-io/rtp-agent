@@ -286,12 +286,13 @@ func TestGradiumSTTStreamSendsSetupAudioAndCloseMessages(t *testing.T) {
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err != nil {
 		t.Fatalf("PushFrame returned error: %v", err)
 	}
+	assertNoGradiumMessage(t, audioCh, "partial audio before flush")
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
 	audio := receiveGradiumMessage(t, audioCh, "audio")
 	if audio["type"] != "audio" || audio["audio"] != base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}) {
 		t.Fatalf("audio = %#v, want base64 audio message", audio)
-	}
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush returned error: %v", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
@@ -399,6 +400,61 @@ type gradiumDummyAddr string
 func (a gradiumDummyAddr) Network() string { return string(a) }
 func (a gradiumDummyAddr) String() string  { return string(a) }
 
+func TestGradiumSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
+	audioCh := make(chan map[string]any, 2)
+	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read setup: %v", err)
+			return
+		}
+		for i := 0; i < 2; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("read audio %d: %v", i, err)
+				return
+			}
+			audioCh <- decodeGradiumMessage(t, payload)
+		}
+	})
+
+	provider := NewGradiumSTT("test-key",
+		WithGradiumSTTModelEndpoint("ws://gradium.test/asr"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first := gradiumBytesOfLength(3838, 0x01)
+	second := []byte{0x02, 0x03}
+	if err := stream.PushFrame(&model.AudioFrame{Data: first}); err != nil {
+		t.Fatalf("first PushFrame returned error: %v", err)
+	}
+	assertNoGradiumMessage(t, audioCh, "incomplete reference chunk")
+	if err := stream.PushFrame(&model.AudioFrame{Data: second}); err != nil {
+		t.Fatalf("second PushFrame returned error: %v", err)
+	}
+	firstAudio := receiveGradiumMessage(t, audioCh, "full chunk audio")
+	wantFirst := append(append([]byte{}, first...), second...)
+	if firstAudio["type"] != "audio" || firstAudio["audio"] != base64.StdEncoding.EncodeToString(wantFirst) {
+		t.Fatalf("first audio = %#v, want one 3840-byte reference chunk", firstAudio)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x04, 0x05}}); err != nil {
+		t.Fatalf("third PushFrame returned error: %v", err)
+	}
+	assertNoGradiumMessage(t, audioCh, "partial chunk before flush")
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	flushed := receiveGradiumMessage(t, audioCh, "flushed audio")
+	if flushed["type"] != "audio" || flushed["audio"] != base64.StdEncoding.EncodeToString([]byte{0x04, 0x05}) {
+		t.Fatalf("flushed audio = %#v, want trailing partial chunk", flushed)
+	}
+}
+
 func TestGradiumSTTProcessMessagesMapsTextAndVADFinal(t *testing.T) {
 	bucket := 2
 	state := &gradiumSTTMessageState{language: "en", vadBucket: &bucket, vadThreshold: 0.9, delayInTokens: 1}
@@ -469,6 +525,23 @@ func receiveGradiumMessage(t *testing.T, ch <-chan map[string]any, label string)
 		t.Fatalf("timed out waiting for %s message", label)
 		return nil
 	}
+}
+
+func assertNoGradiumMessage(t *testing.T, ch <-chan map[string]any, label string) {
+	t.Helper()
+	select {
+	case message := <-ch:
+		t.Fatalf("received %s message before expected: %#v", label, message)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
+func gradiumBytesOfLength(length int, value byte) []byte {
+	data := make([]byte, length)
+	for i := range data {
+		data[i] = value
+	}
+	return data
 }
 
 func assertGradiumSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventType stt.SpeechEventType, text string) {
