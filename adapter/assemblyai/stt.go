@@ -646,7 +646,7 @@ func (state *assemblyAIStreamState) SetStartTimeOffset(offset float64) {
 		return
 	}
 	if offset < 0 {
-		offset = 0
+		panic("start_time_offset must be non-negative")
 	}
 	state.mu.Lock()
 	state.startTimeOffset = offset
@@ -667,7 +667,7 @@ func (state *assemblyAIStreamState) SetStartTime(startTime float64) {
 		return
 	}
 	if startTime < 0 {
-		startTime = 0
+		panic("start_time must be non-negative")
 	}
 	state.mu.Lock()
 	state.startTime = startTime

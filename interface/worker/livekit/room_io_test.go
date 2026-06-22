@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1820,6 +1821,39 @@ func TestRoomIOCloseClearsSessionListeners(t *testing.T) {
 	}
 }
 
+func TestRoomIOCloseSuppressesPendingAgentStatePublish(t *testing.T) {
+	enabledCalled := make(chan struct{})
+	releaseEnabled := make(chan struct{})
+	published := make(chan string, 1)
+	rio := &RoomIO{
+		agentStatePublisher: func(attrs map[string]string) {
+			published <- attrs[RoomIOAgentStateAttribute]
+		},
+		agentStatePublishEnabled: func() bool {
+			close(enabledCalled)
+			<-releaseEnabled
+			return true
+		},
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+	select {
+	case <-enabledCalled:
+	case <-time.After(time.Second):
+		t.Fatal("publish did not reach connection check")
+	}
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	close(releaseEnabled)
+
+	select {
+	case got := <-published:
+		t.Fatalf("published agent state %q after RoomIO.Close", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 	responder := &fakeRoomIOTextResponder{}
 
@@ -1834,11 +1868,11 @@ func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 }
 
 func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) {
-	var got map[string]string
+	published := make(chan map[string]string, 1)
 	dispatcher := &fakeClientEventsDispatcher{}
 	rio := &RoomIO{
 		agentStatePublisher: func(attrs map[string]string) {
-			got = attrs
+			published <- attrs
 		},
 		agentStatePublishEnabled: func() bool {
 			return true
@@ -1848,11 +1882,96 @@ func TestRoomIOHandleAgentStateChangedPublishesReferenceAttribute(t *testing.T) 
 
 	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
 
-	if got[RoomIOAgentStateAttribute] != string(agent.AgentStateThinking) {
-		t.Fatalf("published agent state attributes = %#v, want %s=%s", got, RoomIOAgentStateAttribute, agent.AgentStateThinking)
+	select {
+	case got := <-published:
+		if got[RoomIOAgentStateAttribute] != string(agent.AgentStateThinking) {
+			t.Fatalf("published agent state attributes = %#v, want %s=%s", got, RoomIOAgentStateAttribute, agent.AgentStateThinking)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RoomIO did not publish the agent state change")
 	}
 	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateThinking {
 		t.Fatalf("dispatched agent states = %#v, want thinking", dispatcher.agentStates)
+	}
+}
+
+func TestRoomIOHandleAgentStateChangedDoesNotBlockOnAttributePublish(t *testing.T) {
+	blockPublish := make(chan struct{})
+	dispatcher := &fakeClientEventsDispatcher{}
+	rio := &RoomIO{
+		agentStatePublisher: func(map[string]string) {
+			<-blockPublish
+		},
+		agentStatePublishEnabled: func() bool {
+			return true
+		},
+		clientEvents: dispatcher,
+	}
+	t.Cleanup(func() { close(blockPublish) })
+
+	done := make(chan struct{})
+	go func() {
+		rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("handleAgentStateChanged blocked on attribute publisher")
+	}
+	if len(dispatcher.agentStates) != 1 || dispatcher.agentStates[0] != agent.AgentStateThinking {
+		t.Fatalf("dispatched agent states = %#v, want thinking despite slow attribute publish", dispatcher.agentStates)
+	}
+}
+
+func TestRoomIOHandleAgentStateChangedSuppressesStaleAttributePublish(t *testing.T) {
+	enabledCalls := make(chan struct{}, 2)
+	releaseFirst := make(chan struct{})
+	published := make(chan string, 2)
+	var calls atomic.Int32
+	rio := &RoomIO{
+		agentStatePublisher: func(attrs map[string]string) {
+			published <- attrs[RoomIOAgentStateAttribute]
+		},
+		agentStatePublishEnabled: func() bool {
+			if calls.Add(1) == 1 {
+				enabledCalls <- struct{}{}
+				<-releaseFirst
+				return true
+			}
+			enabledCalls <- struct{}{}
+			return true
+		},
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+	select {
+	case <-enabledCalls:
+	case <-time.After(time.Second):
+		t.Fatal("first publish did not reach connection check")
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateSpeaking})
+	select {
+	case <-enabledCalls:
+	case <-time.After(time.Second):
+		t.Fatal("second publish did not reach connection check")
+	}
+	close(releaseFirst)
+
+	select {
+	case got := <-published:
+		if got != string(agent.AgentStateSpeaking) {
+			t.Fatalf("published state = %q, want only latest speaking state", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RoomIO did not publish latest agent state")
+	}
+	select {
+	case got := <-published:
+		t.Fatalf("published stale state %q after newer state", got)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -3213,6 +3332,25 @@ func TestRoomIOHandleChatTextInputIgnoresUnknownParticipant(t *testing.T) {
 
 	if called {
 		t.Fatal("text input callback was called for unknown participant")
+	}
+}
+
+func TestRoomIOHandleChatTextInputIgnoresClosedRoomIO(t *testing.T) {
+	session := &agent.AgentSession{}
+	called := false
+	rio := &RoomIO{
+		AgentSession: session,
+		textInput: func(context.Context, *agent.AgentSession, TextInputEvent) error {
+			called = true
+			return nil
+		},
+		closed: true,
+	}
+
+	rio.handleChatTextInput(context.Background(), "late text", lksdk.TextStreamInfo{}, "caller")
+
+	if called {
+		t.Fatal("text input callback was called after RoomIO closed")
 	}
 }
 

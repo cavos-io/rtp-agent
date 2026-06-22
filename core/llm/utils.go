@@ -1502,6 +1502,9 @@ func (s *TextStream) Next() (string, error) {
 	if s == nil || isNilLLMStream(s.stream) {
 		return "", fmt.Errorf("llm text stream is nil")
 	}
+	if s.closed {
+		return "", io.EOF
+	}
 	for {
 		chunk, err := s.stream.Next()
 		if err != nil {

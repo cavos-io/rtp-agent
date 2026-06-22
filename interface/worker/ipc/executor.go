@@ -57,6 +57,7 @@ type ThreadJobExecutor struct {
 	job        Job
 	runningJob *RunningJobInfo
 	started    bool
+	closed     bool
 	done       chan struct{}
 }
 
@@ -101,6 +102,10 @@ func (e *ThreadJobExecutor) LaunchJob(ctx context.Context, job Job) error {
 
 func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return fmt.Errorf("executor is closed")
+	}
 	if e.started {
 		e.mu.Unlock()
 		return fmt.Errorf("executor already has a running job")
@@ -136,6 +141,7 @@ func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJo
 
 func (e *ThreadJobExecutor) Close(ctx context.Context) error {
 	e.mu.Lock()
+	e.closed = true
 	done := e.done
 	started := e.started
 	e.mu.Unlock()
@@ -156,6 +162,7 @@ type ProcessJobExecutor struct {
 	status     JobStatus
 	mu         sync.Mutex
 	started    bool
+	closed     bool
 	cmd        *exec.Cmd
 	job        Job
 	runningJob *RunningJobInfo
@@ -242,6 +249,10 @@ func (e *ProcessJobExecutor) HandleShuttingDown(ShuttingDown) {
 
 func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return fmt.Errorf("process is closed")
+	}
 	if e.started {
 		e.mu.Unlock()
 		return fmt.Errorf("process already has a running job")
@@ -381,6 +392,7 @@ func (e *ProcessJobExecutor) pingTask(ctx context.Context) {
 
 func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	e.mu.Lock()
+	e.closed = true
 	cmd := e.cmd
 	done := e.done
 	started := e.started

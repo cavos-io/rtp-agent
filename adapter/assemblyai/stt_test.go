@@ -375,6 +375,27 @@ func TestAssemblyAIRealtimeTurnAppliesReferenceStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTStreamRejectsNegativeTimingAnchors(t *testing.T) {
+	stream := &assemblyAISTTStream{state: &assemblyAIStreamState{
+		startTimeOffset: 1.5,
+		startTime:       2.5,
+	}}
+
+	assertAssemblyAIPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		stream.SetStartTimeOffset(-0.01)
+	})
+	if got := stream.StartTimeOffset(); got != 1.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 1.5", got)
+	}
+
+	assertAssemblyAIPanicsWithMessage(t, "start_time must be non-negative", func() {
+		stream.SetStartTime(-0.01)
+	})
+	if got := stream.StartTime(); got != 2.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 2.5", got)
+	}
+}
+
 func TestAssemblyAIRealtimeTurnEmitsReferenceEventOrder(t *testing.T) {
 	resp := aaiResponse{
 		Type:       "Turn",
@@ -881,6 +902,20 @@ func assertAssemblyAIQuery(t *testing.T, query url.Values, key string, want stri
 	if got := query.Get(key); got != want {
 		t.Fatalf("%s = %q, want %q", key, got, want)
 	}
+}
+
+func assertAssemblyAIPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := recovered.(string); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
 
 func mustAssemblyAIStreamQuery(t *testing.T, streamURL string) url.Values {

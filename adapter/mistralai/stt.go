@@ -492,9 +492,12 @@ func (s *mistralAISTTRealtimeStream) StartTimeOffset() float64 {
 }
 
 func (s *mistralAISTTRealtimeStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.startTimeOffset = nonNegativeMistralAISTTStreamTime(offset)
+	s.startTimeOffset = offset
 }
 
 func (s *mistralAISTTRealtimeStream) StartTime() float64 {
@@ -504,9 +507,12 @@ func (s *mistralAISTTRealtimeStream) StartTime() float64 {
 }
 
 func (s *mistralAISTTRealtimeStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.startTime = nonNegativeMistralAISTTStreamTime(startTime)
+	s.startTime = startTime
 }
 
 func (s *mistralAISTTRealtimeStream) currentStartTimeOffset() float64 {
@@ -670,13 +676,6 @@ func mistralAISTTRealtimeSegments(value any, startTimeOffset float64) []stt.Time
 		})
 	}
 	return segments
-}
-
-func nonNegativeMistralAISTTStreamTime(value float64) float64 {
-	if value < 0 {
-		return 0
-	}
-	return value
 }
 
 func mistralAISTTRealtimeUsageEvent(requestID string, value any) *stt.SpeechEvent {

@@ -475,6 +475,9 @@ func (s *inferenceSTTStream) StartTimeOffset() float64 {
 }
 
 func (s *inferenceSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
 	s.startTimeOffset = offset
 }
 
@@ -483,6 +486,9 @@ func (s *inferenceSTTStream) StartTime() float64 {
 }
 
 func (s *inferenceSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
 	s.startTime = startTime
 }
 

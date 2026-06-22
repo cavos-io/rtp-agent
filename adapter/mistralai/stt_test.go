@@ -349,6 +349,41 @@ func TestMistralAISTTRealtimeStreamAppliesStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRealtimeStreamRejectsNegativeTimingAnchors(t *testing.T) {
+	stream := &mistralAISTTRealtimeStream{
+		startTimeOffset: 1.5,
+		startTime:       2.5,
+	}
+
+	assertMistralAIPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		stream.SetStartTimeOffset(-0.01)
+	})
+	if got := stream.StartTimeOffset(); got != 1.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 1.5", got)
+	}
+
+	assertMistralAIPanicsWithMessage(t, "start_time must be non-negative", func() {
+		stream.SetStartTime(-0.01)
+	})
+	if got := stream.StartTime(); got != 2.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 2.5", got)
+	}
+}
+
+func assertMistralAIPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := recovered.(string); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
+}
+
 func TestMistralAISTTRealtimeStreamUsesVADForEndpointing(t *testing.T) {
 	readGate := make(chan struct{})
 	t.Cleanup(func() { close(readGate) })

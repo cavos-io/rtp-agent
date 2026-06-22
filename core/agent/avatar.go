@@ -13,6 +13,13 @@ const (
 	AvatarStateSpeaking AvatarState = "speaking"
 )
 
+func avatarStateForAgentState(state AgentState) AvatarState {
+	if state == AgentStateSpeaking {
+		return AvatarStateSpeaking
+	}
+	return AvatarStateIdle
+}
+
 type AvatarProvider interface {
 	Start(ctx context.Context) error
 	UpdateState(state AvatarState) error

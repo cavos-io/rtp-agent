@@ -266,6 +266,7 @@ type RoomIO struct {
 	agentStateCancel         context.CancelFunc
 	agentStatePublisher      func(map[string]string)
 	agentStatePublishEnabled func() bool
+	agentStatePublishSeq     uint64
 	userStateCancel          context.CancelFunc
 	clientEvents             roomIOClientEvents
 
@@ -532,14 +533,41 @@ func (rio *RoomIO) handleAgentStateChanged(ev agent.AgentStateChangedEvent) {
 	if rio == nil || (rio.agentStatePublisher == nil && rio.clientEvents == nil) {
 		return
 	}
-	if rio.agentStatePublisher != nil && (rio.agentStatePublishEnabled == nil || rio.agentStatePublishEnabled()) {
-		rio.agentStatePublisher(map[string]string{
+	if rio.agentStatePublisher != nil {
+		publisher := rio.agentStatePublisher
+		enabled := rio.agentStatePublishEnabled
+		attrs := map[string]string{
 			RoomIOAgentStateAttribute: string(ev.NewState),
-		})
+		}
+		rio.mu.Lock()
+		rio.agentStatePublishSeq++
+		seq := rio.agentStatePublishSeq
+		rio.mu.Unlock()
+		go func() {
+			if !rio.isCurrentAgentStatePublish(seq) {
+				return
+			}
+			if enabled != nil && !enabled() {
+				return
+			}
+			if !rio.isCurrentAgentStatePublish(seq) {
+				return
+			}
+			publisher(attrs)
+		}()
 	}
 	if rio.clientEvents != nil {
 		rio.clientEvents.DispatchAgentState(ev.NewState)
 	}
+}
+
+func (rio *RoomIO) isCurrentAgentStatePublish(seq uint64) bool {
+	if rio == nil {
+		return false
+	}
+	rio.mu.Lock()
+	defer rio.mu.Unlock()
+	return seq == rio.agentStatePublishSeq
 }
 
 func (rio *RoomIO) handleUserStateChanged(ev agent.UserStateChangedEvent) {
@@ -947,6 +975,12 @@ func (rio *RoomIO) onChatTextStream(reader *lksdk.TextStreamReader, participantI
 
 func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lksdk.TextStreamInfo, participantIdentity string) {
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
+		return
+	}
+	rio.mu.Lock()
+	closed := rio.closed
+	rio.mu.Unlock()
+	if closed {
 		return
 	}
 	defer func() {
@@ -2091,6 +2125,7 @@ func (rio *RoomIO) Close() error {
 	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
 	rio.closed = true
+	rio.agentStatePublishSeq++
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
 		rio.agentStateCancel = nil

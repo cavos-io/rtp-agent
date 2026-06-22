@@ -503,6 +503,42 @@ func TestGladiaTranscriptTimingAppliesStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestGladiaSTTStreamRejectsNegativeTimingAnchors(t *testing.T) {
+	stream := &gladiaSTTStream{state: &gladiaSTTStreamState{
+		requestID:       "session-1",
+		startTimeOffset: 1.5,
+		startTime:       2.5,
+	}}
+
+	assertGladiaPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		stream.SetStartTimeOffset(-0.01)
+	})
+	if got := stream.StartTimeOffset(); got != 1.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 1.5", got)
+	}
+
+	assertGladiaPanicsWithMessage(t, "start_time must be non-negative", func() {
+		stream.SetStartTime(-0.01)
+	})
+	if got := stream.StartTime(); got != 2.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 2.5", got)
+	}
+}
+
+func assertGladiaPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := recovered.(string); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
+}
+
 func TestGladiaTranslationFinalWaitsForTranslatedTranscript(t *testing.T) {
 	state := &gladiaSTTStreamState{requestID: "session-1", translationEnabled: true}
 	events, err := processGladiaMessage(state, map[string]any{

@@ -388,19 +388,23 @@ func TestMultiSpeakerAdapterWrapperPropagatesTimingAnchors(t *testing.T) {
 		t.Fatalf("inner StartTime = %v, want 88.0", inner.startTime)
 	}
 
-	timing.SetStartTimeOffset(-1)
-	timing.SetStartTime(-2)
-	if timing.StartTimeOffset() < 0 {
-		t.Fatalf("negative StartTimeOffset was stored: %v", timing.StartTimeOffset())
+	assertPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-1)
+	})
+	assertPanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-2)
+	})
+	if timing.StartTimeOffset() != 4.5 {
+		t.Fatalf("StartTimeOffset = %v after rejected update, want previous 4.5", timing.StartTimeOffset())
 	}
-	if timing.StartTime() < 0 {
-		t.Fatalf("negative StartTime was stored: %v", timing.StartTime())
+	if timing.StartTime() != 88.0 {
+		t.Fatalf("StartTime = %v after rejected update, want previous 88.0", timing.StartTime())
 	}
-	if inner.startTimeOffset < 0 {
-		t.Fatalf("negative inner StartTimeOffset was propagated: %v", inner.startTimeOffset)
+	if inner.startTimeOffset != 4.5 {
+		t.Fatalf("inner StartTimeOffset = %v after rejected update, want previous 4.5", inner.startTimeOffset)
 	}
-	if inner.startTime < 0 {
-		t.Fatalf("negative inner StartTime was propagated: %v", inner.startTime)
+	if inner.startTime != 88.0 {
+		t.Fatalf("inner StartTime = %v after rejected update, want previous 88.0", inner.startTime)
 	}
 }
 

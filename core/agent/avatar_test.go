@@ -86,6 +86,38 @@ func TestAgentSessionStartSubscribesAvatarMetrics(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateAgentStateUpdatesAvatarProvider(t *testing.T) {
+	baseAgent := NewAgent("test")
+	baseAgent.VAD = &fakePipelineVAD{}
+	baseAgent.STT = &fakePipelineSTT{}
+	baseAgent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	baseAgent.TTS = &fakePipelineTTS{}
+	avatar := &recordingAvatarProvider{}
+	baseAgent.Avatar = avatar
+
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatalf("Start error = %v", err)
+	}
+
+	if got := avatar.states; len(got) != 1 || got[0] != AvatarStateIdle {
+		t.Fatalf("avatar states after Start = %#v, want [idle]", got)
+	}
+
+	session.UpdateAgentState(AgentStateSpeaking)
+	session.UpdateAgentState(AgentStateThinking)
+
+	want := []AvatarState{AvatarStateIdle, AvatarStateSpeaking, AvatarStateIdle}
+	if len(avatar.states) != len(want) {
+		t.Fatalf("avatar states = %#v, want %#v", avatar.states, want)
+	}
+	for i := range want {
+		if avatar.states[i] != want[i] {
+			t.Fatalf("avatar states = %#v, want %#v", avatar.states, want)
+		}
+	}
+}
+
 func TestAgentSessionStartUnsubscribesAvatarMetricsOnStartError(t *testing.T) {
 	errAvatar := errors.New("avatar start failed")
 	baseAgent := NewAgent("test")
@@ -155,6 +187,7 @@ type recordingAvatarProvider struct {
 	startContext context.Context
 	startErr     error
 	state        AvatarState
+	states       []AvatarState
 	metrics      AvatarMetricsHandler
 }
 
@@ -166,6 +199,7 @@ func (r *recordingAvatarProvider) Start(ctx context.Context) error {
 
 func (r *recordingAvatarProvider) UpdateState(state AvatarState) error {
 	r.state = state
+	r.states = append(r.states, state)
 	return nil
 }
 

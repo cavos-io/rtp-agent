@@ -136,6 +136,47 @@ func TestProcessJobExecutorRejectsDuplicateLaunchWithReferenceError(t *testing.T
 	}
 }
 
+func TestThreadJobExecutorLaunchAfterCloseIsRejected(t *testing.T) {
+	executor := NewThreadJobExecutor("exec-thread-closed", func() error {
+		t.Fatal("entrypoint should not run after executor close")
+		return nil
+	})
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-after-close"})
+
+	if err == nil {
+		t.Fatal("LaunchJob() error = nil, want closed executor error")
+	}
+	if got, want := err.Error(), "executor is closed"; got != want {
+		t.Fatalf("LaunchJob() error = %q, want %q", got, want)
+	}
+	if executor.Started() {
+		t.Fatal("Started() = true after rejected closed launch")
+	}
+}
+
+func TestProcessJobExecutorLaunchAfterCloseIsRejected(t *testing.T) {
+	executor := NewProcessJobExecutor("exec-process-closed")
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-after-close"})
+
+	if err == nil {
+		t.Fatal("LaunchJob() error = nil, want closed process error")
+	}
+	if got, want := err.Error(), "process is closed"; got != want {
+		t.Fatalf("LaunchJob() error = %q, want %q", got, want)
+	}
+	if executor.Started() {
+		t.Fatal("Started() = true after rejected closed launch")
+	}
+}
+
 func TestProcessJobEnvCarriesRunningJobInfo(t *testing.T) {
 	info := RunningJobInfo{
 		AcceptArguments: JobAcceptArguments{

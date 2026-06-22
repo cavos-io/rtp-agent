@@ -936,36 +936,30 @@ func (s *azureSTTStream) writeAudioLocked(audio azureSTTPendingAudio) error {
 func (s *azureSTTStream) StartTimeOffset() float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.startTimeOffset < 0 {
-		return 0
-	}
 	return s.startTimeOffset
 }
 
 func (s *azureSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if offset < 0 {
-		offset = 0
-	}
 	s.startTimeOffset = offset
 }
 
 func (s *azureSTTStream) StartTime() float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.startTime < 0 {
-		return 0
-	}
 	return s.startTime
 }
 
 func (s *azureSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if startTime < 0 {
-		startTime = 0
-	}
 	s.startTime = startTime
 }
 

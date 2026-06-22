@@ -902,11 +902,11 @@ func (s *deepgramStream) StartTimeOffset() float64 {
 }
 
 func (s *deepgramStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if offset < 0 {
-		offset = 0
-	}
 	s.offset = offset
 }
 
@@ -917,11 +917,11 @@ func (s *deepgramStream) StartTime() float64 {
 }
 
 func (s *deepgramStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if startTime < 0 {
-		startTime = 0
-	}
 	s.start = startTime
 }
 

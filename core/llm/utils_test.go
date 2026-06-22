@@ -1181,6 +1181,31 @@ func TestTextStreamClosesAndReturnsStreamError(t *testing.T) {
 	}
 }
 
+func TestTextStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
+	stream := &fakeCollectStream{events: []fakeCollectEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "late"}}},
+	}}
+	textStream, err := NewTextStream(stream)
+	if err != nil {
+		t.Fatalf("NewTextStream() error = %v", err)
+	}
+	if err := textStream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	text, err := textStream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want EOF", err)
+	}
+	if text != "" {
+		t.Fatalf("Next() text = %q, want empty text after close", text)
+	}
+	if len(stream.events) != 1 {
+		t.Fatalf("underlying stream events consumed = %d, want 0", 1-len(stream.events))
+	}
+}
+
 func TestNewTextStreamRejectsNilStream(t *testing.T) {
 	textStream, err := NewTextStream(nil)
 

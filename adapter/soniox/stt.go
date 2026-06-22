@@ -388,18 +388,18 @@ func (s *sonioxStream) Next() (*stt.SpeechEvent, error) {
 func (s *sonioxStream) StartTimeOffset() float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state == nil || s.state.startTimeOffset < 0 {
+	if s.state == nil {
 		return 0
 	}
 	return s.state.startTimeOffset
 }
 
 func (s *sonioxStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if offset < 0 {
-		offset = 0
-	}
 	if s.state == nil {
 		s.state = &sonioxMessageState{}
 	}
@@ -409,18 +409,18 @@ func (s *sonioxStream) SetStartTimeOffset(offset float64) {
 func (s *sonioxStream) StartTime() float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.state == nil || s.state.startTime < 0 {
+	if s.state == nil {
 		return 0
 	}
 	return s.state.startTime
 }
 
 func (s *sonioxStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if startTime < 0 {
-		startTime = 0
-	}
 	if s.state == nil {
 		s.state = &sonioxMessageState{}
 	}

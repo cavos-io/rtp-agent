@@ -236,6 +236,27 @@ func TestDeepgramSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamRejectsNegativeTimingAnchors(t *testing.T) {
+	stream := &deepgramStream{
+		offset: 1.5,
+		start:  2.5,
+	}
+
+	assertDeepgramPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		stream.SetStartTimeOffset(-0.01)
+	})
+	if got := stream.StartTimeOffset(); got != 1.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 1.5", got)
+	}
+
+	assertDeepgramPanicsWithMessage(t, "start_time must be non-negative", func() {
+		stream.SetStartTime(-0.01)
+	})
+	if got := stream.StartTime(); got != 2.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 2.5", got)
+	}
+}
+
 func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	speaker := 0
 	resp := dgRecognitionResponse{}
@@ -1659,6 +1680,20 @@ func assertDeepgramQueryValues(t *testing.T, query url.Values, key string, want 
 			t.Fatalf("%s = %+v, want %+v", key, got, want)
 		}
 	}
+}
+
+func assertDeepgramPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := recovered.(string); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
 
 type deepgramRoundTripFunc func(*http.Request) (*http.Response, error)
