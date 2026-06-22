@@ -190,6 +190,18 @@ func TestFallbackAdapterReportsReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterPrewarmDoesNotTouchProviders(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	fallback := &fakeFallbackLLM{label: "fallback.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	adapter.Prewarm()
+
+	if primary.prewarmCalls != 0 || fallback.prewarmCalls != 0 {
+		t.Fatalf("provider prewarm calls = (%d, %d), want fallback adapter prewarm no-op", primary.prewarmCalls, fallback.prewarmCalls)
+	}
+}
+
 func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
 	providerChatCtx := NewChatContext()
 	providerChatCtx.AddMessage(ChatMessageArgs{Role: ChatRoleAssistant, Text: "provider"})
@@ -1316,6 +1328,8 @@ type fakeFallbackLLM struct {
 	calls   int
 	onChat  func(context.Context)
 	options []ChatOptions
+
+	prewarmCalls int
 }
 
 func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, opts ...ChatOption) (LLMStream, error) {
@@ -1341,6 +1355,10 @@ func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, opts ...Chat
 
 func (f *fakeFallbackLLM) Label() string {
 	return f.label
+}
+
+func (f *fakeFallbackLLM) Prewarm() {
+	f.prewarmCalls++
 }
 
 type fakeFallbackEvent struct {

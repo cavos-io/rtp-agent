@@ -1781,7 +1781,6 @@ func (f *FallbackAdapter) Provider() string {
 }
 
 func (f *FallbackAdapter) Prewarm() {
-	Prewarm(f.llms[0])
 }
 
 func (f *FallbackAdapter) Close() error {
