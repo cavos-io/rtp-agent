@@ -380,6 +380,56 @@ func TestProcPoolStartWarmsTargetIdleExecutors(t *testing.T) {
 	}
 }
 
+func TestProcPoolSetTargetIdleProcessesWarmsRunningPool(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	var created int
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return executor
+	}
+
+	var events []ProcPoolEvent
+	for _, event := range []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+	} {
+		event := event
+		pool.On(event, func(executor JobExecutor) {
+			events = append(events, event)
+			if executor.Started() {
+				t.Fatalf("%s executor %q is running a job, want warmed idle executor", event, executor.ID())
+			}
+		})
+	}
+
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pool.SetTargetIdleProcesses(1)
+
+	if created != 1 {
+		t.Fatalf("created executors = %d, want 1 after target idle increase", created)
+	}
+	if got := len(pool.GetExecutors()); got != 1 {
+		t.Fatalf("executors len = %d, want warmed executor after target idle increase", got)
+	}
+	wantEvents := []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+	}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
+	}
+	for i := range wantEvents {
+		if events[i] != wantEvents[i] {
+			t.Fatalf("events = %v, want %v", events, wantEvents)
+		}
+	}
+}
+
 func TestProcPoolLaunchUsesWarmedIdleExecutor(t *testing.T) {
 	idle := &fakeJobExecutor{id: "idle"}
 	var created int

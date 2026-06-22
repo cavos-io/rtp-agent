@@ -300,8 +300,18 @@ func (p *ProcPool) On(event ProcPoolEvent, handler func(JobExecutor)) {
 
 func (p *ProcPool) SetTargetIdleProcesses(numIdleProcesses int) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.targetIdle = numIdleProcesses
+	if !p.started || p.closed {
+		p.mu.Unlock()
+		return
+	}
+	warmedExecutors, err := p.warmIdleExecutorsLocked()
+	p.mu.Unlock()
+	if err != nil {
+		logger.Logger.Warnw("Failed to warm target idle processes", err, "target_idle_processes", numIdleProcesses)
+		return
+	}
+	_ = p.emitWarmedExecutors(context.Background(), warmedExecutors)
 }
 
 func (p *ProcPool) TargetIdleProcesses() int {
