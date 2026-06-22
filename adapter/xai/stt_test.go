@@ -628,6 +628,45 @@ func TestXaiSTTStreamCloseFlushesBufferedAudioBeforeDone(t *testing.T) {
 	assertXaiSTTMessage(t, messages, handlerErr, `{"type":"audio.done"}`)
 }
 
+func TestXaiSTTFlushEmitsReferenceRecognitionUsage(t *testing.T) {
+	var writes [][]byte
+	stream := &xaiSTTStream{
+		sampleRate: 16000,
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		events: make(chan *stt.SpeechEvent, 4),
+		state:  &xaiSTTStreamState{requestID: "xai-request-usage"},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 200,
+	}); err != nil {
+		t.Fatalf("PushFrame(partial chunk) error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before flush = %d, want buffered partial audio", len(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if got := chunkLengths(writes); len(got) != 1 || got[0] != 400 {
+		t.Fatalf("writes after flush = %v, want one flushed partial chunk", got)
+	}
+
+	event := readXaiSTTBufferedEvent(t, stream.events)
+	if event.Type != stt.SpeechEventRecognitionUsage || event.RequestID != "xai-request-usage" {
+		t.Fatalf("event = %+v, want recognition usage with stream request id", event)
+	}
+	if event.RecognitionUsage == nil || event.RecognitionUsage.AudioDuration != 0.0125 {
+		t.Fatalf("recognition usage = %+v, want 0.0125s audio duration", event.RecognitionUsage)
+	}
+}
+
 func TestXaiSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "")
 	provider := NewXaiSTT("",
@@ -1028,6 +1067,17 @@ func assertXaiSTTMessage(t *testing.T, messages <-chan string, handlerErr <-chan
 		t.Fatal(err)
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for websocket message %q", want)
+	}
+}
+
+func readXaiSTTBufferedEvent(t *testing.T, events <-chan *stt.SpeechEvent) *stt.SpeechEvent {
+	t.Helper()
+	select {
+	case event := <-events:
+		return event
+	default:
+		t.Fatal("no buffered speech event")
+		return nil
 	}
 }
 
