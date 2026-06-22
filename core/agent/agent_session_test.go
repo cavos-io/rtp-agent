@@ -4041,6 +4041,24 @@ func TestAgentSessionShutdownClosesMCPServers(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownClosesSessionToolsets(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	toolset := &closeableSessionToolset{
+		fakeGenerationTool: fakeGenerationTool{name: "session_tools"},
+		tools:              []llm.Tool{&fakeGenerationTool{name: "lookup"}},
+	}
+	session.Tools = []llm.Tool{toolset}
+
+	session.Shutdown(false)
+
+	if toolset.closeCalls != 1 {
+		t.Fatalf("session toolset Close calls = %d, want 1", toolset.closeCalls)
+	}
+}
+
 func TestAgentSessionShutdownDrainsByDefaultBeforeClosing(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -6880,5 +6898,18 @@ func (f *fakeSessionMCPServer) ListTools(context.Context) ([]llm.Tool, error) {
 
 func (f *fakeSessionMCPServer) Close() error {
 	f.closed++
+	return nil
+}
+
+type closeableSessionToolset struct {
+	fakeGenerationTool
+	tools      []llm.Tool
+	closeCalls int
+}
+
+func (c *closeableSessionToolset) Tools() []llm.Tool { return c.tools }
+
+func (c *closeableSessionToolset) Close() error {
+	c.closeCalls++
 	return nil
 }
