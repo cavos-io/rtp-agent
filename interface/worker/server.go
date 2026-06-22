@@ -153,6 +153,7 @@ type WorkerOptions struct {
 	HTTPProxySet                       bool
 	UserArguments                      any
 	DevMode                            bool
+	Simulation                         bool
 	LogLevel                           string
 	PrometheusPort                     int
 	PrometheusPortSet                  bool
@@ -680,6 +681,9 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	}
 	if next.DevMode {
 		current.DevMode = true
+	}
+	if next.Simulation {
+		current.Simulation = true
 	}
 	if next.LogLevel != "" {
 		current.LogLevel = next.LogLevel
@@ -1215,6 +1219,9 @@ func (s *AgentServer) availableForJob() bool {
 	if s.Draining() {
 		return false
 	}
+	if s.Options.Simulation {
+		return true
+	}
 	threshold := s.Options.LoadThreshold
 	if threshold <= 0 {
 		return true
@@ -1228,6 +1235,9 @@ func (s *AgentServer) availableForJob() bool {
 func (s *AgentServer) availableForJobWithLoad(load float64) bool {
 	if s.Draining() {
 		return false
+	}
+	if s.Options.Simulation {
+		return true
 	}
 	threshold := s.Options.LoadThreshold
 	if threshold <= 0 {

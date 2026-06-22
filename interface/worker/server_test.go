@@ -2779,6 +2779,32 @@ func TestAvailabilityAllowsReservedSlotsWithInfiniteLoadThreshold(t *testing.T) 
 	}
 }
 
+func TestAvailabilityAllowsReferenceSimulationAboveLoadThreshold(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		LoadThreshold: 0.5,
+		Simulation:    true,
+		LoadFunc: func(*AgentServer) float64 {
+			return 0.9
+		},
+	})
+
+	if !server.availableForJob() {
+		t.Fatal("availableForJob() = false, want true in reference simulation mode")
+	}
+
+	msg := server.availableWorkerStatusMessage()
+	update := msg.GetUpdateWorker()
+	if update == nil {
+		t.Fatal("update worker message is nil")
+	}
+	if update.GetStatus() != livekit.WorkerStatus_WS_AVAILABLE {
+		t.Fatalf("UpdateWorker.Status = %v, want WS_AVAILABLE in reference simulation mode", update.GetStatus())
+	}
+	if update.Load != 0.9 {
+		t.Fatalf("UpdateWorker.Load = %v, want sampled load still reported", update.Load)
+	}
+}
+
 func TestHandleAvailabilityCountsPendingAcceptsAsReservedLoad(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{
 		LoadThreshold:    0.5,

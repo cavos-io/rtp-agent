@@ -30,12 +30,13 @@ import (
 )
 
 type CliArgs struct {
-	LogLevel  string
-	URL       string
-	APIKey    string
-	APISecret string
-	DevMode   bool
-	Reload    bool
+	LogLevel   string
+	URL        string
+	APIKey     string
+	APISecret  string
+	DevMode    bool
+	Simulation bool
+	Reload     bool
 
 	// ReloadCount tracks how many times the dev-mode worker has been reloaded.
 	ReloadCount int
@@ -277,6 +278,11 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 				return CliArgs{}, nil, fmt.Errorf("invalid --drain-timeout %q", argv[i])
 			}
 			drainTimeout = &value
+		case "--simulation":
+			if devMode {
+				return CliArgs{}, nil, fmt.Errorf("--simulation is only supported by start")
+			}
+			args.Simulation = true
 		case "--reload":
 			if !devMode {
 				return CliArgs{}, nil, fmt.Errorf("--reload is only supported by dev")
@@ -300,11 +306,12 @@ func applyWorkerArgs(server *worker.AgentServer, args CliArgs, drainTimeout *int
 		logLevel = "DEBUG"
 	}
 	opts := worker.WorkerOptions{
-		LogLevel:  logLevel,
-		WSURL:     args.URL,
-		APIKey:    args.APIKey,
-		APISecret: args.APISecret,
-		DevMode:   args.DevMode,
+		LogLevel:   logLevel,
+		WSURL:      args.URL,
+		APIKey:     args.APIKey,
+		APISecret:  args.APISecret,
+		DevMode:    args.DevMode,
+		Simulation: args.Simulation,
 	}
 	if drainTimeout != nil {
 		opts.DrainTimeoutSeconds = *drainTimeout
