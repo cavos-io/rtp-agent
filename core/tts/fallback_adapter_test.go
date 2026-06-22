@@ -1585,7 +1585,7 @@ func TestFallbackSynthesizeStreamFallsBackWhenNormalizationFailsBeforeAudio(t *t
 	}
 }
 
-func TestFallbackSynthesizeStreamErrorsWhenNormalizationFailsAfterAudio(t *testing.T) {
+func TestFallbackSynthesizeStreamIgnoresNormalizationErrorAfterAudio(t *testing.T) {
 	primary := &metadataTTS{
 		label:        "primary",
 		sampleRate:   16000,
@@ -1637,21 +1637,27 @@ func TestFallbackSynthesizeStreamErrorsWhenNormalizationFailsAfterAudio(t *testi
 	if first.IsFinal {
 		t.Fatal("first audio IsFinal = true, want non-final head")
 	}
-	if _, err = stream.Next(); err == nil || !strings.Contains(err.Error(), "audio frame data is shorter than declared sample count") {
-		t.Fatalf("second Next error = %v, want normalization error after partial output", err)
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final tail after partial output", err)
+	}
+	if !second.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final tail after partial output")
+	}
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want io.EOF after partial output", err)
 	}
 	if fallback.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0 after partial output", fallback.streamCalls)
 	}
-	if adapter.status[0].available {
-		t.Fatal("primary availability = true, want false after post-output normalization error")
+	if !adapter.status[0].available {
+		t.Fatal("primary availability = false, want unchanged after ignored post-output normalization error")
 	}
-	got := receiveTerminalTTSError(t, errCh)
-	if got.Err == nil || !strings.Contains(got.Err.Error(), "audio frame data is shorter than declared sample count") {
-		t.Fatalf("emitted error = %v, want normalization error", got.Err)
-	}
-	if got.Recoverable {
-		t.Fatal("Recoverable = true, want false after partial audio")
+	select {
+	case got := <-errCh:
+		t.Fatalf("emitted TTS error after partial output: %#v", got)
+	default:
 	}
 }
 
@@ -2842,22 +2848,27 @@ func TestFallbackSynthesizeStreamDoesNotFallbackAfterAudio(t *testing.T) {
 	if _, err := stream.Next(); err != nil {
 		t.Fatalf("first Next returned error: %v", err)
 	}
+	secondAudio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final tail after partial audio", err)
+	}
+	if !secondAudio.IsFinal {
+		t.Fatal("second audio IsFinal = false, want final tail after partial audio")
+	}
 	_, err = stream.Next()
-	if !errors.Is(err, streamErr) {
-		t.Fatalf("second Next error = %v, want provider error after partial audio", err)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want io.EOF after partial audio", err)
 	}
 	if second.streamCalls != 0 {
 		t.Fatalf("fallback stream calls = %d, want 0", second.streamCalls)
 	}
-	if adapter.status[0].available {
-		t.Fatal("first availability = true, want false after post-output stream error")
+	if !adapter.status[0].available {
+		t.Fatal("first availability = false, want unchanged after ignored post-output stream error")
 	}
-	got := receiveTerminalTTSError(t, errCh)
-	if !errors.Is(got.Err, streamErr) {
-		t.Fatalf("emitted error = %v, want %v", got.Err, streamErr)
-	}
-	if got.Recoverable {
-		t.Fatal("Recoverable = true, want false after partial audio")
+	select {
+	case got := <-errCh:
+		t.Fatalf("emitted TTS error after partial audio: %#v", got)
+	default:
 	}
 }
 

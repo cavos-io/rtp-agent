@@ -1145,10 +1145,18 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			}
 			if outputSent {
 				_ = stream.Close()
-				s.adapter.markUnavailable(s.activeIndex)
-				s.markDone(err)
-				emitTTSError(s.adapter, err, false)
-				s.errCh <- err
+				if pending != nil {
+					pending = cloneSynthesizedAudio(pending)
+					pending.IsFinal = true
+					s.emitMetrics(pending)
+					select {
+					case s.eventCh <- pending:
+					case <-s.closeCh:
+						return
+					}
+				}
+				s.markDone(nil)
+				s.errCh <- io.EOF
 				return
 			}
 
@@ -1188,10 +1196,18 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 		if err != nil {
 			if outputSent {
 				_ = stream.Close()
-				s.adapter.markUnavailable(s.activeIndex)
-				s.markDone(err)
-				emitTTSError(s.adapter, err, false)
-				s.errCh <- err
+				if pending != nil {
+					pending = cloneSynthesizedAudio(pending)
+					pending.IsFinal = true
+					s.emitMetrics(pending)
+					select {
+					case s.eventCh <- pending:
+					case <-s.closeCh:
+						return
+					}
+				}
+				s.markDone(nil)
+				s.errCh <- io.EOF
 				return
 			}
 			s.mu.Lock()
