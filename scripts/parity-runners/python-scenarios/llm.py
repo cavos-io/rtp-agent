@@ -3087,6 +3087,33 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
                 )
             ],
         }
+    if action == "close_nested_toolsets":
+        class ClosingToolset(module.Toolset):
+            def __init__(self, *, id: str, tools: list[Any] | None = None) -> None:
+                super().__init__(id=id, tools=tools)
+                self.close_calls = 0
+
+            async def aclose(self) -> None:
+                self.close_calls += 1
+                await super().aclose()
+
+        child = ClosingToolset(id="child", tools=[fn_tool("lookup")])
+        parent = ClosingToolset(id="parent", tools=[child])
+        ctx = module.ToolContext([parent])
+        asyncio.run(parent.aclose())
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    ctx,
+                    "close_nested_toolsets",
+                    {
+                        "parent_close_calls": parent.close_calls,
+                        "child_close_calls": child.close_calls,
+                    },
+                )
+            ],
+        }
     raise ValueError(f"unsupported LLM tool context action {action!r}")
 
 

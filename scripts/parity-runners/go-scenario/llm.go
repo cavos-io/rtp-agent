@@ -5156,6 +5156,23 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 				summary(ctx, "close_toolsets", map[string]any{"close_calls": toolset.closeCalls}),
 			},
 		}, nil
+	case "close_nested_toolsets":
+		lookup := newTool("lookup", "lookup")
+		child := &scenarioLLMToolset{id: "child", tools: []lkllm.Tool{lookup}}
+		parent := &scenarioLLMToolset{id: "parent", tools: []lkllm.Tool{child}, onClose: child.Close}
+		ctx := lkllm.NewToolContext([]interface{}{parent})
+		if err := ctx.Close(); err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "close_nested_toolsets", map[string]any{
+					"parent_close_calls": parent.closeCalls,
+					"child_close_calls":  child.closeCalls,
+				}),
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM tool context action %q", payload.Action)
 	}
@@ -5328,12 +5345,24 @@ type scenarioLLMToolset struct {
 	id         string
 	tools      []lkllm.Tool
 	closeCalls int
+	onClose    func() error
 }
 
 func (s *scenarioLLMToolset) ID() string          { return s.id }
+func (s *scenarioLLMToolset) Name() string        { return s.id }
+func (s *scenarioLLMToolset) Description() string { return "" }
+func (s *scenarioLLMToolset) Parameters() map[string]any {
+	return nil
+}
+func (s *scenarioLLMToolset) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
 func (s *scenarioLLMToolset) Tools() []lkllm.Tool { return s.tools }
 func (s *scenarioLLMToolset) Close() error {
 	s.closeCalls++
+	if s.onClose != nil {
+		return s.onClose()
+	}
 	return nil
 }
 

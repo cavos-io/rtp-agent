@@ -59,8 +59,11 @@ func (c *ToolContext) Close() error {
 		return nil
 	}
 	var errs []error
-	for _, toolset := range c.toolsets {
-		if closeable, ok := toolset.(closeableToolset); ok {
+	for _, tool := range c.tools {
+		if _, ok := tool.(Toolset); !ok {
+			continue
+		}
+		if closeable, ok := tool.(closeableToolset); ok {
 			if err := closeable.Close(); err != nil {
 				errs = append(errs, err)
 			}
