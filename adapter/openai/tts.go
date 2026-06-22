@@ -340,6 +340,8 @@ type openaiTTSChunkedStream struct {
 	wavSampleRate  uint32
 	wavChannels    uint32
 	closed         bool
+	sseDone        bool
+	sseSawAudio    bool
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -422,6 +424,9 @@ func (s *openaiTTSChunkedStream) feedMP3Audio() {
 }
 
 func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
+	if s.sseDone {
+		return nil, io.EOF
+	}
 	if s.responseFormat == openai.SpeechResponseFormatMp3 {
 		return s.nextSSEMP3Audio()
 	}
@@ -463,9 +468,14 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			if audio == nil {
 				continue
 			}
+			s.sseSawAudio = true
 			return audio, nil
 		case "speech.audio.done":
 			s.emitSSEUsageMetrics(event)
+			s.sseDone = true
+			if s.sseSawAudio {
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 	}

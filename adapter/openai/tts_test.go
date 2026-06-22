@@ -517,6 +517,42 @@ func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEPCMEmitsFinalMarkerAfterDone(t *testing.T) {
+	wantAudio := []byte{0x01, 0x00, 0x02, 0x00}
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
+		`data: {"type":"speech.audio.done"}` + "\n\n"
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(strings.NewReader(sse)),
+		responseFormat: goopenai.SpeechResponseFormatPcm,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("audio Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, wantAudio) {
+		t.Fatalf("audio = %#v, want PCM frame", audio)
+	}
+	if audio.IsFinal {
+		t.Fatal("audio IsFinal = true, want final marker only after done")
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final = %#v, want reference final marker", final)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final = %v, want io.EOF", err)
+	}
+}
+
 func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
