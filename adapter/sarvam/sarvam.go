@@ -672,6 +672,8 @@ type sarvamSTTRecognizeStream struct {
 	mu            sync.Mutex
 	closed        bool
 	audioPosition float64
+	writeMessage  func([]byte) error
+	audioBuffer   []byte
 }
 
 func newSarvamSTTRecognizeStream(ctx context.Context, conn *websocket.Conn, provider *SarvamSTT, language string) *sarvamSTTRecognizeStream {
@@ -698,10 +700,8 @@ func (s *sarvamSTTRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 		return nil
 	}
 	s.mu.Lock()
-	closed := s.closed
-	conn := s.conn
-	s.mu.Unlock()
-	if closed || conn == nil {
+	defer s.mu.Unlock()
+	if s.closed || (s.conn == nil && s.writeMessage == nil) {
 		return io.ErrClosedPipe
 	}
 	sampleRate := s.sampleRate
@@ -709,23 +709,21 @@ func (s *sarvamSTTRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 		sampleRate = int(frame.SampleRate)
 	}
 	chunkBytes := sarvamSTTChunkBytes(sampleRate)
-	for start := 0; start < len(frame.Data); start += chunkBytes {
-		end := start + chunkBytes
-		if end > len(frame.Data) {
-			end = len(frame.Data)
-		}
+	s.audioBuffer = append(s.audioBuffer, frame.Data...)
+	for len(s.audioBuffer) >= chunkBytes {
 		chunk := *frame
-		chunk.Data = frame.Data[start:end]
+		chunk.Data = append([]byte(nil), s.audioBuffer[:chunkBytes]...)
+		s.audioBuffer = s.audioBuffer[chunkBytes:]
 		chunk.SampleRate = uint32(sampleRate)
 		chunk.SamplesPerChannel = uint32(len(chunk.Data) / 2)
 		message, err := buildSarvamSTTAudioMessage(&chunk, s.encoding)
 		if err != nil {
 			return err
 		}
-		if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		if err := s.writeMessageLocked(message); err != nil {
 			return err
 		}
-		s.addAudioPosition(chunk.SamplesPerChannel, sampleRate)
+		s.audioPosition += float64(chunk.SamplesPerChannel) / float64(sampleRate)
 	}
 	return nil
 }
@@ -747,17 +745,23 @@ func (s *sarvamSTTRecognizeStream) currentAudioPosition() float64 {
 
 func (s *sarvamSTTRecognizeStream) Flush() error {
 	s.mu.Lock()
-	closed := s.closed
-	conn := s.conn
-	s.mu.Unlock()
-	if closed || conn == nil {
+	defer s.mu.Unlock()
+	if s.closed || (s.conn == nil && s.writeMessage == nil) {
 		return io.ErrClosedPipe
 	}
+	s.audioBuffer = nil
 	message, err := buildSarvamSTTEndOfStreamMessage(s.encoding, s.sampleRate)
 	if err != nil {
 		return err
 	}
-	return conn.WriteMessage(websocket.TextMessage, message)
+	return s.writeMessageLocked(message)
+}
+
+func (s *sarvamSTTRecognizeStream) writeMessageLocked(message []byte) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(message)
+	}
+	return s.conn.WriteMessage(websocket.TextMessage, message)
 }
 
 func (s *sarvamSTTRecognizeStream) Close() error {
