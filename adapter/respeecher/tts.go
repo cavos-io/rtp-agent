@@ -279,14 +279,25 @@ func validateRespeecherAPIKey(apiKey string) error {
 type respeecherTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	finalSent  bool
 }
 
 func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
+	if n > 0 {
+		return &tts.SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				Data:              buf[:n],
+				SampleRate:        uint32(s.sampleRate),
+				NumChannels:       1,
+				SamplesPerChannel: uint32(n / 2),
+			},
+		}, nil
+	}
 	if err != nil {
 		if err == io.EOF {
-			return nil, io.EOF
+			return s.emitFinal()
 		}
 		return nil, err
 	}
@@ -300,7 +311,16 @@ func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *respeecherTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
 func (s *respeecherTTSChunkedStream) Close() error {
+	s.finalSent = true
 	return s.resp.Body.Close()
 }
 
@@ -347,15 +367,15 @@ func respeecherTTSOutputFormat(t *RespeecherTTS) map[string]interface{} {
 }
 
 type respeecherTTSSynthesizeStream struct {
-	conn      *websocket.Conn
-	ctx       context.Context
-	cancel    context.CancelFunc
-	provider  *RespeecherTTS
-	contextID string
-	events    chan *tts.SynthesizedAudio
-	errCh     chan error
-	mu        sync.Mutex
-	closed    bool
+	conn        *websocket.Conn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	provider    *RespeecherTTS
+	contextID   string
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
+	mu          sync.Mutex
+	closed      bool
 	pendingText string
 
 	writeMessage func([]byte) error

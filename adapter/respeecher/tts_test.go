@@ -16,6 +16,21 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type respeecherFinalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (r *respeecherFinalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *respeecherFinalEOFReader) Close() error { return nil }
+
 func TestRespeecherTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "")
 
@@ -170,6 +185,60 @@ func TestRespeecherTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 48000 {
 		t.Fatalf("sample rate = %d, want configured sample rate", audio.Frame.SampleRate)
+	}
+}
+
+func TestRespeecherTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &respeecherTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestRespeecherTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &respeecherTTSChunkedStream{
+		resp:       &http.Response{Body: &respeecherFinalEOFReader{data: []byte{0x01, 0x02}}},
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want audio frame", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final bytes", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want final marker", final)
 	}
 }
 
