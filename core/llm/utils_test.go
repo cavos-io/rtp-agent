@@ -1102,6 +1102,28 @@ func TestCollectStreamClosesAndReturnsStreamError(t *testing.T) {
 	}
 }
 
+func TestCollectStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+	stream := &fakeCollectStream{events: []fakeCollectEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
+		{err: NewAPIStatusError("client closed", 499, "req_499", nil)},
+	}}
+
+	collected, err := CollectStream(stream)
+
+	if err != nil {
+		t.Fatalf("CollectStream() error = %v, want nil for APIStatusError 499", err)
+	}
+	if collected == nil {
+		t.Fatal("CollectStream() response = nil, want collected partial response")
+	}
+	if collected.Text != "partial" {
+		t.Fatalf("Text = %q, want partial response before client close", collected.Text)
+	}
+	if !stream.closed {
+		t.Fatal("stream was not closed after APIStatusError 499")
+	}
+}
+
 func TestCollectStreamRejectsNilStream(t *testing.T) {
 	collected, err := CollectStream(nil)
 
@@ -1178,6 +1200,33 @@ func TestTextStreamClosesAndReturnsStreamError(t *testing.T) {
 	}
 	if !stream.closed {
 		t.Fatal("stream was not closed after error")
+	}
+}
+
+func TestTextStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+	stream := &fakeCollectStream{events: []fakeCollectEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "hello"}}},
+		{err: NewAPIStatusError("client closed", 499, "req_499", nil)},
+	}}
+	textStream, err := NewTextStream(stream)
+	if err != nil {
+		t.Fatalf("NewTextStream() error = %v", err)
+	}
+
+	text, err := textStream.Next()
+	if err != nil || text != "hello" {
+		t.Fatalf("first Next() = (%q, %v), want hello nil", text, err)
+	}
+	text, err = textStream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next() error = %v, want EOF for APIStatusError 499", err)
+	}
+	if text != "" {
+		t.Fatalf("second Next() text = %q, want empty text", text)
+	}
+	if !stream.closed {
+		t.Fatal("stream was not closed after APIStatusError 499")
 	}
 }
 
