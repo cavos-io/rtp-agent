@@ -2219,6 +2219,36 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamResponseFormat(t *test
 	}
 }
 
+func TestOpenAIChatAppliesExtraParamPromptCacheOptions(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+	)
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		llm.WithExtraParams(map[string]any{
+			"prompt_cache_key":       "room-123",
+			"prompt_cache_retention": "24h",
+		}),
+	)
+
+	if !strings.Contains(capture.requestBody, `"prompt_cache_key":"room-123"`) {
+		t.Fatalf("request body = %s, want call prompt_cache_key", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"prompt_cache_retention":"24h"`) {
+		t.Fatalf("request body = %s, want call prompt_cache_retention", capture.requestBody)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestDropsUnsupportedReasoningParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("openai/gpt-5", llm.NewChatContext(), &llm.ChatOptions{
 		ParallelToolCalls: true,

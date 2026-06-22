@@ -72,6 +72,7 @@ const defaultXAIOpenAIBaseURL = "https://api.x.ai/v1"
 
 type OpenAILLM struct {
 	client               *openai.Client
+	clientConfig         openai.ClientConfig
 	model                string
 	baseURL              string
 	httpClient           openai.HTTPDoer
@@ -326,6 +327,7 @@ func newOpenAILLMWithConfigAndModel(config openai.ClientConfig, model string, op
 	wrapOpenAIExtraHeaders(provider, &config)
 	wrapOpenAIExtraQuery(provider, &config)
 	wrapOpenAIExtraBody(provider, &config)
+	provider.clientConfig = config
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
 }
@@ -380,6 +382,7 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	wrapOpenAIExtraHeaders(provider, &config)
 	wrapOpenAIExtraQuery(provider, &config)
 	wrapOpenAIExtraBody(provider, &config)
+	provider.clientConfig = config
 	provider.client = openai.NewClientWithConfig(config)
 	provider.baseURL = config.BaseURL
 	return provider, nil
@@ -680,6 +683,7 @@ func NewOpenAILLMWithBaseURLAndHTTPClient(apiKey string, model string, baseURL s
 	wrapOpenAIExtraHeaders(provider, &config)
 	wrapOpenAIExtraQuery(provider, &config)
 	wrapOpenAIExtraBody(provider, &config)
+	provider.clientConfig = config
 	provider.client = openai.NewClientWithConfig(config)
 	return provider
 }
@@ -841,10 +845,19 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	}
 
 	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, l.defaultReasoning, l.strictToolSchema)
+	client := l.client
+	if body := openAIExtraBodyParams(effectiveOptions.ExtraParams); len(body) > 0 {
+		config := l.clientConfig
+		config.HTTPClient = &extraBodyHTTPClient{
+			base: config.HTTPClient,
+			body: body,
+		}
+		client = openai.NewClientWithConfig(config)
+	}
 
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
-		stream, err := l.client.CreateChatCompletionStream(ctx, req)
+		stream, err := client.CreateChatCompletionStream(ctx, req)
 		if err == nil {
 			return &openaiStream{
 				stream: stream,
@@ -930,6 +943,27 @@ func mergeOpenAIExtraParams(callParams, providerParams map[string]any) map[strin
 		merged[key] = value
 	}
 	return merged
+}
+
+func openAIExtraBodyParams(params map[string]any) map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+	body := map[string]any{}
+	if extraBody := asAnyMap(params["extra_body"]); extraBody != nil {
+		for key, value := range extraBody {
+			body[key] = value
+		}
+	}
+	for _, key := range []string{"prompt_cache_key", "prompt_cache_retention"} {
+		if value, ok := params[key]; ok {
+			body[key] = value
+		}
+	}
+	if len(body) == 0 {
+		return nil
+	}
+	return body
 }
 
 func cloneOpenAIStringMap(src map[string]string) map[string]string {
