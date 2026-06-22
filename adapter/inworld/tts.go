@@ -789,7 +789,7 @@ func inworldTTSAudioFromWebsocketMessageWithOffset(payload []byte, contextID str
 		return nil, false, true, 0, nil
 	}
 	if message.Result.ContextClosed != nil {
-		return nil, true, false, 0, nil
+		return &tts.SynthesizedAudio{SegmentID: contextID, IsFinal: true}, true, false, 0, nil
 	}
 	if message.Result.AudioChunk == nil || message.Result.AudioChunk.AudioContent == "" {
 		return nil, false, false, 0, nil
