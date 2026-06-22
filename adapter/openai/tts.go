@@ -38,6 +38,8 @@ type OpenAITTS struct {
 	mu             sync.Mutex
 	closed         bool
 	streams        map[*openaiTTSChunkedStream]struct{}
+	prewarmCancel  context.CancelFunc
+	prewarmDone    chan struct{}
 }
 
 const (
@@ -277,18 +279,94 @@ func (t *OpenAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, io.ErrUnexpectedEOF
 }
 
+func (t *OpenAITTS) Prewarm() {
+	if t == nil {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		cancel()
+		close(done)
+		return
+	}
+	previousCancel := t.prewarmCancel
+	t.prewarmCancel = cancel
+	t.prewarmDone = done
+	t.mu.Unlock()
+
+	if previousCancel != nil {
+		previousCancel()
+	}
+
+	go func() {
+		defer close(done)
+		defer func() {
+			t.mu.Lock()
+			if t.prewarmDone == done {
+				t.prewarmCancel = nil
+				t.prewarmDone = nil
+			}
+			t.mu.Unlock()
+		}()
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, openAITTSPrewarmURL(t.baseURL), nil)
+		if err != nil {
+			return
+		}
+		if t.apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+t.apiKey)
+		}
+		client := t.httpClient
+		if client == nil {
+			client = http.DefaultClient
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return
+		}
+		_ = resp.Body.Close()
+	}()
+}
+
+func openAITTSPrewarmURL(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return strings.TrimRight(defaultOpenAIBaseURL, "/") + "/"
+	}
+	u.Path = "/"
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
 func (t *OpenAITTS) Close() error {
 	if t == nil {
 		return nil
 	}
 	t.mu.Lock()
 	t.closed = true
+	prewarmCancel := t.prewarmCancel
+	prewarmDone := t.prewarmDone
+	t.prewarmCancel = nil
+	t.prewarmDone = nil
 	streams := make([]*openaiTTSChunkedStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
 	}
 	t.streams = make(map[*openaiTTSChunkedStream]struct{})
 	t.mu.Unlock()
+
+	if prewarmCancel != nil {
+		prewarmCancel()
+	}
+	if prewarmDone != nil {
+		<-prewarmDone
+	}
 
 	var closeErr error
 	for _, stream := range streams {

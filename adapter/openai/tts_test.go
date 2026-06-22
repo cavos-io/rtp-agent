@@ -351,6 +351,63 @@ func TestOpenAITTSProviderUsesReferenceBaseURLHost(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSPrewarmSendsReferenceRootRequest(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		return nil, errors.New("prewarm failed")
+	})
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSBaseURL("https://openai.test/v1"),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	tts.Prewarm(provider)
+
+	select {
+	case req := <-reqCh:
+		if req.Method != http.MethodGet {
+			t.Fatalf("prewarm method = %s, want GET", req.Method)
+		}
+		if got := req.URL.String(); got != "https://openai.test/" {
+			t.Fatalf("prewarm URL = %q, want https://openai.test/", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for OpenAI TTS prewarm request")
+	}
+}
+
+func TestOpenAITTSCloseCancelsReferencePrewarm(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	cancelled := make(chan struct{})
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		<-r.Context().Done()
+		close(cancelled)
+		return nil, r.Context().Err()
+	})
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSBaseURL("https://openai.test/v1"),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	tts.Prewarm(provider)
+
+	select {
+	case <-reqCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for OpenAI TTS prewarm request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Close to cancel OpenAI TTS prewarm")
+	}
+}
+
 func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	var gotAuth string
 	var gotPath string
