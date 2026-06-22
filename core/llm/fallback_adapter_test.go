@@ -151,6 +151,41 @@ func TestFallbackAdapterRetriesNextLLMWhenStreamFailsBeforeChunk(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterReportsAllFailedWhenFinalStreamFailsBeforeChunk(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	adapter := NewFallbackAdapter([]LLM{
+		&fakeFallbackLLM{label: "primary.LLM", stream: &fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}}},
+	})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want all-failed fallback error")
+	}
+	var allFailed *FallbackAllFailedError
+	if !errors.As(err, &allFailed) {
+		t.Fatalf("Next error = %T %v, want FallbackAllFailedError", err, err)
+	}
+	if allFailed.Count != 1 {
+		t.Fatalf("FallbackAllFailedError.Count = %d, want 1", allFailed.Count)
+	}
+	if len(allFailed.Labels) != 1 || allFailed.Labels[0] != "primary.LLM" {
+		t.Fatalf("FallbackAllFailedError.Labels = %#v, want primary label", allFailed.Labels)
+	}
+	var apiErr *APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError wrapper", err, err)
+	}
+	if !strings.Contains(apiErr.Message, "all LLMs failed ([primary.LLM]) after") {
+		t.Fatalf("APIConnectionError.Message = %q, want all-failed message", apiErr.Message)
+	}
+}
+
 func TestFallbackAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
 	primary := &fakeFallbackLLM{label: "primary.LLM"}
 	adapter := NewFallbackAdapter([]LLM{primary})

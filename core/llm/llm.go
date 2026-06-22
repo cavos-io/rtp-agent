@@ -1860,10 +1860,11 @@ func (f *FallbackAdapter) emitAvailabilityChanged(index int, available bool) {
 
 func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts ...ChatOption) (LLMStream, error) {
 	stream := &fallbackLLMStream{
-		adapter: f,
-		ctx:     ctx,
-		chatCtx: chatCtx,
-		opts:    opts,
+		adapter:   f,
+		ctx:       ctx,
+		chatCtx:   chatCtx,
+		opts:      opts,
+		startTime: time.Now(),
 	}
 	var options ChatOptions
 	for _, opt := range opts {
@@ -1891,6 +1892,7 @@ type fallbackLLMStream struct {
 	lastTools    []Tool
 	outputSent   bool
 	closed       bool
+	startTime    time.Time
 }
 
 func (s *fallbackLLMStream) ChatCtx() *ChatContext {
@@ -2091,11 +2093,23 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 		s.closeActive()
 		s.markUnavailable(s.activeIndex, true)
 		if s.activeIndex+1 >= len(s.adapter.llms) {
-			return nil, err
+			return nil, s.allFailedError(err)
 		}
 		if startErr := s.tryStart(s.activeIndex + 1); startErr != nil {
 			return nil, startErr
 		}
+	}
+}
+
+func (s *fallbackLLMStream) allFailedError(err error) error {
+	labels := s.adapter.labels()
+	duration := time.Since(s.startTime)
+	return &FallbackAllFailedError{
+		Count:    len(s.adapter.llms),
+		Labels:   labels,
+		Duration: duration,
+		Err:      err,
+		APIError: NewAPIConnectionError(fallbackAllFailedMessage(labels, duration)),
 	}
 }
 
