@@ -336,6 +336,71 @@ func TestResembleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestResembleTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: resembleRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"success":true,"audio_content":""}`)),
+		}, nil
+	})}
+	defer func() { http.DefaultClient = oldClient }()
+
+	provider := NewResembleTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls after Close = %d, want 0", httpCalls)
+	}
+}
+
+func TestResembleTTSStreamAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewResembleTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("websocket dials after Close = %d, want 0", dialCalls)
+	}
+}
+
+type resembleRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f resembleRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
 func newResembleClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
