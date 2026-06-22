@@ -977,6 +977,12 @@ func (rio *RoomIO) handleChatTextInput(ctx context.Context, text string, info lk
 	if rio == nil || rio.AgentSession == nil || rio.textInput == nil {
 		return
 	}
+	rio.mu.Lock()
+	closed := rio.closed
+	rio.mu.Unlock()
+	if closed {
+		return
+	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			logger.Logger.Warnw("failed to handle chat text stream", nil, "panic", recovered)

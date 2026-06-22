@@ -3345,6 +3345,25 @@ func TestRoomIOHandleChatTextInputIgnoresUnknownParticipant(t *testing.T) {
 	}
 }
 
+func TestRoomIOHandleChatTextInputIgnoresClosedRoomIO(t *testing.T) {
+	session := &agent.AgentSession{}
+	called := false
+	rio := &RoomIO{
+		AgentSession: session,
+		textInput: func(context.Context, *agent.AgentSession, TextInputEvent) error {
+			called = true
+			return nil
+		},
+		closed: true,
+	}
+
+	rio.handleChatTextInput(context.Background(), "late text", lksdk.TextStreamInfo{}, "caller")
+
+	if called {
+		t.Fatal("text input callback was called after RoomIO closed")
+	}
+}
+
 func TestRoomIOSetParticipantSwitchesTextInputFilter(t *testing.T) {
 	session := &agent.AgentSession{}
 	var calls []string
