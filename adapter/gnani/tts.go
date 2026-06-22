@@ -220,6 +220,8 @@ type ttsChunkedStream struct {
 	resp        *http.Response
 	sampleRate  int
 	numChannels int
+	sentAudio   bool
+	finalSent   bool
 }
 
 func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -227,11 +229,12 @@ func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
-			return nil, io.EOF
+			return s.emitFinal()
 		}
 		return nil, err
 	}
 	data := stripWAVHeader(buf[:n])
+	s.sentAudio = len(data) > 0
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              data,
@@ -242,7 +245,16 @@ func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *ttsChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	if !s.sentAudio || s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
 func (s *ttsChunkedStream) Close() error {
+	s.finalSent = true
 	return s.resp.Body.Close()
 }
 
