@@ -285,15 +285,22 @@ func TestProcPoolRejectsUnsupportedExecutorType(t *testing.T) {
 
 	startPool := NewProcPool(1, ExecutorType("unsupported"), nil)
 	startPool.SetTargetIdleProcesses(1)
+	var readyEvents int
+	startPool.On(ProcPoolEventProcessReady, func(JobExecutor) {
+		readyEvents++
+	})
 	err = startPool.Start(context.Background())
-	if err == nil {
-		t.Fatal("Start error = nil, want unsupported job executor error")
-	}
-	if got, want := err.Error(), "unsupported job executor: unsupported"; got != want {
-		t.Fatalf("Start error = %q, want %q", got, want)
+	if err != nil {
+		t.Fatalf("Start error = %v, want nil like reference async warm failure", err)
 	}
 	if executors := startPool.GetExecutors(); len(executors) != 0 {
 		t.Fatalf("start executors len = %d, want none after unsupported executor type", len(executors))
+	}
+	if readyEvents != 0 {
+		t.Fatalf("ready events = %d, want none after unsupported executor type", readyEvents)
+	}
+	if err := startPool.Start(context.Background()); err != nil {
+		t.Fatalf("second Start error = %v, want nil after reference started flag", err)
 	}
 }
 

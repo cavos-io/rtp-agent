@@ -101,7 +101,8 @@ func (p *ProcPool) Start(ctx context.Context) error {
 
 	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 	if err != nil {
-		return err
+		logger.Logger.Warnw("Failed to warm idle processes", err, "target_idle_processes", p.TargetIdleProcesses())
+		return nil
 	}
 	return p.emitWarmedExecutors(ctx, warmedExecutors)
 }
