@@ -36,6 +36,7 @@ type OpenAITTS struct {
 	instructions   string
 	responseFormat openai.SpeechResponseFormat
 	mu             sync.Mutex
+	closed         bool
 	streams        map[*openaiTTSChunkedStream]struct{}
 }
 
@@ -232,11 +233,19 @@ func (t *OpenAITTS) SampleRate() int  { return 24000 }
 func (t *OpenAITTS) NumChannels() int { return 1 }
 
 func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
+	}
+
 	req := buildOpenAITTSSpeechRequest(t, text)
 
 	resp, err := t.client.CreateSpeech(ctx, req)
 	if err != nil {
 		return nil, mapOpenAIError(err)
+	}
+	if t.isClosed() {
+		_ = resp.Close()
+		return nil, fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
 	}
 
 	stream := &openaiTTSChunkedStream{
@@ -271,6 +280,7 @@ func (t *OpenAITTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*openaiTTSChunkedStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -297,6 +307,12 @@ func (t *OpenAITTS) unregisterStream(stream *openaiTTSChunkedStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
+}
+
+func (t *OpenAITTS) isClosed() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
 }
 
 type openaiTTSChunkedStream struct {
