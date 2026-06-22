@@ -741,6 +741,35 @@ func TestAssemblyAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewAssemblyAISTT("test-key")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected assemblyai stt dial")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	stream, err := provider.Stream(context.Background(), "")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
+	}
+}
+
 func TestAssemblyAISTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})
