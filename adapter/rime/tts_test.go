@@ -425,8 +425,11 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("done message: %v", err)
 	}
-	if finished != nil || !done || transcript != "" {
-		t.Fatalf("finished=%+v done=%v transcript=%q, want done", finished, done, transcript)
+	if finished == nil || !finished.IsFinal || !done || transcript != "" {
+		t.Fatalf("finished=%+v done=%v transcript=%q, want final marker", finished, done, transcript)
+	}
+	if finished.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want boundary-only marker", finished.Frame)
 	}
 
 	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 24000); err == nil {

@@ -583,7 +583,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		}
 		return nil, false, strings.Join(message.WordTimestamps.Words, " ") + " ", nil
 	case "done":
-		return nil, true, "", nil
+		return &tts.SynthesizedAudio{IsFinal: true}, true, "", nil
 	case "error":
 		if message.Message == "" {
 			message.Message = string(payload)
