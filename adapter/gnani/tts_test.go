@@ -248,6 +248,25 @@ func TestGnaniTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestGnaniTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &ttsChunkedStream{
+		resp:        &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
+		sampleRate:  16000,
+		numChannels: 1,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func TestGnaniTTSWebsocketURLHeadersAndPayloadMatchReference(t *testing.T) {
 	provider := NewTTS("test-key", WithBaseURL("https://gnani.example/"), WithLanguage("ta"))
 
