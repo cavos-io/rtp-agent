@@ -1837,8 +1837,41 @@ func TestAzureTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
 		t.Fatalf("data = %v, want final read bytes", audio.Frame.Data)
 	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second Next = %+v, want final marker", final)
+	}
 	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("second Next error = %v, want io.EOF", err)
+		t.Fatalf("third Next error = %v, want io.EOF", err)
+	}
+}
+
+func TestAzureTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &azureTTSChunkedStream{
+		body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want io.EOF", err)
 	}
 }
 
@@ -2830,9 +2863,15 @@ func TestAzureTTSChunkedStreamByteAlignment(t *testing.T) {
 		t.Fatalf("audio2 data = %v, want [0x03, 0x04, 0x05, 0x06]", audio2.Frame.Data)
 	}
 
-	_, err = stream.Next()
-	if err != io.EOF {
-		t.Fatalf("expected EOF, got %v", err)
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("expected EOF after final marker, got %v", err)
 	}
 }
 
