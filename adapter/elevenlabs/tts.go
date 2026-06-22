@@ -266,13 +266,22 @@ func (t *ElevenLabsTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) {
+func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*elevenLabsStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
+	t.mu.Unlock()
+	return true
 }
 
 func (t *ElevenLabsTTS) unregisterStream(stream *elevenLabsStream) {
@@ -548,10 +557,11 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		preferredAlignment:        elevenLabsPreferredAlignment(t.language, t.preferredAlignment),
 	}
 
+	if !t.registerStream(stream) {
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	go stream.pingLoop()
-
-	t.registerStream(stream)
 	return stream, nil
 }
 
