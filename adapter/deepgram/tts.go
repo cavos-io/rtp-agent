@@ -34,6 +34,7 @@ type DeepgramTTS struct {
 	mipOptOut  bool
 	mu         sync.Mutex
 	streams    map[*deepgramTTSStream]struct{}
+	closed     bool
 }
 
 type DeepgramTTSOption func(*DeepgramTTS)
@@ -101,6 +102,7 @@ func (t *DeepgramTTS) UpdateOptions(model string) {
 
 func (t *DeepgramTTS) Close() error {
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*deepgramTTSStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -117,7 +119,19 @@ func (t *DeepgramTTS) Close() error {
 	return closeErr
 }
 
+func (t *DeepgramTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
 func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateDeepgramTTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -166,6 +180,9 @@ func buildDeepgramTTSSynthesizeRequest(t *DeepgramTTS, text string) (string, []b
 }
 
 func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateDeepgramTTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -179,6 +196,10 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 
 	stream := &deepgramTTSStream{
 		provider:   t,
@@ -190,20 +211,27 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 
 	go stream.readLoop()
 
 	return stream, nil
 }
 
-func (t *DeepgramTTS) registerStream(stream *deepgramTTSStream) {
+func (t *DeepgramTTS) registerStream(stream *deepgramTTSStream) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*deepgramTTSStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *DeepgramTTS) unregisterStream(stream *deepgramTTSStream) {

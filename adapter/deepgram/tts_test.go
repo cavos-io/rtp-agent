@@ -128,6 +128,66 @@ func TestDeepgramTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Request:    r,
+		}, nil
+	})}
+	defer func() { http.DefaultClient = oldClient }()
+
+	provider := NewDeepgramTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls after Close = %d, want 0", httpCalls)
+	}
+}
+
+func TestDeepgramTTSStreamAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewDeepgramTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil after Close", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("websocket dials after Close = %d, want 0", dialCalls)
+	}
+}
+
 func TestDeepgramTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "",
 		WithDeepgramTTSMipOptOut(true),
