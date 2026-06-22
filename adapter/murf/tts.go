@@ -17,6 +17,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -395,16 +396,17 @@ func (s *murfTTSChunkedStream) Close() error {
 }
 
 type murfTTSSynthesizeStream struct {
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	provider   *MurfTTS
-	contextID  string
-	sampleRate int
-	events     chan *tts.SynthesizedAudio
-	errCh      chan error
-	mu         sync.Mutex
-	closed     bool
+	conn        *websocket.Conn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	provider    *MurfTTS
+	contextID   string
+	sampleRate  int
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
+	pendingText string
+	mu          sync.Mutex
+	closed      bool
 }
 
 func (s *murfTTSSynthesizeStream) PushText(text string) error {
@@ -416,11 +418,8 @@ func (s *murfTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	message, err := buildMurfTTSTextMessage(s.provider, text, s.contextID)
-	if err != nil {
-		return err
-	}
-	return s.writeMessageLocked(message)
+	s.pendingText += text
+	return s.sendCompleteSentencesLocked()
 }
 
 func (s *murfTTSSynthesizeStream) Flush() error {
@@ -429,7 +428,36 @@ func (s *murfTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendTextLocked(text); err != nil {
+			return err
+		}
+	}
 	message, err := buildMurfTTSEndMessage(s.provider, s.contextID)
+	if err != nil {
+		return err
+	}
+	return s.writeMessageLocked(message)
+}
+
+func (s *murfTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTextLocked(sentence); err != nil {
+			return err
+		}
+		s.pendingText = strings.TrimPrefix(s.pendingText, sentence)
+	}
+}
+
+func (s *murfTTSSynthesizeStream) sendTextLocked(text string) error {
+	message, err := buildMurfTTSTextMessage(s.provider, text, s.contextID)
 	if err != nil {
 		return err
 	}

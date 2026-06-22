@@ -302,6 +302,42 @@ func TestMurfTTSStreamTextAndEndPacketsMatchReference(t *testing.T) {
 	}
 }
 
+func TestMurfTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	conn, messages := newMurfRecordingWebsocketConn(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &murfTTSSynthesizeStream{
+		conn:       conn,
+		ctx:        ctx,
+		cancel:     cancel,
+		provider:   NewMurfTTS("test-key", ""),
+		contextID:  "context-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:      make(chan error, 1),
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	first := readMurfTTSStreamMessage(t, messages)
+	if first["text"] != "This first sentence is definitely long enough. " || first["context_id"] != "context-1" {
+		t.Fatalf("first text packet = %#v, want completed sentence for context", first)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	tail := readMurfTTSStreamMessage(t, messages)
+	if tail["text"] != "Tail " || tail["context_id"] != "context-1" {
+		t.Fatalf("tail text packet = %#v, want flushed tail", tail)
+	}
+	end := readMurfTTSStreamMessage(t, messages)
+	if end["end"] != true || end["context_id"] != "context-1" {
+		t.Fatalf("end packet = %#v, want reference end packet", end)
+	}
+}
+
 func TestMurfTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	conn, closed := newMurfClosingWebsocketConn(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -325,7 +361,7 @@ func TestMurfTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 
 	var writeErr error
 	for range 3 {
-		writeErr = stream.PushText("hello")
+		writeErr = stream.PushText("hello there dear friend. Tail")
 		if writeErr != nil {
 			break
 		}
@@ -516,6 +552,84 @@ type murfTTSRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f murfTTSRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func newMurfRecordingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan map[string]any) {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	messages := make(chan map[string]any, 4)
+	ready := make(chan struct{})
+	var readyOnce sync.Once
+	listener := newMurfSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			readyOnce.Do(func() { close(ready) })
+			serverErr <- err
+			return
+		}
+		readyOnce.Do(func() { close(ready) })
+		defer conn.Close()
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var msg map[string]any
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				serverErr <- err
+				return
+			}
+			messages <- msg
+		}
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://murf.test/v1/speech/stream-input", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket upgrade")
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn, messages
+}
+
+func readMurfTTSStreamMessage(t *testing.T, messages <-chan map[string]any) map[string]any {
+	t.Helper()
+	select {
+	case msg := <-messages:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Murf TTS websocket message")
+	}
+	return nil
 }
 
 type murfSingleConnListener struct {
