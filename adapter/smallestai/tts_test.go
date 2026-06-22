@@ -279,8 +279,14 @@ func TestSmallestAITTSAudioFromWebsocketMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete message: %v", err)
 	}
-	if audio != nil || !done {
-		t.Fatalf("audio=%+v done=%v, want complete marker", audio, done)
+	if audio == nil || !audio.IsFinal || !done {
+		t.Fatalf("audio=%+v done=%v, want final marker", audio, done)
+	}
+	if audio.Frame != nil {
+		t.Fatalf("complete final frame = %+v, want boundary-only marker", audio.Frame)
+	}
+	if audio.SegmentID != "seg-1" {
+		t.Fatalf("complete final segment id = %q, want seg-1", audio.SegmentID)
 	}
 }
 

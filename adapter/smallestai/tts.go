@@ -336,6 +336,9 @@ func (s *smallestaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, err
 		}
 		if done {
 			s.completed = true
+			if audio != nil {
+				return audio, nil
+			}
 			return smallestAITTSFinalAudioDone(s.segmentID), nil
 		}
 		if audio != nil {
@@ -480,7 +483,7 @@ func smallestAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int, segm
 			SegmentID: segmentID,
 		}, false, nil
 	case "complete":
-		return nil, true, nil
+		return smallestAITTSFinalAudioDone(segmentID), true, nil
 	case "error":
 		if message.Message == "" {
 			message.Message = "unknown error"
