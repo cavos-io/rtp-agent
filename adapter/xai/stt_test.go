@@ -823,7 +823,7 @@ func TestXaiSTTBatchResponseMapsSpeechEvent(t *testing.T) {
 }
 
 func TestXaiSTTStreamEventsMapReferenceLifecycle(t *testing.T) {
-	state := &xaiSTTStreamState{interimResults: true, diarization: true}
+	state := &xaiSTTStreamState{interimResults: true, diarization: true, requestID: "xai-request-1"}
 
 	events := processXaiSTTStreamEvent(state, map[string]any{
 		"type":     "transcript.partial",
@@ -832,7 +832,13 @@ func TestXaiSTTStreamEventsMapReferenceLifecycle(t *testing.T) {
 		"is_final": false,
 	})
 	assertXaiEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	if events[0].RequestID != "" {
+		t.Fatalf("start request id = %q, want empty lifecycle request id", events[0].RequestID)
+	}
 	assertXaiEvent(t, events, 1, stt.SpeechEventInterimTranscript, "hel")
+	if events[1].RequestID != "xai-request-1" {
+		t.Fatalf("interim request id = %q, want stream request id", events[1].RequestID)
+	}
 
 	events = processXaiSTTStreamEvent(state, map[string]any{
 		"type":         "transcript.partial",
@@ -845,6 +851,9 @@ func TestXaiSTTStreamEventsMapReferenceLifecycle(t *testing.T) {
 		},
 	})
 	assertXaiEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hello")
+	if events[0].RequestID != "xai-request-1" {
+		t.Fatalf("chunk final request id = %q, want stream request id", events[0].RequestID)
+	}
 	if state.emittedChunkFinal != true {
 		t.Fatal("emitted chunk final = false, want true after non-speech-final final")
 	}
@@ -861,11 +870,36 @@ func TestXaiSTTStreamEventsMapReferenceLifecycle(t *testing.T) {
 		},
 	})
 	assertXaiEvent(t, events, 0, stt.SpeechEventEndOfSpeech, "")
+	if events[0].RequestID != "" {
+		t.Fatalf("end request id = %q, want empty lifecycle request id", events[0].RequestID)
+	}
 	if state.speaking {
 		t.Fatal("speaking = true, want false after speech-final event")
 	}
 	if state.emittedChunkFinal {
 		t.Fatal("emitted chunk final = true, want reset after speech-final event")
+	}
+}
+
+func TestXaiSTTDoneTranscriptUsesReferenceRequestID(t *testing.T) {
+	state := &xaiSTTStreamState{diarization: true, speaking: true, requestID: "xai-request-2"}
+
+	events := processXaiSTTStreamEvent(state, map[string]any{
+		"type":     "transcript.done",
+		"text":     "done",
+		"language": "en",
+		"words": []any{
+			map[string]any{"text": "done", "start": 0.1, "end": 0.4, "speaker": float64(1)},
+		},
+	})
+
+	assertXaiEvent(t, events, 0, stt.SpeechEventFinalTranscript, "done")
+	if events[0].RequestID != "xai-request-2" {
+		t.Fatalf("done request id = %q, want stream request id", events[0].RequestID)
+	}
+	assertXaiEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
+	if events[1].RequestID != "" {
+		t.Fatalf("done end request id = %q, want empty lifecycle request id", events[1].RequestID)
 	}
 }
 

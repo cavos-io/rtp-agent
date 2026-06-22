@@ -20,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -214,6 +215,7 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 		state: &xaiSTTStreamState{
 			interimResults: s.enableInterimResults,
 			diarization:    s.enableDiarization,
+			requestID:      uuid.NewString(),
 		},
 	}
 	if !s.registerStream(stream) {
@@ -708,6 +710,7 @@ type xaiSTTStreamState struct {
 	diarization       bool
 	speaking          bool
 	emittedChunkFinal bool
+	requestID         string
 }
 
 type xaiSTTResponse struct {
@@ -755,7 +758,8 @@ func processXaiSTTPartial(state *xaiSTTStreamState, payload map[string]any) []*s
 	if !isFinal {
 		if state.interimResults {
 			events = append(events, &stt.SpeechEvent{
-				Type: stt.SpeechEventInterimTranscript,
+				Type:      stt.SpeechEventInterimTranscript,
+				RequestID: state.requestID,
 				Alternatives: []stt.SpeechData{{
 					Language: language,
 					Text:     text,
@@ -769,6 +773,7 @@ func processXaiSTTPartial(state *xaiSTTStreamState, payload map[string]any) []*s
 		state.emittedChunkFinal = true
 		events = append(events, &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
+			RequestID:    state.requestID,
 			Alternatives: []stt.SpeechData{xaiSTTSpeechData(words, text, language, state.diarization)},
 		})
 		return events
@@ -777,6 +782,7 @@ func processXaiSTTPartial(state *xaiSTTStreamState, payload map[string]any) []*s
 	if !state.emittedChunkFinal {
 		events = append(events, &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
+			RequestID:    state.requestID,
 			Alternatives: []stt.SpeechData{xaiSTTSpeechData(words, text, language, state.diarization)},
 		})
 	}
@@ -794,6 +800,7 @@ func processXaiSTTDone(state *xaiSTTStreamState, payload map[string]any) []*stt.
 	if text != "" {
 		events = append(events, &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
+			RequestID:    state.requestID,
 			Alternatives: []stt.SpeechData{xaiSTTSpeechData(words, text, language, state.diarization)},
 		})
 	}
