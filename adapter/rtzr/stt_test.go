@@ -1,6 +1,7 @@
 package rtzr
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -274,9 +275,8 @@ func TestRtzrSTTStreamLanguageArgumentDoesNotMutateReferenceLanguage(t *testing.
 func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 	queryCh := make(chan url.Values, 1)
 	authCh := make(chan string, 1)
-	audioCh := make(chan []byte, 1)
-	flushCh := make(chan string, 1)
-	closeCh := make(chan string, 1)
+	audioCh := make(chan []byte, 3)
+	textCh := make(chan string, 3)
 	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		queryCh <- r.URL.Query()
 		authCh <- r.Header.Get("Authorization")
@@ -286,38 +286,18 @@ func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 			return
 		}
 
-		msgType, audioPayload, err := conn.ReadMessage()
-		if err != nil {
-			t.Errorf("read audio: %v", err)
-			return
+		for {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			switch msgType {
+			case websocket.BinaryMessage:
+				audioCh <- append([]byte(nil), payload...)
+			case websocket.TextMessage:
+				textCh <- string(payload)
+			}
 		}
-		if msgType != websocket.BinaryMessage {
-			t.Errorf("audio message type = %d, want binary", msgType)
-			return
-		}
-		audioCh <- audioPayload
-
-		msgType, flushPayload, err := conn.ReadMessage()
-		if err != nil {
-			t.Errorf("read flush: %v", err)
-			return
-		}
-		if msgType != websocket.TextMessage {
-			t.Errorf("flush message type = %d, want text", msgType)
-			return
-		}
-		flushCh <- string(flushPayload)
-
-		msgType, closePayload, err := conn.ReadMessage()
-		if err != nil {
-			t.Errorf("read close: %v", err)
-			return
-		}
-		if msgType != websocket.TextMessage {
-			t.Errorf("close message type = %d, want text", msgType)
-			return
-		}
-		closeCh <- string(closePayload)
 	})
 
 	provider := NewRtzrSTT("client-id",
@@ -353,22 +333,39 @@ func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 		t.Fatalf("second event = %#v, want interim hello", event)
 	}
 
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err != nil {
-		t.Fatalf("PushFrame returned error: %v", err)
+	firstPartial := []byte{0x01, 0x02}
+	if err := stream.PushFrame(&model.AudioFrame{Data: firstPartial}); err != nil {
+		t.Fatalf("PushFrame(partial) returned error: %v", err)
 	}
-	if got := receiveRtzrBytes(t, audioCh); string(got) != "\x01\x02" {
-		t.Fatalf("audio = %v, want pcm bytes", got)
+	assertNoRtzrBytes(t, audioCh)
+
+	remainder := bytes.Repeat([]byte{0x03}, 1598)
+	if err := stream.PushFrame(&model.AudioFrame{Data: remainder}); err != nil {
+		t.Fatalf("PushFrame(remainder) returned error: %v", err)
 	}
+	wantChunk := append(append([]byte(nil), firstPartial...), remainder...)
+	if got := receiveRtzrBytes(t, audioCh); !bytes.Equal(got, wantChunk) {
+		t.Fatalf("audio chunk length=%d first=%v last=%v, want buffered 100ms chunk length=%d", len(got), got[:2], got[len(got)-2:], len(wantChunk))
+	}
+
+	tail := []byte{0x04, 0x05}
+	if err := stream.PushFrame(&model.AudioFrame{Data: tail}); err != nil {
+		t.Fatalf("PushFrame(tail) returned error: %v", err)
+	}
+	assertNoRtzrBytes(t, audioCh)
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush returned error: %v", err)
 	}
-	if got := receiveRtzrString(t, flushCh, "flush"); got != "EOS" {
+	if got := receiveRtzrBytes(t, audioCh); !bytes.Equal(got, tail) {
+		t.Fatalf("flush audio = %v, want pending tail bytes", got)
+	}
+	if got := receiveRtzrString(t, textCh, "flush"); got != "EOS" {
 		t.Fatalf("flush = %q, want EOS", got)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
-	if got := receiveRtzrString(t, closeCh, "close"); got != "EOS" {
+	if got := receiveRtzrString(t, textCh, "close"); got != "EOS" {
 		t.Fatalf("close = %q, want EOS", got)
 	}
 }
@@ -458,6 +455,15 @@ func receiveRtzrBytes(t *testing.T, ch <-chan []byte) []byte {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for audio payload")
 		return nil
+	}
+}
+
+func assertNoRtzrBytes(t *testing.T, ch <-chan []byte) {
+	t.Helper()
+	select {
+	case payload := <-ch:
+		t.Fatalf("unexpected audio payload length=%d, want buffered partial chunk", len(payload))
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
