@@ -215,7 +215,8 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, err
 	}
 	if len(data) == 0 {
-		return nil, io.EOF
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
 	frame, err := decodeSpeechifyWAVPCM16(data)
 	if err != nil {

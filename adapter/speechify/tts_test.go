@@ -259,6 +259,25 @@ func TestSpeechifyTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestSpeechifyTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &speechifyTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(strings.NewReader(""))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("first audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
 func assertSpeechifyPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
