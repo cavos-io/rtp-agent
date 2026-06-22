@@ -194,7 +194,6 @@ func (f *FallbackAdapter) Provider() string {
 }
 
 func (f *FallbackAdapter) Prewarm() {
-	Prewarm(f.stts[0])
 }
 
 func (f *FallbackAdapter) Capabilities() STTCapabilities {

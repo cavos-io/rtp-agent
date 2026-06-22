@@ -931,18 +931,19 @@ func TestStreamAdapterForwardsPrewarm(t *testing.T) {
 	}
 }
 
-func TestFallbackAdapterPrewarmsPrimaryProvider(t *testing.T) {
+func TestFallbackAdapterPrewarmMatchesReferenceNoop(t *testing.T) {
 	primary := &fakeMetadataSTT{capabilities: STTCapabilities{Streaming: true}}
 	fallback := &fakeMetadataSTT{capabilities: STTCapabilities{Streaming: true}}
 	adapter := NewFallbackAdapter([]STT{primary, fallback})
 
 	Prewarm(adapter)
+	Prewarm(adapter)
 
-	if !primary.prewarmed {
-		t.Fatal("FallbackAdapter Prewarm did not call primary STT Prewarm")
+	if primary.prewarmed {
+		t.Fatal("FallbackAdapter Prewarm called primary STT, want reference no-op")
 	}
 	if fallback.prewarmed {
-		t.Fatal("FallbackAdapter Prewarm called fallback STT, want primary only")
+		t.Fatal("FallbackAdapter Prewarm called fallback STT, want reference no-op")
 	}
 }
 
