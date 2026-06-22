@@ -382,6 +382,10 @@ func (f *FallbackAdapter) tryRecoverChunked(index int, text string) {
 				}
 				return
 			}
+			if isClientClosedStatus(err) {
+				f.markAvailable(index)
+				return
+			}
 			f.mu.Lock()
 			f.status[index].recovering = false
 			f.mu.Unlock()
@@ -466,6 +470,10 @@ func (f *FallbackAdapter) tryRecoverStream(index int, inputs []fallbackSynthesiz
 					f.status[index].recovering = false
 					f.mu.Unlock()
 				}
+				return
+			}
+			if isClientClosedStatus(err) {
+				f.markAvailable(index)
 				return
 			}
 			f.mu.Lock()

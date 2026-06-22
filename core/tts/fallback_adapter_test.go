@@ -2523,6 +2523,37 @@ func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayProducesNoAudi
 	}
 }
 
+func TestFallbackChunkedRecoveryMarksClientClosedProviderAvailable(t *testing.T) {
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		chunked:     &metadataChunkedStream{err: llm.NewAPIStatusError("client closed", 499, "req_499", nil)},
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+	changes := make(chan AvailabilityChangedEvent, 1)
+	adapter.OnAvailabilityChanged(func(ev AvailabilityChangedEvent) {
+		changes <- ev
+	})
+
+	adapter.tryRecoverChunked(0, "hello")
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if !adapter.status[0].available {
+		t.Fatal("provider available = false after client-closed recovery probe, want true")
+	}
+	available := receiveTTSAvailabilityChange(t, changes)
+	if available.TTS != primary || !available.Available {
+		t.Fatalf("availability event = %#v, want primary available", available)
+	}
+}
+
 func TestFallbackChunkedRecoveryKeepsProviderUnavailableWhenReplayAudioInvalid(t *testing.T) {
 	primary := &metadataTTS{
 		label:       "primary",
@@ -3391,6 +3422,38 @@ func TestFallbackSynthesizeRecoveryKeepsProviderUnavailableWhenReplayProducesNoA
 
 	if adapter.status[0].available {
 		t.Fatal("provider available = true after no-audio recovery probe, want false")
+	}
+}
+
+func TestFallbackSynthesizeRecoveryMarksClientClosedProviderAvailable(t *testing.T) {
+	primary := &metadataTTS{
+		label:        "primary",
+		sampleRate:   24000,
+		numChannels:  1,
+		capabilities: TTSCapabilities{Streaming: true},
+		stream:       &metadataSynthesizeStream{err: llm.NewAPIStatusError("client closed", 499, "req_499", nil)},
+	}
+	adapter := NewFallbackAdapter([]TTS{primary})
+	adapter.status[0].available = false
+	changes := make(chan AvailabilityChangedEvent, 1)
+	adapter.OnAvailabilityChanged(func(ev AvailabilityChangedEvent) {
+		changes <- ev
+	})
+
+	adapter.tryRecoverStream(0, []fallbackSynthesizeInput{{text: "hello"}})
+
+	waitForFallbackCondition(t, func() bool {
+		adapter.mu.Lock()
+		defer adapter.mu.Unlock()
+		return !adapter.status[0].recovering
+	})
+
+	if !adapter.status[0].available {
+		t.Fatal("provider available = false after client-closed recovery probe, want true")
+	}
+	available := receiveTTSAvailabilityChange(t, changes)
+	if available.TTS != primary || !available.Available {
+		t.Fatalf("availability event = %#v, want primary available", available)
 	}
 }
 
