@@ -872,6 +872,9 @@ func TestMultiSpeakerAdapterMetadataMatchesReferenceDefaults(t *testing.T) {
 	if got := Provider(wrapped); got != "diarized-provider" {
 		t.Fatalf("wrapped Provider = %q, want diarized-provider", got)
 	}
+	if got := adapter.Label(); got != "stt.MultiSpeakerAdapter" {
+		t.Fatalf("MultiSpeakerAdapter Label = %q, want adapter label", got)
+	}
 	if got := Model(adapter); got != "unknown" {
 		t.Fatalf("MultiSpeakerAdapter Model = %q, want reference default unknown", got)
 	}

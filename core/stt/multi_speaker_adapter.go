@@ -79,7 +79,7 @@ func NewMultiSpeakerAdapter(stt STT, detectPrimary bool, suppressBackground bool
 }
 
 func (a *MultiSpeakerAdapter) Label() string {
-	return "MultiSpeakerAdapter(" + a.stt.Label() + ")"
+	return "stt.MultiSpeakerAdapter"
 }
 
 func (a *MultiSpeakerAdapter) Capabilities() STTCapabilities {
