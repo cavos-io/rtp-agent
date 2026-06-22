@@ -255,6 +255,33 @@ func TestTelnyxSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
+	provider := NewTelnyxSTT("test-key")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	closeCalls := 0
+	stream := &telnyxSTTStream{
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if provider.registerStream(stream) {
+		t.Fatal("registerStream after provider Close = true, want false")
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after rejected registration error = %v, want closed error", err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
+	}
+}
+
 func TestTelnyxSTTStreamAfterCloseIsRejected(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	dialCalls := 0

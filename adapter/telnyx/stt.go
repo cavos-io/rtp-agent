@@ -156,7 +156,9 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		},
 	}
 	stream.writeBinary = stream.writeBinaryMessage
-	s.registerStream(stream)
+	if !s.registerStream(stream) {
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
@@ -188,17 +190,23 @@ func (s *TelnyxSTT) isClosed() bool {
 	return s.closed
 }
 
-func (s *TelnyxSTT) registerStream(stream *telnyxSTTStream) {
-	if stream == nil {
-		return
+func (s *TelnyxSTT) registerStream(stream *telnyxSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if s.streams == nil {
 		s.streams = make(map[*telnyxSTTStream]struct{})
 	}
 	stream.provider = s
 	s.streams[stream] = struct{}{}
+	s.mu.Unlock()
+	return true
 }
 
 func (s *TelnyxSTT) unregisterStream(stream *telnyxSTTStream) {
