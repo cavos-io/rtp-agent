@@ -340,6 +340,8 @@ type openaiTTSChunkedStream struct {
 	wavSampleRate  uint32
 	wavChannels    uint32
 	closed         bool
+	audioSawAudio  bool
+	audioFinalSent bool
 	sseDone        bool
 	sseSawAudio    bool
 	sseFinalSent   bool
@@ -395,6 +397,10 @@ func (s *openaiTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
 			return nil, readErr
 		}
 		if openAITTSMP3DecodeEOF(err) {
+			if s.audioSawAudio && !s.audioFinalSent {
+				s.audioFinalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
@@ -410,6 +416,7 @@ func (s *openaiTTSChunkedStream) feedMP3Audio() {
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
+			s.audioSawAudio = true
 			s.decoder.Push(chunk)
 		}
 		if err != nil {
