@@ -152,9 +152,13 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 	if err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	vadProvider := s.vad
+	if vadProvider == nil {
+		vadProvider = vad.NewSimpleVADWith(vad.WithSampleRate(defaultMistralAISTTSampleRate))
+	}
 	var vadStream vad.VADStream
-	if s.vad != nil {
-		vadStream, err = s.vad.Stream(ctx)
+	if vadProvider != nil {
+		vadStream, err = vadProvider.Stream(ctx)
 		if err != nil {
 			_ = conn.Close()
 			return nil, err
