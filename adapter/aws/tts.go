@@ -219,10 +219,12 @@ func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type awsTTSChunkedStream struct {
-	stream   io.ReadCloser
-	decoder  codecs.AudioStreamDecoder
-	started  bool
-	provider *AWSTTS
+	stream    io.ReadCloser
+	decoder   codecs.AudioStreamDecoder
+	started   bool
+	hasAudio  bool
+	finalSent bool
+	provider  *AWSTTS
 }
 
 func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -239,6 +241,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if len(data) == 0 {
 			return nil, io.EOF
 		}
+		s.hasAudio = true
 		go func() {
 			s.decoder.Push(data)
 			s.decoder.EndInput()
@@ -248,6 +251,10 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	frame, err := s.decoder.Next()
 	if err != nil {
 		if strings.Contains(err.Error(), "decoder closed") {
+			if s.hasAudio && !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		return nil, err
