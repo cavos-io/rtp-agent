@@ -85,6 +85,9 @@ type clovaTTSChunkedStream struct {
 }
 
 func (s *clovaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.final {
+		return nil, io.EOF
+	}
 	if !s.started {
 		s.started = true
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
@@ -93,7 +96,8 @@ func (s *clovaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		if len(data) == 0 {
-			return nil, io.EOF
+			s.final = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		go func() {
 			s.decoder.Push(data)
