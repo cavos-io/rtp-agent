@@ -371,6 +371,52 @@ func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("audio = %#v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func TestDeepgramTTSStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "")
 
