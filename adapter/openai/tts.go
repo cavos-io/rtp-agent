@@ -342,6 +342,7 @@ type openaiTTSChunkedStream struct {
 	closed         bool
 	sseDone        bool
 	sseSawAudio    bool
+	sseFinalSent   bool
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -424,11 +425,11 @@ func (s *openaiTTSChunkedStream) feedMP3Audio() {
 }
 
 func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
-	if s.sseDone {
-		return nil, io.EOF
-	}
 	if s.responseFormat == openai.SpeechResponseFormatMp3 {
 		return s.nextSSEMP3Audio()
+	}
+	if s.sseDone {
+		return nil, io.EOF
 	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp)
@@ -474,6 +475,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			s.emitSSEUsageMetrics(event)
 			s.sseDone = true
 			if s.sseSawAudio {
+				s.sseFinalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
 			return nil, io.EOF
@@ -498,6 +500,10 @@ func (s *openaiTTSChunkedStream) nextSSEMP3Audio() (*tts.SynthesizedAudio, error
 			return nil, readErr
 		}
 		if openAITTSMP3DecodeEOF(err) {
+			if s.sseDone && s.sseSawAudio && !s.sseFinalSent {
+				s.sseFinalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
@@ -645,6 +651,7 @@ func (s *openaiTTSChunkedStream) feedSSEMP3Audio() {
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
 		if data == "[DONE]" {
+			s.sseDone = true
 			break
 		}
 		var event map[string]any
@@ -666,15 +673,19 @@ func (s *openaiTTSChunkedStream) feedSSEMP3Audio() {
 				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
 				return
 			}
+			s.sseSawAudio = true
 			s.decoder.Push(audioData)
 		case "speech.audio.done":
 			s.emitSSEUsageMetrics(event)
+			s.sseDone = true
 			return
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
 		s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
+		return
 	}
+	s.sseDone = true
 }
 
 func (s *openaiTTSChunkedStream) sendDecodeReadError(err error) {
