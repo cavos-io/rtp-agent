@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestTelnyxSTTDefaultsMatchReference(t *testing.T) {
@@ -250,6 +252,64 @@ func TestTelnyxSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err == nil || !strings.Contains(err.Error(), "closed") {
 		t.Fatalf("PushFrame after provider Close error = %v, want closed error", err)
+	}
+}
+
+func TestTelnyxSTTStreamAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTBaseURL("wss://telnyx.test/v2/stt"))
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("Stream after Close dial calls = %d, want 0", dialCalls)
+	}
+}
+
+func TestTelnyxSTTRecognizeAfterCloseIsRejected(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected websocket dial")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTBaseURL("wss://telnyx.test/v2/stt"))
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	event, err := provider.Recognize(context.Background(), nil, "en")
+	if event != nil {
+		t.Fatalf("Recognize after Close event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Recognize after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("Recognize after Close dial calls = %d, want 0", dialCalls)
 	}
 }
 

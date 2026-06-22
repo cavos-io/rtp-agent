@@ -37,6 +37,7 @@ type TelnyxSTT struct {
 	interimResults      bool
 	sampleRate          int
 	streams             map[*telnyxSTTStream]struct{}
+	closed              bool
 }
 
 type TelnyxSTTOption func(*TelnyxSTT)
@@ -120,6 +121,9 @@ func (s *TelnyxSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateTelnyxAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
@@ -127,9 +131,17 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial telnyx stt websocket: %w", err)
 	}
+	if s.isClosed() {
+		_ = conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, createTelnyxStreamingWAVHeader(s.sampleRate, telnyxSTTNumChannels)); err != nil {
 		_ = conn.Close()
 		return nil, err
+	}
+	if s.isClosed() {
+		_ = conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &telnyxSTTStream{
@@ -151,6 +163,7 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 
 func (s *TelnyxSTT) Close() error {
 	s.mu.Lock()
+	s.closed = true
 	streams := make([]*telnyxSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -164,6 +177,15 @@ func (s *TelnyxSTT) Close() error {
 		}
 	}
 	return firstErr
+}
+
+func (s *TelnyxSTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *TelnyxSTT) registerStream(stream *telnyxSTTStream) {
