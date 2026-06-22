@@ -196,10 +196,16 @@ type speechifyTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	emitted    bool
+	hasAudio   bool
+	finalSent  bool
 }
 
 func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.emitted {
+		if s.hasAudio && !s.finalSent {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
 		return nil, io.EOF
 	}
 	s.emitted = true
@@ -215,6 +221,7 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.hasAudio = true
 
 	return &tts.SynthesizedAudio{
 		Frame: frame,
