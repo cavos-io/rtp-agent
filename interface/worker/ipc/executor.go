@@ -103,7 +103,7 @@ func (e *ThreadJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJo
 	e.mu.Lock()
 	if e.started {
 		e.mu.Unlock()
-		return fmt.Errorf("executor already started")
+		return fmt.Errorf("executor already has a running job")
 	}
 	e.job = info.Job
 	e.runningJob = &info
