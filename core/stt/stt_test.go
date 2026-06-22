@@ -920,29 +920,31 @@ func TestMultiSpeakerAdapterMetadataMatchesReferenceDefaults(t *testing.T) {
 	}
 }
 
-func TestStreamAdapterForwardsPrewarm(t *testing.T) {
+func TestStreamAdapterPrewarmMatchesReferenceNoop(t *testing.T) {
 	wrapped := &fakeMetadataSTT{}
 	adapter := NewStreamAdapter(wrapped, &fakeStreamAdapterVAD{})
 
 	Prewarm(adapter)
+	Prewarm(adapter)
 
-	if !wrapped.prewarmed {
-		t.Fatal("StreamAdapter Prewarm did not call wrapped STT Prewarm")
+	if wrapped.prewarmed {
+		t.Fatal("StreamAdapter Prewarm called wrapped STT, want reference no-op")
 	}
 }
 
-func TestFallbackAdapterPrewarmsPrimaryProvider(t *testing.T) {
+func TestFallbackAdapterPrewarmMatchesReferenceNoop(t *testing.T) {
 	primary := &fakeMetadataSTT{capabilities: STTCapabilities{Streaming: true}}
 	fallback := &fakeMetadataSTT{capabilities: STTCapabilities{Streaming: true}}
 	adapter := NewFallbackAdapter([]STT{primary, fallback})
 
 	Prewarm(adapter)
+	Prewarm(adapter)
 
-	if !primary.prewarmed {
-		t.Fatal("FallbackAdapter Prewarm did not call primary STT Prewarm")
+	if primary.prewarmed {
+		t.Fatal("FallbackAdapter Prewarm called primary STT, want reference no-op")
 	}
 	if fallback.prewarmed {
-		t.Fatal("FallbackAdapter Prewarm called fallback STT, want primary only")
+		t.Fatal("FallbackAdapter Prewarm called fallback STT, want reference no-op")
 	}
 }
 

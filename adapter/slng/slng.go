@@ -499,6 +499,7 @@ type TTS struct {
 	encoding       string
 	modelOptions   map[string]any
 	streams        map[*ttsStream]struct{}
+	closed         bool
 }
 
 type TTSOption func(*TTS)
@@ -633,6 +634,9 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 func (t *TTS) stream(ctx context.Context, appendTextSpace bool) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := t.requireAPIKey(); err != nil {
 		return nil, err
 	}
@@ -645,12 +649,19 @@ func (t *TTS) stream(ctx context.Context, appendTextSpace bool) (tts.SynthesizeS
 		return nil, err
 	}
 	stream := &ttsStream{provider: t, conn: conn, sampleRate: t.sampleRate, model: t.model, appendTextSpace: appendTextSpace}
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		return nil, io.ErrClosedPipe
+	}
 	return stream, nil
 }
 
 func (t *TTS) Close() error {
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*ttsStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -666,17 +677,32 @@ func (t *TTS) Close() error {
 	return firstErr
 }
 
-func (t *TTS) registerStream(stream *ttsStream) {
-	if stream == nil {
-		return
+func (t *TTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *TTS) registerStream(stream *ttsStream) bool {
+	if stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*ttsStream]struct{})
 	}
 	stream.provider = t
 	t.streams[stream] = struct{}{}
+	t.mu.Unlock()
+	return true
 }
 
 func (t *TTS) unregisterStream(stream *ttsStream) {

@@ -517,6 +517,42 @@ func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEPCMEmitsFinalMarkerAfterDone(t *testing.T) {
+	wantAudio := []byte{0x01, 0x00, 0x02, 0x00}
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
+		`data: {"type":"speech.audio.done"}` + "\n\n"
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(strings.NewReader(sse)),
+		responseFormat: goopenai.SpeechResponseFormatPcm,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("audio Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, wantAudio) {
+		t.Fatalf("audio = %#v, want PCM frame", audio)
+	}
+	if audio.IsFinal {
+		t.Fatal("audio IsFinal = true, want final marker only after done")
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final = %#v, want reference final marker", final)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final = %v, want io.EOF", err)
+	}
+}
+
 func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
@@ -734,6 +770,45 @@ func TestOpenAITTSAudioMP3StreamsBeforeResponseEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSAudioMP3DrainsAndFinalizesAfterEOF(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(bytes.NewReader(mp3Data)),
+		responseFormat: goopenai.SpeechResponseFormatMp3,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+	defer stream.Close()
+
+	frames := 0
+	for i := 0; i < 5000; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned %v before final marker after %d frames", err, frames)
+		}
+		if audio == nil {
+			t.Fatalf("Next returned nil audio after %d frames", frames)
+		}
+		if audio.IsFinal {
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded MP3 frames")
+			}
+			_, err = stream.Next()
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("Next after final = %v, want io.EOF", err)
+			}
+			return
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("audio = %#v, want decoded MP3 frame or final marker", audio)
+		}
+		frames++
+	}
+	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
+}
+
 func TestOpenAITTSSSEMP3StreamsBeforeDoneEvent(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -770,6 +845,47 @@ func TestOpenAITTSSSEMP3StreamsBeforeDoneEvent(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("timed out waiting for decoded SSE MP3 audio before done event")
 	}
+}
+
+func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterDone(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(mp3Data) + `"}` + "\n\n" +
+		`data: {"type":"speech.audio.done"}` + "\n\n"
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(strings.NewReader(sse)),
+		responseFormat: goopenai.SpeechResponseFormatMp3,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	frames := 0
+	for i := 0; i < 5000; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned %v before final marker after %d frames", err, frames)
+		}
+		if audio == nil {
+			t.Fatalf("Next returned nil audio after %d frames", frames)
+		}
+		if audio.IsFinal {
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded MP3 frames")
+			}
+			_, err = stream.Next()
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("Next after final = %v, want io.EOF", err)
+			}
+			return
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("audio = %#v, want decoded MP3 frame or final marker", audio)
+		}
+		frames++
+	}
+	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
 }
 
 func TestOpenAITTSChunkedStreamReturnsDataBeforeEOF(t *testing.T) {

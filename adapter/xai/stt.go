@@ -20,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -30,6 +31,8 @@ const (
 	defaultXaiSTTLanguage     = "en"
 	defaultXaiSTTEndpointing  = 100
 	xaiAPIKeyEnv              = "XAI_API_KEY"
+	xaiSTTPCMBytesPerSample   = 2
+	xaiSTTUsageReportInterval = 5 * time.Second
 )
 
 type XaiSTT struct {
@@ -214,6 +217,7 @@ func (s *XaiSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 		state: &xaiSTTStreamState{
 			interimResults: s.enableInterimResults,
 			diarization:    s.enableDiarization,
+			requestID:      uuid.NewString(),
 		},
 	}
 	if !s.registerStream(stream) {
@@ -418,7 +422,10 @@ type xaiSTTStream struct {
 	closed             bool
 	reconnectRequested bool
 	serverReady        bool
+	eventsClosed       bool
 	pendingAudio       [][]byte
+	usageAudioDuration float64
+	usageLastFlush     time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -426,7 +433,12 @@ type xaiSTTStream struct {
 }
 
 func (s *xaiSTTStream) readLoop() {
-	defer close(s.events)
+	defer func() {
+		s.mu.Lock()
+		s.eventsClosed = true
+		s.mu.Unlock()
+		close(s.events)
+	}()
 	defer s.owner.unregisterStream(s)
 	for {
 		conn := s.currentConn()
@@ -524,6 +536,7 @@ func (s *xaiSTTStream) Flush() error {
 			return err
 		}
 	}
+	s.emitRecognitionUsageLocked()
 	return nil
 }
 
@@ -544,17 +557,25 @@ func newXaiSTTAudioByteStream(s *xaiSTTStream, frame *model.AudioFrame) *audio.A
 
 func (s *xaiSTTStream) writeBinaryDataLocked(data []byte) error {
 	if s.writeBinary != nil {
-		return s.writeBinary(data)
+		if err := s.writeBinary(data); err != nil {
+			return err
+		}
+		s.recordUsageAudioLocked(len(data))
+		return nil
 	}
 	if s.conn == nil {
 		return io.ErrClosedPipe
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, data)
+	if err := s.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+		return err
+	}
+	s.recordUsageAudioLocked(len(data))
+	return nil
 }
 
 func (s *xaiSTTStream) writeOrBufferBinaryDataLocked(data []byte) error {
 	if s.writeBinary != nil {
-		return s.writeBinary(data)
+		return s.writeBinaryDataLocked(data)
 	}
 	if !s.serverReady {
 		s.pendingAudio = append(s.pendingAudio, append([]byte(nil), data...))
@@ -613,6 +634,9 @@ func (s *xaiSTTStream) Close() error {
 		return flushErr
 	}
 	if flushErr == nil {
+		s.mu.Lock()
+		s.emitRecognitionUsageLocked()
+		s.mu.Unlock()
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"audio.done"}`))
 	}
 	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
@@ -695,6 +719,49 @@ func (s *xaiSTTStream) reconnect() error {
 	return nil
 }
 
+func (s *xaiSTTStream) recordUsageAudioLocked(byteCount int) {
+	duration := xaiSTTAudioDuration(byteCount, s.sampleRate)
+	if duration <= 0 {
+		return
+	}
+	s.usageAudioDuration += duration
+	now := time.Now()
+	if s.usageLastFlush.IsZero() {
+		s.usageLastFlush = now
+		return
+	}
+	if now.Sub(s.usageLastFlush) >= xaiSTTUsageReportInterval {
+		s.emitRecognitionUsageAtLocked(now)
+	}
+}
+
+func (s *xaiSTTStream) emitRecognitionUsageLocked() {
+	s.emitRecognitionUsageAtLocked(time.Now())
+}
+
+func (s *xaiSTTStream) emitRecognitionUsageAtLocked(flushTime time.Time) {
+	s.usageLastFlush = flushTime
+	if s.usageAudioDuration <= 0 || s.events == nil || s.eventsClosed {
+		return
+	}
+	duration := s.usageAudioDuration
+	s.usageAudioDuration = 0
+	s.events <- &stt.SpeechEvent{
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: s.state.requestID,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: duration,
+		},
+	}
+}
+
+func xaiSTTAudioDuration(byteCount int, sampleRate int) float64 {
+	if byteCount <= 0 || sampleRate <= 0 {
+		return 0
+	}
+	return float64(byteCount) / float64(sampleRate*xaiSTTPCMBytesPerSample)
+}
+
 func xaiSTTUnexpectedCloseError(err error) error {
 	message := "xAI connection closed unexpectedly"
 	if err != nil && err != io.EOF {
@@ -708,6 +775,7 @@ type xaiSTTStreamState struct {
 	diarization       bool
 	speaking          bool
 	emittedChunkFinal bool
+	requestID         string
 }
 
 type xaiSTTResponse struct {
@@ -755,7 +823,8 @@ func processXaiSTTPartial(state *xaiSTTStreamState, payload map[string]any) []*s
 	if !isFinal {
 		if state.interimResults {
 			events = append(events, &stt.SpeechEvent{
-				Type: stt.SpeechEventInterimTranscript,
+				Type:      stt.SpeechEventInterimTranscript,
+				RequestID: state.requestID,
 				Alternatives: []stt.SpeechData{{
 					Language: language,
 					Text:     text,
@@ -769,6 +838,7 @@ func processXaiSTTPartial(state *xaiSTTStreamState, payload map[string]any) []*s
 		state.emittedChunkFinal = true
 		events = append(events, &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
+			RequestID:    state.requestID,
 			Alternatives: []stt.SpeechData{xaiSTTSpeechData(words, text, language, state.diarization)},
 		})
 		return events
@@ -777,6 +847,7 @@ func processXaiSTTPartial(state *xaiSTTStreamState, payload map[string]any) []*s
 	if !state.emittedChunkFinal {
 		events = append(events, &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
+			RequestID:    state.requestID,
 			Alternatives: []stt.SpeechData{xaiSTTSpeechData(words, text, language, state.diarization)},
 		})
 	}
@@ -794,6 +865,7 @@ func processXaiSTTDone(state *xaiSTTStreamState, payload map[string]any) []*stt.
 	if text != "" {
 		events = append(events, &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
+			RequestID:    state.requestID,
 			Alternatives: []stt.SpeechData{xaiSTTSpeechData(words, text, language, state.diarization)},
 		})
 	}

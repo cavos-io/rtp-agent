@@ -31,8 +31,17 @@ func TestGoogleRecognitionConfigRequestsWordDetails(t *testing.T) {
 	if !config.EnableWordTimeOffsets {
 		t.Fatal("expected word time offsets to be enabled")
 	}
+	if config.EnableWordConfidence {
+		t.Fatal("word confidence enabled = true, want false by default")
+	}
+}
+
+func TestGoogleRecognitionConfigEnablesWordConfidenceWhenConfigured(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTWordConfidence(true))
+	config := googleRecognitionConfig(provider, "en-US")
+
 	if !config.EnableWordConfidence {
-		t.Fatal("expected word confidence to be enabled")
+		t.Fatal("word confidence enabled = false, want true when configured")
 	}
 }
 
@@ -112,10 +121,27 @@ func TestGoogleSpeechDataFromAlternativeToleratesMissingWordTimes(t *testing.T) 
 }
 
 func TestGoogleSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
-	provider := &GoogleSTT{}
+	provider := newGoogleSTTWithClient(nil)
 
 	if got := provider.Capabilities().AlignedTranscript; got != "word" {
 		t.Fatalf("AlignedTranscript = %q, want word", got)
+	}
+}
+
+func TestGoogleSTTChirp3CapabilitiesDisableWordAlignment(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
+
+	if got := provider.Capabilities().AlignedTranscript; got != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty for chirp_3", got)
+	}
+}
+
+func TestGoogleRecognitionConfigChirp3DisablesWordTimeOffsets(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.EnableWordTimeOffsets {
+		t.Fatal("word time offsets enabled = true, want false for chirp_3")
 	}
 }
 

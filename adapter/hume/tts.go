@@ -313,6 +313,8 @@ type humeTTSChunkedStream struct {
 	scanner       *bufio.Scanner
 	decoder       codecs.AudioStreamDecoder
 	decodeStarted bool
+	hasAudio      bool
+	finalSent     bool
 }
 
 func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -370,6 +372,7 @@ func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 		if len(audio) == 0 {
 			return nil, io.EOF
 		}
+		s.hasAudio = true
 		decoder := codecs.NewMP3AudioStreamDecoder()
 		s.decoder = decoder
 		go func() {
@@ -381,6 +384,10 @@ func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 	frame, err := s.decoder.Next()
 	if err != nil {
 		if strings.Contains(err.Error(), "decoder closed") {
+			if s.hasAudio && !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		return nil, err

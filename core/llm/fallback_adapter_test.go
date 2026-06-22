@@ -190,6 +190,18 @@ func TestFallbackAdapterReportsReferenceMetadata(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterPrewarmDoesNotTouchProviders(t *testing.T) {
+	primary := &fakeFallbackLLM{label: "primary.LLM"}
+	fallback := &fakeFallbackLLM{label: "fallback.LLM"}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	adapter.Prewarm()
+
+	if primary.prewarmCalls != 0 || fallback.prewarmCalls != 0 {
+		t.Fatalf("provider prewarm calls = (%d, %d), want fallback adapter prewarm no-op", primary.prewarmCalls, fallback.prewarmCalls)
+	}
+}
+
 func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
 	providerChatCtx := NewChatContext()
 	providerChatCtx.AddMessage(ChatMessageArgs{Role: ChatRoleAssistant, Text: "provider"})
@@ -223,6 +235,12 @@ func TestFallbackAdapterStreamExposesChatContext(t *testing.T) {
 	}
 	if got := chatCtxStream.ChatCtx(); got != providerChatCtx {
 		t.Fatalf("ChatCtx() after first chunk = %p, want provider context %p", got, providerChatCtx)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider completion error = %v, want EOF", err)
+	}
+	if got := chatCtxStream.ChatCtx(); got != providerChatCtx {
+		t.Fatalf("ChatCtx() after EOF = %p, want provider context %p", got, providerChatCtx)
 	}
 }
 
@@ -258,15 +276,22 @@ func TestFallbackAdapterStreamExposesActiveTools(t *testing.T) {
 	if got := toolsStream.Tools(); len(got) != 1 || got[0] != providerTools[0] {
 		t.Fatalf("Tools() after first chunk = %#v, want provider stream tools %#v", got, providerTools)
 	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider completion error = %v, want EOF", err)
+	}
+	if got := toolsStream.Tools(); len(got) != 1 || got[0] != providerTools[0] {
+		t.Fatalf("Tools() after EOF = %#v, want provider stream tools %#v", got, providerTools)
+	}
 }
 
 func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
+	primaryStream := &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
+		{err: firstErr},
+	}}
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
-			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "partial"}}},
-			{err: firstErr},
-		}}},
+		&fakeFallbackLLM{stream: primaryStream},
 		&fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 			{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
 		}}},
@@ -288,6 +313,9 @@ func TestFallbackAdapterDoesNotRetryAfterChunkSent(t *testing.T) {
 	_, err = stream.Next()
 	if !errors.Is(err, firstErr) {
 		t.Fatalf("second Next error = %v, want primary stream error", err)
+	}
+	if !primaryStream.closed {
+		t.Fatal("primary stream was not closed after post-chunk failure")
 	}
 }
 
@@ -637,11 +665,12 @@ func TestFallbackAdapterPassesAttemptConnectOptionsToProvider(t *testing.T) {
 }
 
 func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
+	providerStream := &fakeFallbackStream{}
 	second := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
 	}}}
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{stream: &fakeFallbackStream{}},
+		&fakeFallbackLLM{stream: providerStream},
 		second,
 	})
 
@@ -656,6 +685,9 @@ func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 	}
 	if second.calls != 0 {
 		t.Fatalf("fallback LLM calls = %d, want 0", second.calls)
+	}
+	if !providerStream.closed {
+		t.Fatal("provider stream was not closed after clean EOF")
 	}
 }
 
@@ -752,8 +784,10 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	if !strings.Contains(err.Error(), "primary.LLM") || !strings.Contains(err.Error(), "fallback.LLM") {
 		t.Fatalf("Chat error = %q, want exhausted provider labels", err)
 	}
-	if primary.calls != 1 || fallback.calls != 1 {
-		t.Fatalf("provider calls = (%d, %d), want one startup attempt per provider", primary.calls, fallback.calls)
+	waitForFallbackCalls(t, primary, 2)
+	waitForFallbackCalls(t, fallback, 2)
+	if primary.calls != 2 || fallback.calls != 2 {
+		t.Fatalf("provider calls = (%d, %d), want one startup attempt and one recovery probe per provider", primary.calls, fallback.calls)
 	}
 }
 
@@ -1168,6 +1202,49 @@ func TestFallbackAdapterRecoversUnavailableProviderInBackground(t *testing.T) {
 	}
 }
 
+func TestFallbackAdapterStartsRecoveryWithoutRetryIntervalDelay(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	recoveryStarted := make(chan struct{}, 1)
+	primary := &fakeFallbackLLM{
+		streams: []LLMStream{
+			&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+			&fakeFallbackStream{events: []fakeFallbackEvent{
+				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "recovery probe"}}},
+			}},
+		},
+		onChat: func(context.Context) {
+			if len(recoveryStarted) == 0 {
+				recoveryStarted <- struct{}{}
+			}
+		},
+	}
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapterWithOptions([]LLM{primary, fallback}, FallbackAdapterOptions{
+		RetryInterval: 500 * time.Millisecond,
+	})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	<-recoveryStarted // first primary attempt
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("fallback content = %q, want fallback", got)
+	}
+
+	select {
+	case <-recoveryStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recovery did not start promptly; reference starts background recovery without waiting retry_interval")
+	}
+}
+
 func TestFallbackAdapterRetriesRecoveryAfterFailedProbeOnLaterChat(t *testing.T) {
 	firstErr := errors.New("primary stream failed")
 	recoveryErr := errors.New("recovery probe failed")
@@ -1227,6 +1304,8 @@ type fakeFallbackLLM struct {
 	calls   int
 	onChat  func(context.Context)
 	options []ChatOptions
+
+	prewarmCalls int
 }
 
 func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, opts ...ChatOption) (LLMStream, error) {
@@ -1252,6 +1331,10 @@ func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, opts ...Chat
 
 func (f *fakeFallbackLLM) Label() string {
 	return f.label
+}
+
+func (f *fakeFallbackLLM) Prewarm() {
+	f.prewarmCalls++
 }
 
 type fakeFallbackEvent struct {

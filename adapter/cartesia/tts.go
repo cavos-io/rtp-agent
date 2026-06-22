@@ -492,6 +492,8 @@ type cartesiaTTSWordTimestamps struct {
 
 func (s *cartesiaTTSStream) readLoop() {
 	defer close(s.audio)
+	emittedAudio := false
+	emittedFinal := false
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {
@@ -518,6 +520,7 @@ func (s *cartesiaTTSStream) readLoop() {
 		if resp.Type == "chunk" && resp.Data != "" {
 			data, err := base64.StdEncoding.DecodeString(resp.Data)
 			if err == nil {
+				isFinal := resp.Done
 				s.audio <- &tts.SynthesizedAudio{
 					Frame: &model.AudioFrame{
 						Data:              data,
@@ -525,8 +528,10 @@ func (s *cartesiaTTSStream) readLoop() {
 						NumChannels:       1,
 						SamplesPerChannel: uint32(len(data) / 2),
 					},
-					IsFinal: resp.Done,
+					IsFinal: isFinal,
 				}
+				emittedAudio = true
+				emittedFinal = emittedFinal || isFinal
 			}
 		}
 
@@ -538,6 +543,9 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		if resp.Type == "done" || resp.Done {
 			if s.isFlushed() {
+				if emittedAudio && !emittedFinal {
+					s.audio <- &tts.SynthesizedAudio{IsFinal: true}
+				}
 				return
 			}
 		}

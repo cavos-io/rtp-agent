@@ -69,6 +69,12 @@ func WithGoogleSTTVoiceActivityEvents(enabled bool) GoogleSTTOption {
 	}
 }
 
+func WithGoogleSTTWordConfidence(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.enableWordConfidence = enabled
+	}
+}
+
 func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if sampleRate > 0 {
@@ -111,7 +117,6 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		sampleRate:           16000,
 		minConfidence:        0.65,
 		enableWordTimeOffset: true,
-		enableWordConfidence: true,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -122,7 +127,11 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 func (s *GoogleSTT) Label() string           { return "google.STT" }
 func (s *GoogleSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: true}
+	alignedTranscript := ""
+	if googleEnableWordTimeOffsets(s) {
+		alignedTranscript = "word"
+	}
+	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
 }
 
 func (s *GoogleSTT) Close() error {
@@ -264,13 +273,20 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 		Encoding:                   speechpb.RecognitionConfig_LINEAR16,
 		SampleRateHertz:            s.sampleRate,
 		LanguageCode:               language,
-		EnableWordTimeOffsets:      s.enableWordTimeOffset,
+		EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
 		EnableWordConfidence:       s.enableWordConfidence,
 		EnableAutomaticPunctuation: s.punctuate,
 		EnableSpokenPunctuation:    wrapperspb.Bool(s.spokenPunctuation),
 		ProfanityFilter:            s.profanityFilter,
 		Model:                      s.model,
 	}
+}
+
+func googleEnableWordTimeOffsets(s *GoogleSTT) bool {
+	if s.model == "chirp_3" {
+		return false
+	}
+	return s.enableWordTimeOffset
 }
 
 func googleSpeechDataFromAlternative(alt *speechpb.SpeechRecognitionAlternative) stt.SpeechData {

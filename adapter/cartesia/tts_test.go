@@ -865,6 +865,67 @@ func TestCartesiaTTSStreamDoneAfterFlushReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamAudioDoneAfterFlushEmitsFinalMarker(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadFlushThenAudioDoneWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("audio Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want frame", audio)
+	}
+	if audio.IsFinal {
+		t.Fatal("audio IsFinal = true, want false until provider done")
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final = %#v, want IsFinal marker", final)
+	}
+
+	_, err = stream.Next()
+	if err != io.EOF {
+		t.Fatalf("Next after final = %v, want io.EOF", err)
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio done server")
+	}
+}
+
 func TestCartesiaTTSStreamEmitsWordTimestamps(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -1046,6 +1107,39 @@ func runCartesiaReadFlushThenDoneWebsocketServer(conn net.Conn, errCh chan<- err
 			errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"done","done":true}`))
 		}),
 	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaReadFlushThenAudioDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer ws.Close()
+
+		for i := 0; i < 2; i++ {
+			var msg map[string]any
+			if err := ws.ReadJSON(&msg); err != nil {
+				errCh <- err
+				return
+			}
+			if msg["continue"] == false {
+				if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"chunk","data":"AQIDBA=="}`)); err != nil {
+					errCh <- err
+					return
+				}
+				errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"done","done":true}`))
+				return
+			}
+		}
+		errCh <- errors.New("flush packet not received")
+	})}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		errCh <- err
 	}
