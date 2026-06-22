@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -381,6 +382,62 @@ func TestFireworksSTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	}
 	if !strings.Contains(statusErr.Message, "Fireworks connection closed unexpectedly") {
 		t.Fatalf("message = %q, want unexpected close context", statusErr.Message)
+	}
+}
+
+func TestFireworksSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	handlerDone := make(chan struct{})
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+			defer close(handlerDone)
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		}),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("PushFrame after provider Close error = %v, want closed error", err)
+	}
+
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("provider Close did not close active Fireworks websocket stream")
+	}
+}
+
+func TestFireworksSTTStreamAfterCloseIsRejected(t *testing.T) {
+	dialCalls := 0
+	provider := NewFireworksSTT("test-key",
+		withFireworksSTTWebsocketDialer(func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			dialCalls++
+			return nil, nil, errors.New("unexpected websocket dial")
+		}),
+	)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("Stream after Close dial calls = %d, want 0", dialCalls)
 	}
 }
 
