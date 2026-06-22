@@ -173,3 +173,24 @@ func TestPhonicRealtimeSessionUnsupportedOperationsAreExplicit(t *testing.T) {
 		t.Fatalf("Truncate error = %v, want unsupported error", err)
 	}
 }
+
+func TestPhonicRealtimeSessionCloseIsIdempotentLikeReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("first Close error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if _, ok := <-session.EventCh(); ok {
+		t.Fatal("EventCh still open after Close")
+	}
+}

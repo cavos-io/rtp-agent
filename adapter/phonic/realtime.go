@@ -3,6 +3,7 @@ package phonic
 import (
 	"errors"
 	"os"
+	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -205,7 +206,8 @@ func setPhonicString(payload map[string]any, key string, value string) {
 }
 
 type realtimeSession struct {
-	eventCh chan llm.RealtimeEvent
+	eventCh   chan llm.RealtimeEvent
+	closeOnce sync.Once
 }
 
 func (s *realtimeSession) UpdateInstructions(string) error          { return nil }
@@ -221,7 +223,9 @@ func (s *realtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 }
 func (s *realtimeSession) Interrupt() error { return phonicUnsupported("interrupt") }
 func (s *realtimeSession) Close() error {
-	close(s.eventCh)
+	s.closeOnce.Do(func() {
+		close(s.eventCh)
+	})
 	return nil
 }
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent  { return s.eventCh }

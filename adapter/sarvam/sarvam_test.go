@@ -308,6 +308,57 @@ func TestSarvamSTTStreamMessagesMatchReference(t *testing.T) {
 	assertSarvamJSONField(t, endAudio, "sample_rate", float64(8000))
 }
 
+func TestSarvamSTTStreamBuffersAudioAcrossFramesLikeReference(t *testing.T) {
+	var messages []map[string]any
+	stream := &sarvamSTTRecognizeStream{
+		encoding:   "audio/pcm",
+		sampleRate: 16000,
+		writeMessage: func(payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				return err
+			}
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	firstPartial := []byte{0x01, 0x02}
+	if err := stream.PushFrame(&model.AudioFrame{Data: firstPartial, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(partial) error = %v", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("messages after partial = %#v, want buffered partial audio", messages)
+	}
+
+	remainder := bytes.Repeat([]byte{0x03}, 1598)
+	if err := stream.PushFrame(&model.AudioFrame{Data: remainder, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 799}); err != nil {
+		t.Fatalf("PushFrame(remainder) error = %v", err)
+	}
+	wantChunk := append(append([]byte(nil), firstPartial...), remainder...)
+	if len(messages) != 1 {
+		t.Fatalf("messages after full chunk = %d, want 1", len(messages))
+	}
+	if got := sarvamAudioMessageBytes(t, messages[0]); !bytes.Equal(got, wantChunk) {
+		t.Fatalf("audio chunk length=%d first=%v last=%v, want buffered 50ms chunk length=%d", len(got), got[:2], got[len(got)-2:], len(wantChunk))
+	}
+
+	tail := []byte{0x04, 0x05}
+	if err := stream.PushFrame(&model.AudioFrame{Data: tail, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err != nil {
+		t.Fatalf("PushFrame(tail) error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after tail = %d, want tail buffered", len(messages))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages after flush = %d, want end_of_stream without partial tail", len(messages))
+	}
+	assertSarvamJSONField(t, messages[1], "type", "end_of_stream")
+}
+
 func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	events, err := sarvamSTTEventsFromStreamMessage([]byte(`{"type":"data","data":{"transcript":"hello","language_code":"hi-IN","request_id":"req-1","speech_start":0.1,"speech_end":0.7,"language_probability":0.91,"metrics":{"audio_duration":1.2}}}`), "en-IN")
 	if err != nil {
@@ -997,6 +1048,43 @@ func assertSarvamJSONField(t *testing.T, payload map[string]any, key string, wan
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %#v", key, got, want)
 	}
+}
+
+func receiveSarvamMessage(t *testing.T, ch <-chan map[string]any, label string) map[string]any {
+	t.Helper()
+	select {
+	case message := <-ch:
+		return message
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return nil
+	}
+}
+
+func assertNoSarvamMessage(t *testing.T, ch <-chan map[string]any) {
+	t.Helper()
+	select {
+	case message := <-ch:
+		t.Fatalf("unexpected message = %#v, want buffered partial audio", message)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func sarvamAudioMessageBytes(t *testing.T, message map[string]any) []byte {
+	t.Helper()
+	audio, ok := message["audio"].(map[string]any)
+	if !ok {
+		t.Fatalf("message audio = %#v, want audio object", message["audio"])
+	}
+	encoded, ok := audio["data"].(string)
+	if !ok {
+		t.Fatalf("audio data = %#v, want string", audio["data"])
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode audio data: %v", err)
+	}
+	return data
 }
 
 func assertSarvamQuery(t *testing.T, query url.Values, key string, want string) {

@@ -329,6 +329,39 @@ func TestRimeTTSWebsocketMessagesMatchReference(t *testing.T) {
 	assertRimePayload(t, flushPayload, "contextId", "ctx-1")
 }
 
+func TestRimeTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after PushText = %d, want one completed sentence", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "This first sentence is definitely long enough. ")
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 3 {
+		t.Fatalf("writes after Flush = %d, want tail text and flush", len(writes))
+	}
+	assertRimePayload(t, writes[1], "text", "Tail ")
+	assertRimePayload(t, writes[2], "operation", "flush")
+	assertRimePayload(t, writes[2], "contextId", "ctx-1")
+}
+
 func TestRimeTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -344,7 +377,7 @@ func TestRimeTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
+	if err := stream.PushText("This sentence is definitely long enough. Tail"); !errors.Is(err, writeErr) {
 		t.Fatalf("PushText error = %v, want write error", err)
 	}
 	if !cancelled {

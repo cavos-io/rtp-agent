@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -98,6 +99,34 @@ func TestTelnyxTTSTextMessagesMatchReference(t *testing.T) {
 	assertTelnyxTextPayload(t, flush, "")
 }
 
+func TestTelnyxTTSStreamBuffersTextUntilFlushLikeReference(t *testing.T) {
+	var writes []string
+	stream := &telnyxTTSStream{
+		writeMessage: func(message map[string]string) error {
+			writes = append(writes, message["text"])
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello "); err != nil {
+		t.Fatalf("PushText first error = %v", err)
+	}
+	if err := stream.PushText("world"); err != nil {
+		t.Fatalf("PushText second error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after PushText = %#v, want buffered text with no websocket writes", writes)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	want := []string{"hello world", ""}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after Flush = %#v, want %#v", writes, want)
+	}
+}
+
 func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -113,8 +142,11 @@ func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 		},
 	}
 
-	if err := stream.PushText("hello"); !errors.Is(err, writeErr) {
-		t.Fatalf("PushText error = %v, want write error", err)
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v, want buffered text accepted", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, writeErr) {
+		t.Fatalf("Flush error = %v, want write error", err)
 	}
 	if !cancelled {
 		t.Fatal("cancel not called after write failure")

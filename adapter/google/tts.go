@@ -10,6 +10,7 @@ import (
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/googleapis/gax-go/v2"
 )
 
@@ -364,12 +365,14 @@ type googleTTSSynthesizeStream struct {
 	ctx        context.Context
 	client     googleTTSClient
 	streams    []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	active     texttospeechpb.TextToSpeech_StreamingSynthesizeClient
 	voice      *texttospeechpb.VoiceSelectionParams
 	prompt     *string
 	audio      *texttospeechpb.AudioConfig
 	buffer     strings.Builder
 	closed     bool
 	inputEnded bool
+	sentInput  bool
 }
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
@@ -381,29 +384,105 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 	if s.inputEnded {
 		return io.ErrClosedPipe
 	}
-	_, err := s.buffer.WriteString(text)
-	return err
+	if _, err := s.buffer.WriteString(text); err != nil {
+		return err
+	}
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.buffer.String(), "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTextLocked(sentence); err != nil {
+			s.closeActiveLocked()
+			s.markClosedLocked()
+			return err
+		}
+		current := s.buffer.String()
+		tokenIdx := strings.Index(current, sentence)
+		if tokenIdx < 0 {
+			s.buffer.Reset()
+			s.buffer.WriteString(strings.TrimSpace(strings.TrimPrefix(current, sentence)))
+			continue
+		}
+		s.buffer.Reset()
+		s.buffer.WriteString(strings.TrimLeftFunc(current[tokenIdx+len(sentence):], func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		}))
+	}
 }
 
 func (s *googleTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
-		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	text := s.buffer.String()
 	s.buffer.Reset()
-	s.mu.Unlock()
+	if text != "" {
+		text = strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(text, ""), " ")
+		if err := s.sendTextLocked(text); err != nil {
+			s.closeActiveLocked()
+			s.markClosedLocked()
+			return err
+		}
+	}
+	if s.active == nil {
+		return nil
+	}
+	if err := s.active.CloseSend(); err != nil {
+		s.markClosedLocked()
+		return err
+	}
+	s.active = nil
+	return nil
+}
+
+func (s *googleTTSSynthesizeStream) closeActiveLocked() {
+	if s.active == nil {
+		return
+	}
+	_ = s.active.CloseSend()
+	s.active = nil
+}
+
+func (s *googleTTSSynthesizeStream) sendTextLocked(text string) error {
 	if text == "" {
 		return nil
 	}
-	stream, err := s.client.StreamingSynthesize(s.ctx)
+	stream, err := s.ensureActiveStreamLocked()
 	if err != nil {
 		return err
+	}
+	return stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
+		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
+			Input: &texttospeechpb.StreamingSynthesisInput{
+				InputSource: &texttospeechpb.StreamingSynthesisInput_Text{Text: text},
+				Prompt:      s.nextPromptLocked(),
+			},
+		},
+	})
+}
+
+func (s *googleTTSSynthesizeStream) nextPromptLocked() *string {
+	if s.sentInput {
+		return nil
+	}
+	s.sentInput = true
+	return s.prompt
+}
+
+func (s *googleTTSSynthesizeStream) ensureActiveStreamLocked() (texttospeechpb.TextToSpeech_StreamingSynthesizeClient, error) {
+	if s.active != nil {
+		return s.active, nil
+	}
+	stream, err := s.client.StreamingSynthesize(s.ctx)
+	if err != nil {
+		return nil, err
 	}
 	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
 		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_StreamingConfig{
@@ -417,36 +496,14 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 			},
 		},
 	}); err != nil {
-		s.markClosed()
 		_ = stream.CloseSend()
-		return err
+		return nil, err
 	}
-	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
-		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
-			Input: &texttospeechpb.StreamingSynthesisInput{
-				InputSource: &texttospeechpb.StreamingSynthesisInput_Text{Text: text},
-				Prompt:      s.prompt,
-			},
-		},
-	}); err != nil {
-		s.markClosed()
-		_ = stream.CloseSend()
-		return err
-	}
-	if err := stream.CloseSend(); err != nil {
-		s.markClosed()
-		return err
-	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		_ = stream.CloseSend()
-		return io.ErrClosedPipe
-	}
+	s.active = stream
+	s.sentInput = false
 	s.streams = append(s.streams, stream)
 	s.cond.Broadcast()
-	s.mu.Unlock()
-	return nil
+	return stream, nil
 }
 
 func (s *googleTTSSynthesizeStream) EndInput() error {
@@ -465,6 +522,7 @@ func (s *googleTTSSynthesizeStream) Close() error {
 	s.closed = true
 	streams := append([]texttospeechpb.TextToSpeech_StreamingSynthesizeClient(nil), s.streams...)
 	s.streams = nil
+	s.active = nil
 	s.cond.Broadcast()
 	s.mu.Unlock()
 	s.unregister()
@@ -516,10 +574,14 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *googleTTSSynthesizeStream) markClosed() {
 	s.mu.Lock()
-	s.closed = true
-	s.cond.Broadcast()
+	s.markClosedLocked()
 	s.mu.Unlock()
 	s.unregister()
+}
+
+func (s *googleTTSSynthesizeStream) markClosedLocked() {
+	s.closed = true
+	s.cond.Broadcast()
 }
 
 func (s *googleTTSSynthesizeStream) unregister() {

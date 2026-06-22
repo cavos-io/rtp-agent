@@ -234,16 +234,17 @@ func (s *telnyxTTSChunkedStream) Close() error {
 }
 
 type telnyxTTSStream struct {
-	owner      *TelnyxTTS
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	sampleRate int
-	events     chan *tts.SynthesizedAudio
-	errCh      chan error
-	decoder    codecs.AudioStreamDecoder
-	mu         sync.Mutex
-	closed     bool
+	owner       *TelnyxTTS
+	conn        *websocket.Conn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	sampleRate  int
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
+	decoder     codecs.AudioStreamDecoder
+	mu          sync.Mutex
+	closed      bool
+	pendingText string
 
 	writeMessage func(map[string]string) error
 	closeConn    func() error
@@ -255,10 +256,7 @@ func (s *telnyxTTSStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("telnyx tts stream is closed")
 	}
-	if err := s.writeMessageData(buildTelnyxTTSTextMessage(text)); err != nil {
-		s.closeAfterWriteFailureLocked()
-		return err
-	}
+	s.pendingText += text
 	return nil
 }
 
@@ -267,6 +265,15 @@ func (s *telnyxTTSStream) Flush() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return fmt.Errorf("telnyx tts stream is closed")
+	}
+	if s.pendingText == "" {
+		return nil
+	}
+	text := s.pendingText
+	s.pendingText = ""
+	if err := s.writeMessageData(buildTelnyxTTSTextMessage(text)); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
 	}
 	if err := s.writeMessageData(buildTelnyxTTSTextMessage("")); err != nil {
 		s.closeAfterWriteFailureLocked()
