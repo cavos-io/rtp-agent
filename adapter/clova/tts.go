@@ -81,6 +81,7 @@ type clovaTTSChunkedStream struct {
 	resp    *http.Response
 	decoder codecs.AudioStreamDecoder
 	started bool
+	final   bool
 }
 
 func (s *clovaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -103,7 +104,11 @@ func (s *clovaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	frame, err := s.decoder.Next()
 	if err != nil {
 		if strings.Contains(err.Error(), "decoder closed") {
-			return nil, io.EOF
+			if s.final {
+				return nil, io.EOF
+			}
+			s.final = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		return nil, err
 	}
@@ -114,6 +119,7 @@ func (s *clovaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *clovaTTSChunkedStream) Close() error {
+	s.final = true
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}
