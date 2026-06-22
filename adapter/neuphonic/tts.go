@@ -39,6 +39,7 @@ type NeuphonicTTS struct {
 	encoding   string
 	sampleRate int
 	speed      *float64
+	closed     bool
 }
 
 type NeuphonicTTSOption func(*NeuphonicTTS)
@@ -132,6 +133,7 @@ func (t *NeuphonicTTS) UpdateOptions(opts ...NeuphonicTTSOption) {
 
 func (t *NeuphonicTTS) Close() error {
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*neuphonicTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -148,17 +150,30 @@ func (t *NeuphonicTTS) Close() error {
 	return closeErr
 }
 
-func (t *NeuphonicTTS) registerStream(stream *neuphonicTTSSynthesizeStream) {
-	if t == nil || stream == nil {
-		return
+func (t *NeuphonicTTS) isClosed() bool {
+	if t == nil {
+		return true
 	}
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *NeuphonicTTS) registerStream(stream *neuphonicTTSSynthesizeStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*neuphonicTTSSynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	stream.owner = t
-	t.mu.Unlock()
+	return true
 }
 
 func (t *NeuphonicTTS) unregisterStream(stream *neuphonicTTSSynthesizeStream) {
@@ -171,6 +186,9 @@ func (t *NeuphonicTTS) unregisterStream(stream *neuphonicTTSSynthesizeStream) {
 }
 
 func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateNeuphonicAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -220,12 +238,19 @@ func buildNeuphonicTTSRequest(ctx context.Context, t *NeuphonicTTS, text string)
 }
 
 func (t *NeuphonicTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateNeuphonicAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildNeuphonicTTSWebsocketURL(t).String(), buildNeuphonicTTSWebsocketHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial neuphonic tts websocket: %w", err)
+	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &neuphonicTTSSynthesizeStream{
@@ -239,7 +264,11 @@ func (t *NeuphonicTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		cancel()
+		conn.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
