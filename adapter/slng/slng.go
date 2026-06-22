@@ -1565,8 +1565,8 @@ func (s *ttsStream) readError(err error) error {
 	if closeErr.Code == websocket.CloseNormalClosure && (s.audioFrames > 0 || isRimeArcanaModel(s.model)) {
 		return io.EOF
 	}
-	return fmt.Errorf(
-		"slng tts websocket closed before completion: %w (model=%s audio_frames=%d audio_bytes=%d text_messages=%d last_message_type=%q)",
+	message := fmt.Sprintf(
+		"slng tts websocket closed before completion: %v (model=%s audio_frames=%d audio_bytes=%d text_messages=%d last_message_type=%q)",
 		err,
 		s.model,
 		s.audioFrames,
@@ -1574,6 +1574,7 @@ func (s *ttsStream) readError(err error) error {
 		s.textMessages,
 		s.lastMessageType,
 	)
+	return llm.NewAPIStatusError(message, closeErr.Code, "", err.Error())
 }
 
 func slngTTSMessageKind(payload []byte) string {

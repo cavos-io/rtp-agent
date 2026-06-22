@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -400,6 +403,50 @@ func TestTelnyxTTSStreamEmitsReferenceFinalMarkerAfterMP3Decode(t *testing.T) {
 			t.Fatal("non-final event missing decoded frame")
 		}
 		frames++
+	}
+}
+
+func TestTelnyxTTSStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &telnyxTTSStream{
+		conn:   conn,
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+	}
+	go stream.readLoop()
+
+	select {
+	case err := <-stream.errCh:
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(err, &connectionErr) {
+			t.Fatalf("readLoop error = %T %v, want APIConnectionError", err, err)
+		}
+		if !strings.Contains(err.Error(), "Telnyx TTS WebSocket closed unexpectedly") {
+			t.Fatalf("readLoop error = %q, want Telnyx close context", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for websocket close error")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -780,7 +782,7 @@ func (s *minimaxTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- minimaxTTSReadError(err, s.traceID)
 			}
 			return
 		}
@@ -802,6 +804,15 @@ func (s *minimaxTTSSynthesizeStream) readLoop() {
 			return
 		}
 	}
+}
+
+func minimaxTTSReadError(err error, traceID string) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		message := fmt.Sprintf("MiniMax connection closed unexpectedly (trace_id: %s)", traceID)
+		return llm.NewAPIStatusError(message, closeErr.Code, traceID, err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("MiniMax websocket receive failed: %v", err))
 }
 
 func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sampleRate int) (*tts.SynthesizedAudio, bool, string, error) {

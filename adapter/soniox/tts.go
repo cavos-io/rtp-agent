@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -422,7 +424,7 @@ func (s *sonioxTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- sonioxTTSReadError(err)
 			}
 			return
 		}
@@ -438,6 +440,14 @@ func (s *sonioxTTSSynthesizeStream) readLoop() {
 			return
 		}
 	}
+}
+
+func sonioxTTSReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIStatusError("Soniox TTS WebSocket connection closed unexpectedly", closeErr.Code, "", err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Soniox TTS recv loop error: %v", err))
 }
 
 func (s *sonioxTTSSynthesizeStream) handleSonioxTTSMessage(payload []byte) (bool, error) {

@@ -397,6 +397,13 @@ func TestSLNGTTSStreamUnexpectedCloseReportsAudioStats(t *testing.T) {
 	}
 
 	err := stream.readError(&websocket.CloseError{Code: websocket.CloseNormalClosure, Text: ""})
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("readError() = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
+	}
 	got := err.Error()
 	for _, want := range []string{
 		"slng tts websocket closed before completion",
