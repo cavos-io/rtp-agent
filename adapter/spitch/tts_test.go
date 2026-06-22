@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -256,9 +257,35 @@ func TestSpitchTTSChunkedStreamDecodesWAVResponse(t *testing.T) {
 		t.Fatalf("frame shape = rate %d channels %d samples %d, want 24000/1/2", audio.Frame.SampleRate, audio.Frame.NumChannels, audio.Frame.SamplesPerChannel)
 	}
 
-	_, err = stream.Next()
-	if err != io.EOF {
-		t.Fatalf("second Next error = %v, want EOF", err)
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestSpitchTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyWAVAudio(t *testing.T) {
+	stream := &spitchTTSChunkedStream{
+		resp:         &http.Response{Body: io.NopCloser(strings.NewReader(""))},
+		outputFormat: "wav",
+		sampleRate:   24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("first audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
 	}
 }
 
@@ -339,6 +366,26 @@ func TestSpitchTTSChunkedStreamDrainsMP3AndEmitsReferenceFinalMarker(t *testing.
 		frames++
 	}
 	t.Fatalf("stream did not emit final marker after %d frames", frames)
+}
+
+func TestSpitchTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyMP3Audio(t *testing.T) {
+	stream := &spitchTTSChunkedStream{
+		resp:         &http.Response{Body: io.NopCloser(strings.NewReader(""))},
+		outputFormat: "mp3",
+		sampleRate:   24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("first audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
 }
 
 type spitchRoundTripFunc func(*http.Request) (*http.Response, error)
