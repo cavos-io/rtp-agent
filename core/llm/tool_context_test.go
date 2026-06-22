@@ -398,3 +398,18 @@ func TestToolContextEqualUsesToolIdentity(t *testing.T) {
 		t.Fatal("Equal() = true, want false for same function name backed by a different tool")
 	}
 }
+
+func TestToolContextEqualHandlesNilReceiverLikeReference(t *testing.T) {
+	var nilCtx *ToolContext
+	empty := EmptyToolContext()
+
+	if !nilCtx.Equal(nil) {
+		t.Fatal("nil ToolContext Equal(nil) = false, want true for same absent context")
+	}
+	if nilCtx.Equal(empty) {
+		t.Fatal("nil ToolContext Equal(empty) = true, want false like reference non-ToolContext comparison")
+	}
+	if empty.Equal(nilCtx) {
+		t.Fatal("empty ToolContext Equal(nil) = true, want false")
+	}
+}

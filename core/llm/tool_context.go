@@ -262,6 +262,9 @@ func (c *ToolContext) Equal(other *ToolContext) bool {
 	if c == other {
 		return true
 	}
+	if c == nil {
+		return false
+	}
 	if other == nil {
 		return false
 	}
