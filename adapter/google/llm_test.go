@@ -223,6 +223,39 @@ func TestBuildGoogleToolConfigMapsNoneToolChoice(t *testing.T) {
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigDropsToolsWithCachedContentLikeReference(t *testing.T) {
+	options := &llm.ChatOptions{
+		Tools:      []llm.Tool{googleRequestTestTool{}},
+		ToolChoice: "required",
+		ExtraParams: map[string]any{
+			"cached_content":    "cachedContents/prefix",
+			"temperature":       0.7,
+			"max_output_tokens": 128,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "system prompt\n")
+
+	if config.CachedContent != "cachedContents/prefix" {
+		t.Fatalf("CachedContent = %q, want cachedContents/prefix", config.CachedContent)
+	}
+	if config.SystemInstruction != nil {
+		t.Fatalf("SystemInstruction = %#v, want nil with cached_content", config.SystemInstruction)
+	}
+	if config.Tools != nil {
+		t.Fatalf("Tools = %#v, want nil with cached_content", config.Tools)
+	}
+	if config.ToolConfig != nil {
+		t.Fatalf("ToolConfig = %#v, want nil with cached_content", config.ToolConfig)
+	}
+	if config.Temperature == nil || *config.Temperature != float32(0.7) {
+		t.Fatalf("Temperature = %#v, want 0.7", config.Temperature)
+	}
+	if config.MaxOutputTokens != 128 {
+		t.Fatalf("MaxOutputTokens = %d, want 128", config.MaxOutputTokens)
+	}
+}
+
 func assertGoogleTextPart(t *testing.T, parts []*genai.Part, index int, want string) {
 	t.Helper()
 	if len(parts) <= index {
