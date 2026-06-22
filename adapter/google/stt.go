@@ -329,6 +329,10 @@ func (s *googleSTTStream) readLoop() {
 			s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 		}
 
+		if resp.GetSpeechEventType() != speechpb.StreamingRecognizeResponse_SPEECH_EVENT_UNSPECIFIED {
+			continue
+		}
+
 		if data, eventType, ok := googleSpeechDataFromStreamingResults(resp.Results, s.minConfidence); ok {
 			s.events <- &stt.SpeechEvent{
 				Type:         eventType,
