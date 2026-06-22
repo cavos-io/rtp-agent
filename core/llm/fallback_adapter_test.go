@@ -649,11 +649,12 @@ func TestFallbackAdapterPassesAttemptConnectOptionsToProvider(t *testing.T) {
 }
 
 func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
+	providerStream := &fakeFallbackStream{}
 	second := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
 		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
 	}}}
 	adapter := NewFallbackAdapter([]LLM{
-		&fakeFallbackLLM{stream: &fakeFallbackStream{}},
+		&fakeFallbackLLM{stream: providerStream},
 		second,
 	})
 
@@ -668,6 +669,9 @@ func TestFallbackAdapterDoesNotRetryCleanEOF(t *testing.T) {
 	}
 	if second.calls != 0 {
 		t.Fatalf("fallback LLM calls = %d, want 0", second.calls)
+	}
+	if !providerStream.closed {
+		t.Fatal("provider stream was not closed after clean EOF")
 	}
 }
 

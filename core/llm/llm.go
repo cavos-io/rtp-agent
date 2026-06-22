@@ -2061,6 +2061,7 @@ func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 			return chunk, nil
 		}
 		if errors.Is(err, io.EOF) {
+			s.closeActive()
 			return nil, err
 		}
 		if s.outputSent && isClientClosedStatus(err) {
