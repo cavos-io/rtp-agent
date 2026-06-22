@@ -4041,6 +4041,24 @@ func TestAgentSessionShutdownClosesMCPServers(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownClosesSessionToolsets(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	toolset := &closeableSessionToolset{
+		fakeGenerationTool: fakeGenerationTool{name: "session_tools"},
+		tools:              []llm.Tool{&fakeGenerationTool{name: "lookup"}},
+	}
+	session.Tools = []llm.Tool{toolset}
+
+	session.Shutdown(false)
+
+	if toolset.closeCalls != 1 {
+		t.Fatalf("session toolset Close calls = %d, want 1", toolset.closeCalls)
+	}
+}
+
 func TestAgentSessionShutdownDrainsByDefaultBeforeClosing(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -5639,6 +5657,33 @@ func TestAgentSessionUpdateAgentReplacesSessionTools(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateAgentClosesPreviousAgentToolsets(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initialToolset := &closeableSessionToolset{
+		fakeGenerationTool: fakeGenerationTool{name: "initial_tools"},
+		tools:              []llm.Tool{&fakeGenerationTool{name: "initial_lookup"}},
+	}
+	initial.Tools = []llm.Tool{initialToolset}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	nextToolset := &closeableSessionToolset{
+		fakeGenerationTool: fakeGenerationTool{name: "next_tools"},
+		tools:              []llm.Tool{&fakeGenerationTool{name: "next_lookup"}},
+	}
+	next.Tools = []llm.Tool{nextToolset}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(initial, session)
+	session.started = true
+
+	session.UpdateAgent(next)
+
+	if initialToolset.closeCalls != 1 {
+		t.Fatalf("initial toolset Close calls = %d, want 1", initialToolset.closeCalls)
+	}
+	if nextToolset.closeCalls != 0 {
+		t.Fatalf("next toolset Close calls = %d, want 0 during handoff", nextToolset.closeCalls)
+	}
+}
+
 func TestAgentSessionUpdateAgentBeforeStartUsesNextRealtimeModel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -6880,5 +6925,18 @@ func (f *fakeSessionMCPServer) ListTools(context.Context) ([]llm.Tool, error) {
 
 func (f *fakeSessionMCPServer) Close() error {
 	f.closed++
+	return nil
+}
+
+type closeableSessionToolset struct {
+	fakeGenerationTool
+	tools      []llm.Tool
+	closeCalls int
+}
+
+func (c *closeableSessionToolset) Tools() []llm.Tool { return c.tools }
+
+func (c *closeableSessionToolset) Close() error {
+	c.closeCalls++
 	return nil
 }

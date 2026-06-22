@@ -85,6 +85,10 @@ func (p *ProcPool) LaunchJob(ctx context.Context, job Job) error {
 
 func (p *ProcPool) Start(ctx context.Context) error {
 	p.mu.Lock()
+	if p.started {
+		p.mu.Unlock()
+		return nil
+	}
 	if p.closed {
 		p.mu.Unlock()
 		return ErrProcPoolClosed
@@ -97,7 +101,8 @@ func (p *ProcPool) Start(ctx context.Context) error {
 
 	p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 	if err != nil {
-		return err
+		logger.Logger.Warnw("Failed to warm idle processes", err, "target_idle_processes", p.TargetIdleProcesses())
+		return nil
 	}
 	return p.emitWarmedExecutors(ctx, warmedExecutors)
 }
@@ -115,7 +120,7 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 		if err := p.validateExecutorType(); err != nil {
 			p.mu.Unlock()
 			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
-			return err
+			return fmt.Errorf("no process became available after %d attempts", maxLaunchAttempts)
 		}
 		executor := p.idleExecutorLocked()
 		executorWarmed := executor != nil
@@ -300,8 +305,18 @@ func (p *ProcPool) On(event ProcPoolEvent, handler func(JobExecutor)) {
 
 func (p *ProcPool) SetTargetIdleProcesses(numIdleProcesses int) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.targetIdle = numIdleProcesses
+	if !p.started || p.closed {
+		p.mu.Unlock()
+		return
+	}
+	warmedExecutors, err := p.warmIdleExecutorsLocked()
+	p.mu.Unlock()
+	if err != nil {
+		logger.Logger.Warnw("Failed to warm target idle processes", err, "target_idle_processes", numIdleProcesses)
+		return
+	}
+	_ = p.emitWarmedExecutors(context.Background(), warmedExecutors)
 }
 
 func (p *ProcPool) TargetIdleProcesses() int {

@@ -46,6 +46,30 @@ func (s *closableTestToolset) Close() error {
 	return nil
 }
 
+type closableNestedTestToolset struct {
+	testTool
+	tools      []Tool
+	closeCalls int
+	onClose    func() error
+}
+
+func (s *closableNestedTestToolset) Tools() []Tool { return s.tools }
+
+func (s *closableNestedTestToolset) Close() error {
+	s.closeCalls++
+	if s.onClose != nil {
+		return s.onClose()
+	}
+	return nil
+}
+
+type nestedTestToolset struct {
+	testTool
+	tools []Tool
+}
+
+func (s *nestedTestToolset) Tools() []Tool { return s.tools }
+
 type nonComparableTool struct {
 	id     string
 	name   string
@@ -181,6 +205,50 @@ func TestToolContextCloseClosesToolsets(t *testing.T) {
 
 	if toolset.closeCalls != 1 {
 		t.Fatalf("toolset Close calls = %d, want 1", toolset.closeCalls)
+	}
+}
+
+func TestToolContextCloseClosesNestedToolsetsOnce(t *testing.T) {
+	child := &closableNestedTestToolset{
+		testTool: testTool{id: "child", name: "child"},
+		tools:    []Tool{&testTool{id: "lookup", name: "lookup"}},
+	}
+	parent := &closableNestedTestToolset{
+		testTool: testTool{id: "parent", name: "parent"},
+		tools:    []Tool{child},
+		onClose:  child.Close,
+	}
+	ctx := NewToolContext([]interface{}{parent})
+
+	if err := ctx.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if parent.closeCalls != 1 {
+		t.Fatalf("parent Close calls = %d, want 1", parent.closeCalls)
+	}
+	if child.closeCalls != 1 {
+		t.Fatalf("child Close calls = %d, want 1 via parent close", child.closeCalls)
+	}
+}
+
+func TestToolContextCloseRecursesIntoPlainNestedToolsets(t *testing.T) {
+	child := &closableNestedTestToolset{
+		testTool: testTool{id: "child", name: "child"},
+		tools:    []Tool{&testTool{id: "lookup", name: "lookup"}},
+	}
+	parent := &nestedTestToolset{
+		testTool: testTool{id: "parent", name: "parent"},
+		tools:    []Tool{child},
+	}
+	ctx := NewToolContext([]interface{}{parent})
+
+	if err := ctx.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if child.closeCalls != 1 {
+		t.Fatalf("child Close calls = %d, want 1 through plain parent recursion", child.closeCalls)
 	}
 }
 
@@ -328,5 +396,20 @@ func TestToolContextEqualUsesToolIdentity(t *testing.T) {
 	other := NewToolContext([]interface{}{otherLookup, provider})
 	if left.Equal(other) {
 		t.Fatal("Equal() = true, want false for same function name backed by a different tool")
+	}
+}
+
+func TestToolContextEqualHandlesNilReceiverLikeReference(t *testing.T) {
+	var nilCtx *ToolContext
+	empty := EmptyToolContext()
+
+	if !nilCtx.Equal(nil) {
+		t.Fatal("nil ToolContext Equal(nil) = false, want true for same absent context")
+	}
+	if nilCtx.Equal(empty) {
+		t.Fatal("nil ToolContext Equal(empty) = true, want false like reference non-ToolContext comparison")
+	}
+	if empty.Equal(nilCtx) {
+		t.Fatal("empty ToolContext Equal(nil) = true, want false")
 	}
 }

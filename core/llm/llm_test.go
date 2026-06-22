@@ -58,6 +58,25 @@ func TestLLMPrewarmDelegatesWhenSupported(t *testing.T) {
 	}
 }
 
+func TestLLMCloseDefaultNoop(t *testing.T) {
+	provider := &metadataTestLLM{}
+
+	if err := Close(provider); err != nil {
+		t.Fatalf("Close error = %v, want nil default close", err)
+	}
+}
+
+func TestLLMCloseDelegatesWhenSupported(t *testing.T) {
+	provider := &closableMetadataLLM{}
+
+	if err := Close(provider); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !provider.closed {
+		t.Fatal("Close did not delegate to provider")
+	}
+}
+
 func TestLLMErrorCarriesReferenceFields(t *testing.T) {
 	cause := errors.New("provider unavailable")
 	err := NewLLMError("openai.LLM", cause, true)
@@ -1277,6 +1296,16 @@ func (m *metadataTestLLM) Provider() string {
 
 func (m *metadataTestLLM) Prewarm() {
 	m.prewarmed = true
+}
+
+type closableMetadataLLM struct {
+	metadataTestLLM
+	closed bool
+}
+
+func (m *closableMetadataLLM) Close() error {
+	m.closed = true
+	return nil
 }
 
 type metadataTestStream struct{}

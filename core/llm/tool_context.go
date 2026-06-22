@@ -59,11 +59,26 @@ func (c *ToolContext) Close() error {
 		return nil
 	}
 	var errs []error
-	for _, toolset := range c.toolsets {
-		if closeable, ok := toolset.(closeableToolset); ok {
-			if err := closeable.Close(); err != nil {
-				errs = append(errs, err)
-			}
+	for _, tool := range c.tools {
+		if err := closeToolsetValue(tool); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func closeToolsetValue(tool interface{}) error {
+	toolset, ok := tool.(Toolset)
+	if !ok {
+		return nil
+	}
+	if closeable, ok := toolset.(closeableToolset); ok {
+		return closeable.Close()
+	}
+	var errs []error
+	for _, child := range toolset.Tools() {
+		if err := closeToolsetValue(child); err != nil {
+			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
@@ -246,6 +261,9 @@ func (c *ToolContext) Copy() *ToolContext {
 func (c *ToolContext) Equal(other *ToolContext) bool {
 	if c == other {
 		return true
+	}
+	if c == nil {
+		return false
 	}
 	if other == nil {
 		return false

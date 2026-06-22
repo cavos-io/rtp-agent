@@ -213,6 +213,10 @@ type closeableSessionAssistant interface {
 	Close() error
 }
 
+type sessionToolsetCloser interface {
+	Close() error
+}
+
 type scheduledSpeechAssistant interface {
 	OnSpeechScheduled(ctx context.Context, speech *SpeechHandle)
 }
@@ -2716,6 +2720,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	oldActivity := s.activity
 	started := s.started
+	oldTools := copySessionTools(s.Tools)
 	s.Agent = agent
 	s.Tools = copySessionTools(baseAgent.Tools)
 	s.updateAgentComponentsLocked(baseAgent)
@@ -2773,6 +2778,10 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	if oldActivity != nil {
 		oldActivity.Stop()
+		if err := closeSessionToolsets(oldTools); err != nil {
+			logger.Logger.Errorw("failed to close previous agent toolsets", err)
+			s.EmitError(ErrorEvent{Error: err, Source: oldAgent})
+		}
 	}
 	handoff := newAgentHandoff(oldAgent, baseAgent)
 	if runState != nil {
@@ -2880,6 +2889,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 	s.clearAECWarmupLocked()
 	backgroundAudio := s.Options.BackgroundAudio
 	mcpServers := append([]llm.MCPServer(nil), s.mcpServers...)
+	sessionTools := copySessionTools(s.Tools)
 	s.mu.Unlock()
 
 	if ivrActivity != nil {
@@ -2929,11 +2939,41 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			stopErr = err
 		}
 	}
+	if err := closeSessionToolsets(sessionTools); err != nil && stopErr == nil {
+		stopErr = err
+	}
 	s.flushOTelTurnMetrics()
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
 	}
 	return stopErr
+}
+
+func closeSessionToolsets(tools []llm.Tool) error {
+	var errs []error
+	for _, tool := range tools {
+		if err := closeSessionToolsetValue(tool); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func closeSessionToolsetValue(tool llm.Tool) error {
+	toolset, ok := tool.(llm.Toolset)
+	if !ok {
+		return nil
+	}
+	if closeable, ok := toolset.(sessionToolsetCloser); ok {
+		return closeable.Close()
+	}
+	var errs []error
+	for _, child := range toolset.Tools() {
+		if err := closeSessionToolsetValue(child); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s *AgentSession) flushOTelTurnMetrics() {

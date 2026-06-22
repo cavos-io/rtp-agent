@@ -271,29 +271,43 @@ func TestProcPoolTargetIdleProcesses(t *testing.T) {
 
 func TestProcPoolRejectsUnsupportedExecutorType(t *testing.T) {
 	launchPool := NewProcPool(1, ExecutorType("unsupported"), nil)
+	var launchReadyEvents int
+	launchPool.On(ProcPoolEventProcessReady, func(JobExecutor) {
+		launchReadyEvents++
+	})
 
 	err := launchPool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
 	if err == nil {
-		t.Fatal("LaunchJob error = nil, want unsupported job executor error")
+		t.Fatal("LaunchJob error = nil, want process acquisition error")
 	}
-	if got, want := err.Error(), "unsupported job executor: unsupported"; got != want {
+	if got, want := err.Error(), "no process became available after 3 attempts"; got != want {
 		t.Fatalf("LaunchJob error = %q, want %q", got, want)
 	}
 	if executors := launchPool.GetExecutors(); len(executors) != 0 {
 		t.Fatalf("executors len = %d, want none after unsupported executor type", len(executors))
 	}
+	if launchReadyEvents != 0 {
+		t.Fatalf("launch ready events = %d, want none after unsupported executor type", launchReadyEvents)
+	}
 
 	startPool := NewProcPool(1, ExecutorType("unsupported"), nil)
 	startPool.SetTargetIdleProcesses(1)
+	var readyEvents int
+	startPool.On(ProcPoolEventProcessReady, func(JobExecutor) {
+		readyEvents++
+	})
 	err = startPool.Start(context.Background())
-	if err == nil {
-		t.Fatal("Start error = nil, want unsupported job executor error")
-	}
-	if got, want := err.Error(), "unsupported job executor: unsupported"; got != want {
-		t.Fatalf("Start error = %q, want %q", got, want)
+	if err != nil {
+		t.Fatalf("Start error = %v, want nil like reference async warm failure", err)
 	}
 	if executors := startPool.GetExecutors(); len(executors) != 0 {
 		t.Fatalf("start executors len = %d, want none after unsupported executor type", len(executors))
+	}
+	if readyEvents != 0 {
+		t.Fatalf("ready events = %d, want none after unsupported executor type", readyEvents)
+	}
+	if err := startPool.Start(context.Background()); err != nil {
+		t.Fatalf("second Start error = %v, want nil after reference started flag", err)
 	}
 }
 
@@ -366,6 +380,56 @@ func TestProcPoolStartWarmsTargetIdleExecutors(t *testing.T) {
 		ProcPoolEventProcessCreated,
 		ProcPoolEventProcessStarted,
 		ProcPoolEventProcessReady,
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+	}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
+	}
+	for i := range wantEvents {
+		if events[i] != wantEvents[i] {
+			t.Fatalf("events = %v, want %v", events, wantEvents)
+		}
+	}
+}
+
+func TestProcPoolSetTargetIdleProcessesWarmsRunningPool(t *testing.T) {
+	executor := &fakeJobExecutor{id: "exec-a"}
+	var created int
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return executor
+	}
+
+	var events []ProcPoolEvent
+	for _, event := range []ProcPoolEvent{
+		ProcPoolEventProcessCreated,
+		ProcPoolEventProcessStarted,
+		ProcPoolEventProcessReady,
+	} {
+		event := event
+		pool.On(event, func(executor JobExecutor) {
+			events = append(events, event)
+			if executor.Started() {
+				t.Fatalf("%s executor %q is running a job, want warmed idle executor", event, executor.ID())
+			}
+		})
+	}
+
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pool.SetTargetIdleProcesses(1)
+
+	if created != 1 {
+		t.Fatalf("created executors = %d, want 1 after target idle increase", created)
+	}
+	if got := len(pool.GetExecutors()); got != 1 {
+		t.Fatalf("executors len = %d, want warmed executor after target idle increase", got)
+	}
+	wantEvents := []ProcPoolEvent{
 		ProcPoolEventProcessCreated,
 		ProcPoolEventProcessStarted,
 		ProcPoolEventProcessReady,
@@ -532,6 +596,45 @@ func TestProcPoolCloseBeforeStartIsReferenceNoop(t *testing.T) {
 	}
 	if got := len(pool.GetExecutors()); got != 1 {
 		t.Fatalf("executors len = %d, want warmed executor after Start", got)
+	}
+}
+
+func TestProcPoolStartAfterCloseIsReferenceNoop(t *testing.T) {
+	var created int
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.SetTargetIdleProcesses(1)
+	pool.executorFactory = func(id string) JobExecutor {
+		created++
+		return &fakeJobExecutor{id: id}
+	}
+
+	var readyEvents int
+	pool.On(ProcPoolEventProcessReady, func(executor JobExecutor) {
+		readyEvents++
+	})
+
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := pool.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := pool.Start(context.Background()); err != nil {
+		t.Fatalf("Start after Close: %v", err)
+	}
+
+	if created != 1 {
+		t.Fatalf("created executors = %d, want only initial warm executor", created)
+	}
+	if readyEvents != 1 {
+		t.Fatalf("ready events = %d, want only initial warm event", readyEvents)
+	}
+	if got := len(pool.GetExecutors()); got != 0 {
+		t.Fatalf("executors len = %d, want closed pool to stay empty", got)
+	}
+	err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	if !errors.Is(err, ErrProcPoolClosed) {
+		t.Fatalf("LaunchJob after close error = %v, want ErrProcPoolClosed", err)
 	}
 }
 

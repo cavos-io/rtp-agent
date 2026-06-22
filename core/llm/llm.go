@@ -1126,6 +1126,10 @@ type prewarmProviderLLM interface {
 	Prewarm()
 }
 
+type closeProviderLLM interface {
+	Close() error
+}
+
 func Label(llm LLM) string {
 	if provider, ok := llm.(labelProviderLLM); ok {
 		if label := provider.Label(); label != "" {
@@ -1160,6 +1164,13 @@ func Prewarm(llm LLM) {
 	if provider, ok := llm.(prewarmProviderLLM); ok {
 		provider.Prewarm()
 	}
+}
+
+func Close(llm LLM) error {
+	if provider, ok := llm.(closeProviderLLM); ok {
+		return provider.Close()
+	}
+	return nil
 }
 
 func reflectedLLMLabel(llm LLM) string {
