@@ -201,13 +201,22 @@ func (t *GoogleTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *GoogleTTS) registerStream(stream *googleTTSSynthesizeStream) {
+func (t *GoogleTTS) registerStream(stream *googleTTSSynthesizeStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*googleTTSSynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	t.mu.Unlock()
+	return true
 }
 
 func (t *GoogleTTS) unregisterStream(stream *googleTTSSynthesizeStream) {
@@ -289,7 +298,9 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		audio:  t.audio,
 	}
 	stream.cond = sync.NewCond(&stream.mu)
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		return nil, io.ErrClosedPipe
+	}
 	return stream, nil
 }
 

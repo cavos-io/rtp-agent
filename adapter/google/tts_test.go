@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -350,6 +351,36 @@ func TestGoogleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestGoogleTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	stream := &googleTTSSynthesizeStream{
+		owner:   provider,
+		ctx:     context.Background(),
+		client:  provider.client,
+		voice:   provider.voice,
+		audio:   provider.audio,
+		streams: []texttospeech.TextToSpeech_StreamingSynthesizeClient{streamClient},
+	}
+	stream.cond = sync.NewCond(&stream.mu)
+
+	if provider.registerStream(stream) {
+		t.Fatal("registerStream after provider Close = true, want false")
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after rejected registration")
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after rejected registration error = %v, want io.ErrClosedPipe", err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
 	}
 }
 
