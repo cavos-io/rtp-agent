@@ -971,7 +971,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		return nil, false, nil
 	}
 	if isSLNGTTSEndEvent(message) {
-		return nil, true, nil
+		return slngTTSFinalMarker(), true, nil
 	}
 	messageType := slngString(message["type"])
 	switch messageType {
@@ -993,14 +993,17 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 			},
 		}, false, nil
 	case "Flushed", "audio_end", "end", "flushed", "complete", "completed", "done", "final":
-		return nil, true, nil
+		return slngTTSFinalMarker(), true, nil
 	case "Error", "error":
 		return nil, false, fmt.Errorf("slng tts error: %s", extractSLNGError(message))
 	case "":
 		if encoded := slngString(message["audio"]); encoded != "" {
 			data, err := base64.StdEncoding.DecodeString(encoded)
 			if err != nil {
-				return nil, slngBool(message["isFinal"]), nil
+				if slngBool(message["isFinal"]) {
+					return slngTTSFinalMarker(), true, nil
+				}
+				return nil, false, nil
 			}
 			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
@@ -1013,13 +1016,17 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 			return audio, slngBool(message["isFinal"]), nil
 		}
 		if slngBool(message["isFinal"]) {
-			return nil, true, nil
+			return slngTTSFinalMarker(), true, nil
 		}
 		if message["error"] != nil {
 			return nil, false, fmt.Errorf("slng tts error: %s", extractSLNGError(message))
 		}
 	}
 	return nil, false, nil
+}
+
+func slngTTSFinalMarker() *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{IsFinal: true}
 }
 
 func isSLNGTTSEndEvent(message map[string]any) bool {

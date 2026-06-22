@@ -303,16 +303,22 @@ func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("final event: %v", err)
 	}
-	if audio != nil || !done {
-		t.Fatalf("audio=%+v done=%v, want end event", audio, done)
+	if audio == nil || !audio.IsFinal || !done {
+		t.Fatalf("audio=%+v done=%v, want final marker", audio, done)
+	}
+	if audio.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want boundary-only marker", audio.Frame)
 	}
 
 	audio, done, err = ttsAudioFromMessage([]byte(`{"isFinal":true}`), 24000)
 	if err != nil {
 		t.Fatalf("isFinal message: %v", err)
 	}
-	if audio != nil || !done {
-		t.Fatalf("audio=%+v done=%v, want no-audio isFinal to end segment", audio, done)
+	if audio == nil || !audio.IsFinal || !done {
+		t.Fatalf("audio=%+v done=%v, want final marker for no-audio isFinal", audio, done)
+	}
+	if audio.Frame != nil {
+		t.Fatalf("isFinal marker frame = %+v, want boundary-only marker", audio.Frame)
 	}
 	if got := slngTTSMessageKind([]byte(`{"isFinal":true}`)); got != "isFinal" {
 		t.Fatalf("message kind = %q, want isFinal", got)
@@ -335,8 +341,11 @@ func TestSLNGTTSReceivedEventParsesReferenceTopLevelCompletionTypes(t *testing.T
 		if err != nil {
 			t.Fatalf("ttsAudioFromMessage(%s) error = %v", payload, err)
 		}
-		if audio != nil || !done {
-			t.Fatalf("ttsAudioFromMessage(%s) audio=%+v done=%v, want no-audio end event", payload, audio, done)
+		if audio == nil || !audio.IsFinal || !done {
+			t.Fatalf("ttsAudioFromMessage(%s) audio=%+v done=%v, want final marker", payload, audio, done)
+		}
+		if audio.Frame != nil {
+			t.Fatalf("ttsAudioFromMessage(%s) final frame = %+v, want boundary-only marker", payload, audio.Frame)
 		}
 	}
 }
@@ -359,8 +368,11 @@ func TestSLNGTTSReceivedEventIgnoresInvalidBase64LikeReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ttsAudioFromMessage(isFinal invalid audio) error = %v, want nil", err)
 	}
-	if audio != nil || !done {
+	if audio == nil || !audio.IsFinal || !done {
 		t.Fatalf("ttsAudioFromMessage(isFinal invalid audio) audio=%+v done=%v, want final marker", audio, done)
+	}
+	if audio.Frame != nil {
+		t.Fatalf("ttsAudioFromMessage(isFinal invalid audio) frame = %+v, want boundary-only marker", audio.Frame)
 	}
 }
 
