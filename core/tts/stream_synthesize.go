@@ -108,6 +108,9 @@ type chunkedStreamFromSynthesizeStream struct {
 }
 
 func (s *chunkedStreamFromSynthesizeStream) Next() (*SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	for {
 		audio, err := s.stream.Next()
 		clientClosed := isClientClosedStatus(err)
