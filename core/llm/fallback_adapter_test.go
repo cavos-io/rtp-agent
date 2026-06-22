@@ -752,8 +752,10 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	if !strings.Contains(err.Error(), "primary.LLM") || !strings.Contains(err.Error(), "fallback.LLM") {
 		t.Fatalf("Chat error = %q, want exhausted provider labels", err)
 	}
-	if primary.calls != 1 || fallback.calls != 1 {
-		t.Fatalf("provider calls = (%d, %d), want one startup attempt per provider", primary.calls, fallback.calls)
+	waitForFallbackCalls(t, primary, 2)
+	waitForFallbackCalls(t, fallback, 2)
+	if primary.calls != 2 || fallback.calls != 2 {
+		t.Fatalf("provider calls = (%d, %d), want one startup attempt and one recovery probe per provider", primary.calls, fallback.calls)
 	}
 }
 
@@ -1209,6 +1211,49 @@ func TestFallbackAdapterRecoveryTreatsClientClosedAsAvailable(t *testing.T) {
 	}
 	if got := chunk.Delta.Content; got != "primary active" {
 		t.Fatalf("second stream content = %q, want recovered primary active", got)
+	}
+}
+
+func TestFallbackAdapterStartsRecoveryWithoutRetryIntervalDelay(t *testing.T) {
+	firstErr := errors.New("primary stream failed")
+	recoveryStarted := make(chan struct{}, 1)
+	primary := &fakeFallbackLLM{
+		streams: []LLMStream{
+			&fakeFallbackStream{events: []fakeFallbackEvent{{err: firstErr}}},
+			&fakeFallbackStream{events: []fakeFallbackEvent{
+				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "recovery probe"}}},
+			}},
+		},
+		onChat: func(context.Context) {
+			if len(recoveryStarted) == 0 {
+				recoveryStarted <- struct{}{}
+			}
+		},
+	}
+	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
+		{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback"}}},
+	}}}
+	adapter := NewFallbackAdapterWithOptions([]LLM{primary, fallback}, FallbackAdapterOptions{
+		RetryInterval: 500 * time.Millisecond,
+	})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	<-recoveryStarted // first primary attempt
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "fallback" {
+		t.Fatalf("fallback content = %q, want fallback", got)
+	}
+
+	select {
+	case <-recoveryStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("recovery did not start promptly; reference starts background recovery without waiting retry_interval")
 	}
 }
 

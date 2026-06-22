@@ -1960,10 +1960,6 @@ func (s *fallbackLLMStream) tryRecovery(index int) {
 
 func (f *FallbackAdapter) scheduleRecovery(index int, llm LLM, chatCtx *ChatContext, opts []ChatOption) {
 	go func() {
-		if f.retryInterval > 0 {
-			timer := time.NewTimer(f.retryInterval)
-			<-timer.C
-		}
 		f.recoverLLM(index, llm, chatCtx, opts)
 	}()
 }
