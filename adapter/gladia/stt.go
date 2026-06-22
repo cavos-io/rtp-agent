@@ -839,6 +839,9 @@ func (s *gladiaSTTStream) StartTimeOffset() float64 {
 }
 
 func (s *gladiaSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureStateLocked().startTimeOffset = offset
@@ -851,6 +854,9 @@ func (s *gladiaSTTStream) StartTime() float64 {
 }
 
 func (s *gladiaSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureStateLocked().startTime = startTime
