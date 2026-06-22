@@ -448,6 +448,9 @@ func (s *minimaxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.audioFormat == "mp3" {
 		return s.nextDecodedMP3()
 	}
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	for s.scanner.Scan() {
 		line := strings.TrimSpace(s.scanner.Text())
 		if line == "" || !strings.HasPrefix(line, "data:") {
@@ -473,10 +476,14 @@ func (s *minimaxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err := s.scanner.Err(); err != nil {
 		return nil, err
 	}
-	return nil, io.EOF
+	s.finalSent = true
+	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
 
 func (s *minimaxTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	if !s.decodeStarted {
 		s.decodeStarted = true
 		audio, err := s.collectSSEAudio()
@@ -484,7 +491,8 @@ func (s *minimaxTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 			return nil, err
 		}
 		if len(audio) == 0 {
-			return nil, io.EOF
+			s.finalSent = true
+			return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 		}
 		s.hasAudio = true
 		decoder := codecs.NewMP3AudioStreamDecoder()

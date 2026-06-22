@@ -348,6 +348,36 @@ func TestMinimaxTTSChunkedStreamDecodesReferenceSSEAudio(t *testing.T) {
 	}
 }
 
+func TestMinimaxTTSChunkedStreamEmitsReferenceFinalMarkerAfterSSEAudio(t *testing.T) {
+	stream := &minimaxTTSChunkedStream{
+		resp: &http.Response{
+			Body:   io.NopCloser(bytes.NewReader([]byte("data: {\"data\":{\"audio\":\"0102\"},\"base_resp\":{\"status_code\":0}}\n\n"))),
+			Header: http.Header{"Trace-Id": []string{"trace-sse-final"}},
+		},
+		audioFormat: "pcm",
+		sampleRate:  16000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want SSE audio frame", audio)
+	}
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.RequestID != "trace-sse-final" {
+		t.Fatalf("second audio = %#v, want final marker with trace id", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
 func TestMinimaxTTSChunkedStreamDecodesReferenceMP3SSEAudio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -441,6 +471,29 @@ func TestMinimaxTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 		frames++
 	}
 	t.Fatalf("stream did not emit final marker after %d frames", frames)
+}
+
+func TestMinimaxTTSChunkedStreamEmitsReferenceMP3FinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &minimaxTTSChunkedStream{
+		resp: &http.Response{
+			Body:   io.NopCloser(strings.NewReader("data: {\"base_resp\":{\"status_code\":0}}\n\n")),
+			Header: http.Header{"Trace-Id": []string{"trace-empty"}},
+		},
+		audioFormat: "mp3",
+		sampleRate:  24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.RequestID != "trace-empty" {
+		t.Fatalf("Next = %+v, want final marker with trace id", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
 }
 
 func TestMinimaxTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
