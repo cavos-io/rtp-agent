@@ -16,6 +16,21 @@ func (f cambaiRoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, er
 	return f(req)
 }
 
+type cambaiFinalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (r *cambaiFinalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *cambaiFinalEOFReader) Close() error { return nil }
+
 func TestCambaiTTSDefaultsMatchReference(t *testing.T) {
 	provider, err := NewCambaiTTS("test-key", "")
 	if err != nil {
@@ -274,6 +289,33 @@ func TestCambaiTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testi
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
+func TestCambaiTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &cambaiTTSChunkedStream{
+		resp:       &http.Response{Body: &cambaiFinalEOFReader{data: []byte{0x01, 0x02}}},
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want audio frame", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final bytes", got)
+	}
+
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", audio)
 	}
 }
 
