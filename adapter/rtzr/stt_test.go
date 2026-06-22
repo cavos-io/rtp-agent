@@ -226,6 +226,51 @@ func TestRtzrSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	}
 }
 
+func TestRtzrSTTStreamLanguageArgumentDoesNotMutateReferenceLanguage(t *testing.T) {
+	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"start_at":0,"duration":100,"final":true,"alternatives":[{"text":"hello"}]}`)); err != nil {
+			t.Errorf("write transcript event: %v", err)
+		}
+		_, _, _ = conn.ReadMessage()
+	})
+
+	provider := NewRtzrSTT("client-id",
+		WithRtzrAccessToken("access-token"),
+		WithRtzrWSBase("ws://rtzr.test"),
+		WithRtzrLanguage("ko"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %v, want start of speech", event.Type)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event = %v, want final transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0].Language; got != "ko" {
+		t.Fatalf("transcript language = %q, want configured reference language ko", got)
+	}
+	if provider.language != "ko" {
+		t.Fatalf("provider language = %q, want unchanged ko", provider.language)
+	}
+}
+
 func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 	queryCh := make(chan url.Values, 1)
 	authCh := make(chan string, 1)

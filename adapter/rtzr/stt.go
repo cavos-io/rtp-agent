@@ -218,9 +218,6 @@ func (s *RtzrSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *RtzrSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	if language != "" {
-		s.language = language
-	}
 	token, err := s.token(ctx)
 	if err != nil {
 		return nil, err
