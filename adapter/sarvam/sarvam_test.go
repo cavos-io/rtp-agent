@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestSarvamSTTDefaultsMatchReference(t *testing.T) {
@@ -803,6 +806,60 @@ func TestSarvamTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	provider := NewSarvamTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	originalClient := http.DefaultClient
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return nil, errors.New("unexpected sarvam tts request")
+	})}
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Synthesize after Close stream = %#v, want nil", stream)
+	}
+	if requests != 0 {
+		t.Fatalf("Synthesize after Close sent %d HTTP requests, want none", requests)
+	}
+}
+
+func TestSarvamTTSStreamAfterCloseIsRejected(t *testing.T) {
+	provider := NewSarvamTTS("test-key", "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	oldDialer := websocket.DefaultDialer
+	dials := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("unexpected sarvam tts dial")
+		},
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	stream, err := provider.Stream(context.Background())
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Stream after Close stream = %#v, want nil", stream)
+	}
+	if dials != 0 {
+		t.Fatalf("Stream after Close dialed %d times, want none", dials)
+	}
+}
+
 func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050, "mp3")
 	if err != nil {
@@ -871,6 +928,12 @@ func TestSarvamTTSAudioFromStreamMessageDecodesTelephonyCodecs(t *testing.T) {
 
 func TestSarvamTTSImplementsStreamingInterface(t *testing.T) {
 	var _ tts.TTS = NewSarvamTTS("test-key", "")
+}
+
+type sarvamRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f sarvamRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func readMultipartFields(t *testing.T, req *http.Request) map[string]string {
