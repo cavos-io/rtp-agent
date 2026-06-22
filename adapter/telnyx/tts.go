@@ -34,6 +34,7 @@ type TelnyxTTS struct {
 	baseURL    string
 	voice      string
 	sampleRate int
+	closed     bool
 }
 
 type TelnyxTTSOption func(*TelnyxTTS)
@@ -77,6 +78,7 @@ func (t *TelnyxTTS) Provider() string { return "telnyx" }
 
 func (t *TelnyxTTS) Close() error {
 	t.mu.Lock()
+	t.closed = true
 	streams := make([]*telnyxTTSStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -91,6 +93,15 @@ func (t *TelnyxTTS) Close() error {
 		}
 	}
 	return closeErr
+}
+
+func (t *TelnyxTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
 }
 
 func (t *TelnyxTTS) registerStream(stream *telnyxTTSStream) {
@@ -132,12 +143,19 @@ func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 }
 
 func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateTelnyxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxTTSStreamURL(t), buildTelnyxTTSHeaders(t))
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial telnyx tts websocket: %w", err)
+	}
+	if t.isClosed() {
+		_ = conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &telnyxTTSStream{
@@ -153,6 +171,11 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		conn.Close()
 		cancel()
 		return nil, err
+	}
+	if t.isClosed() {
+		conn.Close()
+		cancel()
+		return nil, io.ErrClosedPipe
 	}
 	stream.writeMessage = stream.writeTTSMessage
 	stream.closeConn = stream.closeWebsocketConn
