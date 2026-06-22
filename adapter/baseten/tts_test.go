@@ -516,9 +516,64 @@ func TestBasetenTTSStreamReturnsBinaryAudioFrames(t *testing.T) {
 	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
 		t.Fatalf("frame = %+v, want 24 kHz mono PCM", audio.Frame)
 	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second next err = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second next = %#v, want final marker", final)
+	}
 	_, err = stream.Next()
 	if err != io.EOF {
-		t.Fatalf("second next err = %v, want EOF", err)
+		t.Fatalf("third next err = %v, want EOF", err)
+	}
+}
+
+func TestBasetenTTSStreamEmitsFinalMarkerOnNormalClose(t *testing.T) {
+	dialer := newBasetenTTSTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read setup: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte{0x01, 0x02, 0x03, 0x04}); err != nil {
+			t.Errorf("write audio: %v", err)
+			return
+		}
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	})
+
+	provider := mustNewBasetenTTS(t, "test-key", "",
+		WithBasetenTTSModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("stream: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v, want audio", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first Next() = %#v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second Next() = %#v, want reference final marker", final)
+	}
+	if final.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want boundary-only final marker", final.Frame)
+	}
+
+	_, err = stream.Next()
+	if err != io.EOF {
+		t.Fatalf("third Next() error = %v, want EOF", err)
 	}
 }
 

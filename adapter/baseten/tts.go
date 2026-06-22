@@ -487,10 +487,15 @@ func (s *basetenTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *basetenTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
+	audioSent := false
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+				if audioSent && !s.isClosed() {
+					s.events <- &tts.SynthesizedAudio{IsFinal: true}
+				}
+			} else {
 				s.errCh <- err
 			}
 			return
@@ -504,9 +509,16 @@ func (s *basetenTTSSynthesizeStream) readLoop() {
 			return
 		}
 		if audio != nil {
+			audioSent = true
 			s.events <- audio
 		}
 	}
+}
+
+func (s *basetenTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func basetenTTSAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, error) {
