@@ -2720,6 +2720,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	oldActivity := s.activity
 	started := s.started
+	oldTools := copySessionTools(s.Tools)
 	s.Agent = agent
 	s.Tools = copySessionTools(baseAgent.Tools)
 	s.updateAgentComponentsLocked(baseAgent)
@@ -2777,6 +2778,10 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	if oldActivity != nil {
 		oldActivity.Stop()
+		if err := closeSessionToolsets(oldTools); err != nil {
+			logger.Logger.Errorw("failed to close previous agent toolsets", err)
+			s.EmitError(ErrorEvent{Error: err, Source: oldAgent})
+		}
 	}
 	handoff := newAgentHandoff(oldAgent, baseAgent)
 	if runState != nil {
