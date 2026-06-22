@@ -229,6 +229,9 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			if done {
 				s.done = true
+				if audio != nil {
+					return audio, nil
+				}
 				return nil, io.EOF
 			}
 			if audio != nil {
@@ -285,7 +288,7 @@ func mistralAITTSAudioFromStreamEvent(data string, responseFormat string) (*tts.
 		}
 		return audio, false, nil
 	case "speech.audio.done":
-		return nil, true, nil
+		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	default:
 		return nil, false, nil
 	}
