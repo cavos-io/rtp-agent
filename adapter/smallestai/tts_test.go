@@ -412,6 +412,24 @@ func TestSmallestAITTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &smallestaiTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker", audio)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func TestSmallestAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	oldClient := http.DefaultClient
 	body := &smallestAICloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
