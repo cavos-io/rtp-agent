@@ -167,6 +167,7 @@ func (s *GradiumSTT) Stream(ctx context.Context, language string) (stt.Recognize
 			language:       streamLanguage,
 			vadBucket:      s.vadBucket,
 			vadThreshold:   s.vadThreshold,
+			vadFlush:       s.vadFlush,
 			delayInTokens:  6,
 			frameSize:      1920,
 			bufferedText:   nil,
@@ -260,6 +261,12 @@ func (s *gradiumSTTStream) readLoop() {
 			s.errCh <- err
 			return
 		}
+		if s.state.takeFlushSilenceRequest() {
+			if err := s.writeVADFlushSilence(); err != nil {
+				s.errCh <- err
+				return
+			}
+		}
 		for _, event := range events {
 			s.events <- event
 		}
@@ -297,6 +304,24 @@ func (s *gradiumSTTStream) writeAudioFramesLocked(frames []*model.AudioFrame) er
 		}
 	}
 	return nil
+}
+
+func (s *gradiumSTTStream) writeVADFlushSilence() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	delay := s.state.delayInTokens
+	if delay == 0 {
+		delay = 6
+	}
+	frameSize := s.state.frameSize
+	if frameSize == 0 {
+		frameSize = 1920
+	}
+	silence := make([]byte, frameSize*delay*2)
+	return s.writeAudioFramesLocked(s.audioBStream.Write(silence))
 }
 
 func (s *gradiumSTTStream) Close() error {
@@ -341,9 +366,11 @@ type gradiumSTTMessageState struct {
 	bufferedText   []string
 	vadBucket      *int
 	vadThreshold   float64
+	vadFlush       bool
 	delayInTokens  int
 	frameSize      int
 	remainingSteps *int
+	flushSilence   bool
 }
 
 func processGradiumSTTMessage(state *gradiumSTTMessageState, payload []byte, startTimeOffset float64) ([]*stt.SpeechEvent, error) {
@@ -416,6 +443,9 @@ func processGradiumSTTStep(state *gradiumSTTMessageState, raw map[string]any) []
 			delay = 6
 		}
 		state.remainingSteps = &delay
+		if state.vadFlush {
+			state.flushSilence = true
+		}
 		return nil
 	}
 	*state.remainingSteps--
@@ -435,6 +465,14 @@ func processGradiumSTTStep(state *gradiumSTTMessageState, raw map[string]any) []
 		},
 		{Type: stt.SpeechEventEndOfSpeech},
 	}
+}
+
+func (state *gradiumSTTMessageState) takeFlushSilenceRequest() bool {
+	if state == nil || !state.flushSilence {
+		return false
+	}
+	state.flushSilence = false
+	return true
 }
 
 func float64Value(value any) float64 {
