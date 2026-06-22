@@ -374,6 +374,42 @@ func TestSmallestAITTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	if audio.Frame.SampleRate != 44100 {
 		t.Fatalf("sample rate = %d, want configured sample rate", audio.Frame.SampleRate)
 	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestSmallestAITTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &smallestaiTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
 }
 
 func TestSmallestAITTSProviderCloseClosesActiveStreams(t *testing.T) {

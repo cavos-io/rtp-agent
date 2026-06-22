@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -30,6 +31,7 @@ const (
 	defaultEPDTime         = 0.8
 	defaultNoiseThreshold  = 0.60
 	defaultActiveThreshold = 0.80
+	defaultChunkMS         = 100
 	rtzrClientIDEnv        = "RTZR_CLIENT_ID"
 	rtzrClientSecretEnv    = "RTZR_CLIENT_SECRET"
 )
@@ -230,12 +232,13 @@ func (s *RtzrSTT) Stream(ctx context.Context, language string) (stt.RecognizeStr
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rtzrStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 100),
-		errCh:  make(chan error, 1),
-		ctx:    streamCtx,
-		cancel: cancel,
-		state:  &rtzrTranscriptState{language: s.language},
+		conn:         conn,
+		events:       make(chan *stt.SpeechEvent, 100),
+		errCh:        make(chan error, 1),
+		ctx:          streamCtx,
+		cancel:       cancel,
+		state:        &rtzrTranscriptState{language: s.language},
+		audioBStream: newRtzrAudioByteStream(s.sampleRate),
 	}
 	go stream.readLoop()
 	return stream, nil
@@ -339,6 +342,8 @@ type rtzrStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *rtzrTranscriptState
+
+	audioBStream *audio.AudioByteStream
 }
 
 func (s *rtzrStream) readLoop() {
@@ -373,11 +378,43 @@ func (s *rtzrStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.audioBStream == nil {
+		s.audioBStream = newRtzrAudioByteStream(defaultSampleRate)
+	}
+	return s.writeAudioFramesLocked(s.audioBStream.Write(frame.Data))
 }
 
 func (s *rtzrStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.audioBStream != nil {
+		if err := s.writeAudioFramesLocked(s.audioBStream.Flush()); err != nil {
+			return err
+		}
+	}
 	return s.conn.WriteMessage(websocket.TextMessage, []byte("EOS"))
+}
+
+func (s *rtzrStream) writeAudioFramesLocked(frames []*model.AudioFrame) error {
+	for _, frame := range frames {
+		if frame == nil || len(frame.Data) == 0 {
+			continue
+		}
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, frame.Data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newRtzrAudioByteStream(sampleRate int) *audio.AudioByteStream {
+	if sampleRate <= 0 {
+		sampleRate = defaultSampleRate
+	}
+	samplesPerChannel := sampleRate / (1000 / defaultChunkMS)
+	return audio.NewAudioByteStream(uint32(sampleRate), 1, uint32(samplesPerChannel))
 }
 
 func (s *rtzrStream) Close() error {

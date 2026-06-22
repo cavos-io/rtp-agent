@@ -280,6 +280,43 @@ func TestFishAudioTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	if !bytes.Equal(audio.Frame.Data, pcm) {
 		t.Fatalf("audio data = %#v, want decoded wav pcm", audio.Frame.Data)
 	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestFishAudioTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &fishaudioTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(fishAudioTestWAV([]byte{0x01, 0x02}, 24000, 1)))},
+		sampleRate: 24000,
+		format:     "wav",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
 }
 
 func TestFishAudioTTSChunkedStreamCloseIsIdempotent(t *testing.T) {

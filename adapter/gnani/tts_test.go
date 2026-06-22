@@ -208,6 +208,44 @@ func TestGnaniTTSChunkedStreamStripsWAVHeaderAndUsesConfiguredSampleRate(t *test
 	if audio.Frame.NumChannels != 2 {
 		t.Fatalf("num channels = %d, want configured channels", audio.Frame.NumChannels)
 	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestGnaniTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	wav := gnaniTestWAV([]byte{0x01, 0x02})
+	stream := &ttsChunkedStream{
+		resp:        &http.Response{Body: io.NopCloser(bytes.NewReader(wav))},
+		sampleRate:  16000,
+		numChannels: 1,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
 }
 
 func TestGnaniTTSWebsocketURLHeadersAndPayloadMatchReference(t *testing.T) {

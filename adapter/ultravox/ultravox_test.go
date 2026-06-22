@@ -1,7 +1,10 @@
 package ultravox
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -45,5 +48,32 @@ func TestUltravoxTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ULTRAVOX_API_KEY") {
 		t.Fatalf("Synthesize error = %q, want ULTRAVOX_API_KEY guidance", err)
+	}
+}
+
+func TestUltravoxTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &ultravoxTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02, 0x03, 0x04}))},
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want boundary-only final marker", final)
+	}
+
+	audio, err = stream.Next()
+	if err != io.EOF || audio != nil {
+		t.Fatalf("Next after final marker = (%+v, %v), want EOF", audio, err)
 	}
 }

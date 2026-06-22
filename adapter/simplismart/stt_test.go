@@ -1,13 +1,19 @@
 package simplismart
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestSimplismartSTTDefaultsMatchReference(t *testing.T) {
@@ -250,9 +256,128 @@ func TestSimplismartSTTStreamTranscriptEvents(t *testing.T) {
 	}
 }
 
+func TestSimplismartSTTStreamChunksAndFlushesAudioLikeReference(t *testing.T) {
+	configCh := make(chan []byte, 1)
+	authCh := make(chan string, 1)
+	audioCh := make(chan []byte, 3)
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		authCh <- r.Header.Get("Authorization")
+
+		msgType, config, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read config: %v", err)
+			return
+		}
+		if msgType != websocket.TextMessage {
+			t.Errorf("config message type = %d, want text", msgType)
+			return
+		}
+		configCh <- append([]byte(nil), config...)
+
+		for {
+			msgType, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			if msgType == websocket.BinaryMessage {
+				audioCh <- append([]byte(nil), payload...)
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSimplismartSTT("test-key",
+		WithSimplismartSTTStreaming(true),
+		WithSimplismartSTTBaseURL(server.URL),
+	)
+	stream, err := provider.Stream(context.Background(), "de")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if got := receiveSimplismartString(t, authCh, "auth header"); got != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+	var config map[string]string
+	if err := json.Unmarshal(receiveSimplismartBytes(t, configCh, "initial config"), &config); err != nil {
+		t.Fatalf("decode config: %v", err)
+	}
+	if config["language"] != "de" {
+		t.Fatalf("config language = %q, want stream override", config["language"])
+	}
+
+	firstPartial := []byte{0x01, 0x02}
+	if err := stream.PushFrame(&model.AudioFrame{Data: firstPartial}); err != nil {
+		t.Fatalf("PushFrame(partial) returned error: %v", err)
+	}
+	assertNoSimplismartBytes(t, audioCh)
+
+	remainder := bytes.Repeat([]byte{0x03}, 1598)
+	if err := stream.PushFrame(&model.AudioFrame{Data: remainder}); err != nil {
+		t.Fatalf("PushFrame(remainder) returned error: %v", err)
+	}
+	wantChunk := append(append([]byte(nil), firstPartial...), remainder...)
+	if got := receiveSimplismartBytes(t, audioCh, "audio chunk"); !bytes.Equal(got, wantChunk) {
+		t.Fatalf("audio chunk length=%d first=%v last=%v, want buffered 50ms chunk length=%d", len(got), got[:2], got[len(got)-2:], len(wantChunk))
+	}
+
+	tail := []byte{0x04, 0x05}
+	if err := stream.PushFrame(&model.AudioFrame{Data: tail}); err != nil {
+		t.Fatalf("PushFrame(tail) returned error: %v", err)
+	}
+	assertNoSimplismartBytes(t, audioCh)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if got := receiveSimplismartBytes(t, audioCh, "flush tail"); !bytes.Equal(got, tail) {
+		t.Fatalf("flush audio = %v, want pending tail bytes", got)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
 func assertSimplismartPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
+	}
+}
+
+func receiveSimplismartBytes(t *testing.T, ch <-chan []byte, label string) []byte {
+	t.Helper()
+	select {
+	case payload := <-ch:
+		return payload
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return nil
+	}
+}
+
+func receiveSimplismartString(t *testing.T, ch <-chan string, label string) string {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return ""
+	}
+}
+
+func assertNoSimplismartBytes(t *testing.T, ch <-chan []byte) {
+	t.Helper()
+	select {
+	case payload := <-ch:
+		t.Fatalf("unexpected audio payload length=%d, want buffered partial chunk", len(payload))
+	case <-time.After(100 * time.Millisecond):
 	}
 }

@@ -82,15 +82,30 @@ func (t *UltravoxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 }
 
 type ultravoxTTSChunkedStream struct {
-	resp *http.Response
+	resp      *http.Response
+	finalSent bool
 }
 
 func (s *ultravoxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
-			return nil, io.EOF
+			if n > 0 {
+				return &tts.SynthesizedAudio{
+					Frame: &model.AudioFrame{
+						Data:              buf[:n],
+						SampleRate:        24000,
+						NumChannels:       1,
+						SamplesPerChannel: uint32(n / 2),
+					},
+				}, nil
+			}
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		return nil, err
 	}

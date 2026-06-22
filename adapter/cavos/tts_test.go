@@ -91,6 +91,34 @@ func TestCavosTTSOptionsBuildCacatuaRequest(t *testing.T) {
 	}
 }
 
+func TestCavosTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &ttsStream{
+		resp:       io.NopCloser(stringsNewReader("\x01\x00\x02\x00")),
+		sampleRate: 44100,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want boundary-only final marker", final)
+	}
+
+	audio, err = stream.Next()
+	if err != io.EOF || audio != nil {
+		t.Fatalf("Next after final marker = (%+v, %v), want EOF", audio, err)
+	}
+}
+
 func assertPayloadString(t *testing.T, payload map[string]any, key, want string) {
 	t.Helper()
 	if got, _ := payload[key].(string); got != want {

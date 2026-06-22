@@ -34,3 +34,42 @@ func TestClovaTTSChunkedStreamDecodesMP3Response(t *testing.T) {
 		t.Fatalf("frame shape = rate %d channels %d samples %d, want decoded PCM frame", audio.Frame.SampleRate, audio.Frame.NumChannels, audio.Frame.SamplesPerChannel)
 	}
 }
+
+func TestClovaTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	stream := &clovaTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(bytes.NewReader(mp3Data))},
+	}
+	defer stream.Close()
+
+	sawAudio := false
+	for {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next error before final marker = %v", err)
+		}
+		if audio == nil {
+			t.Fatal("Next returned nil audio without error")
+		}
+		if audio.IsFinal {
+			if !sawAudio {
+				t.Fatal("final marker arrived before decoded audio")
+			}
+			if audio.Frame != nil {
+				t.Fatalf("final marker frame = %+v, want nil", audio.Frame)
+			}
+			break
+		}
+		if audio.Frame != nil && len(audio.Frame.Data) > 0 {
+			sawAudio = true
+		}
+	}
+
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker error = %v, want EOF", err)
+	}
+}

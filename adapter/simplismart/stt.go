@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
@@ -25,6 +26,7 @@ const (
 	defaultSimplismartSTTLanguage   = "en"
 	defaultSimplismartSTTTask       = "transcribe"
 	defaultSimplismartSTTSampleRate = 16000
+	simplismartSTTChunkDurationMS   = 50
 	simplismartAPIKeyEnv            = "SIMPLISMART_API_KEY"
 )
 
@@ -211,13 +213,14 @@ func (s *SimplismartSTT) Stream(ctx context.Context, language string) (stt.Recog
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &simplismartSTTStream{
-		conn:      conn,
-		events:    make(chan *stt.SpeechEvent, 100),
-		errCh:     make(chan error, 1),
-		ctx:       streamCtx,
-		cancel:    cancel,
-		requestID: fmt.Sprintf("%p", conn),
-		language:  resolveSimplismartSTTLanguage(s, language),
+		conn:         conn,
+		events:       make(chan *stt.SpeechEvent, 100),
+		errCh:        make(chan error, 1),
+		ctx:          streamCtx,
+		cancel:       cancel,
+		requestID:    fmt.Sprintf("%p", conn),
+		language:     resolveSimplismartSTTLanguage(s, language),
+		audioBStream: newSimplismartSTTAudioByteStream(),
 	}
 	go stream.readLoop()
 	return stream, nil
@@ -400,6 +403,8 @@ type simplismartSTTStream struct {
 	cancel    context.CancelFunc
 	requestID string
 	language  string
+
+	audioBStream *audio.AudioByteStream
 }
 
 func (s *simplismartSTTStream) readLoop() {
@@ -425,11 +430,38 @@ func (s *simplismartSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.audioBStream == nil {
+		s.audioBStream = newSimplismartSTTAudioByteStream()
+	}
+	return s.writeAudioFramesLocked(s.audioBStream.Write(frame.Data))
 }
 
 func (s *simplismartSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.audioBStream == nil {
+		return nil
+	}
+	return s.writeAudioFramesLocked(s.audioBStream.Flush())
+}
+
+func (s *simplismartSTTStream) writeAudioFramesLocked(frames []*model.AudioFrame) error {
+	for _, frame := range frames {
+		if frame == nil || len(frame.Data) == 0 {
+			continue
+		}
+		if err := s.conn.WriteMessage(websocket.BinaryMessage, frame.Data); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func newSimplismartSTTAudioByteStream() *audio.AudioByteStream {
+	samplesPerChannel := defaultSimplismartSTTSampleRate / (1000 / simplismartSTTChunkDurationMS)
+	return audio.NewAudioByteStream(defaultSimplismartSTTSampleRate, 1, uint32(samplesPerChannel))
 }
 
 func (s *simplismartSTTStream) Close() error {
