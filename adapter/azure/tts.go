@@ -50,6 +50,7 @@ type AzureTTS struct {
 	httpClient     *http.Client
 	mu             sync.Mutex
 	streams        map[*azureTTSChunkedStream]struct{}
+	closed         bool
 }
 
 type AzureTTSProsody struct {
@@ -226,6 +227,9 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 }
 
 func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	req, err := buildAzureTTSRequest(ctx, t, text)
 	if err != nil {
 		return nil, err
@@ -254,7 +258,10 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 		sampleRate: t.sampleRate,
 		provider:   t,
 	}
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	return stream, nil
 }
 
@@ -263,6 +270,11 @@ func (t *AzureTTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*azureTTSChunkedStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -279,10 +291,26 @@ func (t *AzureTTS) Close() error {
 	return closeErr
 }
 
-func (t *AzureTTS) registerStream(stream *azureTTSChunkedStream) {
+func (t *AzureTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *AzureTTS) registerStream(stream *azureTTSChunkedStream) bool {
+	if t == nil || stream == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *AzureTTS) unregisterStream(stream *azureTTSChunkedStream) {
