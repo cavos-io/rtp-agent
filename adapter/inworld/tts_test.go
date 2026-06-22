@@ -768,7 +768,52 @@ func TestInworldTTSStreamBuffersTextUntilFlush(t *testing.T) {
 	}
 }
 
-func TestInworldTTSStreamPreservesWhitespaceOnFlush(t *testing.T) {
+func TestInworldTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	var sent [][]byte
+	stream := &inworldTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	if err := stream.PushText("This is a complete sen"); err != nil {
+		t.Fatalf("PushText(partial) error = %v", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("sent after partial = %d, want no provider text before complete sentence", len(sent))
+	}
+
+	if err := stream.PushText("tence. Tail"); err != nil {
+		t.Fatalf("PushText(sentence) error = %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent after complete sentence = %d, want one send_text", len(sent))
+	}
+	if got := inworldTTSTestSendText(t, sent[0]); got != "This is a complete sentence." {
+		t.Fatalf("send_text = %q, want completed sentence", got)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(sent) != 3 {
+		t.Fatalf("sent after flush = %d, want tail send_text and flush_context", len(sent))
+	}
+	if got := inworldTTSTestSendText(t, sent[1]); got != "Tail" {
+		t.Fatalf("tail send_text = %q, want Tail", got)
+	}
+	var flush map[string]any
+	if err := json.Unmarshal(sent[2], &flush); err != nil {
+		t.Fatalf("decode flush message: %v", err)
+	}
+	if _, ok := flush["flush_context"]; !ok {
+		t.Fatalf("last message = %#v, want flush_context", flush)
+	}
+}
+
+func TestInworldTTSStreamNormalizesWhitespaceOnFlushLikeReference(t *testing.T) {
 	var sent [][]byte
 	stream := &inworldTTSSynthesizeStream{
 		contextID: "ctx-1",
@@ -789,8 +834,8 @@ func TestInworldTTSStreamPreservesWhitespaceOnFlush(t *testing.T) {
 	if len(sent) != 2 {
 		t.Fatalf("sent messages = %d, want send_text and flush", len(sent))
 	}
-	if got := inworldTTSTestSendText(t, sent[0]); got != text {
-		t.Fatalf("send_text = %q, want exact buffered text %q", got, text)
+	if got := inworldTTSTestSendText(t, sent[0]); got != "hello world" {
+		t.Fatalf("send_text = %q, want normalized sentence text", got)
 	}
 }
 
