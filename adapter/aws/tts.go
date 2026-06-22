@@ -231,6 +231,9 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.stream == nil {
 		return nil, io.EOF
 	}
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	if !s.started {
 		s.started = true
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
@@ -239,7 +242,8 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		if len(data) == 0 {
-			return nil, io.EOF
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		s.hasAudio = true
 		go func() {
