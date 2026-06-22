@@ -248,6 +248,43 @@ func TestFireworksSTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	assertFireworksQuery(t, secondURL.Query(), "text_timeout_seconds", "2.5")
 }
 
+func TestFireworksSTTStreamLanguageOverrideDoesNotMutateDefault(t *testing.T) {
+	endpoints := make(chan string, 2)
+	errCh := make(chan error, 2)
+	dialer := newFireworksSTTMultiWebsocketDialer(t, endpoints, errCh)
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		WithFireworksLanguage("en"),
+		dialer,
+	)
+
+	first, err := provider.Stream(context.Background(), "es")
+	if err != nil {
+		t.Fatalf("first Stream error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close error = %v", err)
+	}
+	second, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("second Stream error = %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+
+	firstURL, err := url.Parse(readFireworksTestChan(t, endpoints, errCh))
+	if err != nil {
+		t.Fatalf("parse first stream url: %v", err)
+	}
+	assertFireworksQuery(t, firstURL.Query(), "language", "es")
+	secondURL, err := url.Parse(readFireworksTestChan(t, endpoints, errCh))
+	if err != nil {
+		t.Fatalf("parse second stream url: %v", err)
+	}
+	assertFireworksQuery(t, secondURL.Query(), "language", "en")
+}
+
 func TestFireworksSTTUpdateOptionsBuffersAudioDuringReconnect(t *testing.T) {
 	secondDialStarted := make(chan struct{})
 	allowSecondDial := make(chan struct{})

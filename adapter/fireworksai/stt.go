@@ -187,13 +187,13 @@ func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.Recogni
 	}
 
 	s.mu.Lock()
+	streamLanguage := s.language
 	if language != "" {
-		s.language = language
+		streamLanguage = language
 	}
-	endpoint := buildFireworksStreamURL(s)
+	endpoint := buildFireworksStreamURLForLanguage(s, streamLanguage)
 	headers := buildFireworksStreamHeaders(s)
 	dialer := s.dialWebsocket
-	streamLanguage := s.language
 	s.mu.Unlock()
 
 	conn, _, err := dialer(ctx, endpoint, headers)
@@ -265,6 +265,10 @@ func buildFireworksStreamHeaders(s *FireworksSTT) http.Header {
 }
 
 func buildFireworksStreamURL(s *FireworksSTT) string {
+	return buildFireworksStreamURLForLanguage(s, s.language)
+}
+
+func buildFireworksStreamURLForLanguage(s *FireworksSTT, language string) string {
 	base := strings.TrimRight(s.baseURL, "/") + streamingPath
 	u, err := url.Parse(base)
 	if err != nil {
@@ -272,7 +276,7 @@ func buildFireworksStreamURL(s *FireworksSTT) string {
 	}
 	query := u.Query()
 	setOptionalString(query, "model", s.model)
-	setOptionalString(query, "language", s.language)
+	setOptionalString(query, "language", language)
 	setOptionalString(query, "prompt", s.prompt)
 	if s.temperature != nil {
 		query.Set("temperature", strconv.FormatFloat(*s.temperature, 'f', -1, 64))
