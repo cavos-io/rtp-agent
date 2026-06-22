@@ -249,6 +249,7 @@ func isSimplismartQwenModel(model string) bool {
 type simplismartTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	finalSent  bool
 }
 
 func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -256,7 +257,7 @@ func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
 		if err == io.EOF {
-			return nil, io.EOF
+			return s.emitFinal()
 		}
 		return nil, err
 	}
@@ -271,6 +272,15 @@ func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *simplismartTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
 func (s *simplismartTTSChunkedStream) Close() error {
+	s.finalSent = true
 	return s.resp.Body.Close()
 }
