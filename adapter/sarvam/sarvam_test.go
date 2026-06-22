@@ -822,8 +822,14 @@ func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("final event: %v", err)
 	}
-	if finished != nil || !done {
-		t.Fatalf("finished=%+v done=%v, want final event to finish stream", finished, done)
+	if finished == nil || !finished.IsFinal || !done {
+		t.Fatalf("finished=%+v done=%v, want final marker and done", finished, done)
+	}
+	if finished.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want no audio frame", finished.Frame)
+	}
+	if finished.RequestID != "req-2" {
+		t.Fatalf("final marker request id = %q, want req-2", finished.RequestID)
 	}
 }
 

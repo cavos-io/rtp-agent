@@ -1544,7 +1544,7 @@ func openAIRealtimeSTTTranscriptionFromSessionUpdate(t *testing.T, payload []byt
 	return input["transcription"].(map[string]any)
 }
 
-func TestOpenAIRealtimeSTTStreamLanguageDoesNotMutateSessionLanguage(t *testing.T) {
+func TestOpenAIRealtimeSTTStreamLanguageOverrideUpdatesSessionLanguage(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
 		WithOpenAISTTBaseURL("http://openai.test/v1"),
@@ -1570,21 +1570,28 @@ func TestOpenAIRealtimeSTTStreamLanguageDoesNotMutateSessionLanguage(t *testing.
 		t.Fatalf("Stream error = %v", err)
 	}
 	defer stream.Close()
+	realtimeStream, ok := stream.(*openAIRealtimeSTTStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *openAIRealtimeSTTStream", stream)
+	}
+	if got := realtimeStream.state.language; got != "id" {
+		t.Fatalf("stream event language = %q, want id", got)
+	}
 	defer close(releaseServer)
 
 	select {
 	case payload := <-sessionUpdateCh:
 		transcription := openAIRealtimeSTTTranscriptionFromSessionUpdate(t, payload)
-		if got := transcription["language"]; got != "en" {
-			t.Fatalf("session update language = %#v, want provider language en", got)
+		if got := transcription["language"]; got != "id" {
+			t.Fatalf("session update language = %#v, want stream override id", got)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for session update")
 	}
 
 	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
-	if req.Language != "en" {
-		t.Fatalf("provider language after Stream override = %q, want en", req.Language)
+	if req.Language != "id" {
+		t.Fatalf("provider language after Stream override = %q, want id", req.Language)
 	}
 }
 

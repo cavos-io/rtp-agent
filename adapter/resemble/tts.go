@@ -426,7 +426,7 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 		}
 		return decoded, false, message.RequestID, nil
 	case "audio_end":
-		return nil, true, message.RequestID, nil
+		return &tts.SynthesizedAudio{IsFinal: true}, true, message.RequestID, nil
 	case "error":
 		if message.Message == "" {
 			message.Message = string(payload)

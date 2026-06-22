@@ -167,7 +167,7 @@ func (s *MistralAISTT) Stream(ctx context.Context, language string) (stt.Recogni
 		errCh:     make(chan error, 1),
 		ctx:       streamCtx,
 		cancel:    cancel,
-		state:     &mistralAISTTRealtimeState{},
+		state:     &mistralAISTTRealtimeState{detectedLanguage: language},
 		vadStream: vadStream,
 	}
 	s.registerRealtimeStream(stream)

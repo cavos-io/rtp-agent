@@ -173,6 +173,51 @@ func TestGradiumSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTStreamLanguageOverrideDoesNotMutateDefault(t *testing.T) {
+	setupCh := make(chan map[string]any, 2)
+	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		_, setupPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read setup: %v", err)
+			return
+		}
+		setupCh <- decodeGradiumMessage(t, setupPayload)
+		_, _, _ = conn.ReadMessage()
+	})
+
+	provider := NewGradiumSTT("test-key",
+		WithGradiumSTTModelEndpoint("ws://gradium.test/asr"),
+		WithGradiumSTTLanguage("en"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("first Stream returned error: %v", err)
+	}
+	firstSetup := receiveGradiumMessage(t, setupCh, "first setup")
+	firstConfig := firstSetup["json_config"].(map[string]any)
+	if firstConfig["language"] != "id" {
+		t.Fatalf("first setup language = %#v, want id", firstConfig["language"])
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+
+	stream, err = provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("second Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	secondSetup := receiveGradiumMessage(t, setupCh, "second setup")
+	secondConfig := secondSetup["json_config"].(map[string]any)
+	if secondConfig["language"] != "en" {
+		t.Fatalf("second setup language = %#v, want configured default en", secondConfig["language"])
+	}
+	if provider.language != "en" {
+		t.Fatalf("provider language = %q, want unchanged en", provider.language)
+	}
+}
+
 func TestGradiumSTTStreamSendsSetupAudioAndCloseMessages(t *testing.T) {
 	setupCh := make(chan map[string]any, 1)
 	audioCh := make(chan map[string]any, 1)

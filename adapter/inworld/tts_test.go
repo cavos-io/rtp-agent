@@ -444,12 +444,15 @@ func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {
 		t.Fatalf("wsAudio=%+v done=%v, want decoded segment audio", wsAudio, done)
 	}
 
-	_, done, err = inworldTTSAudioFromWebsocketMessage([]byte(`{"result":{"contextId":"ctx-1","contextClosed":{}}}`), "ctx-1", 24000)
+	final, done, err := inworldTTSAudioFromWebsocketMessage([]byte(`{"result":{"contextId":"ctx-1","contextClosed":{}}}`), "ctx-1", 24000)
 	if err != nil {
 		t.Fatalf("context closed message: %v", err)
 	}
-	if !done {
-		t.Fatal("done = false, want true for contextClosed")
+	if final == nil || !final.IsFinal || !done {
+		t.Fatalf("final=%+v done=%v, want final marker for contextClosed", final, done)
+	}
+	if final.Frame != nil {
+		t.Fatalf("contextClosed final frame = %+v, want boundary-only marker", final.Frame)
 	}
 
 	if _, _, err := inworldTTSAudioFromResponseLine([]byte(`{"error":{"code":3,"message":"bad text"}}`), 24000); err == nil {

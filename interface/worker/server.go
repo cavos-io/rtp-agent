@@ -469,6 +469,10 @@ func (s *AgentServer) launchReloadedJob(ctx context.Context, jobCtx *JobContext)
 			},
 			SendStatus: func(status JobStatus) error {
 				if err := s.sendWorkerMessage(livekitServerJobStatusMessage(jobCtx.JobID(), status)); err != nil {
+					if isWorkerWebSocketDisconnected(err) {
+						logger.Logger.Debugw("skipping reloaded job status after worker websocket disconnect", "jobId", jobCtx.JobID())
+						return nil
+					}
 					logger.Logger.Errorw("failed to update reloaded job status", err, "jobId", jobCtx.JobID())
 					return err
 				}
@@ -1712,7 +1716,11 @@ func (s *AgentServer) handleAssignment(ctx context.Context, req *JobAssignment) 
 	s.mu.Unlock()
 
 	if err := s.sendWorkerMessage(livekitServerJobRunningMessage(jobID)); err != nil {
-		logger.Logger.Errorw("failed to update job status", err, "jobId", jobID)
+		if isWorkerWebSocketDisconnected(err) {
+			logger.Logger.Debugw("skipping running job status after worker websocket disconnect", jobLogValues(jobCtx, "jobId", jobID)...)
+		} else {
+			logger.Logger.Errorw("failed to update job status", err, "jobId", jobID)
+		}
 	}
 
 	if s.entrypointFnc != nil {

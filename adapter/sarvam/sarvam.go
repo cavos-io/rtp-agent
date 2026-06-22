@@ -1709,7 +1709,10 @@ func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int, outputAudio
 		}
 		return sarvamTTSAudioFrame(data, sampleRate, message.Data.RequestID, outputAudioCodec), false, nil
 	case "event":
-		return nil, message.Data.EventType == "final", nil
+		if message.Data.EventType == "final" {
+			return &tts.SynthesizedAudio{RequestID: message.Data.RequestID, IsFinal: true}, true, nil
+		}
+		return nil, false, nil
 	case "error":
 		return nil, false, fmt.Errorf("sarvam tts stream error: %s", string(payload))
 	default:

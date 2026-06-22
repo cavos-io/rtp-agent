@@ -2160,6 +2160,50 @@ func TestReloadedJobWaitsForShutdownAfterEntrypointCompletes(t *testing.T) {
 	}
 }
 
+func TestReloadedJobSuppressesDisconnectedStatusError(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &roomIORecordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	server := NewAgentServer(WorkerOptions{})
+	entrypointDone := make(chan *JobContext, 1)
+	server.entrypointFnc = func(ctx *JobContext) error {
+		entrypointDone <- ctx
+		return nil
+	}
+	jobCtx := NewJobContext(&livekit.Job{Id: "job-reloaded-disconnected", Room: &livekit.Room{Name: "room-a"}}, "", "", "")
+	server.mu.Lock()
+	server.activeJobs[jobCtx.Job.Id] = jobCtx
+	server.mu.Unlock()
+
+	server.launchReloadedJob(context.Background(), jobCtx)
+
+	select {
+	case <-entrypointDone:
+	case <-time.After(time.Second):
+		t.Fatal("reloaded job entrypoint did not return")
+	}
+
+	jobCtx.Shutdown("session ended")
+
+	deadline := time.After(time.Second)
+	for {
+		if got := server.ActiveRunningJobs(); len(got) == 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("reloaded job did not finish after shutdown")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	if got := countWarnMessage(recorder.errorMessages, "failed to update reloaded job status"); got != 0 {
+		t.Fatalf("disconnected worker websocket status errors = %d, want 0", got)
+	}
+}
+
 func TestAgentServerProcessReloadIPCMessagesUntilEOF(t *testing.T) {
 	server := NewAgentServer(WorkerOptions{})
 	server.workerID = "worker-a"
@@ -3328,6 +3372,23 @@ func TestAssignmentSuppressesDisconnectedFinalStatusError(t *testing.T) {
 
 	if countWarnMessage(recorder.errorMessages, "failed to update job status") != 0 {
 		t.Fatalf("error messages = %#v, want no disconnected final status error", recorder.errorMessages)
+	}
+}
+
+func TestAssignmentSuppressesDisconnectedRunningStatusError(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &roomIORecordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	server := NewAgentServer(WorkerOptions{})
+	job := &livekit.Job{Id: "job_disconnect_running_status", Room: &livekit.Room{Name: "room-a"}}
+	markJobAccepted(t, server, job)
+
+	server.handleAssignment(context.Background(), &livekit.JobAssignment{Job: job})
+
+	if countWarnMessage(recorder.errorMessages, "failed to update job status") != 0 {
+		t.Fatalf("error messages = %#v, want no disconnected running status error", recorder.errorMessages)
 	}
 }
 

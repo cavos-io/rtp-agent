@@ -296,8 +296,11 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("audio_end message: %v", err)
 	}
-	if finished != nil || !done || requestID != 7 {
-		t.Fatalf("finished=%+v done=%v requestID=%d, want done for request 7", finished, done, requestID)
+	if finished == nil || !finished.IsFinal || !done || requestID != 7 {
+		t.Fatalf("finished=%+v done=%v requestID=%d, want final marker for request 7", finished, done, requestID)
+	}
+	if finished.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want boundary-only marker", finished.Frame)
 	}
 
 	if _, _, _, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`)); err == nil {

@@ -211,8 +211,19 @@ func TestMistralAITTSStreamDecodesAudioDeltaDoneAndPCM(t *testing.T) {
 	}
 	assertMistralTTSAudio(t, audio, []byte{0xff, 0x3f, 0x01, 0xc0})
 
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("next final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final marker = %#v, want IsFinal audio", final)
+	}
+	if final.Frame != nil {
+		t.Fatalf("final frame = %+v, want boundary-only marker", final.Frame)
+	}
+
 	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("next after done error = %v, want EOF", err)
+		t.Fatalf("next after final error = %v, want EOF", err)
 	}
 }
 

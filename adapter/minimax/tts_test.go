@@ -595,8 +595,14 @@ func TestMinimaxTTSAudioFromWebsocketMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task_finished message: %v", err)
 	}
-	if finished != nil || !done || traceID != "fallback" {
-		t.Fatalf("finished=%+v done=%v trace=%q, want done with fallback trace", finished, done, traceID)
+	if finished == nil || !finished.IsFinal || !done || traceID != "fallback" {
+		t.Fatalf("finished=%+v done=%v trace=%q, want final marker with fallback trace", finished, done, traceID)
+	}
+	if finished.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want boundary-only marker", finished.Frame)
+	}
+	if finished.RequestID != "fallback" {
+		t.Fatalf("final marker request id = %q, want fallback", finished.RequestID)
 	}
 
 	if _, _, _, err := minimaxAudioFromWebsocketMessage([]byte(`{"base_resp":{"status_code":1001,"status_msg":"bad text"}}`), "fallback", 24000); err == nil {

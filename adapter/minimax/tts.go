@@ -768,7 +768,7 @@ func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sa
 		}
 		return minimaxTTSAudioFrame(audio, sampleRate, traceID), data.IsFinal, traceID, nil
 	case "task_finished":
-		return nil, true, traceID, nil
+		return &tts.SynthesizedAudio{RequestID: traceID, IsFinal: true}, true, traceID, nil
 	case "task_failed":
 		return nil, false, traceID, fmt.Errorf("minimax websocket task failed: %s", string(payload))
 	default:
