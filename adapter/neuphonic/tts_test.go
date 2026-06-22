@@ -221,6 +221,58 @@ func TestNeuphonicTTSChunkedStreamDecodesSSEAudio(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &neuphonicTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(
+			"event: message\n" +
+				"data: {\"status_code\":200,\"data\":{\"audio\":\"AQI=\"}}\n\n",
+		)))},
+		sampleRate: 16000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestNeuphonicTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &neuphonicTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(
+			"event: message\n" +
+				"data: {\"status_code\":200,\"data\":{}}\n\n",
+		)))},
+		sampleRate: 16000,
+	}
+	defer stream.Close()
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("audio = %#v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func TestNeuphonicTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &neuphonicCloseCountBody{Reader: bytes.NewReader([]byte("data: {\"status_code\":200,\"data\":{\"audio\":\"AQI=\"}}\n\n"))}
 	stream := &neuphonicTTSChunkedStream{
