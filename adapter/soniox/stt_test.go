@@ -279,6 +279,27 @@ func TestSonioxSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTStreamRejectsNegativeTimingAnchors(t *testing.T) {
+	stream := &sonioxStream{state: &sonioxMessageState{
+		startTimeOffset: 1.5,
+		startTime:       2.5,
+	}}
+
+	assertSonioxPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		stream.SetStartTimeOffset(-0.01)
+	})
+	if got := stream.StartTimeOffset(); got != 1.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 1.5", got)
+	}
+
+	assertSonioxPanicsWithMessage(t, "start_time must be non-negative", func() {
+		stream.SetStartTime(-0.01)
+	})
+	if got := stream.StartTime(); got != 2.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 2.5", got)
+	}
+}
+
 func TestSonioxProcessMessagePreservesReferenceLanguageSegments(t *testing.T) {
 	state := &sonioxMessageState{}
 
@@ -409,6 +430,20 @@ func assertSonioxEvent(t *testing.T, events []*stt.SpeechEvent, index int, event
 	if events[index].Alternatives[0].Text != text {
 		t.Fatalf("event %d text = %q, want %q", index, events[index].Alternatives[0].Text, text)
 	}
+}
+
+func assertSonioxPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := recovered.(string); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
 
 func anyFloat64(v float64) *float64 {
