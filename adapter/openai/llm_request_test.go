@@ -1863,6 +1863,20 @@ func TestOpenAIStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
+	err := openAIStreamRecvError(llm.NewAPIStatusError("client closed", 499, "req_499", nil))
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("openAIStreamRecvError(499) = %v, want EOF", err)
+	}
+
+	statusErr := llm.NewAPIStatusError("rate limited", http.StatusTooManyRequests, "req_429", nil)
+	err = openAIStreamRecvError(statusErr)
+	var gotStatusErr *llm.APIStatusError
+	if !errors.As(err, &gotStatusErr) || gotStatusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("openAIStreamRecvError(429) = %T %v, want APIStatusError 429", err, err)
+	}
+}
+
 type sequenceHTTPClient struct {
 	responses []*http.Response
 	calls     int

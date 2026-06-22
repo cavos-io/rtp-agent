@@ -1933,10 +1933,7 @@ type openaiStream struct {
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	resp, err := s.stream.Recv()
 	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, io.EOF
-		}
-		return nil, mapOpenAIError(err)
+		return nil, openAIStreamRecvError(err)
 	}
 
 	if len(resp.Choices) == 0 {
@@ -1969,6 +1966,24 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	}
 
 	return chunk, nil
+}
+
+func openAIStreamRecvError(err error) error {
+	if errors.Is(err, io.EOF) {
+		return io.EOF
+	}
+	var statusErr *llm.APIStatusError
+	if errors.As(err, &statusErr) {
+		if statusErr.StatusCode == 499 {
+			return io.EOF
+		}
+		return err
+	}
+	mapped := mapOpenAIError(err)
+	if errors.As(mapped, &statusErr) && statusErr.StatusCode == 499 {
+		return io.EOF
+	}
+	return mapped
 }
 
 func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
