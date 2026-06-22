@@ -38,6 +38,7 @@ type AsyncAITTS struct {
 	voice      string
 	sampleRate int
 	mu         sync.Mutex
+	closed     bool
 	streams    map[*asyncAITTSStream]struct{}
 }
 
@@ -142,6 +143,11 @@ func (t *AsyncAITTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*asyncAITTSStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -159,6 +165,9 @@ func (t *AsyncAITTS) Close() error {
 }
 
 func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := t.validateStreamConfig(); err != nil {
 		return nil, err
 	}
@@ -186,21 +195,28 @@ func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	return stream, nil
 }
 
-func (t *AsyncAITTS) registerStream(stream *asyncAITTSStream) {
+func (t *AsyncAITTS) registerStream(stream *asyncAITTSStream) bool {
 	if t == nil || stream == nil {
-		return
+		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*asyncAITTSStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	stream.owner = t
+	return true
 }
 
 func (t *AsyncAITTS) unregisterStream(stream *asyncAITTSStream) {
@@ -213,6 +229,15 @@ func (t *AsyncAITTS) unregisterStream(stream *asyncAITTSStream) {
 	if stream.owner == t {
 		stream.owner = nil
 	}
+}
+
+func (t *AsyncAITTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closed
 }
 
 func (t *AsyncAITTS) validateStreamConfig() error {
