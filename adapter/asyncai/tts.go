@@ -326,7 +326,7 @@ func (s *asyncAITTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 			return nil, err
 		}
 		if done {
-			return nil, io.EOF
+			return audio, nil
 		}
 		if audio != nil {
 			return audio, nil
