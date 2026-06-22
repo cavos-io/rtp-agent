@@ -552,6 +552,72 @@ func TestSLNGTTSStreamTextMessageUsesReferenceSpacing(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSStreamTokenizesWordsAndFlushesTailLikeReference(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		for i := 0; i < 4; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("read message %d: %v", i, err)
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Errorf("decode message %d: %v", i, err)
+				return
+			}
+			messages <- message
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+
+	provider := NewTTS("test-key", WithTTSEndpoint(endpoint))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello wor"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	readMessage := func(want string) map[string]any {
+		t.Helper()
+		select {
+		case message := <-messages:
+			if got := message["type"]; got != want {
+				t.Fatalf("message type = %#v, want %#v in %#v", got, want, message)
+			}
+			return message
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s message", want)
+		}
+		return nil
+	}
+
+	readMessage("init")
+	first := readMessage("text")
+	if first["text"] != "hello " {
+		t.Fatalf("first text message = %#v, want completed word only", first)
+	}
+	tail := readMessage("text")
+	if tail["text"] != "wor " {
+		t.Fatalf("tail text message = %#v, want flushed tail word", tail)
+	}
+	readMessage("flush")
+}
+
 func TestSLNGSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	events, err := sttEventsFromMessage([]byte(`{"type":"Results","is_final":false,"language":"en","channel":{"alternatives":[{"transcript":"hel","confidence":0.5}]}}`), "en", true)
 	if err != nil {

@@ -13,10 +13,12 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -1373,6 +1375,7 @@ type ttsStream struct {
 	audioFrames     int
 	audioBytes      int
 	textMessages    int
+	pendingText     string
 	lastMessageType string
 	appendTextSpace bool
 	closed          bool
@@ -1390,22 +1393,8 @@ func (s *ttsStream) PushText(text string) error {
 	if s.conn == nil {
 		return io.ErrClosedPipe
 	}
-	if s.appendTextSpace && !strings.HasSuffix(text, " ") {
-		text += " "
-	}
-	data, err := json.Marshal(map[string]any{"type": "text", "text": text})
-	if err != nil {
-		return err
-	}
-	if err := s.conn.WriteMessage(websocket.TextMessage, data); err != nil {
-		s.closed = true
-		_ = s.conn.Close()
-		if s.provider != nil {
-			s.provider.unregisterStream(s)
-		}
-		return err
-	}
-	return nil
+	s.pendingText += text
+	return s.sendCompleteWordsLocked()
 }
 
 func (s *ttsStream) Flush() error {
@@ -1416,6 +1405,13 @@ func (s *ttsStream) Flush() error {
 	}
 	if s.conn == nil {
 		return io.ErrClosedPipe
+	}
+	if s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicWordTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendTextLocked(text); err != nil {
+			return err
+		}
 	}
 	if isRimeArcanaModel(s.model) {
 		if err := s.conn.WriteMessage(websocket.TextMessage, []byte(slngCancelMessage)); err != nil {
@@ -1429,6 +1425,43 @@ func (s *ttsStream) Flush() error {
 		return nil
 	}
 	if err := s.conn.WriteMessage(websocket.TextMessage, []byte(slngFlushMessage)); err != nil {
+		s.closed = true
+		_ = s.conn.Close()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *ttsStream) sendCompleteWordsLocked() error {
+	for {
+		tokens := tokenize.NewBasicWordTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		word := tokens[0]
+		if err := s.sendTextLocked(word); err != nil {
+			return err
+		}
+		wordIdx := strings.Index(s.pendingText, word)
+		if wordIdx < 0 {
+			return nil
+		}
+		s.pendingText = strings.TrimLeftFunc(s.pendingText[wordIdx+len(word):], unicode.IsSpace)
+	}
+}
+
+func (s *ttsStream) sendTextLocked(text string) error {
+	if s.appendTextSpace && !strings.HasSuffix(text, " ") {
+		text += " "
+	}
+	data, err := json.Marshal(map[string]any{"type": "text", "text": text})
+	if err != nil {
+		return err
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, data); err != nil {
 		s.closed = true
 		_ = s.conn.Close()
 		if s.provider != nil {
