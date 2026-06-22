@@ -40,6 +40,7 @@ type BasetenTTS struct {
 	httpClient    basetenTTSHTTPDoer
 	dialWebsocket basetenTTSWebsocketDialer
 	mu            sync.Mutex
+	closed        bool
 	streams       map[*basetenTTSSynthesizeStream]struct{}
 }
 
@@ -186,6 +187,11 @@ func (t *BasetenTTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*basetenTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -204,6 +210,10 @@ func (t *BasetenTTS) Close() error {
 
 func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil, io.ErrClosedPipe
+	}
 	req, err := buildBasetenTTSRequest(ctx, t, text)
 	client := t.httpClient
 	sampleRate := t.sampleRate
@@ -245,6 +255,10 @@ func buildBasetenTTSRequest(ctx context.Context, t *BasetenTTS, text string) (*h
 
 func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil, io.ErrClosedPipe
+	}
 	streaming := strings.HasPrefix(t.modelEndpoint, "ws://") || strings.HasPrefix(t.modelEndpoint, "wss://")
 	endpoint := t.modelEndpoint
 	headers := buildBasetenTTSWebsocketHeaders(t)
@@ -278,22 +292,29 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		stream.Close()
+		return nil, io.ErrClosedPipe
+	}
 	go stream.readLoop()
 	return stream, nil
 }
 
-func (t *BasetenTTS) registerStream(stream *basetenTTSSynthesizeStream) {
+func (t *BasetenTTS) registerStream(stream *basetenTTSSynthesizeStream) bool {
 	if t == nil || stream == nil {
-		return
+		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*basetenTTSSynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
 	stream.owner = t
+	return true
 }
 
 func (t *BasetenTTS) unregisterStream(stream *basetenTTSSynthesizeStream) {
