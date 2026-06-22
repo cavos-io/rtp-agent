@@ -159,6 +159,33 @@ func TestGradiumTTSTextAndEndMessagesMatchReference(t *testing.T) {
 	assertGradiumSetup(t, endMessage, "type", "end_of_stream")
 }
 
+func TestGradiumTTSStreamTokenizesWordsAndFlushesTailLikeReference(t *testing.T) {
+	var writes []map[string]any
+	stream := &gradiumTTSSynthesizeStream{
+		writeMessage: func(payload map[string]any) error {
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after PushText = %d, want completed word only", len(writes))
+	}
+	assertGradiumSetup(t, writes[0], "text", "hello ")
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 3 {
+		t.Fatalf("writes after Flush = %d, want tail word and end", len(writes))
+	}
+	assertGradiumSetup(t, writes[1], "text", "world ")
+	assertGradiumSetup(t, writes[2], "type", "end_of_stream")
+}
+
 func TestGradiumTTSWebsocketMessageMapsAudioAndEnd(t *testing.T) {
 	audio, done, err := gradiumTTSAudioFromMessage([]byte(`{"type":"audio","audio":"`+base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})+`"}`), 48000)
 	if err != nil {
