@@ -185,14 +185,14 @@ func (s *BasetenSTT) Capabilities() stt.STTCapabilities {
 
 func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	s.mu.Lock()
+	streamLanguage := s.language
 	if language != "" {
-		s.language = language
+		streamLanguage = language
 	}
 	endpoint := s.modelEndpoint
 	headers := buildBasetenSTTHeaders(s)
-	metadata, err := json.Marshal(buildBasetenSTTMetadata(s))
+	metadata, err := json.Marshal(buildBasetenSTTMetadataForLanguage(s, streamLanguage))
 	dialer := s.dialWebsocket
-	streamLanguage := s.language
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -309,9 +309,13 @@ func buildBasetenSTTHeaders(s *BasetenSTT) http.Header {
 }
 
 func buildBasetenSTTMetadata(s *BasetenSTT) map[string]interface{} {
+	return buildBasetenSTTMetadataForLanguage(s, s.language)
+}
+
+func buildBasetenSTTMetadataForLanguage(s *BasetenSTT, language string) map[string]interface{} {
 	return map[string]interface{}{
 		"whisper_params": map[string]interface{}{
-			"audio_language":       s.language,
+			"audio_language":       language,
 			"show_word_timestamps": s.showWordTimestamps,
 		},
 		"streaming_params": map[string]interface{}{
