@@ -16,6 +16,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -332,6 +333,7 @@ type resembleTTSSynthesizeStream struct {
 	requestID int
 	lastID    int
 	flushed   bool
+	pendingText string
 }
 
 func (s *resembleTTSSynthesizeStream) PushText(text string) error {
@@ -343,6 +345,39 @@ func (s *resembleTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("resemble tts stream is closed")
 	}
+	s.pendingText += text
+	return s.sendCompleteSentencesLocked()
+}
+
+func (s *resembleTTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingText != "" {
+		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		s.pendingText = ""
+		if err := s.sendTextLocked(text); err != nil {
+			return err
+		}
+	}
+	s.flushed = true
+	return nil
+}
+
+func (s *resembleTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+	for {
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTextLocked(sentence); err != nil {
+			return err
+		}
+		s.pendingText = strings.TrimPrefix(s.pendingText, sentence)
+	}
+}
+
+func (s *resembleTTSSynthesizeStream) sendTextLocked(text string) error {
 	s.requestID++
 	s.lastID = s.requestID
 	message, err := buildResembleTTSWebsocketMessage(s.provider, text, s.requestID)
@@ -350,13 +385,6 @@ func (s *resembleTTSSynthesizeStream) PushText(text string) error {
 		return err
 	}
 	return s.conn.WriteMessage(websocket.TextMessage, message)
-}
-
-func (s *resembleTTSSynthesizeStream) Flush() error {
-	s.mu.Lock()
-	s.flushed = true
-	s.mu.Unlock()
-	return nil
 }
 
 func (s *resembleTTSSynthesizeStream) Close() error {
