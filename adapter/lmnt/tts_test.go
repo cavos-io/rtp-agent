@@ -232,6 +232,25 @@ func TestLMNTTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
 }
 
+func TestLMNTTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyMP3Audio(t *testing.T) {
+	stream := &lmntTTSChunkedStream{
+		resp:   &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
+		format: "mp3",
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("first audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final = %v, want io.EOF", err)
+	}
+}
+
 func TestLMNTTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &lmntTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -245,6 +264,33 @@ func TestLMNTTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want 16000", audio.Frame.SampleRate)
+	}
+}
+
+func TestLMNTTTSChunkedStreamEmitsReferenceFinalMarkerAfterRawAudio(t *testing.T) {
+	stream := &lmntTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		format:     "raw",
+		sampleRate: 16000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want raw audio frame", audio)
+	}
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final = %v, want io.EOF", err)
 	}
 }
 

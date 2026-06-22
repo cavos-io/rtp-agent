@@ -209,27 +209,37 @@ func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.format == "mp3" {
 		return s.nextDecodedMP3()
 	}
-
-	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			return nil, io.EOF
-		}
-		return nil, err
+	if s.finalSent {
+		return nil, io.EOF
 	}
 
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
+	buf := make([]byte, 4096)
+	for {
+		n, err := s.resp.Body.Read(buf)
+		if n > 0 {
+			return &tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              buf[:n],
+					SampleRate:        uint32(s.sampleRate),
+					NumChannels:       1,
+					SamplesPerChannel: uint32(n / 2),
+				},
+			}, nil
+		}
+		if err != nil {
+			if err == io.EOF {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
+			return nil, err
+		}
+	}
 }
 
 func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	if !s.started {
 		s.started = true
 		data, err := io.ReadAll(s.resp.Body)
@@ -237,7 +247,8 @@ func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		if len(data) == 0 {
-			return nil, io.EOF
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		s.hasAudio = true
 		decoder := codecs.NewMP3AudioStreamDecoder()
