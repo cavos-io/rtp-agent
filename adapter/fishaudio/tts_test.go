@@ -319,6 +319,25 @@ func TestFishAudioTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestFishAudioTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &fishaudioTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
+		sampleRate: 24000,
+		format:     "wav",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker", audio)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func TestFishAudioTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &fishAudioCloseCountBody{Reader: bytes.NewReader(fishAudioTestWAV([]byte{0x01, 0x02}, 24000, 1))}
 	stream := &fishaudioTTSChunkedStream{
