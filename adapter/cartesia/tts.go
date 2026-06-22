@@ -319,6 +319,7 @@ func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{}
 type cartesiaTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	finalSent  bool
 	mu         sync.Mutex
 }
 
@@ -330,9 +331,19 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
+	if n > 0 {
+		return &tts.SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				Data:              buf[:n],
+				SampleRate:        uint32(s.sampleRate),
+				NumChannels:       1,
+				SamplesPerChannel: uint32(n / 2),
+			},
+		}, nil
+	}
 	if err != nil {
 		if err == io.EOF {
-			return nil, io.EOF
+			return s.emitFinal()
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
@@ -347,6 +358,14 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *cartesiaTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	s.finalSent = true
+	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
 func (s *cartesiaTTSChunkedStream) Close() error {
 	s.mu.Lock()
 	if s.resp == nil || s.resp.Body == nil {
@@ -355,6 +374,7 @@ func (s *cartesiaTTSChunkedStream) Close() error {
 	}
 	body := s.resp.Body
 	s.resp = nil
+	s.finalSent = true
 	s.mu.Unlock()
 	return body.Close()
 }
