@@ -3,6 +3,7 @@ package aws
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -206,6 +207,21 @@ func TestAWSTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if body.closed != 1 {
 		t.Fatalf("body Close calls after second Close = %d, want 1", body.closed)
+	}
+}
+
+func TestAWSTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "")
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close err = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Synthesize after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if stream != nil {
+		t.Fatalf("Synthesize after Close stream = %#v, want nil", stream)
 	}
 }
 
