@@ -361,7 +361,6 @@ type smallestaiTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	mu         sync.Mutex
-	sentAudio  bool
 	finalSent  bool
 }
 
@@ -380,10 +379,6 @@ func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return nil, err
 	}
-	s.mu.Lock()
-	s.sentAudio = true
-	s.mu.Unlock()
-
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
@@ -397,7 +392,7 @@ func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *smallestaiTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.sentAudio || s.finalSent {
+	if s.finalSent {
 		return nil, io.EOF
 	}
 	s.finalSent = true

@@ -183,6 +183,24 @@ func TestAWSTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	t.Fatalf("stream did not emit final marker after %d frames", frames)
 }
 
+func TestAWSTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &awsTTSChunkedStream{
+		stream: io.NopCloser(bytes.NewReader(nil)),
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 
@@ -208,8 +226,15 @@ func TestAWSTTSChunkedStreamEOFAndClose(t *testing.T) {
 		stream: io.NopCloser(bytes.NewReader(nil)),
 	}
 
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next err = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker", audio)
+	}
 	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("Next err = %v, want EOF", err)
+		t.Fatalf("second Next err = %v, want EOF", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close err = %v, want nil", err)
