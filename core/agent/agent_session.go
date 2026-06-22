@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"time"
@@ -1980,6 +1981,22 @@ func (s *AgentSession) closeSoon(reason CloseReason, err error) {
 	for _, ch := range closeSubscribers {
 		ch <- *ev
 	}
+	s.finishActiveRunStateWithCloseError(err)
+}
+
+func (s *AgentSession) finishActiveRunStateWithCloseError(err error) {
+	s.mu.Lock()
+	runState := s.runState
+	s.mu.Unlock()
+
+	if runState == nil || runState.Done() {
+		return
+	}
+	if err != nil {
+		runState.markDoneWithError(fmt.Errorf("session closed: %w", err))
+		return
+	}
+	runState.markDoneWithError(errors.New("session closed"))
 }
 
 func (s *AgentSession) Shutdown(drain ...bool) {

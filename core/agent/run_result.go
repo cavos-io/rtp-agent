@@ -125,6 +125,17 @@ func (r *RunResult) MarkDone() {
 	r.markDoneLocked()
 }
 
+func (r *RunResult) markDoneWithError(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.done {
+		return
+	}
+	r.finalOutputErr = err
+	r.markDoneLocked()
+}
+
 func (r *RunResult) markDoneLocked() {
 	if r.done {
 		return
