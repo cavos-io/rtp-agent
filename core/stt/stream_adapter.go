@@ -306,13 +306,13 @@ func (w *streamAdapterWrapper) SetStartTime(startTime float64) {
 
 func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return fmt.Errorf("stream closed")
-	}
 	if w.inputEnded {
 		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
+	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("stream closed")
 	}
 	if err := w.rateGuard.Check(frame); err != nil {
 		w.mu.Unlock()
@@ -325,13 +325,13 @@ func (w *streamAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 
 func (w *streamAdapterWrapper) Flush() error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return fmt.Errorf("stream closed")
-	}
 	if w.inputEnded {
 		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
+	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("stream closed")
 	}
 	w.mu.Unlock()
 
@@ -340,13 +340,13 @@ func (w *streamAdapterWrapper) Flush() error {
 
 func (w *streamAdapterWrapper) EndInput() error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return fmt.Errorf("stream closed")
-	}
 	if w.inputEnded {
 		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
+	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("stream closed")
 	}
 	w.inputEnded = true
 	w.mu.Unlock()
@@ -380,6 +380,7 @@ func (w *streamAdapterWrapper) Close() error {
 		w.mu.Unlock()
 		return nil
 	}
+	w.inputEnded = true
 	w.closed = true
 	w.closeInputLocked()
 	w.mu.Unlock()

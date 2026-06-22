@@ -499,6 +499,36 @@ func TestMultiSpeakerAdapterWrapperEndInputDoesNotFlushAndRejectsMoreInput(t *te
 	}
 }
 
+func TestMultiSpeakerAdapterReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	wrapper := &multiSpeakerAdapterWrapper{
+		inner:    &fakeMultiSpeakerStream{},
+		ctx:      ctx,
+		cancel:   cancel,
+		detector: newPrimarySpeakerDetector(false, false, "{text}", "{text}", DefaultPrimarySpeakerDetectionOptions()),
+		eventCh:  make(chan *SpeechEvent, 1),
+		errCh:    make(chan error, 1),
+		inputCh:  make(chan multiSpeakerInput, 1),
+	}
+	ending, ok := any(wrapper).(InputEnding)
+	if !ok {
+		t.Fatal("wrapper does not implement InputEnding")
+	}
+	if err := wrapper.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	for name, err := range map[string]error{
+		"PushFrame": wrapper.PushFrame(&model.AudioFrame{Data: []byte{0, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}),
+		"Flush":     wrapper.Flush(),
+		"EndInput":  ending.EndInput(),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("%s after Close error = %v, want input ended", name, err)
+		}
+	}
+}
+
 func TestMultiSpeakerAdapterCloseDoesNotPanicBlockedPushFrame(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	wrapper := &multiSpeakerAdapterWrapper{

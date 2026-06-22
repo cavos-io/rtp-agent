@@ -938,11 +938,11 @@ func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.closed {
-		return fmt.Errorf("stream closed")
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return fmt.Errorf("stream closed")
 	}
 	if err := s.rateGuard.Check(frame); err != nil {
 		return err
@@ -964,11 +964,11 @@ func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 func (s *fallbackRecognizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return fmt.Errorf("stream closed")
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return fmt.Errorf("stream closed")
 	}
 	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true})
 	for _, recovery := range s.recoveries {
@@ -980,11 +980,11 @@ func (s *fallbackRecognizeStream) Flush() error {
 func (s *fallbackRecognizeStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return fmt.Errorf("stream closed")
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return fmt.Errorf("stream closed")
 	}
 	s.inputEnded = true
 	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true}, fallbackRecognizeInput{end: true})
@@ -1011,6 +1011,7 @@ func (s *fallbackRecognizeStream) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	activeStream := s.activeStream
 	activeCancel := s.activeCancel

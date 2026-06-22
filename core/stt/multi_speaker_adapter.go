@@ -179,13 +179,13 @@ func (w *multiSpeakerAdapterWrapper) applyTiming() {
 
 func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return fmt.Errorf("stream closed")
-	}
 	if w.inputEnded {
 		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
+	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("stream closed")
 	}
 	if err := w.rateGuard.Check(frame); err != nil {
 		w.mu.Unlock()
@@ -198,13 +198,13 @@ func (w *multiSpeakerAdapterWrapper) PushFrame(frame *model.AudioFrame) error {
 
 func (w *multiSpeakerAdapterWrapper) Flush() error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return fmt.Errorf("stream closed")
-	}
 	if w.inputEnded {
 		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
+	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("stream closed")
 	}
 	w.ensureDoneChLocked()
 	w.mu.Unlock()
@@ -213,13 +213,13 @@ func (w *multiSpeakerAdapterWrapper) Flush() error {
 
 func (w *multiSpeakerAdapterWrapper) EndInput() error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		return fmt.Errorf("stream closed")
-	}
 	if w.inputEnded {
 		w.mu.Unlock()
 		return fmt.Errorf("stream input ended")
+	}
+	if w.closed {
+		w.mu.Unlock()
+		return fmt.Errorf("stream closed")
 	}
 	w.inputEnded = true
 	w.ensureDoneChLocked()
@@ -254,6 +254,7 @@ func (w *multiSpeakerAdapterWrapper) Close() error {
 	if w.closed {
 		return nil
 	}
+	w.inputEnded = true
 	w.closed = true
 	w.closeInputLocked()
 	w.cancel()

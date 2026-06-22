@@ -1244,6 +1244,37 @@ func TestFallbackAdapterCloseCancelsRecognizeRecovery(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	adapter := NewFallbackAdapter([]STT{
+		&metadataSTT{
+			label:        "primary",
+			capabilities: STTCapabilities{Streaming: true},
+			stream:       &metadataRecognizeStream{events: []*SpeechEvent{{Type: SpeechEventFinalTranscript}}},
+		},
+	})
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	ending, ok := stream.(InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement InputEnding")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	for name, err := range map[string]error{
+		"PushFrame": stream.PushFrame(&model.AudioFrame{Data: []byte{0, 0}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}),
+		"Flush":     stream.Flush(),
+		"EndInput":  ending.EndInput(),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("%s after Close error = %v, want input ended", name, err)
+		}
+	}
+}
+
 func TestFallbackAdapterAllFailedRecoveryAttemptsOncePerProvider(t *testing.T) {
 	primary := &metadataSTT{
 		label:         "primary",
