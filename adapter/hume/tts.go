@@ -363,6 +363,9 @@ func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	if !s.decodeStarted {
 		s.decodeStarted = true
 		audio, err := s.collectJSONLineAudio()
@@ -370,7 +373,8 @@ func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		if len(audio) == 0 {
-			return nil, io.EOF
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		s.hasAudio = true
 		decoder := codecs.NewMP3AudioStreamDecoder()

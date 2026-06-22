@@ -151,33 +151,34 @@ type upliftAITTSChunkedStream struct {
 	resp      *http.Response
 	once      sync.Once
 	err       error
-	hasAudio  bool
 	finalSent bool
 }
 
 func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
-	if err != nil {
-		if err == io.EOF {
-			if s.hasAudio && !s.finalSent {
-				s.finalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
-			}
-			return nil, io.EOF
+	for {
+		n, err := s.resp.Body.Read(buf)
+		if n > 0 {
+			return &tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              buf[:n],
+					SampleRate:        defaultUpliftAISampleRate,
+					NumChannels:       1,
+					SamplesPerChannel: uint32(n / 2),
+				},
+			}, nil
 		}
-		return nil, err
+		if err != nil {
+			if err == io.EOF {
+				if !s.finalSent {
+					s.finalSent = true
+					return &tts.SynthesizedAudio{IsFinal: true}, nil
+				}
+				return nil, io.EOF
+			}
+			return nil, err
+		}
 	}
-	s.hasAudio = true
-
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        defaultUpliftAISampleRate,
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
 }
 
 func (s *upliftAITTSChunkedStream) Close() error {

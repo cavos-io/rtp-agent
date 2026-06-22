@@ -160,7 +160,6 @@ type groqTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	emitted    bool
-	hasAudio   bool
 	finalSent  bool
 }
 
@@ -169,7 +168,7 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 	if s.emitted {
-		if s.hasAudio && !s.finalSent {
+		if !s.finalSent {
 			s.finalSent = true
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
@@ -182,13 +181,13 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, err
 	}
 	if len(data) == 0 {
-		return nil, io.EOF
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
 	frame, err := decodeGroqWAVPCM16(data)
 	if err != nil {
 		return nil, err
 	}
-	s.hasAudio = true
 	return &tts.SynthesizedAudio{
 		Frame: frame,
 	}, nil

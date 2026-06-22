@@ -384,6 +384,26 @@ func TestHumeTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 	t.Fatalf("stream did not emit final marker after %d frames", frames)
 }
 
+func TestHumeTTSChunkedStreamEmitsReferenceMP3FinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &humeTTSChunkedStream{
+		resp:        &http.Response{Body: io.NopCloser(strings.NewReader(""))},
+		audioFormat: "mp3",
+		sampleRate:  48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
 func TestHumeTTSChunkedStreamDecodesReferenceWAVJSONLines(t *testing.T) {
 	wav := humeTestWAVPCM16(16000, 1, []byte{0x01, 0x02, 0x03, 0x04})
 	line := `{"audio":"` + base64.StdEncoding.EncodeToString(wav) + `"}` + "\n"

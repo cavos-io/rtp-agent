@@ -18,6 +18,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -549,8 +550,14 @@ func (s *inworldTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("inworld tts stream is closed")
 	}
-	_, err := s.pendingText.WriteString(text)
-	return err
+	if _, err := s.pendingText.WriteString(text); err != nil {
+		return err
+	}
+	if err := s.sendCompleteSentencesLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *inworldTTSSynthesizeStream) Flush() error {
@@ -565,15 +572,10 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 		return nil
 	}
 	if text != "" {
-		for _, chunk := range inworldTTSChunkText(text, inworldTTSSendTextChunkLimit) {
-			message, err := buildInworldTTSSendTextMessage(s.contextID, chunk)
-			if err != nil {
-				return err
-			}
-			if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
-				s.closeAfterWriteFailureLocked()
-				return err
-			}
+		text = strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(text, ""), " ")
+		if err := s.sendTextLocked(text); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
 		}
 	}
 	message, err := buildInworldTTSFlushMessage(s.contextID)
@@ -583,6 +585,47 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
+	}
+	return nil
+}
+
+func (s *inworldTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+	for {
+		text := s.pendingText.String()
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(text, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTextLocked(sentence); err != nil {
+			return err
+		}
+		tokenIdx := strings.Index(text, sentence)
+		if tokenIdx < 0 {
+			s.pendingText.Reset()
+			s.pendingText.WriteString(strings.TrimSpace(strings.TrimPrefix(text, sentence)))
+			continue
+		}
+		tail := strings.TrimLeftFunc(text[tokenIdx+len(sentence):], func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+		s.pendingText.Reset()
+		s.pendingText.WriteString(tail)
+	}
+}
+
+func (s *inworldTTSSynthesizeStream) sendTextLocked(text string) error {
+	if text == "" {
+		return nil
+	}
+	for _, chunk := range inworldTTSChunkText(text, inworldTTSSendTextChunkLimit) {
+		message, err := buildInworldTTSSendTextMessage(s.contextID, chunk)
+		if err != nil {
+			return err
+		}
+		if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+			return err
+		}
 	}
 	return nil
 }

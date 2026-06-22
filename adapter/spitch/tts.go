@@ -166,6 +166,10 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return s.nextDecodedMP3()
 	}
 	if s.emitted {
+		if !s.finalSent {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
 		return nil, io.EOF
 	}
 	s.emitted = true
@@ -175,7 +179,8 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, err
 	}
 	if len(data) == 0 {
-		return nil, io.EOF
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
 	frame, err := decodeSpitchWAVPCM16(data)
 	if err != nil {
@@ -188,6 +193,9 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	if !s.started {
 		s.started = true
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
@@ -196,7 +204,8 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 			return nil, err
 		}
 		if len(data) == 0 {
-			return nil, io.EOF
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		s.hasAudio = true
 		decoder := s.decoder

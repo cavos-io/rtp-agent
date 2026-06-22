@@ -455,6 +455,49 @@ func TestGradiumSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTPositiveVADFlushesReferenceSilence(t *testing.T) {
+	audioCh := make(chan map[string]any, 6)
+	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read setup: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"text","text":"hello","start_s":0}`)); err != nil {
+			t.Errorf("write text: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"step","vad":[{}, {}, {"inactivity_prob":0.95}]}`)); err != nil {
+			t.Errorf("write vad step: %v", err)
+			return
+		}
+		for i := 0; i < 6; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				t.Errorf("read silence audio %d: %v", i, err)
+				return
+			}
+			audioCh <- decodeGradiumMessage(t, payload)
+		}
+	})
+
+	provider := NewGradiumSTT("test-key",
+		WithGradiumSTTModelEndpoint("ws://gradium.test/asr"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	for i := 0; i < 6; i++ {
+		audio := receiveGradiumMessage(t, audioCh, "vad silence audio")
+		if audio["type"] != "audio" || audio["audio"] != base64.StdEncoding.EncodeToString(make([]byte, 3840)) {
+			t.Fatalf("silence audio %d = %#v, want one 1920-sample zero frame", i, audio)
+		}
+	}
+}
+
 func TestGradiumSTTProcessMessagesMapsTextAndVADFinal(t *testing.T) {
 	bucket := 2
 	state := &gradiumSTTMessageState{language: "en", vadBucket: &bucket, vadThreshold: 0.9, delayInTokens: 1}

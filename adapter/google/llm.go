@@ -59,6 +59,19 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	contents, systemInstructions := buildGoogleContents(chatCtx)
 
+	config := buildGoogleGenerateContentConfig(options, systemInstructions)
+
+	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
+
+	next, stop := iter.Pull2(stream)
+
+	return &googleLLMStream{
+		next: next,
+		stop: stop,
+	}, nil
+}
+
+func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructions string) *genai.GenerateContentConfig {
 	config := &genai.GenerateContentConfig{}
 	if systemInstructions != "" {
 		config.SystemInstruction = genai.NewContentFromText(systemInstructions, genai.RoleUser)
@@ -78,14 +91,15 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		config.ToolConfig = toolConfig
 	}
 
-	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
+	applyGoogleExtraParams(config, options.ExtraParams)
+	applyGoogleResponseFormat(config, options.ResponseFormat)
+	if config.CachedContent != "" {
+		config.SystemInstruction = nil
+		config.Tools = nil
+		config.ToolConfig = nil
+	}
 
-	next, stop := iter.Pull2(stream)
-
-	return &googleLLMStream{
-		next: next,
-		stop: stop,
-	}, nil
+	return config
 }
 
 func buildGoogleFunctionDeclaration(t llm.Tool) *genai.FunctionDeclaration {
@@ -131,6 +145,84 @@ func googleRequiredFields(value any) []string {
 		return required
 	default:
 		return nil
+	}
+}
+
+func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[string]any) {
+	if len(params) == 0 {
+		return
+	}
+	if value, ok := params["cached_content"].(string); ok {
+		config.CachedContent = value
+	}
+	if value, ok := googleFloat32Param(params["temperature"]); ok {
+		config.Temperature = &value
+	}
+	if value, ok := googleFloat32Param(params["top_p"]); ok {
+		config.TopP = &value
+	}
+	if value, ok := googleFloat32Param(params["top_k"]); ok {
+		config.TopK = &value
+	}
+	if value, ok := googleFloat32Param(params["presence_penalty"]); ok {
+		config.PresencePenalty = &value
+	}
+	if value, ok := googleFloat32Param(params["frequency_penalty"]); ok {
+		config.FrequencyPenalty = &value
+	}
+	if value, ok := googleInt32Param(params["max_output_tokens"]); ok {
+		config.MaxOutputTokens = value
+	}
+	if value, ok := googleInt32Param(params["seed"]); ok {
+		config.Seed = &value
+	}
+	if value, ok := params["response_mime_type"].(string); ok {
+		config.ResponseMIMEType = value
+	}
+	if value, ok := params["response_json_schema"]; ok {
+		config.ResponseJsonSchema = value
+	}
+}
+
+func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[string]any) {
+	if len(format) == 0 {
+		return
+	}
+	config.ResponseMIMEType = "application/json"
+	config.ResponseJsonSchema = format
+}
+
+func googleFloat32Param(value any) (float32, bool) {
+	switch v := value.(type) {
+	case float32:
+		return v, true
+	case float64:
+		return float32(v), true
+	case int:
+		return float32(v), true
+	case int32:
+		return float32(v), true
+	case int64:
+		return float32(v), true
+	default:
+		return 0, false
+	}
+}
+
+func googleInt32Param(value any) (int32, bool) {
+	switch v := value.(type) {
+	case int:
+		return int32(v), true
+	case int32:
+		return v, true
+	case int64:
+		return int32(v), true
+	case float64:
+		return int32(v), true
+	case float32:
+		return int32(v), true
+	default:
+		return 0, false
 	}
 }
 

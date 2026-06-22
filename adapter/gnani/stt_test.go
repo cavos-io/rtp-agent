@@ -6,10 +6,14 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/gorilla/websocket"
 )
 
 func TestGnaniSTTDefaultsMatchReference(t *testing.T) {
@@ -174,6 +178,63 @@ func TestGnaniSTTAudioChunkerSendsReferenceChunksAndFlushesRemainder(t *testing.
 	}
 	if again := chunker.Flush(); len(again) != 0 {
 		t.Fatalf("second flush chunks = %d, want none", len(again))
+	}
+}
+
+func TestGnaniSTTCloseWaitsForFinalTranscriptAfterAudioFlush(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"connected"}`)); err != nil {
+			return
+		}
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"transcript","text":"final words","segment_id":"seg-final"}`))
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &gnaniSTTStream{
+		conn:              conn,
+		ctx:               ctx,
+		cancel:            cancel,
+		language:          "en-IN",
+		chunker:           newGnaniSTTAudioChunker(),
+		events:            make(chan *stt.SpeechEvent, 4),
+		errCh:             make(chan error, 1),
+		closeDrainTimeout: 100 * time.Millisecond,
+		drainEvent:        make(chan struct{}, 1),
+	}
+	go stream.readLoop()
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 2, 3}, SampleRate: 16000, NumChannels: 1}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	select {
+	case event := <-stream.events:
+		assertGnaniSTTEvent(t, []*stt.SpeechEvent{event}, 0, stt.SpeechEventFinalTranscript, "seg-final", "final words")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for final transcript after close")
 	}
 }
 

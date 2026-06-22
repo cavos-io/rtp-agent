@@ -245,6 +245,25 @@ func TestGroqTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestGroqTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &groqTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("first audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
 func TestGroqTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &groqCloseCountBody{Reader: bytes.NewReader(groqTestWAV([]byte{0x01, 0x02}, 48000, 1))}
 	stream := &groqTTSChunkedStream{

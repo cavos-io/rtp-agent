@@ -15,6 +15,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -358,8 +359,17 @@ func (s *asyncAITTSStream) PushText(text string) error {
 	if s.closed {
 		return fmt.Errorf("asyncai tts stream is closed")
 	}
-	_, err := s.pendingText.WriteString(text)
-	return err
+	if _, err := s.pendingText.WriteString(text); err != nil {
+		return err
+	}
+	if s.conn == nil && s.writeMessage == nil {
+		return nil
+	}
+	if err := s.sendCompleteSentencesLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *asyncAITTSStream) Flush() error {
@@ -375,11 +385,8 @@ func (s *asyncAITTSStream) Flush() error {
 	text := s.pendingText.String()
 	s.pendingText.Reset()
 	if text != "" {
-		payload, err := buildAsyncAITTSTextMessage(s.contextID, text)
-		if err != nil {
-			return err
-		}
-		if err := s.writeMessageData(payload); err != nil {
+		text = strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(text, ""), " ")
+		if err := s.sendTextLocked(text); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
@@ -393,6 +400,42 @@ func (s *asyncAITTSStream) Flush() error {
 		return err
 	}
 	return nil
+}
+
+func (s *asyncAITTSStream) sendCompleteSentencesLocked() error {
+	for {
+		text := s.pendingText.String()
+		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(text, "")
+		if len(tokens) <= 1 {
+			return nil
+		}
+		sentence := tokens[0]
+		if err := s.sendTextLocked(sentence); err != nil {
+			return err
+		}
+		tokenIdx := strings.Index(text, sentence)
+		if tokenIdx < 0 {
+			s.pendingText.Reset()
+			s.pendingText.WriteString(strings.TrimSpace(strings.TrimPrefix(text, sentence)))
+			continue
+		}
+		tail := strings.TrimLeftFunc(text[tokenIdx+len(sentence):], func(r rune) bool {
+			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+		})
+		s.pendingText.Reset()
+		s.pendingText.WriteString(tail)
+	}
+}
+
+func (s *asyncAITTSStream) sendTextLocked(text string) error {
+	if text == "" {
+		return nil
+	}
+	payload, err := buildAsyncAITTSTextMessage(s.contextID, text)
+	if err != nil {
+		return err
+	}
+	return s.writeMessageData(payload)
 }
 
 func (s *asyncAITTSStream) Close() error {

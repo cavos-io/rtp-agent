@@ -210,6 +210,23 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	body := io.NopCloser(strings.NewReader(""))
+	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error before final marker = %v", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("first audio = %#v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker error = %v, want EOF", err)
+	}
+}
+
 type upliftAIRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f upliftAIRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {

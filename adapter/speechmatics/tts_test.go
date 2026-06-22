@@ -229,9 +229,33 @@ func TestSpeechmaticsTTSChunkedStreamDiscardsPartialEOFRead(t *testing.T) {
 		sampleRate: 24000,
 	}
 
-	_, err := stream.Next()
-	if err != io.EOF {
-		t.Fatalf("Next error = %v, want EOF for trailing partial sample", err)
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final marker with trailing partial sample discarded", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker without partial sample frame", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     io.NopCloser(bytes.NewReader(nil)),
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
 	}
 }
 
