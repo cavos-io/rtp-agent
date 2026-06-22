@@ -325,6 +325,18 @@ func TestOpenAITTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSUpdateOptionsKeepsReferenceResponseFormat(t *testing.T) {
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+	)
+
+	provider.UpdateOptions(WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatMp3))
+
+	if provider.responseFormat != goopenai.SpeechResponseFormatPcm {
+		t.Fatalf("responseFormat = %q, want constructor format %q", provider.responseFormat, goopenai.SpeechResponseFormatPcm)
+	}
+}
+
 func TestOpenAITTSLabelCapabilitiesAndUnsupportedStream(t *testing.T) {
 	provider := mustNewOpenAITTS(t, "test-key", "", "")
 

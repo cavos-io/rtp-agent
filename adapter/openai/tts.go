@@ -214,9 +214,11 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 }
 
 func (t *OpenAITTS) UpdateOptions(opts ...OpenAITTSOption) {
+	responseFormat := t.responseFormat
 	for _, opt := range opts {
 		opt(t)
 	}
+	t.responseFormat = responseFormat
 }
 
 func (t *OpenAITTS) Label() string { return "openai.TTS" }
