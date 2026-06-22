@@ -185,9 +185,41 @@ func TestSpeechmaticsTTSChunkedStreamBuffersPartialSamples(t *testing.T) {
 		t.Fatalf("first samples per channel = %d, want 1", audio.Frame.SamplesPerChannel)
 	}
 
-	_, err = stream.Next()
-	if err != io.EOF {
-		t.Fatalf("second Next error = %v, want EOF with trailing partial byte discarded", err)
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker with trailing partial byte discarded", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
 	}
 }
 
