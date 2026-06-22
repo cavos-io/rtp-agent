@@ -410,6 +410,7 @@ type elevenLabsChunkedStream struct {
 	decoder    codecs.AudioStreamDecoder
 	started    bool
 	emitted    bool
+	finalSent  bool
 	mu         sync.Mutex
 }
 
@@ -478,6 +479,10 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 	frame, err := s.decoder.Next()
 	if err != nil {
 		if strings.Contains(err.Error(), "decoder closed") {
+			if s.emitted && !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		return nil, fmt.Errorf("elevenlabs TTS chunked mp3 decode %s: %w", s.audioByteState(), err)
