@@ -1,6 +1,7 @@
 package asyncai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -229,6 +230,19 @@ func TestAsyncAITTSTextMessageKeepsTrailingWhitespace(t *testing.T) {
 	}
 }
 
+func asyncAITTSTestTranscript(t *testing.T, payload []byte) string {
+	t.Helper()
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode AsyncAI message: %v", err)
+	}
+	transcript, ok := message["transcript"].(string)
+	if !ok {
+		t.Fatalf("message transcript = %#v, want string", message["transcript"])
+	}
+	return transcript
+}
+
 func TestAsyncAITTSAudioFromWebsocketMessage(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})
 	audio, done, err := asyncAITTSAudioFromWebsocketMessage([]byte(`{"context_id":"ctx-1","audio":"`+encoded+`"}`), 32000)
@@ -304,6 +318,47 @@ func TestAsyncAITTSStreamBuffersTextUntilFlush(t *testing.T) {
 	}
 	if got := stream.pendingText.String(); got != "hello world" {
 		t.Fatalf("pending text = %q, want concatenated text", got)
+	}
+}
+
+func TestAsyncAITTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	var sent [][]byte
+	stream := &asyncAITTSStream{
+		contextID: "ctx-1",
+		writeMessage: func(payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	if err := stream.PushText("This is a complete sen"); err != nil {
+		t.Fatalf("PushText(partial) error = %v", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("sent after partial = %d, want no provider text before complete sentence", len(sent))
+	}
+
+	if err := stream.PushText("tence. Tail"); err != nil {
+		t.Fatalf("PushText(sentence) error = %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent after sentence = %d, want one text message", len(sent))
+	}
+	if got := asyncAITTSTestTranscript(t, sent[0]); got != "This is a complete sentence. " {
+		t.Fatalf("transcript = %q, want completed sentence with reference spacing", got)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(sent) != 3 {
+		t.Fatalf("sent after flush = %d, want tail text and end message", len(sent))
+	}
+	if got := asyncAITTSTestTranscript(t, sent[1]); got != "Tail " {
+		t.Fatalf("tail transcript = %q, want Tail with reference spacing", got)
+	}
+	if got := asyncAITTSTestTranscript(t, sent[2]); got != "" {
+		t.Fatalf("end transcript = %q, want empty end packet", got)
 	}
 }
 
