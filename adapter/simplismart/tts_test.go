@@ -1,6 +1,7 @@
 package simplismart
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -10,6 +11,21 @@ import (
 
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
+
+type simplismartFinalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (r *simplismartFinalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *simplismartFinalEOFReader) Close() error { return nil }
 
 func TestNewSimplismartTTSUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SIMPLISMART_API_KEY", "env-key")
@@ -201,6 +217,35 @@ func TestSimplismartTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestSimplismartTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &simplismartTTSChunkedStream{
+		resp: &http.Response{
+			Body: &simplismartFinalEOFReader{data: []byte{0x01, 0x02}},
+		},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want audio frame", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final bytes", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want final marker", final)
 	}
 }
 
