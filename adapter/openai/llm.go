@@ -840,13 +840,19 @@ func (l *OpenAILLM) Close() error {
 	return closeErr
 }
 
-func (l *OpenAILLM) registerStream(stream *openaiStream) {
+func (l *OpenAILLM) registerStream(stream *openaiStream) bool {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
 	if l.streams == nil {
 		l.streams = make(map[*openaiStream]struct{})
 	}
 	l.streams[stream] = struct{}{}
+	l.mu.Unlock()
+	return true
 }
 
 func (l *OpenAILLM) unregisterStream(stream *openaiStream) {
@@ -917,7 +923,12 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 				cancel:   cancel,
 				provider: l,
 			}
-			l.registerStream(wrapped)
+			if !l.registerStream(wrapped) {
+				if cancel != nil {
+					cancel()
+				}
+				return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+			}
 			return wrapped, nil
 		}
 		lastErr = mapOpenAIError(err)
