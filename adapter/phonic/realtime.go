@@ -214,14 +214,14 @@ func (s *realtimeSession) UpdateInstructions(string) error          { return nil
 func (s *realtimeSession) UpdateChatContext(*llm.ChatContext) error { return nil }
 func (s *realtimeSession) UpdateTools([]llm.Tool) error             { return nil }
 func (s *realtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
-	return phonicUnsupported("update_options")
+	return nil
 }
 func (s *realtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error { return nil }
 func (s *realtimeSession) Say(string) error                                     { return nil }
 func (s *realtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
-	return phonicUnsupported("truncate")
+	return nil
 }
-func (s *realtimeSession) Interrupt() error { return phonicUnsupported("interrupt") }
+func (s *realtimeSession) Interrupt() error { return nil }
 func (s *realtimeSession) Close() error {
 	s.closeOnce.Do(func() {
 		close(s.eventCh)
@@ -231,8 +231,8 @@ func (s *realtimeSession) Close() error {
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent  { return s.eventCh }
 func (s *realtimeSession) PushAudio(*model.AudioFrame) error  { return nil }
 func (s *realtimeSession) PushVideo(*images.VideoFrame) error { return phonicUnsupported("push_video") }
-func (s *realtimeSession) CommitAudio() error                 { return phonicUnsupported("commit_audio") }
-func (s *realtimeSession) ClearAudio() error                  { return phonicUnsupported("clear_audio") }
+func (s *realtimeSession) CommitAudio() error                 { return nil }
+func (s *realtimeSession) ClearAudio() error                  { return nil }
 
 func phonicUnsupported(operation string) error {
 	return errors.New(operation + " is not supported by the Phonic realtime model")

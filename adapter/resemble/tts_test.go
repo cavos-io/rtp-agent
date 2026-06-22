@@ -262,6 +262,36 @@ func TestResembleTTSWebsocketMessageMatchesReference(t *testing.T) {
 	}
 }
 
+func TestResembleTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	conn, messages := newResembleRecordingWebsocketConn(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &resembleTTSSynthesizeStream{
+		conn:     conn,
+		ctx:      ctx,
+		cancel:   cancel,
+		provider: NewResembleTTS("test-key", ""),
+		events:   make(chan *coretts.SynthesizedAudio, 1),
+		errCh:    make(chan error, 1),
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	first := readResembleTTSStreamMessage(t, messages)
+	if first["data"] != "This first sentence is definitely long enough." || first["request_id"] != float64(1) {
+		t.Fatalf("first websocket message = %#v, want completed sentence request 1", first)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	tail := readResembleTTSStreamMessage(t, messages)
+	if tail["data"] != "Tail" || tail["request_id"] != float64(2) {
+		t.Fatalf("tail websocket message = %#v, want flushed tail request 2", tail)
+	}
+}
+
 func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -446,6 +476,84 @@ func newResembleClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan stru
 		}
 	})
 	return conn, closed
+}
+
+func newResembleRecordingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan map[string]any) {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	messages := make(chan map[string]any, 4)
+	ready := make(chan struct{})
+	var readyOnce sync.Once
+	listener := newResembleSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			readyOnce.Do(func() { close(ready) })
+			serverErr <- err
+			return
+		}
+		readyOnce.Do(func() { close(ready) })
+		defer conn.Close()
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var msg map[string]any
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				serverErr <- err
+				return
+			}
+			messages <- msg
+		}
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://resemble.test/stream", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket upgrade")
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn, messages
+}
+
+func readResembleTTSStreamMessage(t *testing.T, messages <-chan map[string]any) map[string]any {
+	t.Helper()
+	select {
+	case msg := <-messages:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Resemble TTS websocket message")
+	}
+	return nil
 }
 
 type resembleSingleConnListener struct {

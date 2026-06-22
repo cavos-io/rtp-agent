@@ -850,7 +850,7 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 		t.Fatalf("dictionary init locators = %#v, want reference locator payload", locators)
 	}
 
-	text := elevenLabsTextPayload(contextID, "hello")
+	text := elevenLabsTextPayload(contextID, "hello", false)
 	if text["text"] != "hello " || text["context_id"] != contextID {
 		t.Fatalf("text payload = %#v, want text with trailing space and context_id", text)
 	}
@@ -873,7 +873,7 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 }
 
 func TestElevenLabsTextPayloadAppendsReferenceTrailingSpace(t *testing.T) {
-	payload := elevenLabsTextPayload("ctx_test", "hello")
+	payload := elevenLabsTextPayload("ctx_test", "hello", false)
 	if payload["text"] != "hello " {
 		t.Fatalf("text payload = %#v, want reference trailing space", payload)
 	}
@@ -958,6 +958,63 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	}
 	if _, ok := text["flush"]; ok {
 		t.Fatalf("text packet = %#v, want no flush before Flush()", text)
+	}
+}
+
+func TestElevenLabsTTSStreamAutoModeSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("This first sentence is definitely long enough. Tail"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+
+	init := readElevenLabsTTSStreamMessage(t, messages)
+	contextID, _ := init["context_id"].(string)
+	if init["text"] != " " || contextID == "" {
+		t.Fatalf("init packet = %#v, want warmup packet with context_id", init)
+	}
+	first := readElevenLabsTTSStreamMessage(t, messages)
+	if first["text"] != "This first sentence is definitely long enough. " || first["context_id"] != contextID {
+		t.Fatalf("first text packet = %#v, want completed sentence for context %q", first, contextID)
+	}
+	if first["flush"] != true {
+		t.Fatalf("first text packet flush = %#v, want true for auto_mode sentence chunk", first["flush"])
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	tail := readElevenLabsTTSStreamMessage(t, messages)
+	if tail["text"] != "Tail " || tail["context_id"] != contextID || tail["flush"] != true {
+		t.Fatalf("tail text packet = %#v, want flushed tail with flush=true", tail)
+	}
+	end := readElevenLabsTTSStreamMessage(t, messages)
+	if end["text"] != "" || end["context_id"] != contextID || end["flush"] != true {
+		t.Fatalf("end packet = %#v, want empty flush packet", end)
 	}
 }
 
@@ -1065,7 +1122,7 @@ func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 	defer stream.Close()
 
-	writeErr := stream.PushText("hello")
+	writeErr := stream.PushText("hello there dear friend. Tail")
 	if writeErr == nil {
 		select {
 		case <-closed:
@@ -1082,7 +1139,7 @@ func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 
 	for range 3 {
-		writeErr = stream.PushText("hello")
+		writeErr = stream.PushText("hello there dear friend. Tail")
 		if writeErr != nil {
 			break
 		}
@@ -1332,7 +1389,7 @@ func TestElevenLabsTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
-	if err := stream.PushText("hello"); err != nil {
+	if err := stream.PushText("hello there dear friend. Tail"); err != nil {
 		t.Fatalf("PushText error = %v", err)
 	}
 	select {
@@ -1385,7 +1442,7 @@ func TestElevenLabsTTSStreamUnexpectedNormalCloseReturnsAPIStatusError(t *testin
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
-	if err := stream.PushText("hello"); err != nil {
+	if err := stream.PushText("hello there dear friend. Tail"); err != nil {
 		t.Fatalf("PushText error = %v", err)
 	}
 	select {
@@ -1437,7 +1494,7 @@ func TestElevenLabsTTSStreamProviderErrorReturnsAPIStatusError(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
-	if err := stream.PushText("hello"); err != nil {
+	if err := stream.PushText("hello there dear friend. Tail"); err != nil {
 		t.Fatalf("PushText error = %v", err)
 	}
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
 
@@ -258,17 +259,59 @@ type gradiumTTSSynthesizeStream struct {
 	closed     bool
 	sampleRate int
 	finalDone  bool
+	pending    string
+
+	writeMessage func(map[string]any) error
 }
 
 func (s *gradiumTTSSynthesizeStream) PushText(text string) error {
-	return writeGradiumTTSMessage(s.conn, buildGradiumTTSTextMessage(text))
+	if text == "" {
+		return nil
+	}
+	s.pending += text
+	tokens := tokenize.SplitWords(s.pending, false, false, false)
+	if len(tokens) <= 1 {
+		return nil
+	}
+	for _, token := range tokens[:len(tokens)-1] {
+		if err := s.writeMessageData(buildGradiumTTSTextMessage(token.Token + " ")); err != nil {
+			return err
+		}
+		s.consumePendingToken(token.Token)
+	}
+	return nil
 }
 
 func (s *gradiumTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	s.finalDone = false
 	s.mu.Unlock()
-	return writeGradiumTTSMessage(s.conn, buildGradiumTTSEndMessage())
+	tokens := tokenize.SplitWords(s.pending, false, false, false)
+	for _, token := range tokens {
+		if err := s.writeMessageData(buildGradiumTTSTextMessage(token.Token + " ")); err != nil {
+			return err
+		}
+	}
+	s.pending = ""
+	return s.writeMessageData(buildGradiumTTSEndMessage())
+}
+
+func (s *gradiumTTSSynthesizeStream) consumePendingToken(token string) {
+	tokenIdx := strings.Index(s.pending, token)
+	if tokenIdx < 0 {
+		s.pending = strings.TrimSpace(strings.TrimPrefix(s.pending, token))
+		return
+	}
+	s.pending = strings.TrimLeftFunc(s.pending[tokenIdx+len(token):], func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+}
+
+func (s *gradiumTTSSynthesizeStream) writeMessageData(message map[string]any) error {
+	if s.writeMessage != nil {
+		return s.writeMessage(message)
+	}
+	return writeGradiumTTSMessage(s.conn, message)
 }
 
 func (s *gradiumTTSSynthesizeStream) Close() error {
