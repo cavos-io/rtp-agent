@@ -1821,6 +1821,39 @@ func TestRoomIOCloseClearsSessionListeners(t *testing.T) {
 	}
 }
 
+func TestRoomIOCloseSuppressesPendingAgentStatePublish(t *testing.T) {
+	enabledCalled := make(chan struct{})
+	releaseEnabled := make(chan struct{})
+	published := make(chan string, 1)
+	rio := &RoomIO{
+		agentStatePublisher: func(attrs map[string]string) {
+			published <- attrs[RoomIOAgentStateAttribute]
+		},
+		agentStatePublishEnabled: func() bool {
+			close(enabledCalled)
+			<-releaseEnabled
+			return true
+		},
+	}
+
+	rio.handleAgentStateChanged(agent.AgentStateChangedEvent{NewState: agent.AgentStateThinking})
+	select {
+	case <-enabledCalled:
+	case <-time.After(time.Second):
+		t.Fatal("publish did not reach connection check")
+	}
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	close(releaseEnabled)
+
+	select {
+	case got := <-published:
+		t.Fatalf("published agent state %q after RoomIO.Close", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestRoomIODefaultTextInputInterruptsBeforeGenerateReply(t *testing.T) {
 	responder := &fakeRoomIOTextResponder{}
 

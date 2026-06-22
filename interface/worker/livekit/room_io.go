@@ -2119,6 +2119,7 @@ func (rio *RoomIO) Close() error {
 	rio.dropPausedAudioOutput()
 	rio.mu.Lock()
 	rio.closed = true
+	rio.agentStatePublishSeq++
 	if rio.agentStateCancel != nil {
 		rio.agentStateCancel()
 		rio.agentStateCancel = nil
