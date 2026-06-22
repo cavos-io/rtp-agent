@@ -169,6 +169,7 @@ func runLLMAPIErrors(input json.RawMessage) (any, error) {
 		}{
 			{name: "client_forces_false", status: 400, retryable: true},
 			{name: "transient_keeps_true", status: 429, retryable: true},
+			{name: "transient_keeps_false", status: 429, retryable: false},
 			{name: "server_keeps_false", status: 500, retryable: false},
 		}
 		events := make([]map[string]any, 0, len(tests))

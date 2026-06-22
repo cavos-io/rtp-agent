@@ -1455,6 +1455,7 @@ def llm_api_errors(input_data: Any) -> dict[str, Any]:
         cases = [
             ("client_forces_false", 400, True),
             ("transient_keeps_true", 429, True),
+            ("transient_keeps_false", 429, False),
             ("server_keeps_false", 500, False),
         ]
         events = []

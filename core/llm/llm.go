@@ -783,8 +783,8 @@ func apiStatusDefaultRetryable(statusCode int) bool {
 }
 
 func applyAPIStatusRetryableOverride(statusCode int, retryable bool) bool {
-	if statusCode >= 400 && statusCode < 500 {
-		return statusCode == 408 || statusCode == 429 || statusCode == 499
+	if statusCode >= 400 && statusCode < 500 && statusCode != 408 && statusCode != 429 && statusCode != 499 {
+		return false
 	}
 	return retryable
 }

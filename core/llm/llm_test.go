@@ -539,6 +539,11 @@ func TestAPIStatusErrorOverridesRetryableForReferenceClientErrors(t *testing.T) 
 		t.Fatal("Retryable = false for explicit retryable 429, want true")
 	}
 
+	nonRetryableTransientErr := NewAPIStatusErrorWithRetryable("rate limited but fatal", 429, "req_429", nil, false)
+	if nonRetryableTransientErr.Retryable {
+		t.Fatal("Retryable = true for explicit non-retryable 429, want caller override preserved like reference")
+	}
+
 	serverErr := NewAPIStatusErrorWithRetryable("server failed", 500, "req_500", nil, false)
 	if serverErr.Retryable {
 		t.Fatal("Retryable = true for explicit non-retryable 500, want caller override preserved")
