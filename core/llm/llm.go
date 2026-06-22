@@ -1674,10 +1674,7 @@ type FallbackAllFailedError struct {
 
 func (e *FallbackAllFailedError) Error() string {
 	if e.APIError != nil {
-		if e.Err == nil {
-			return e.APIError.Error()
-		}
-		return fmt.Sprintf("%s: %v", e.APIError.Error(), e.Err)
+		return e.APIError.Error()
 	}
 	message := fallbackAllFailedMessage(e.Labels, e.Duration)
 	if e.Err == nil {

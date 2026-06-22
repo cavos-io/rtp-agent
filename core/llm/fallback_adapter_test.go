@@ -184,6 +184,9 @@ func TestFallbackAdapterReportsAllFailedWhenFinalStreamFailsBeforeChunk(t *testi
 	if !strings.Contains(apiErr.Message, "all LLMs failed ([primary.LLM]) after") {
 		t.Fatalf("APIConnectionError.Message = %q, want all-failed message", apiErr.Message)
 	}
+	if strings.Contains(err.Error(), firstErr.Error()) {
+		t.Fatalf("Next error = %q, want public all-failed message without raw provider detail", err)
+	}
 }
 
 func TestFallbackAdapterErrorUnsubscribeRemovesLocalHandler(t *testing.T) {
@@ -818,6 +821,9 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "primary.LLM") || !strings.Contains(err.Error(), "fallback.LLM") {
 		t.Fatalf("Chat error = %q, want exhausted provider labels", err)
+	}
+	if strings.Contains(err.Error(), secondErr.Error()) {
+		t.Fatalf("Chat error = %q, want public all-failed message without raw provider detail", err)
 	}
 	waitForFallbackCalls(t, primary, 2)
 	waitForFallbackCalls(t, fallback, 2)
