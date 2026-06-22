@@ -77,6 +77,45 @@ func TestSpeechmaticsTranscriptEventPreservesWordTimings(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
+	tests := []struct {
+		message string
+		want    stt.SpeechEventType
+	}{
+		{message: "AddPartialSegment", want: stt.SpeechEventInterimTranscript},
+		{message: "AddSegment", want: stt.SpeechEventFinalTranscript},
+	}
+
+	for _, tt := range tests {
+		var resp smResponse
+		body := strings.ReplaceAll(`{
+			"message":"MESSAGE",
+			"segments":[{
+				"text":"hello",
+				"language":"en",
+				"speaker_id":"S1",
+				"metadata":{"start_time":0.1,"end_time":0.4}
+			}]
+		}`, "MESSAGE", tt.message)
+		if err := json.Unmarshal([]byte(body), &resp); err != nil {
+			t.Fatalf("unmarshal segment response: %v", err)
+		}
+
+		events := speechmaticsEvents(resp, nil)
+		if len(events) != 1 {
+			t.Fatalf("%s events = %d, want one transcript", tt.message, len(events))
+		}
+		event := events[0]
+		if event.Type != tt.want || len(event.Alternatives) != 1 {
+			t.Fatalf("%s event = %#v, want one %s transcript", tt.message, event, tt.want)
+		}
+		got := event.Alternatives[0]
+		if got.Text != "hello" || got.Language != "en" || got.SpeakerID != "S1" || got.StartTime != 0.1 || got.EndTime != 0.4 {
+			t.Fatalf("%s alternative = %+v, want reference segment text/language/speaker/timing", tt.message, got)
+		}
+	}
+}
+
 func TestSpeechmaticsTurnBoundaryEventsMatchReference(t *testing.T) {
 	state := &speechmaticsStreamState{speechDuration: 1.25}
 
