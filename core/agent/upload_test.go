@@ -517,6 +517,20 @@ func TestUploadSessionReportRecordsTranscriptChatItems(t *testing.T) {
 	}
 }
 
+func TestUploadSessionReportSkipsMalformedCloudURLLikeReference(t *testing.T) {
+	useRecordingUploadHTTPClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("UploadSessionReport issued request to %s, want malformed URL skipped", r.URL.String())
+	}))
+
+	report := NewSessionReport()
+	report.RecordingOptions = RecordingOptions{Transcript: true}
+	report.RoomID = "RM_test"
+
+	if err := UploadSessionReport("://bad-url", "key", "secret", "agent-a", report); err != nil {
+		t.Fatalf("UploadSessionReport() error = %v, want nil for malformed non-cloud URL", err)
+	}
+}
+
 func TestUploadSessionReportSanitizesTranscriptChatHistory(t *testing.T) {
 	oldClient := recordingUploadHTTPClient
 	oldRecord := recordUploadTelemetryEvent

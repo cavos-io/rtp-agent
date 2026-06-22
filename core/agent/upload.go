@@ -272,7 +272,7 @@ func observabilityURLFromLiveKitURL(liveKitURL string) (string, error) {
 
 	u, err := url.Parse(liveKitURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse cloud URL: %w", err)
+		return "", nil
 	}
 	if !utils.IsCloud(liveKitURL) || u.Host == "" {
 		return "", nil
