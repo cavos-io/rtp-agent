@@ -38,6 +38,7 @@ type XaiTTS struct {
 	voice        string
 	language     string
 	streams      map[*xaiTTSSynthesizeStream]struct{}
+	closed       bool
 }
 
 type XaiTTSOption func(*XaiTTS)
@@ -106,6 +107,9 @@ func (t *XaiTTS) UpdateOptions(opts ...XaiTTSOption) {
 }
 
 func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateXaiAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -113,6 +117,10 @@ func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiTTSStreamURL(t), buildXaiTTSHeaders(t))
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
+	}
+	if t.isClosed() {
+		conn.Close()
+		return nil, io.ErrClosedPipe
 	}
 	if err := writeXaiTTSTokenizedText(func(message map[string]any) error {
 		return writeXaiTTSMessage(conn, message)
@@ -124,6 +132,9 @@ func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 }
 
 func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateXaiAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
@@ -139,7 +150,10 @@ func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeTTSMessage
 	stream.closeConn = stream.closeWebsocketConn
-	t.registerStream(stream)
+	if !t.registerStream(stream) {
+		cancel()
+		return nil, io.ErrClosedPipe
+	}
 	return stream, nil
 }
 
@@ -148,6 +162,11 @@ func (t *XaiTTS) Close() error {
 		return nil
 	}
 	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return nil
+	}
+	t.closed = true
 	streams := make([]*xaiTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -164,13 +183,26 @@ func (t *XaiTTS) Close() error {
 	return closeErr
 }
 
-func (t *XaiTTS) registerStream(stream *xaiTTSSynthesizeStream) {
+func (t *XaiTTS) isClosed() bool {
+	if t == nil {
+		return true
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.closed
+}
+
+func (t *XaiTTS) registerStream(stream *xaiTTSSynthesizeStream) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return false
+	}
 	if t.streams == nil {
 		t.streams = make(map[*xaiTTSSynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
+	return true
 }
 
 func (t *XaiTTS) unregisterStream(stream *xaiTTSSynthesizeStream) {
