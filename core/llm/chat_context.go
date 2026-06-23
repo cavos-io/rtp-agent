@@ -131,7 +131,7 @@ func (c *ChatContext) AddMessage(args ChatMessageArgs) *ChatMessage {
 		createdAt = time.Now()
 	}
 	content := args.Content
-	if len(content) == 0 && args.Text != "" {
+	if content == nil {
 		content = []ChatContent{{Text: args.Text}}
 	}
 	message := &ChatMessage{

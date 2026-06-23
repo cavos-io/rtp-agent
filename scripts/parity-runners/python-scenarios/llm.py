@@ -3256,10 +3256,10 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
         item_id: str = "",
         role: str,
         content: list[Any] | None = None,
-        text: str = "",
+        text: str | None = None,
         created_at: float = 0.0,
     ) -> dict[str, Any]:
-        resolved_content = list(content or ([] if text == "" else [text]))
+        resolved_content = list(content if content is not None else ([] if text is None else [text]))
         item = message(item_id or generated_id(), role, resolved_content, created_at=created_at)
         if not created_at:
             item["created_at"] = generated_time()
@@ -4604,7 +4604,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 target_items,
                 item_id=str(args.get("id", "")),
                 role=str(args["role"]),
-                text=str(args.get("text", "")),
+                text=str(args["text"]) if "text" in args else None,
                 created_at=float(args.get("created_at_unix", 0.0)),
             )
             return
@@ -4617,7 +4617,7 @@ def llm_chat_context(input_data: Any) -> dict[str, Any]:
                 target_items,
                 item_id=str(args.get("id", "")),
                 role=str(args["role"]),
-                text=str(args.get("text", "")),
+                text=str(args["text"]) if "text" in args else None,
                 created_at=float(args.get("created_at_unix", 0.0)),
             )
             variables[step["assign"]] = ""

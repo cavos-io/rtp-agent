@@ -510,6 +510,28 @@ func TestChatContextAddMessageAcceptsTextContent(t *testing.T) {
 	}
 }
 
+func TestChatContextAddMessagePreservesEmptyTextContent(t *testing.T) {
+	ctx := NewChatContext()
+
+	message := ctx.AddMessage(ChatMessageArgs{
+		Role: ChatRoleUser,
+		Text: "",
+	})
+
+	if got := len(message.Content); got != 1 {
+		t.Fatalf("AddMessage() content length = %d, want one explicit empty text part", got)
+	}
+	if got := message.Content[0].Text; got != "" {
+		t.Fatalf("AddMessage() text part = %q, want empty string", got)
+	}
+	data := ctx.ToDict()
+	items := data["items"].([]map[string]any)
+	content := items[0]["content"].([]any)
+	if len(content) != 1 || content[0] != "" {
+		t.Fatalf("serialized content = %#v, want explicit empty string part", content)
+	}
+}
+
 func TestChatMessageTextContentIncludesInstructionsAndPlainText(t *testing.T) {
 	message := &ChatMessage{
 		Role: ChatRoleSystem,
