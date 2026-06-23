@@ -909,6 +909,59 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "stream_start_all_failed":
+        class FailingStreamStartTTS(ScenarioTTS):
+            def __init__(self) -> None:
+                super().__init__()
+                self._label = "primary"
+                self._capabilities = module.TTSCapabilities(streaming=True)
+                self.stream_calls = 0
+
+            def stream(self, *, conn_options: Any = None) -> Any:
+                self.stream_calls += 1
+                raise module.APIConnectionError("provider unavailable")
+
+        primary = FailingStreamStartTTS()
+        adapter = module.FallbackAdapter([primary], max_retry_per_tts=0)
+        stream_created = False
+        error_class = ""
+        retryable = False
+        has_all_failed = False
+        has_provider_label = False
+
+        async def consume() -> None:
+            nonlocal stream_created
+            stream = adapter.stream()
+            stream_created = True
+            stream.push_text("hello")
+            stream.end_input()
+            async with stream:
+                async for _ in stream:
+                    pass
+
+        try:
+            asyncio.run(consume())
+        except Exception as exc:
+            error_class = type(exc).__name__
+            retryable = getattr(exc, "retryable", False)
+            message = str(exc)
+            has_all_failed = "all TTSs failed" in message
+            has_provider_label = "primary" in message
+
+        return {
+            "contract": "tts-fallback-stream-start-all-failed",
+            "events": [
+                {
+                    "name": "stream_start_all_failed",
+                    "stream_created": stream_created,
+                    "error_class": error_class,
+                    "retryable": retryable,
+                    "has_all_failed": has_all_failed,
+                    "has_provider_label": has_provider_label,
+                    "stream_calls": primary.stream_calls,
+                }
+            ],
+        }
     if action == "availability_panic_isolated":
         primary = ScenarioTTS()
         adapter = module.FallbackAdapter([primary])

@@ -527,6 +527,9 @@ def load_reference_tts():
                 setattr(self, key, value)
 
     class Span:
+        def is_recording(self) -> bool:
+            return False
+
         def set_attribute(self, *args: Any, **kwargs: Any) -> None:
             pass
 

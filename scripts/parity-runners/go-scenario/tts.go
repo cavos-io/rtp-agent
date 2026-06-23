@@ -752,6 +752,56 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "stream_start_all_failed":
+		var streamCalls int
+		primary := &fakeScenarioTTS{
+			label:        "primary",
+			provider:     "primary",
+			capabilities: lktts.TTSCapabilities{Streaming: true},
+			streamError:  lkllm.NewAPIConnectionError("provider unavailable"),
+			streamCalls:  &streamCalls,
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		stream, err := adapter.Stream(context.Background())
+		streamCreated := err == nil
+		errorClass := ""
+		retryable := false
+		hasAllFailed := false
+		hasProviderLabel := false
+		if err == nil {
+			defer stream.Close()
+			if pushErr := stream.PushText("hello"); pushErr != nil {
+				err = pushErr
+			} else if endErr := lktts.EndSynthesizeStreamInput(stream); endErr != nil {
+				err = endErr
+			} else {
+				_, err = stream.Next()
+			}
+		}
+		if err != nil {
+			var connectionErr *lkllm.APIConnectionError
+			if errors.As(err, &connectionErr) {
+				errorClass = "APIConnectionError"
+				retryable = connectionErr.Retryable
+			}
+			message := err.Error()
+			hasAllFailed = strings.Contains(message, "all TTSs failed")
+			hasProviderLabel = strings.Contains(message, "primary")
+		}
+		return map[string]any{
+			"contract": "tts-fallback-stream-start-all-failed",
+			"events": []map[string]any{
+				{
+					"name":               "stream_start_all_failed",
+					"stream_created":     streamCreated,
+					"error_class":        errorClass,
+					"retryable":          retryable,
+					"has_all_failed":     hasAllFailed,
+					"has_provider_label": hasProviderLabel,
+					"stream_calls":       streamCalls,
+				},
+			},
+		}, nil
 	case "availability_panic_isolated":
 		primary := &fakeScenarioTTS{
 			provider:     "primary",
@@ -1060,6 +1110,7 @@ type fakeScenarioTTS struct {
 
 	sampleRate    int
 	numChannels   int
+	capabilities  lktts.TTSCapabilities
 	label         string
 	model         string
 	provider      string
@@ -1068,6 +1119,8 @@ type fakeScenarioTTS struct {
 	chunkedEvents []*lktts.SynthesizedAudio
 	chunkedError  error
 	chunkedCalls  *int
+	streamError   error
+	streamCalls   *int
 }
 
 func (t fakeScenarioTTS) Label() string {
@@ -1076,8 +1129,8 @@ func (t fakeScenarioTTS) Label() string {
 	}
 	return "fake-scenario-tts"
 }
-func (fakeScenarioTTS) Capabilities() lktts.TTSCapabilities {
-	return lktts.TTSCapabilities{}
+func (t fakeScenarioTTS) Capabilities() lktts.TTSCapabilities {
+	return t.capabilities
 }
 func (t fakeScenarioTTS) SampleRate() int {
 	if t.sampleRate != 0 {
@@ -1116,7 +1169,13 @@ func (t fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStrea
 	}
 	return nil, nil
 }
-func (fakeScenarioTTS) Stream(context.Context) (lktts.SynthesizeStream, error) {
+func (t fakeScenarioTTS) Stream(context.Context) (lktts.SynthesizeStream, error) {
+	if t.streamCalls != nil {
+		(*t.streamCalls)++
+	}
+	if t.streamError != nil {
+		return nil, t.streamError
+	}
 	return nil, nil
 }
 
