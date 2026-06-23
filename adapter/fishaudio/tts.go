@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -615,7 +617,7 @@ func (s *fishAudioTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- fishAudioTTSReadError(err)
 			}
 			return
 		}
@@ -634,6 +636,14 @@ func (s *fishAudioTTSSynthesizeStream) readLoop() {
 			return
 		}
 	}
+}
+
+func fishAudioTTSReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIStatusError("Fish Audio websocket connection closed unexpectedly", closeErr.Code, "", err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Fish Audio websocket receive failed: %v", err))
 }
 
 func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format string) (*tts.SynthesizedAudio, bool, error) {
