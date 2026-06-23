@@ -13,7 +13,9 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -305,6 +307,46 @@ func TestAsyncAITTSWebsocketNextReturnsFinalMarker(t *testing.T) {
 	_, err = stream.Next()
 	if err != io.EOF {
 		t.Fatalf("Next after final = %v, want io.EOF", err)
+	}
+}
+
+func TestAsyncAITTSWebsocketNextUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &asyncAITTSWebsocketChunkedStream{conn: conn, sampleRate: 32000}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseUnsupportedData {
+		t.Fatalf("StatusCode = %d, want close code", statusErr.StatusCode)
+	}
+	if !strings.Contains(err.Error(), "Async connection closed unexpectedly") {
+		t.Fatalf("Next error = %q, want Async close context", err)
 	}
 }
 
