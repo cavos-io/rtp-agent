@@ -1370,9 +1370,12 @@ func (s *AgentServer) Run(ctx context.Context) error {
 func (s *AgentServer) runLiveKitConnectionWithRetry(ctx context.Context) error {
 	retryCount := 0
 	for {
-		err := s.runLiveKitConnectionOnce(ctx)
+		connected, err := s.runLiveKitConnectionOnce(ctx)
 		if err == nil {
 			return nil
+		}
+		if connected {
+			retryCount = 0
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -1389,7 +1392,7 @@ func (s *AgentServer) runLiveKitConnectionWithRetry(ctx context.Context) error {
 	}
 }
 
-func (s *AgentServer) runLiveKitConnectionOnce(ctx context.Context) error {
+func (s *AgentServer) runLiveKitConnectionOnce(ctx context.Context) (bool, error) {
 	openResult, err := s.openWorkerWebSocket(ctx, WorkerWebSocketOpenOptions{
 		WSURL:       s.Options.WSRL,
 		WorkerToken: s.Options.WorkerToken,
@@ -1400,7 +1403,7 @@ func (s *AgentServer) runLiveKitConnectionOnce(ctx context.Context) error {
 		MaxRetry:    s.Options.MaxRetry,
 	})
 	if err != nil {
-		return err
+		return false, err
 	}
 	conn := openResult.Conn
 	s.mu.Lock()
@@ -1419,7 +1422,7 @@ func (s *AgentServer) runLiveKitConnectionOnce(ctx context.Context) error {
 
 	msg, err := livekitExchangeInitialServerRegisterWebSocket(conn, s.registerWorkerRequest())
 	if err != nil {
-		return err
+		return true, err
 	}
 	s.handleMessage(ctx, msg)
 
@@ -1429,7 +1432,7 @@ func (s *AgentServer) runLiveKitConnectionOnce(ctx context.Context) error {
 	s.emitWorkerStarted()
 	s.startReloadIPCSessionFromEnv(ctx)
 
-	return s.runWorkerMessageLoop(ctx, conn.ReadMessage, conn.Close)
+	return true, s.runWorkerMessageLoop(ctx, conn.ReadMessage, conn.Close)
 }
 
 func (s *AgentServer) RunUnregistered(ctx context.Context) error {

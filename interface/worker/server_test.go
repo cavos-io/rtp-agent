@@ -4373,6 +4373,124 @@ func TestRunRetriesInitialRegisterExchangeFailure(t *testing.T) {
 	}
 }
 
+func TestRunResetsRetryAfterSuccessfulWorkerConnection(t *testing.T) {
+	stubWorkerHTTPListener(t)
+	oldSleep := workerRetrySleep
+	oldDial := workerDialContext
+	t.Cleanup(func() {
+		workerRetrySleep = oldSleep
+		workerDialContext = oldDial
+	})
+	workerRetrySleep = func(context.Context, time.Duration) error {
+		return nil
+	}
+
+	var upgrader websocket.Upgrader
+	var mu sync.Mutex
+	attempts := 0
+	registered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("Upgrade() error = %v", err)
+			return
+		}
+		defer conn.Close()
+
+		mu.Lock()
+		attempts++
+		attempt := attempts
+		mu.Unlock()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("ReadMessage register attempt %d error = %v", attempt, err)
+			return
+		}
+		msg := &livekit.ServerMessage{
+			Message: &livekit.ServerMessage_Register{
+				Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-retry-reset"},
+			},
+		}
+		data, err := proto.Marshal(msg)
+		if err != nil {
+			t.Errorf("proto.Marshal register response error = %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+			t.Errorf("WriteMessage register response error = %v", err)
+			return
+		}
+		registered <- struct{}{}
+		if attempt < 3 {
+			return
+		}
+		<-release
+	})
+	defer close(release)
+	workerDialContext = func(ctx context.Context, _ *websocket.Dialer, rawURL string, header http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		listener := newSingleConnListener(serverConn)
+		server := &http.Server{Handler: handler}
+		go func() {
+			_ = server.Serve(listener)
+		}()
+		go func() {
+			<-ctx.Done()
+			_ = server.Close()
+		}()
+		wsURL, err := url.Parse(rawURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		conn, response, err := websocket.NewClient(clientConn, wsURL, header, 1024, 1024)
+		if err != nil {
+			_ = clientConn.Close()
+			_ = server.Close()
+			return nil, response, err
+		}
+		return conn, response, nil
+	}
+
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "ws://livekit.test",
+		APIKey:    "run-key",
+		APISecret: "run-secret",
+		MaxRetry:  1,
+		DevMode:   true,
+		Host:      "127.0.0.1",
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.Run(ctx)
+	}()
+
+	for i := 0; i < 3; i++ {
+		select {
+		case <-registered:
+		case err := <-doneCh:
+			t.Fatalf("Run() returned after %d successful registrations: %v", i, err)
+		case <-time.After(time.Second):
+			t.Fatalf("Run() registered %d times, want retry counter reset through third registration", i)
+		}
+	}
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() after cancel error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not return after context cancellation")
+	}
+}
+
 func TestRunUnregisteredStartsHTTPAndSkipsLiveKitCredentials(t *testing.T) {
 	stubWorkerHTTPListener(t)
 	server := NewAgentServer(WorkerOptions{DevMode: true, Host: "127.0.0.1"})
