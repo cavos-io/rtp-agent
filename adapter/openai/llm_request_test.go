@@ -1335,6 +1335,80 @@ func TestOpenAIChatAppliesCallExtraQuery(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatProviderExtraHeadersOverrideCallExtraHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMExtraHeaders(map[string]string{
+			"X-Request-Group": "provider",
+		}),
+	)
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		llm.WithExtraParams(map[string]any{
+			"extra_headers": map[string]any{
+				"X-Request-Group": "call",
+				"X-Trace-ID":      "trace-123",
+			},
+		}),
+	)
+
+	if got := capture.header.Get("X-Request-Group"); got != "provider" {
+		t.Fatalf("X-Request-Group = %q, want provider extra header override", got)
+	}
+	if got := capture.header.Get("X-Trace-ID"); got != "trace-123" {
+		t.Fatalf("X-Trace-ID = %q, want call-only extra header preserved", got)
+	}
+}
+
+func TestOpenAIChatProviderExtraQueryOverridesCallExtraQuery(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMExtraQuery(map[string]string{
+			"api-version": "provider-preview",
+		}),
+	)
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		llm.WithExtraParams(map[string]any{
+			"extra_query": map[string]any{
+				"api-version": "call-preview",
+				"trace":       "trace-123",
+			},
+		}),
+	)
+
+	requestURL, err := url.Parse(capture.requestURL)
+	if err != nil {
+		t.Fatalf("request URL parse error = %v", err)
+	}
+	if got := requestURL.Query().Get("api-version"); got != "provider-preview" {
+		t.Fatalf("api-version query = %q, want provider extra query override", got)
+	}
+	if got := requestURL.Query().Get("trace"); got != "trace-123" {
+		t.Fatalf("trace query = %q, want call-only extra query preserved", got)
+	}
+}
+
 func TestOpenAIChatAppliesProviderExtraBody(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
