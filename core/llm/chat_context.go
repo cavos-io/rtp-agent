@@ -1814,7 +1814,7 @@ func openAIResponsesMessage(msg *ChatMessage) (map[string]any, error) {
 	}
 	if msg.Role == ChatRoleAssistant {
 		if openAIExtra, _ := msg.Extra["openai"].(map[string]any); openAIExtra != nil {
-			if phase, ok := openAIExtra["phase"]; ok {
+			if phase, ok := openAIExtra["phase"]; ok && phase != nil {
 				result["phase"] = phase
 			}
 		}

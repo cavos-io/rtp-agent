@@ -2654,6 +2654,29 @@ func TestChatContextToOpenAIResponsesProviderFormat(t *testing.T) {
 	}
 }
 
+func TestChatContextToOpenAIResponsesProviderFormatOmitsNullPhase(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&ChatMessage{
+			ID:      "assistant-turn",
+			Role:    ChatRoleAssistant,
+			Content: []ChatContent{{Text: "checking"}},
+			Extra: map[string]any{
+				"openai": map[string]any{"phase": nil},
+			},
+		},
+	}
+
+	items, _ := ctx.ToProviderFormat("openai.responses")
+
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1: %#v", len(items), items)
+	}
+	if _, ok := items[0]["phase"]; ok {
+		t.Fatalf("assistant phase = %#v, want omitted for null reference phase", items[0]["phase"])
+	}
+}
+
 func TestChatContextToOpenAIProviderFormatFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{
