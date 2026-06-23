@@ -15,12 +15,14 @@ import (
 )
 
 type SpitchSTT struct {
-	apiKey string
+	apiKey   string
+	language string
 }
 
 func NewSpitchSTT(apiKey string) *SpitchSTT {
 	return &SpitchSTT{
-		apiKey: resolveSpitchAPIKey(apiKey),
+		apiKey:   resolveSpitchAPIKey(apiKey),
+		language: "en",
 	}
 }
 
@@ -38,6 +40,7 @@ func (s *SpitchSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
+	language = s.resolveLanguage(language)
 	req, err := buildSpitchSTTRecognizeRequest(ctx, s, frames, language)
 	if err != nil {
 		return nil, err
@@ -59,6 +62,16 @@ func (s *SpitchSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 
 	return spitchSTTResponseToEvent(result, language), nil
+}
+
+func (s *SpitchSTT) resolveLanguage(language string) string {
+	if language != "" {
+		return language
+	}
+	if s != nil && s.language != "" {
+		return s.language
+	}
+	return "en"
 }
 
 type spitchSTTResponse struct {
@@ -104,15 +117,14 @@ func spitchSTTResponseToEvent(result spitchSTTResponse, language string) *stt.Sp
 }
 
 func buildSpitchSTTRecognizeRequest(ctx context.Context, s *SpitchSTT, frames []*model.AudioFrame, language string) (*http.Request, error) {
+	language = s.resolveLanguage(language)
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
 	part, _ := writer.CreateFormFile("file", "audio.wav")
 	if _, err := part.Write(spitchSTTWAVBytes(frames)); err != nil {
 		return nil, err
 	}
-	if language != "" {
-		writer.WriteField("language", language)
-	}
+	writer.WriteField("language", language)
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
