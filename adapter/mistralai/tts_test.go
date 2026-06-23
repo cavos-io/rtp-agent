@@ -238,8 +238,15 @@ func TestMistralAITTSStreamDecodesJSONAudioResponse(t *testing.T) {
 		t.Fatalf("next audio: %v", err)
 	}
 	assertMistralTTSAudio(t, audio, []byte{0x01, 0x02})
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("next final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final marker = %#v, want boundary-only marker", final)
+	}
 	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("next after json chunk error = %v, want EOF", err)
+		t.Fatalf("next after final marker error = %v, want EOF", err)
 	}
 }
 
