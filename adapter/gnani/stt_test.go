@@ -279,6 +279,46 @@ func TestGnaniSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	}
 }
 
+func TestGnaniSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &gnaniSTTStream{
+		conn:              conn,
+		ctx:               ctx,
+		cancel:            cancel,
+		language:          "en-IN",
+		chunker:           newGnaniSTTAudioChunker(),
+		events:            make(chan *stt.SpeechEvent, 1),
+		errCh:             make(chan error, 1),
+		closeDrainTimeout: 0,
+		drainEvent:        make(chan struct{}, 1),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after local Close = (%#v, %v), want EOF", event, err)
+	}
+}
+
 func TestGnaniSTTStreamMessagesMapReferenceEvents(t *testing.T) {
 	transcript, err := gnaniSTTEventsFromStreamMessage([]byte(`{"type":"transcript","text":"hello","segment_id":"seg-1"}`), "en-IN")
 	if err != nil {
