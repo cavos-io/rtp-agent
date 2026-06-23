@@ -272,6 +272,44 @@ func TestRtzrSTTStreamLanguageArgumentDoesNotMutateReferenceLanguage(t *testing.
 	}
 }
 
+func TestRtzrSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	serverClosed := make(chan struct{})
+	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		defer close(serverClosed)
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	provider := NewRtzrSTT("client-id",
+		WithRtzrAccessToken("access-token"),
+		WithRtzrWSBase("ws://rtzr.test"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event after Close = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)
+	}
+	select {
+	case <-serverClosed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for server close")
+	}
+}
+
 func TestRtzrSTTStreamNonNormalCloseReturnsEOF(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
