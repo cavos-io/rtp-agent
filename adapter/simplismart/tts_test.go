@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -26,6 +27,22 @@ func (r *simplismartFinalEOFReader) Read(p []byte) (int, error) {
 }
 
 func (r *simplismartFinalEOFReader) Close() error { return nil }
+
+type simplismartCloseErrorBody struct {
+	closed bool
+}
+
+func (b *simplismartCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *simplismartCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
 
 func TestNewSimplismartTTSUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SIMPLISMART_API_KEY", "env-key")
@@ -217,6 +234,24 @@ func TestSimplismartTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestSimplismartTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &simplismartCloseErrorBody{}
+	stream := &simplismartTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	_, err := stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
 	}
 }
 

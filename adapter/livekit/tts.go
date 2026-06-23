@@ -637,7 +637,7 @@ func (s *inferenceTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		if done {
 			return nil, io.EOF
 		}
-		return nil, context.Canceled
+		return nil, io.EOF
 	}
 	return ev, nil
 }

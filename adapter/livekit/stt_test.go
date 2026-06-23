@@ -401,6 +401,29 @@ func TestInferenceSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestInferenceSTTStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &inferenceSTTStream{
+		conn:    conn,
+		ctx:     ctx,
+		cancel:  cancel,
+		audioCh: make(chan *model.AudioFrame, 1),
+		eventCh: make(chan *stt.SpeechEvent, 1),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}
+
 func TestInferenceSTTStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewSTT("deepgram/nova-3", "key", "secret")
 	dials := 0

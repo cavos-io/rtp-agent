@@ -2,12 +2,29 @@ package clova
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+type clovaCloseCountBody struct {
+	closed bool
+}
+
+func (b *clovaCloseCountBody) Read(_ []byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (b *clovaCloseCountBody) Close() error {
+	if b.closed {
+		return errors.New("already closed")
+	}
+	b.closed = true
+	return nil
+}
 
 func TestClovaTTSChunkedStreamDecodesMP3Response(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
@@ -71,6 +88,20 @@ func TestClovaTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after final marker error = %v, want EOF", err)
+	}
+}
+
+func TestClovaTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &clovaCloseCountBody{}
+	stream := &clovaTTSChunkedStream{
+		resp: &http.Response{Body: body},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v, want nil", err)
 	}
 }
 

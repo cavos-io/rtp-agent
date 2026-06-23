@@ -1,8 +1,10 @@
 package sarvam
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -10,6 +12,22 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
+
+type sarvamLLMCloseErrorBody struct {
+	closed bool
+}
+
+func (b *sarvamLLMCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *sarvamLLMCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
 
 func TestSarvamLLMDefaultsMatchReference(t *testing.T) {
 	provider, err := NewSarvamLLMWithError("test-key", "")
@@ -170,6 +188,24 @@ func TestSarvamLLMChatStreamsOpenAICompatibleContent(t *testing.T) {
 	}
 	if got := first.Delta.Content + second.Delta.Content; got != "hello" {
 		t.Fatalf("streamed content = %q, want hello", got)
+	}
+}
+
+func TestSarvamLLMStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &sarvamLLMCloseErrorBody{}
+	stream := &sarvamLLMStream{
+		resp:    &http.Response{Body: body},
+		scanner: bufio.NewScanner(body),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	_, err := stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
 	}
 }
 

@@ -198,9 +198,13 @@ type cambaiTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	finalSent  bool
+	closed     bool
 }
 
 func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if n > 0 {
@@ -234,6 +238,10 @@ func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *cambaiTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	return s.resp.Body.Close()
 }
 

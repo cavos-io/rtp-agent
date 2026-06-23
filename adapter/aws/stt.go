@@ -407,6 +407,17 @@ func (s *awsSTTStream) Close() error {
 }
 
 func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
+	if s.closed {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		return nil, io.EOF
+	}
+
 	select {
 	case event, ok := <-s.events:
 		if !ok {

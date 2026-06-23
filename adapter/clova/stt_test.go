@@ -3,6 +3,7 @@ package clova
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -122,6 +124,32 @@ func TestBuildClovaSTTRecognizeRequestMatchesReference(t *testing.T) {
 	}
 	if !strings.HasPrefix(fields["media"], "RIFF") || !strings.Contains(fields["media"], "WAVE") {
 		t.Fatalf("media = %q, want wav payload", fields["media"][:min(len(fields["media"]), 12)])
+	}
+}
+
+func TestClovaSTTRecognizeResamplesAudioToReferenceInputRate(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}
+	for i := 0; i < 480; i++ {
+		binary.LittleEndian.PutUint16(frame.Data[i*2:i*2+2], uint16(i))
+	}
+
+	wav, err := clovaSTTWAVBytesFromFrames([]*model.AudioFrame{frame})
+	if err != nil {
+		t.Fatalf("build wav: %v", err)
+	}
+	if len(wav) < 44 {
+		t.Fatalf("wav length = %d, want RIFF header", len(wav))
+	}
+	if got := binary.LittleEndian.Uint32(wav[24:28]); got != defaultClovaSTTInputSampleRate {
+		t.Fatalf("wav sample rate = %d, want %d", got, defaultClovaSTTInputSampleRate)
+	}
+	if got := binary.LittleEndian.Uint32(wav[40:44]); got != 160*2 {
+		t.Fatalf("wav data size = %d, want 10ms resampled 16k mono PCM size", got)
 	}
 }
 

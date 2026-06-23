@@ -250,9 +250,13 @@ type simplismartTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	finalSent  bool
+	closed     bool
 }
 
 func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if n > 0 {
@@ -290,6 +294,10 @@ func (s *simplismartTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error)
 }
 
 func (s *simplismartTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	s.finalSent = true
 	return s.resp.Body.Close()
 }

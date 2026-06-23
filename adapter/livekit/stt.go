@@ -628,7 +628,7 @@ func (s *inferenceSTTStream) Next() (*stt.SpeechEvent, error) {
 		if err != nil {
 			return nil, err
 		}
-		return nil, context.Canceled
+		return nil, io.EOF
 	}
 	return ev, nil
 }

@@ -83,6 +83,22 @@ func anthropicTestResponse(statusCode int, body string) *http.Response {
 	}
 }
 
+type anthropicCloseErrorBody struct {
+	closed bool
+}
+
+func (b *anthropicCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *anthropicCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestAnthropicLLMMetadataMatchesReference(t *testing.T) {
 	model, err := NewAnthropicLLM("test-key", "")
 	if err != nil {
@@ -465,6 +481,24 @@ func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}
 	if !apiErr.Retryable {
 		t.Fatal("Retryable = false, want stream API errors retryable")
+	}
+}
+
+func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &anthropicCloseErrorBody{}
+	stream := &anthropicStream{
+		resp:   &http.Response{Body: body},
+		reader: bufio.NewReader(body),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	_, err := stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
 	}
 }
 

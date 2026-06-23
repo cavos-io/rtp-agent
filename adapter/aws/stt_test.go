@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
@@ -472,6 +473,45 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 	if err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("after-close")}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after close error = %v, want ErrClosedPipe", err)
+	}
+}
+
+func TestAWSSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := &fakeAWSSTTWriter{}
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error),
+	}
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	type nextResult struct {
+		event *stt.SpeechEvent
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		event, err := providerStream.Next()
+		resultCh <- nextResult{event: event, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.event != nil {
+			t.Fatalf("Next event = %#v, want nil", got.event)
+		}
+		if !errors.Is(got.err, io.EOF) {
+			t.Fatalf("Next error = %v, want io.EOF", got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Next after Close")
 	}
 }
 

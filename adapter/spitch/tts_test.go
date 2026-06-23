@@ -128,6 +128,55 @@ func TestSpitchSTTRecognizeRequestUploadsReferenceWAV(t *testing.T) {
 	}
 }
 
+func TestSpitchSTTRecognizeRequestUsesReferenceDefaultLanguage(t *testing.T) {
+	provider := NewSpitchSTT("test-key")
+
+	req, err := buildSpitchSTTRecognizeRequest(context.Background(), provider, []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	mediaType, params, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("parse content type: %v", err)
+	}
+	if mediaType != "multipart/form-data" {
+		t.Fatalf("content type = %q, want multipart/form-data", mediaType)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	fields := map[string]string{}
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read multipart: %v", err)
+		}
+		if part.FileName() != "" {
+			continue
+		}
+		value, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("read field %s: %v", part.FormName(), err)
+		}
+		fields[part.FormName()] = string(value)
+	}
+
+	if got := fields["language"]; got != "en" {
+		t.Fatalf("language field = %q, want reference default en", got)
+	}
+}
+
 func TestSpitchSTTResponsePreservesReferenceSegments(t *testing.T) {
 	event := spitchSTTResponseToEvent(spitchSTTResponse{
 		Text: "hello world",

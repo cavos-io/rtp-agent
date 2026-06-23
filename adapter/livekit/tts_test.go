@@ -391,6 +391,29 @@ func TestInferenceTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	conn := &recordingTTSConn{}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &inferenceTTSStream{
+		conn:      conn,
+		ctx:       ctx,
+		cancel:    cancel,
+		tokenizer: tokenize.NewBasicSentenceTokenizer().Stream(""),
+		eventCh:   make(chan *coretts.SynthesizedAudio, 1),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+}
+
 func TestInferenceTTSStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewTTS("cartesia/sonic-3", "key", "secret")
 	dials := 0
@@ -847,8 +870,8 @@ func TestInferenceTTSCloseWhileReadLoopReceivesBufferedAudioDoesNotPanic(t *test
 	}
 
 	_, err = stream.Next()
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Next() error = %v, want context.Canceled", err)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
 	}
 }
 

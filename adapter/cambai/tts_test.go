@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -30,6 +31,22 @@ func (r *cambaiFinalEOFReader) Read(p []byte) (int, error) {
 }
 
 func (r *cambaiFinalEOFReader) Close() error { return nil }
+
+type cambaiCloseErrorBody struct {
+	closed bool
+}
+
+func (b *cambaiCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *cambaiCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
 
 func TestCambaiTTSDefaultsMatchReference(t *testing.T) {
 	provider, err := NewCambaiTTS("test-key", "")
@@ -270,6 +287,24 @@ func TestCambaiTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
+func TestCambaiTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &cambaiCloseErrorBody{}
+	stream := &cambaiTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 48000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	_, err := stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
 	}
 }
 

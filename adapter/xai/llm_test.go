@@ -477,6 +477,22 @@ func TestXAIStreamStripsThinkingChunks(t *testing.T) {
 	}
 }
 
+func TestXAIStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &xaiCloseErrorBody{err: errors.New("read after close")}
+	stream := &xaiStream{resp: &http.Response{Body: body}}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next() chunk = %#v, want nil", chunk)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+}
+
 func TestXAIStreamMapsToolCallDeltas(t *testing.T) {
 	stream := &xaiStream{resp: &http.Response{
 		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
@@ -561,4 +577,21 @@ func xaiTestChatContext() *llm.ChatContext {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 	return ctx
+}
+
+type xaiCloseErrorBody struct {
+	closed bool
+	err    error
+}
+
+func (b *xaiCloseErrorBody) Read([]byte) (int, error) {
+	if b.closed {
+		return 0, b.err
+	}
+	return 0, io.EOF
+}
+
+func (b *xaiCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
 }

@@ -84,10 +84,11 @@ func (t *UltravoxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 type ultravoxTTSChunkedStream struct {
 	resp      *http.Response
 	finalSent bool
+	closed    bool
 }
 
 func (s *ultravoxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.finalSent {
+	if s.finalSent || s.closed {
 		return nil, io.EOF
 	}
 	buf := make([]byte, 4096)
@@ -121,5 +122,9 @@ func (s *ultravoxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *ultravoxTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	return s.resp.Body.Close()
 }
