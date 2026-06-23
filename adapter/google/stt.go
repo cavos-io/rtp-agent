@@ -466,7 +466,23 @@ func (s *googleSTTStream) Close() error {
 	return err
 }
 
+func (s *googleSTTStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		return nil, io.EOF
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {
