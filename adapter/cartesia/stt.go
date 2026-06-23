@@ -226,7 +226,7 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 		conn.Close()
 		return nil, io.ErrClosedPipe
 	}
-	go stream.readLoop()
+	go stream.readLoop(conn)
 	return stream, nil
 }
 
@@ -276,16 +276,17 @@ func validateCartesiaSTTAPIKey(apiKey string) error {
 }
 
 type cartesiaSTTStream struct {
-	provider *CartesiaSTT
-	conn     *websocket.Conn
-	events   chan *stt.SpeechEvent
-	errCh    chan error
-	mu       sync.Mutex
-	closed   bool
-	ctx      context.Context
-	cancel   context.CancelFunc
-	state    *cartesiaSTTStreamState
-	pushedSR uint32
+	provider      *CartesiaSTT
+	conn          *websocket.Conn
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	mu            sync.Mutex
+	closed        bool
+	ctx           context.Context
+	cancel        context.CancelFunc
+	state         *cartesiaSTTStreamState
+	pushedSR      uint32
+	reconnectNext bool
 
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
@@ -305,6 +306,10 @@ func (s *cartesiaSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return fmt.Errorf("cartesia stt input sample rate changed from %d to %d", s.pushedSR, frame.SampleRate)
 		}
 		s.pushedSR = frame.SampleRate
+	}
+	if err := s.reconnectIfNeeded(); err != nil {
+		s.closeAfterWriteFailure()
+		return err
 	}
 	if s.audioBStream == nil {
 		s.audioBStream = newCartesiaSTTAudioByteStream(int(frame.SampleRate), defaultCartesiaSTTAudioChunkDurationMS)
@@ -452,11 +457,23 @@ func (s *cartesiaSTTStream) Next() (*stt.SpeechEvent, error) {
 	}
 }
 
-func (s *cartesiaSTTStream) readLoop() {
-	defer close(s.events)
+func (s *cartesiaSTTStream) readLoop(conn *websocket.Conn) {
+	closeEvents := true
+	defer func() {
+		if closeEvents {
+			close(s.events)
+		}
+	}()
 	for {
-		msgType, payload, err := s.conn.ReadMessage()
+		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
+			s.mu.Lock()
+			stale := conn != s.conn
+			s.mu.Unlock()
+			if stale {
+				closeEvents = false
+				return
+			}
 			if !s.isClosed() {
 				for _, event := range cartesiaSTTUnexpectedCloseEvents(s.state) {
 					s.events <- event
@@ -495,7 +512,56 @@ func (s *cartesiaSTTStream) updateOptions(language string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	currentLanguage := s.state.languageOrDefault()
 	s.state.language = cartesiaLanguageBase(language)
+	if s.state.mode == "legacy" && currentLanguage != s.state.languageOrDefault() {
+		s.reconnectNext = true
+	}
+}
+
+func (s *cartesiaSTTStream) reconnectIfNeeded() error {
+	s.mu.Lock()
+	if !s.reconnectNext {
+		s.mu.Unlock()
+		return nil
+	}
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	provider := s.provider
+	language := s.state.languageOrDefault()
+	ctx := s.ctx
+	oldConn := s.conn
+	s.mu.Unlock()
+
+	if provider == nil {
+		return io.ErrClosedPipe
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(provider, language), buildCartesiaSTTHeaders(provider))
+	if err != nil {
+		return fmt.Errorf("failed to reconnect cartesia stt websocket: %w", err)
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = conn.Close()
+		return io.ErrClosedPipe
+	}
+	s.conn = conn
+	s.reconnectNext = false
+	s.mu.Unlock()
+
+	if oldConn != nil {
+		_ = oldConn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		_ = oldConn.Close()
+	}
+	go s.readLoop(conn)
+	return nil
 }
 
 func cartesiaSTTUnexpectedCloseError(err error) error {
