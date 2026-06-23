@@ -663,16 +663,22 @@ func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testi
 		},
 	}, FallbackAdapterOptions{DisableRetries: true})
 
-	_, err := adapter.Stream(context.Background(), "en")
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error = %v, want stream creation to succeed like reference", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Stream error = nil, want all STTs failed error")
+		t.Fatal("Next error = nil, want all STTs failed error")
 	}
 	if !errors.Is(err, fallbackErr) {
-		t.Fatalf("Stream error = %v, want to wrap final provider start error", err)
+		t.Fatalf("Next error = %v, want to wrap final provider start error", err)
 	}
 	var allFailed *FallbackAllFailedError
 	if !errors.As(err, &allFailed) {
-		t.Fatalf("Stream error = %T, want *FallbackAllFailedError", err)
+		t.Fatalf("Next error = %T, want *FallbackAllFailedError", err)
 	}
 	if allFailed.Count != 2 {
 		t.Fatalf("all failed Count = %d, want 2", allFailed.Count)
@@ -684,10 +690,10 @@ func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testi
 		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
 	}
 	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
-		t.Fatalf("Stream error = %q, want reference seconds duration", err)
+		t.Fatalf("Next error = %q, want reference seconds duration", err)
 	}
 	if strings.Contains(err.Error(), fallbackErr.Error()) {
-		t.Fatalf("Stream error = %q, want public all-failed message without raw provider detail", err)
+		t.Fatalf("Next error = %q, want public all-failed message without raw provider detail", err)
 	}
 }
 
@@ -787,13 +793,19 @@ func TestFallbackStreamStartClosesRecoveryStreamsWhenProvidersExhausted(t *testi
 		},
 	}, FallbackAdapterOptions{DisableRetries: true})
 
-	_, err := adapter.Stream(context.Background(), "en")
+	stream, err := adapter.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error = %v, want stream creation to succeed like reference", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Stream error = nil, want all STTs failed error")
+		t.Fatal("Next error = nil, want all STTs failed error")
 	}
 	var allFailed *FallbackAllFailedError
 	if !errors.As(err, &allFailed) {
-		t.Fatalf("Stream error = %T, want *FallbackAllFailedError", err)
+		t.Fatalf("Next error = %T, want *FallbackAllFailedError", err)
 	}
 	waitForRecoveryClosed(t, recovery)
 	close(recovery.release)
@@ -2304,6 +2316,9 @@ func TestFallbackStreamRejectsMismatchedSampleRates(t *testing.T) {
 		t.Fatal("PushFrame(second) returned nil, want sample-rate mismatch error")
 	}
 	if strings.Join(inner.calls, ",") != "push:first" {
+		waitForRecognizeStreamCalls(t, inner, 1)
+	}
+	if strings.Join(inner.calls, ",") != "push:first" {
 		t.Fatalf("inner calls = %#v, want only first frame forwarded", inner.calls)
 	}
 }
@@ -2342,6 +2357,7 @@ func TestFallbackStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	}
 
 	want := []string{"push:first", "flush", "end_input"}
+	waitForRecognizeStreamCalls(t, inner, len(want))
 	if len(inner.calls) != len(want) {
 		t.Fatalf("inner call count = %d, want %d: %#v", len(inner.calls), len(want), inner.calls)
 	}
@@ -2375,6 +2391,7 @@ func TestFallbackStreamForwardsEndInput(t *testing.T) {
 	}
 
 	want := "flush,end_input"
+	waitForRecognizeStreamCalls(t, inner, 2)
 	if len(inner.calls) != 2 {
 		t.Fatalf("inner call count = %d, want 2: %#v", len(inner.calls), inner.calls)
 	}
@@ -2732,6 +2749,18 @@ type metadataRecognizeStream struct {
 	calls           []string
 	startTimeOffset float64
 	startTime       float64
+}
+
+func waitForRecognizeStreamCalls(t *testing.T, stream *metadataRecognizeStream, count int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(stream.calls) >= count {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("inner calls = %#v, want at least %d", stream.calls, count)
 }
 
 func (m *metadataRecognizeStream) PushFrame(frame *model.AudioFrame) error {

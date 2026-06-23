@@ -522,11 +522,6 @@ func (f *FallbackAdapter) Stream(ctx context.Context, language string) (Recogniz
 		startTime:   streamStartTimeNow(),
 	}
 
-	if err := s.tryStartStream(0); err != nil {
-		s.closeRecoveries()
-		return nil, err
-	}
-
 	go s.monitorStream()
 
 	return s, nil
@@ -718,6 +713,12 @@ func replayFallbackInputs(stream RecognizeStream, inputs []fallbackRecognizeInpu
 }
 
 func (s *fallbackRecognizeStream) monitorStream() {
+	if err := s.tryStartStream(0); err != nil {
+		s.closeRecoveries()
+		s.finish(err)
+		return
+	}
+
 	for {
 		s.mu.Lock()
 		if s.closed {
@@ -964,6 +965,9 @@ func (s *fallbackRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 	for _, recovery := range s.recoveries {
 		_ = recovery.PushFrame(frame)
 	}
+	if isNilRecognizeStream(s.activeStream) {
+		return nil
+	}
 	return s.activeStream.PushFrame(frame)
 }
 
@@ -979,6 +983,9 @@ func (s *fallbackRecognizeStream) Flush() error {
 	s.inputBuffer = append(s.inputBuffer, fallbackRecognizeInput{flush: true})
 	for _, recovery := range s.recoveries {
 		_ = recovery.Flush()
+	}
+	if isNilRecognizeStream(s.activeStream) {
+		return nil
 	}
 	return s.activeStream.Flush()
 }
@@ -1001,6 +1008,9 @@ func (s *fallbackRecognizeStream) EndInput() error {
 		} else {
 			continue
 		}
+	}
+	if isNilRecognizeStream(s.activeStream) {
+		return nil
 	}
 	if err := s.activeStream.Flush(); err != nil {
 		return err
@@ -1029,6 +1039,9 @@ func (s *fallbackRecognizeStream) Close() error {
 	closeStreams(recoveries)
 	if activeCancel != nil {
 		activeCancel()
+	}
+	if isNilRecognizeStream(activeStream) {
+		return nil
 	}
 	return activeStream.Close()
 }
