@@ -153,6 +153,48 @@ func TestSonioxSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer close(serverClosed)
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSonioxSTT("test-key", WithSonioxBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event after Close = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)
+	}
+	select {
+	case <-serverClosed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for server close")
+	}
+}
+
 func TestSonioxSTTOptionsBuildReferenceConfig(t *testing.T) {
 	provider := NewSonioxSTT("test-key",
 		WithSonioxBaseURL("ws://soniox.example/ws"),
