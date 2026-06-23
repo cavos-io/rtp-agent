@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
@@ -80,11 +81,11 @@ func (s *ClovaSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 }
 
 func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	var audio bytes.Buffer
-	for _, f := range frames {
-		audio.Write(f.Data)
+	wav, err := clovaSTTWAVBytesFromFrames(frames)
+	if err != nil {
+		return nil, err
 	}
-	req, err := buildClovaSTTRecognizeRequest(ctx, s, audio.Bytes(), language)
+	req, err := buildClovaSTTRecognizeRequestWithWAV(ctx, s, wav, language)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +106,11 @@ func (s *ClovaSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 }
 
 func buildClovaSTTRecognizeRequest(ctx context.Context, s *ClovaSTT, audio []byte, language string) (*http.Request, error) {
+	wav := clovaSTTWAVBytes(audio, defaultClovaSTTInputSampleRate, clovaSTTNumChannels)
+	return buildClovaSTTRecognizeRequestWithWAV(ctx, s, wav, language)
+}
+
+func buildClovaSTTRecognizeRequestWithWAV(ctx context.Context, s *ClovaSTT, wav []byte, language string) (*http.Request, error) {
 	provider := s.withLanguage(language)
 	params, err := json.Marshal(map[string]string{
 		"language":   provider.language,
@@ -113,7 +119,6 @@ func buildClovaSTTRecognizeRequest(ctx context.Context, s *ClovaSTT, audio []byt
 	if err != nil {
 		return nil, err
 	}
-	wav := clovaSTTWAVBytes(audio, defaultClovaSTTInputSampleRate, clovaSTTNumChannels)
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := writer.WriteField("params", string(params)); err != nil {
@@ -139,6 +144,23 @@ func buildClovaSTTRecognizeRequest(ctx context.Context, s *ClovaSTT, audio []byt
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("X-CLOVASPEECH-API-KEY", provider.secret)
 	return req, nil
+}
+
+func clovaSTTWAVBytesFromFrames(frames []*model.AudioFrame) ([]byte, error) {
+	var audio bytes.Buffer
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultClovaSTTInputSampleRate)
+		if err != nil {
+			return nil, err
+		}
+		if resampled != nil {
+			audio.Write(resampled.Data)
+		}
+	}
+	return clovaSTTWAVBytes(audio.Bytes(), defaultClovaSTTInputSampleRate, clovaSTTNumChannels), nil
 }
 
 type clovaSTTResponse struct {
