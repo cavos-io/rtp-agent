@@ -396,6 +396,12 @@ func (s *sonioxTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	}
 }
 
+func (s *sonioxTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *sonioxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	localDone := s.localDone
 	select {
@@ -423,7 +429,7 @@ func (s *sonioxTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if !s.isClosed() {
 				s.errCh <- sonioxTTSReadError(err)
 			}
 			return

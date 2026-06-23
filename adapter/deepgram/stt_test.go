@@ -1140,6 +1140,67 @@ func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognitionUsageCarriesReferenceRequestID(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	closeServer := make(chan struct{})
+	go runDeepgramSpeechStateWebsocketServer(serverConn, closeServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	defer close(closeServer)
+
+	for _, wantType := range []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	} {
+		if event := nextDeepgramTestSpeechEvent(t, stream); event.Type != wantType {
+			t.Fatalf("event type = %s, want %s", event.Type, wantType)
+		}
+	}
+
+	rawStream, ok := stream.(*deepgramStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *deepgramStream", stream)
+	}
+	rawStream.mu.Lock()
+	rawStream.sendRecognitionUsage(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	rawStream.mu.Unlock()
+
+	usage := nextDeepgramTestSpeechEvent(t, stream)
+	if usage.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("usage event type = %s, want %s", usage.Type, stt.SpeechEventRecognitionUsage)
+	}
+	if usage.RequestID != "req-2" {
+		t.Fatalf("usage request id = %q, want latest Deepgram request id req-2", usage.RequestID)
+	}
+}
+
 func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})

@@ -56,9 +56,11 @@ func (e *fakeJobExecutor) Close(ctx context.Context) error {
 }
 
 func TestProcPoolGetByJobIDFindsRunningExecutor(t *testing.T) {
+	running := RunningJobInfo{Job: &livekit.Job{Id: "job-a"}}
 	executor := &fakeJobExecutor{
-		id:  "exec-a",
-		job: &livekit.Job{Id: "job-a"},
+		id:         "exec-a",
+		job:        running.Job,
+		runningJob: &running,
 	}
 	pool := &ProcPool{
 		executors: map[string]JobExecutor{executor.id: executor},
@@ -76,6 +78,26 @@ func TestProcPoolGetByJobIDFindsRunningExecutor(t *testing.T) {
 	}
 	if pool.GetByJobID("missing") != nil {
 		t.Fatal("GetByJobID returned executor for missing job")
+	}
+}
+
+func TestProcPoolGetByJobIDUsesRunningJobInfo(t *testing.T) {
+	running := RunningJobInfo{Job: &livekit.Job{Id: "job-running"}}
+	executor := &fakeJobExecutor{
+		id:         "exec-a",
+		runningJob: &running,
+	}
+	pool := &ProcPool{
+		executors: map[string]JobExecutor{executor.id: executor},
+	}
+
+	got := pool.GetByJobID("job-running")
+
+	if got == nil {
+		t.Fatal("GetByJobID returned nil, want executor from RunningJobInfo")
+	}
+	if got.ID() != "exec-a" {
+		t.Fatalf("executor ID = %q, want exec-a", got.ID())
 	}
 }
 

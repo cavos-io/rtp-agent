@@ -580,6 +580,12 @@ func (s *rimeTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	}
 }
 
+func (s *rimeTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
 	case audio, ok := <-s.events:
@@ -604,7 +610,7 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if !s.isClosed() {
 				s.errCh <- rimeTTSReadError(err)
 			}
 			return

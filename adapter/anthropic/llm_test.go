@@ -484,6 +484,67 @@ func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
+	transport := &captureRoundTripper{
+		responseBody: strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"<thinking>hidden"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":" still hidden"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"</thinking>visible answer"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"),
+	}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("message_start Next() error = %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("visible text Next() error = %v", err)
+	}
+	if chunk.Delta == nil {
+		t.Fatalf("chunk Delta = nil, want visible text")
+	}
+	if chunk.Delta.Content != "visible answer" {
+		t.Fatalf("content = %q, want visible answer without thinking text", chunk.Delta.Content)
+	}
+}
+
+func TestAnthropicStreamTextChunkCarriesReferenceRequestID(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			``,
+		}, "\n"))),
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("message_start Next() error = %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text delta Next() error = %v", err)
+	}
+	if chunk.ID != "msg_1" {
+		t.Fatalf("text chunk ID = %q, want msg_1", chunk.ID)
+	}
+}
+
 func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &anthropicCloseErrorBody{}
 	stream := &anthropicStream{
@@ -609,6 +670,39 @@ func TestAnthropicChatMapsNamedToolChoice(t *testing.T) {
 	}
 	if choice["type"] != "tool" || choice["name"] != "lookup" {
 		t.Fatalf("tool_choice = %#v, want named lookup tool", choice)
+	}
+}
+
+func TestAnthropicChatToolChoiceNoneClearsTools(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+		llm.WithToolChoice("none"),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v, want empty list", transport.body["tools"])
+	}
+	if len(tools) != 0 {
+		t.Fatalf("tools length = %d, want 0 for tool_choice none", len(tools))
+	}
+	if _, ok := transport.body["tool_choice"]; ok {
+		t.Fatalf("tool_choice = %#v, want omitted for tool_choice none", transport.body["tool_choice"])
 	}
 }
 

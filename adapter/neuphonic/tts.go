@@ -565,9 +565,7 @@ func (s *neuphonicTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- neuphonicTTSReadError(err)
-			}
+			s.errCh <- neuphonicTTSReadError(err)
 			return
 		}
 		if msgType != websocket.TextMessage {

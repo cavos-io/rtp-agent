@@ -603,6 +603,7 @@ type deepgramStream struct {
 	closed        bool
 	speaking      bool
 	reconnectNext bool
+	requestID     string
 	start         float64
 	offset        float64
 
@@ -851,6 +852,7 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 
 		case "Results":
+			s.setRequestID(resp.Metadata.RequestID)
 			if event := deepgramSpeechEventForLanguageOffset(resp, s.language, s.StartTimeOffset()); event != nil {
 				if !s.speaking {
 					s.speaking = true
@@ -911,7 +913,8 @@ func (s *deepgramStream) sendRecognitionUsage(frame *model.AudioFrame) {
 		return
 	}
 	s.sendEvent(&stt.SpeechEvent{
-		Type: stt.SpeechEventRecognitionUsage,
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: s.requestID,
 		RecognitionUsage: &stt.RecognitionUsage{
 			AudioDuration: duration,
 		},
@@ -923,6 +926,12 @@ func (s *deepgramStream) sendError(err error) {
 	case s.errCh <- err:
 	default:
 	}
+}
+
+func (s *deepgramStream) setRequestID(requestID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.requestID = requestID
 }
 
 func (s *deepgramStream) StartTimeOffset() float64 {

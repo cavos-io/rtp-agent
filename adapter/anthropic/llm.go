@@ -138,6 +138,9 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		}
 		body["tools"] = tools
 	}
+	if anthropicToolChoiceNone(options.ToolChoice) {
+		body["tools"] = []map[string]interface{}{}
+	}
 	if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls); toolChoice != nil {
 		body["tool_choice"] = toolChoice
 	}
@@ -148,9 +151,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		resp, err := l.startAnthropicStream(ctx, jsonBody)
 		if err == nil {
 			return &anthropicStream{
-				resp:   resp,
-				reader: bufio.NewReader(resp.Body),
-				cancel: cancel,
+				resp:     resp,
+				reader:   bufio.NewReader(resp.Body),
+				cancel:   cancel,
+				hasTools: len(options.Tools) > 0,
 			}, nil
 		}
 		lastErr = err
@@ -301,6 +305,11 @@ func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map
 	return toolChoice
 }
 
+func anthropicToolChoiceNone(choice llm.ToolChoice) bool {
+	tc, ok := choice.(string)
+	return ok && tc == "none"
+}
+
 type anthropicStream struct {
 	resp   *http.Response
 	reader *bufio.Reader
@@ -308,9 +317,12 @@ type anthropicStream struct {
 	closed bool
 
 	// internal states for tracking tool calls over multiple chunks
-	toolCallID string
-	toolName   string
-	toolArgs   string
+	toolCallID  string
+	toolName    string
+	toolArgs    string
+	requestID   string
+	hasTools    bool
+	ignoringCoT bool
 }
 
 func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
@@ -613,6 +625,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		switch event.Type {
 		case "message_start":
+			s.requestID = event.Message.ID
 			return &llm.ChatChunk{
 				ID: event.Message.ID,
 				Usage: &llm.CompletionUsage{
@@ -631,10 +644,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" {
+				text := s.visibleAnthropicTextDelta(event.Delta.Text)
+				if text == "" {
+					continue
+				}
 				return &llm.ChatChunk{
+					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
 						Role:    llm.ChatRoleAssistant,
-						Content: event.Delta.Text,
+						Content: text,
 					},
 				}, nil
 			} else if event.Delta.Type == "input_json_delta" {
@@ -644,6 +662,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		case "content_block_stop":
 			if s.toolCallID != "" {
 				chunk := &llm.ChatChunk{
+					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
 						Role: llm.ChatRoleAssistant,
 						ToolCalls: []llm.FunctionToolCall{
@@ -677,6 +696,23 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			return nil, llm.NewAPIError(message, body, true)
 		}
 	}
+}
+
+func (s *anthropicStream) visibleAnthropicTextDelta(text string) string {
+	if !s.hasTools {
+		return text
+	}
+	if strings.HasPrefix(text, "<thinking>") {
+		s.ignoringCoT = true
+	}
+	if s.ignoringCoT {
+		if _, after, ok := strings.Cut(text, "</thinking>"); ok {
+			s.ignoringCoT = false
+			return after
+		}
+		return ""
+	}
+	return text
 }
 
 func (s *anthropicStream) Close() error {

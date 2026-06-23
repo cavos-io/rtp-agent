@@ -432,9 +432,7 @@ func (s *resembleTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- resembleTTSReadError(err)
-			}
+			s.errCh <- resembleTTSReadError(err)
 			return
 		}
 		if msgType != websocket.TextMessage {

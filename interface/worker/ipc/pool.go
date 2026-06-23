@@ -330,8 +330,8 @@ func (p *ProcPool) GetByJobID(jobID string) JobExecutor {
 	closedExecutors := p.pruneFinishedExecutorsLocked()
 
 	for _, executor := range p.executors {
-		job := executor.Job()
-		if JobID(job) == jobID {
+		runningJob := executor.RunningJob()
+		if runningJob != nil && JobID(runningJob.Job) == jobID {
 			p.mu.Unlock()
 			p.emitMany(ProcPoolEventProcessClosed, closedExecutors)
 			return executor

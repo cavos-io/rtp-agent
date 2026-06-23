@@ -616,9 +616,7 @@ func (s *fishAudioTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- fishAudioTTSReadError(err)
-			}
+			s.errCh <- fishAudioTTSReadError(err)
 			return
 		}
 		if msgType != websocket.BinaryMessage {
