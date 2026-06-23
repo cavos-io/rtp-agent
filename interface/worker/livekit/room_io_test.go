@@ -2984,6 +2984,184 @@ type roomIOPublishedText struct {
 	opts lksdk.StreamTextOptions
 }
 
+type fakeTextStream struct {
+	opts   lksdk.StreamTextOptions
+	writes []string
+	closed bool
+}
+
+func (f *fakeTextStream) Write(text string) { f.writes = append(f.writes, text) }
+func (f *fakeTextStream) Close()            { f.closed = true }
+
+type fakeTextStreamFactory struct {
+	streams []*fakeTextStream
+}
+
+func (f *fakeTextStreamFactory) open(opts lksdk.StreamTextOptions) roomIOTextStreamWriter {
+	s := &fakeTextStream{opts: opts}
+	f.streams = append(f.streams, s)
+	return s
+}
+
+func TestRoomIOAgentTranscriptionDeltaStreamAppendsToSingleStream(t *testing.T) {
+	factory := &fakeTextStreamFactory{}
+	rio := &RoomIO{
+		audioTrackID:                     "TR_agent_audio",
+		transcriptionParticipantIdentity: func() string { return "agent-local" },
+		transcriptionPacketPublisher:     func(*livekit.Transcription) error { return nil },
+		agentTextStreamOpener:            factory.open,
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo ", IsFinal: false})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "selamat ", IsFinal: false})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "pagi ", IsFinal: false})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo selamat pagi ", IsFinal: true})
+
+	if len(factory.streams) != 1 {
+		t.Fatalf("opened %d streams, want 1 persistent stream for the segment", len(factory.streams))
+	}
+	stream := factory.streams[0]
+	wantWrites := []string{"halo ", "selamat ", "pagi "}
+	if !reflect.DeepEqual(stream.writes, wantWrites) {
+		t.Fatalf("stream writes = %#v, want %#v (deltas appended, final not re-written)", stream.writes, wantWrites)
+	}
+	if !stream.closed {
+		t.Fatal("stream was not closed on final marker")
+	}
+	if got := stream.opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]; !strings.HasPrefix(got, "SG_") {
+		t.Fatalf("stream segment id = %q, want SG_ prefix", got)
+	}
+	if got := stream.opts.Attributes[RoomIOTranscriptionFinalAttribute]; got != "false" {
+		t.Fatalf("stream open final attribute = %q, want false", got)
+	}
+	if got := stream.opts.Topic; got != RoomIOTranscriptionTopic {
+		t.Fatalf("stream topic = %q, want %q", got, RoomIOTranscriptionTopic)
+	}
+}
+
+func TestRoomIOAgentTranscriptionDeltaStreamLoneFinalWritesFullText(t *testing.T) {
+	factory := &fakeTextStreamFactory{}
+	rio := &RoomIO{
+		audioTrackID:                     "TR_agent_audio",
+		transcriptionParticipantIdentity: func() string { return "agent-local" },
+		transcriptionPacketPublisher:     func(*livekit.Transcription) error { return nil },
+		agentTextStreamOpener:            factory.open,
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "assistant transcript", IsFinal: true})
+
+	if len(factory.streams) != 1 {
+		t.Fatalf("opened %d streams, want 1", len(factory.streams))
+	}
+	stream := factory.streams[0]
+	if !reflect.DeepEqual(stream.writes, []string{"assistant transcript"}) {
+		t.Fatalf("lone final writes = %#v, want full text written once", stream.writes)
+	}
+	if !stream.closed {
+		t.Fatal("lone final stream was not closed")
+	}
+}
+
+func TestRoomIOAgentTranscriptionDeltaStreamNewSegmentOpensNewStream(t *testing.T) {
+	factory := &fakeTextStreamFactory{}
+	rio := &RoomIO{
+		audioTrackID:                     "TR_agent_audio",
+		transcriptionParticipantIdentity: func() string { return "agent-local" },
+		transcriptionPacketPublisher:     func(*livekit.Transcription) error { return nil },
+		agentTextStreamOpener:            factory.open,
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo ", IsFinal: false})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo ", IsFinal: true})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "dunia ", IsFinal: false})
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "dunia ", IsFinal: true})
+
+	if len(factory.streams) != 2 {
+		t.Fatalf("opened %d streams, want 2 (one per segment)", len(factory.streams))
+	}
+	firstID := factory.streams[0].opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	secondID := factory.streams[1].opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	if firstID == "" || secondID == "" || firstID == secondID {
+		t.Fatalf("segment ids = (%q, %q), want two distinct non-empty ids", firstID, secondID)
+	}
+	if !factory.streams[0].closed || !factory.streams[1].closed {
+		t.Fatalf("streams closed = (%v, %v), want both closed", factory.streams[0].closed, factory.streams[1].closed)
+	}
+}
+
+type fakeLKTextStreamWriter struct {
+	mu           sync.Mutex
+	written      []string
+	closed       bool
+	invokeOnDone bool
+}
+
+func (f *fakeLKTextStreamWriter) Write(data string, onDone *func()) {
+	f.mu.Lock()
+	f.written = append(f.written, data)
+	f.mu.Unlock()
+	if f.invokeOnDone && onDone != nil {
+		(*onDone)()
+	}
+}
+
+func (f *fakeLKTextStreamWriter) Close() {
+	f.mu.Lock()
+	f.closed = true
+	f.mu.Unlock()
+}
+
+func TestRoomIOSDKTextStreamWriterWaitsForFlush(t *testing.T) {
+	fake := &fakeLKTextStreamWriter{invokeOnDone: true}
+	w := roomIOSDKTextStreamWriter{writer: fake, writeTimeout: time.Second}
+
+	w.Write("bantu hari ini?")
+
+	fake.mu.Lock()
+	got := append([]string(nil), fake.written...)
+	fake.mu.Unlock()
+	if !reflect.DeepEqual(got, []string{"bantu hari ini?"}) {
+		t.Fatalf("written = %#v, want the chunk flushed before return", got)
+	}
+}
+
+func TestRoomIOSDKTextStreamWriterWriteTimesOut(t *testing.T) {
+	fake := &fakeLKTextStreamWriter{invokeOnDone: false}
+	w := roomIOSDKTextStreamWriter{writer: fake, writeTimeout: 20 * time.Millisecond}
+
+	done := make(chan struct{})
+	go func() {
+		w.Write("chunk")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Write hung when onDone was never invoked")
+	}
+}
+
+func TestRoomIOCloseAgentTextStreamClosesOpenWriter(t *testing.T) {
+	factory := &fakeTextStreamFactory{}
+	rio := &RoomIO{
+		audioTrackID:                     "TR_agent_audio",
+		transcriptionParticipantIdentity: func() string { return "agent-local" },
+		transcriptionPacketPublisher:     func(*livekit.Transcription) error { return nil },
+		agentTextStreamOpener:            factory.open,
+	}
+
+	rio.handleAgentOutputTranscribed(agent.AgentOutputTranscribedEvent{Transcript: "halo ", IsFinal: false})
+	if len(factory.streams) != 1 || factory.streams[0].closed {
+		t.Fatalf("expected one open (not closed) stream, got %#v", factory.streams)
+	}
+
+	rio.closeAgentTextStream()
+	if !factory.streams[0].closed {
+		t.Fatal("closeAgentTextStream did not close the open writer")
+	}
+}
+
 func receiveTranscriptionPacket(t *testing.T, ch <-chan *livekit.Transcription, label string) *livekit.Transcription {
 	t.Helper()
 	select {

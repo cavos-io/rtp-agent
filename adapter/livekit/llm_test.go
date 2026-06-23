@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -372,6 +373,46 @@ func TestLiveKitInferenceLLMChatSendsReferenceCallExtraHeaders(t *testing.T) {
 	}
 	if strings.Contains(capture.requestBody, "extra_headers") {
 		t.Fatalf("request body = %s, want call extra_headers consumed as headers", capture.requestBody)
+	}
+}
+
+func TestLiveKitInferenceLLMChatSendsReferenceCallExtraQuery(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusUnauthorized,
+		responseBody: `{"error":{"message":"stop"}}`,
+	}
+
+	provider, err := NewLiveKitInferenceLLM("openai/gpt-4.1", "key", "secret")
+	if err != nil {
+		t.Fatalf("NewLiveKitInferenceLLM error = %v", err)
+	}
+	provider.baseURL = "https://livekit.test/v1"
+	provider.httpClient = capture
+
+	_, _ = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{
+			"extra_query": map[string]any{
+				"trace": "query-123",
+			},
+			"user": "caller-789",
+		}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	requestURL, err := url.Parse(capture.requestURL)
+	if err != nil {
+		t.Fatalf("request URL parse error = %v", err)
+	}
+	if got := requestURL.Query().Get("trace"); got != "query-123" {
+		t.Fatalf("trace query = %q, want query-123", got)
+	}
+	if !strings.Contains(capture.requestBody, `"user":"caller-789"`) {
+		t.Fatalf("request body = %s, want non-query call extra param preserved", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, "extra_query") {
+		t.Fatalf("request body = %s, want call extra_query consumed as query params", capture.requestBody)
 	}
 }
 

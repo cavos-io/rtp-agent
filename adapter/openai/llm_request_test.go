@@ -1275,6 +1275,66 @@ func TestOpenAIChatAppliesProviderExtraQuery(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatAppliesCallExtraHeaders(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+	)
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		llm.WithExtraParams(map[string]any{
+			"extra_headers": map[string]any{
+				"X-Request-Group": "silver",
+			},
+		}),
+	)
+
+	if got := capture.header.Get("X-Request-Group"); got != "silver" {
+		t.Fatalf("X-Request-Group = %q, want call extra header", got)
+	}
+}
+
+func TestOpenAIChatAppliesCallExtraQuery(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+	)
+
+	_, _ = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		llm.WithExtraParams(map[string]any{
+			"extra_query": map[string]any{
+				"api-version": "call-preview",
+			},
+		}),
+	)
+
+	requestURL, err := url.Parse(capture.requestURL)
+	if err != nil {
+		t.Fatalf("request URL parse error = %v", err)
+	}
+	if got := requestURL.Query().Get("api-version"); got != "call-preview" {
+		t.Fatalf("api-version query = %q, want call extra query", got)
+	}
+}
+
 func TestOpenAIChatAppliesProviderExtraBody(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
