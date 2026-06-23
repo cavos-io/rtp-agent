@@ -861,6 +861,50 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "chunked_recovery_client_closed":
+		var synthesizeCalls int
+		primary := &fakeScenarioTTS{
+			label:        "primary",
+			provider:     "primary",
+			chunkedCalls: &synthesizeCalls,
+			chunkedStreams: []lktts.ChunkedStream{
+				&fakeScenarioChunkedStream{err: errors.New("primary stream failed")},
+				&fakeScenarioChunkedStream{err: lkllm.NewAPIStatusError("client closed", 499, "req_recovery", nil)},
+			},
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		availabilityCh := make(chan lktts.AvailabilityChangedEvent, 4)
+		unsubscribe := adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			availabilityCh <- event
+		})
+		defer unsubscribe()
+		stream, err := adapter.Synthesize(context.Background(), "hello")
+		errorClass := ""
+		if err == nil {
+			defer stream.Close()
+			_, err = stream.Next()
+		}
+		if err != nil {
+			var connectionErr *lkllm.APIConnectionError
+			if errors.As(err, &connectionErr) {
+				errorClass = "APIConnectionError"
+			}
+		}
+		availabilityEvents, err := waitForScenarioTTSAvailable(availabilityCh)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-fallback-chunked-recovery-client-closed",
+			"events": []map[string]any{
+				{
+					"name":                "chunked_recovery_client_closed",
+					"error_class":         errorClass,
+					"availability_events": availabilityEvents,
+					"synthesize_calls":    synthesizeCalls,
+				},
+			},
+		}, nil
 	case "stream_start_all_failed":
 		var streamCalls int
 		primary := &fakeScenarioTTS{
@@ -1352,6 +1396,7 @@ type fakeScenarioTTS struct {
 	chunkedEvents      []*lktts.SynthesizedAudio
 	chunkedError       error
 	chunkedCalls       *int
+	chunkedStreams     []lktts.ChunkedStream
 	chunkedStreamError error
 	streamError        error
 	streamCalls        *int
@@ -1393,11 +1438,21 @@ func (t *fakeScenarioTTS) Close() error {
 	return nil
 }
 func (t fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStream, error) {
+	callIndex := 0
+	if t.chunkedCalls != nil {
+		callIndex = *t.chunkedCalls
+	}
 	if t.chunkedCalls != nil {
 		(*t.chunkedCalls)++
 	}
 	if t.chunkedError != nil {
 		return nil, t.chunkedError
+	}
+	if t.chunkedStreams != nil {
+		if callIndex >= len(t.chunkedStreams) {
+			return &fakeScenarioChunkedStream{}, nil
+		}
+		return t.chunkedStreams[callIndex], nil
 	}
 	if t.chunkedStreamError != nil {
 		return &fakeScenarioChunkedStream{err: t.chunkedStreamError}, nil
@@ -1467,4 +1522,24 @@ func (s *fakeScenarioChunkedStream) Next() (*lktts.SynthesizedAudio, error) {
 
 func (*fakeScenarioChunkedStream) Close() error {
 	return nil
+}
+
+func waitForScenarioTTSAvailable(availabilityCh <-chan lktts.AvailabilityChangedEvent) ([]map[string]any, error) {
+	events := []map[string]any{}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-availabilityCh:
+			entry := map[string]any{
+				"available": event.Available,
+				"label":     event.TTS.Label(),
+			}
+			events = append(events, entry)
+			if event.Available {
+				return events, nil
+			}
+		case <-deadline:
+			return events, fmt.Errorf("timed out waiting for recovered TTS availability")
+		}
+	}
 }
