@@ -1690,7 +1690,27 @@ func (va *PipelineAgent) playTTSGeneration(ctx context.Context, session *AgentSe
 
 func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, session *AgentSession, ttsGen *TTSGenerationData, transcriptSync *TranscriptSynchronizer, transcriptionDone <-chan struct{}, speech *SpeechHandle) (*TTSGenerationData, error) {
 	startedSpeaking := false
-	for frame := range ttsGen.AudioCh {
+	for {
+		var frame *model.AudioFrame
+		select {
+		case <-ctx.Done():
+			transcriptSync.Close()
+			<-transcriptionDone
+			va.clearAssistantPlayback(session)
+			return ttsGen, ctx.Err()
+		case f, ok := <-ttsGen.AudioCh:
+			if !ok {
+				transcriptSync.Close()
+				<-transcriptionDone
+				va.flushAssistantPlayback(session)
+				if ttsGen.StreamErr != nil {
+					return ttsGen, ttsGen.StreamErr
+				}
+				return ttsGen, nil
+			}
+			frame = f
+		}
+
 		select {
 		case <-ctx.Done():
 			transcriptSync.Close()
@@ -1698,43 +1718,36 @@ func (va *PipelineAgent) playTTSGenerationWithTranscript(ctx context.Context, se
 			va.clearAssistantPlayback(session)
 			return ttsGen, ctx.Err()
 		default:
-			if speech != nil && speech.IsInterrupted() {
+		}
+		if speech != nil && speech.IsInterrupted() {
+			transcriptSync.Close()
+			<-transcriptionDone
+			return ttsGen, nil
+		}
+		transcriptSync.PushAudio(frame)
+		if va.PublishAudio != nil {
+			if err := va.PublishAudio(ctx, frame); err != nil {
 				transcriptSync.Close()
 				<-transcriptionDone
-				return ttsGen, nil
-			}
-			transcriptSync.PushAudio(frame)
-			if va.PublishAudio != nil {
-				if err := va.PublishAudio(ctx, frame); err != nil {
-					transcriptSync.Close()
-					<-transcriptionDone
-					if errors.Is(err, context.Canceled) {
-						va.clearAssistantPlayback(session)
-					} else {
-						va.flushAssistantPlayback(session)
-					}
-					return ttsGen, err
+				if errors.Is(err, context.Canceled) {
+					va.clearAssistantPlayback(session)
+				} else {
+					va.flushAssistantPlayback(session)
 				}
-			}
-			ttsGen.ForwardedAudio = true
-			if !startedSpeaking {
-				session.UpdateAgentState(AgentStateSpeaking)
-				startedSpeaking = true
-			}
-			if speech != nil && speech.IsInterrupted() {
-				transcriptSync.Close()
-				<-transcriptionDone
-				return ttsGen, nil
+				return ttsGen, err
 			}
 		}
+		ttsGen.ForwardedAudio = true
+		if !startedSpeaking {
+			session.UpdateAgentState(AgentStateSpeaking)
+			startedSpeaking = true
+		}
+		if speech != nil && speech.IsInterrupted() {
+			transcriptSync.Close()
+			<-transcriptionDone
+			return ttsGen, nil
+		}
 	}
-	transcriptSync.Close()
-	<-transcriptionDone
-	va.flushAssistantPlayback(session)
-	if ttsGen.StreamErr != nil {
-		return ttsGen, ttsGen.StreamErr
-	}
-	return ttsGen, nil
 }
 
 func (va *PipelineAgent) useTTSAlignedTranscript(session *AgentSession) bool {

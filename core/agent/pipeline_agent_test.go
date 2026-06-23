@@ -1298,6 +1298,44 @@ func TestPipelineAgentCanceledPublishAudioClearsPlayback(t *testing.T) {
 	}
 }
 
+// TestPipelineAgentPlayTTSCancelsWhenNoAudioFrames reproduces the stall where a
+// filler/speech whose TTS provider never emits an audio frame (and never closes
+// AudioCh) blocks playout forever, ignoring barge-in/context cancellation. The
+// playout loop must observe ctx cancellation even while waiting for the first
+// frame, so the scheduler's single currentSpeech slot is never held hostage.
+func TestPipelineAgentPlayTTSCancelsWhenNoAudioFrames(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	playback := &fakePipelinePlaybackController{}
+	session.SetAudioPlaybackController(playback)
+	agent := NewPipelineAgent(nil, nil, nil, nil, llm.NewChatContext())
+	ctx, cancel := context.WithCancel(context.Background())
+	ttsGen := &TTSGenerationData{
+		AudioCh:     make(chan *model.AudioFrame), // never receives a frame, never closed
+		TimedTextCh: make(chan tts.TimedString),
+	}
+	transcriptSync := NewTranscriptSynchronizer(0)
+	defer transcriptSync.Close()
+	done := closedChannel()
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := agent.playTTSGenerationWithTranscript(ctx, session, ttsGen, transcriptSync, done, nil)
+		resultCh <- err
+	}()
+
+	// Simulate a barge-in cancelling the speech context before any frame arrives.
+	cancel()
+
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("playTTSGenerationWithTranscript error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("playTTSGenerationWithTranscript did not return after context cancellation with no audio frames (stuck ranging over AudioCh)")
+	}
+}
+
 func TestPipelineAgentSayReturnsDirectSpeechToListeningWithoutIdle(t *testing.T) {
 	baseAgent := NewAgent("test")
 	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
