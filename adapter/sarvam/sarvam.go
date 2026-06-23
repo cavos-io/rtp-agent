@@ -1588,29 +1588,39 @@ type sarvamTTSChunkedStream struct {
 	resp             *http.Response
 	sampleRate       int
 	outputAudioCodec string
-	read             bool
+	loaded           bool
+	requestID        string
+	audios           []string
+	nextAudio        int
+	finalSent        bool
 }
 
 func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.read {
-		return nil, io.EOF
+	if !s.loaded {
+		var result struct {
+			RequestID string   `json:"request_id"`
+			Audios    []string `json:"audios"`
+		}
+		if err := json.NewDecoder(s.resp.Body).Decode(&result); err != nil {
+			return nil, err
+		}
+		s.loaded = true
+		s.requestID = result.RequestID
+		s.audios = result.Audios
 	}
-	s.read = true
-	var result struct {
-		RequestID string   `json:"request_id"`
-		Audios    []string `json:"audios"`
+	if s.nextAudio < len(s.audios) {
+		data, err := base64.StdEncoding.DecodeString(s.audios[s.nextAudio])
+		if err != nil {
+			return nil, err
+		}
+		s.nextAudio++
+		return sarvamTTSAudioFrame(data, s.sampleRate, s.requestID, s.outputAudioCodec), nil
 	}
-	if err := json.NewDecoder(s.resp.Body).Decode(&result); err != nil {
-		return nil, err
+	if len(s.audios) > 0 && !s.finalSent {
+		s.finalSent = true
+		return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 	}
-	if len(result.Audios) == 0 {
-		return nil, io.EOF
-	}
-	data, err := base64.StdEncoding.DecodeString(result.Audios[0])
-	if err != nil {
-		return nil, err
-	}
-	return sarvamTTSAudioFrame(data, s.sampleRate, result.RequestID, s.outputAudioCodec), nil
+	return nil, io.EOF
 }
 
 func (s *sarvamTTSChunkedStream) Close() error {

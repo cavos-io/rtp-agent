@@ -753,6 +753,45 @@ func TestSarvamTTSAdvancedOptionsBuildReferencePayloads(t *testing.T) {
 	assertSarvamJSONField(t, data, "dict_id", "dict-123")
 }
 
+func TestSarvamTTSChunkedStreamEmitsAllReferenceAudioChunks(t *testing.T) {
+	stream := &sarvamTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(strings.NewReader(`{
+			"request_id":"req-chunks",
+			"audios":["AQI=","AwQ="]
+		}`))},
+		sampleRate:       22050,
+		outputAudioCodec: "mp3",
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if first.RequestID != "req-chunks" || !bytes.Equal(first.Frame.Data, []byte{1, 2}) {
+		t.Fatalf("first audio = %+v, want first decoded chunk with request id", first)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if second.RequestID != "req-chunks" || !bytes.Equal(second.Frame.Data, []byte{3, 4}) {
+		t.Fatalf("second audio = %+v, want second decoded chunk with request id", second)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("third Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != "req-chunks" || final.Frame != nil {
+		t.Fatalf("third audio = %+v, want request-scoped final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("fourth Next error = %v, want EOF", err)
+	}
+}
+
 func TestSarvamTTSUpdateOptionsAppliesToFuturePayloads(t *testing.T) {
 	provider := NewSarvamTTS("test-key", "",
 		WithSarvamTTSModel("bulbul:v3"),
