@@ -453,8 +453,11 @@ func TestBasetenSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	if got := readBasetenTestChan(t, terminateCh, errCh); got != `{"terminate_session":true}` {
 		t.Fatalf("terminate payload = %q, want terminate_session", got)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); err == nil {
-		t.Fatal("PushFrame error = nil, want closed stream error")
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 
