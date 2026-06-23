@@ -721,11 +721,9 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 			if speech.IsInterrupted() {
 				forwardedText = va.forwardedAssistantTextAfterInterruption(ctx, session, speech, speech.Generation.Text)
 			}
-			if forwardedText != "" {
-				if speech.Generation.AssistantMessage != nil {
-					speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
-					speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
-				}
+			if forwardedText != "" && speech.Generation.AssistantMessage != nil {
+				speech.Generation.AssistantMessage.Interrupted = speech.IsInterrupted()
+				speech.Generation.AssistantMessage.Content = []llm.ChatContent{{Text: forwardedText}}
 				insertChatItemIfMissing(va.chatCtx, speech.Generation.AssistantMessage)
 				addSpeechChatItemIfMissing(speech, speech.Generation.AssistantMessage)
 				session.EmitConversationItemAdded(speech.Generation.AssistantMessage)
