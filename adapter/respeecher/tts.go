@@ -526,9 +526,7 @@ func (s *respeecherTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- respeecherTTSReadError(err)
-			}
+			s.errCh <- respeecherTTSReadError(err)
 			return
 		}
 		if msgType != websocket.TextMessage {
