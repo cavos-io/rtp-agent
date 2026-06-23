@@ -123,6 +123,9 @@ func (s *clovaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *clovaTTSChunkedStream) Close() error {
+	if s.final {
+		return nil
+	}
 	s.final = true
 	if s.decoder != nil {
 		_ = s.decoder.Close()
