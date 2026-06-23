@@ -3796,8 +3796,11 @@ func TestFallbackChunkedStreamReportsAllFailedWhenFinalStreamFailsBeforeAudio(t 
 	if !strings.Contains(err.Error(), "all TTSs failed") || !strings.Contains(err.Error(), "primary") {
 		t.Fatalf("Next error = %q, want all-failed message with provider label", err)
 	}
-	if strings.Contains(err.Error(), "after 0s") {
+	if !strings.Contains(err.Error(), "after ") {
 		t.Fatalf("Next error = %q, want elapsed all-failed duration", err)
+	}
+	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
+		t.Fatalf("Next error = %q, want reference seconds duration", err)
 	}
 	if errors.Is(err, providerErr) {
 		t.Fatalf("Next error wraps raw provider error %v, want reference all-failed connection error", providerErr)
@@ -3832,8 +3835,8 @@ func TestFallbackChunkedStreamStartReportsAllFailedWhenProviderCannotStart(t *te
 	if !strings.Contains(err.Error(), "all TTSs failed") || !strings.Contains(err.Error(), "primary") {
 		t.Fatalf("Synthesize error = %q, want all-failed message with provider label", err)
 	}
-	if strings.Contains(err.Error(), "after 0s") {
-		t.Fatalf("Synthesize error = %q, want elapsed all-failed duration", err)
+	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
+		t.Fatalf("Synthesize error = %q, want reference seconds duration", err)
 	}
 	if errors.Is(err, providerErr) {
 		t.Fatalf("Synthesize error wraps raw provider error %v, want reference all-failed connection error", providerErr)
@@ -3966,8 +3969,8 @@ func TestFallbackSynthesizeStreamReportsAllFailedWhenFinalStreamFailsBeforeAudio
 	if !strings.Contains(err.Error(), "all TTSs failed") || !strings.Contains(err.Error(), "primary") {
 		t.Fatalf("Next error = %q, want all-failed message with provider label", err)
 	}
-	if strings.Contains(err.Error(), "after 0s") {
-		t.Fatalf("Next error = %q, want elapsed all-failed duration", err)
+	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
+		t.Fatalf("Next error = %q, want reference seconds duration", err)
 	}
 	if errors.Is(err, providerErr) {
 		t.Fatalf("Next error wraps raw provider error %v, want reference all-failed connection error", providerErr)
@@ -4005,8 +4008,8 @@ func TestFallbackSynthesizeStreamStartReportsAllFailedWhenProviderCannotStart(t 
 	if !strings.Contains(err.Error(), "all TTSs failed") || !strings.Contains(err.Error(), "primary") {
 		t.Fatalf("Stream error = %q, want all-failed message with provider label", err)
 	}
-	if strings.Contains(err.Error(), "after 0s") {
-		t.Fatalf("Stream error = %q, want elapsed all-failed duration", err)
+	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
+		t.Fatalf("Stream error = %q, want reference seconds duration", err)
 	}
 	if errors.Is(err, providerErr) {
 		t.Fatalf("Stream error wraps raw provider error %v, want reference all-failed connection error", providerErr)

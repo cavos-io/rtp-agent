@@ -74,14 +74,19 @@ type FallbackAllFailedError struct {
 }
 
 func (e *FallbackAllFailedError) Error() string {
+	message := fallbackAllFailedMessage(e.Labels, e.Duration)
 	if e.Err == nil {
-		return fmt.Sprintf("all STTs failed (%v) after %s", e.Labels, e.Duration)
+		return message
 	}
-	return fmt.Sprintf("all STTs failed (%v) after %s: %v", e.Labels, e.Duration, e.Err)
+	return fmt.Sprintf("%s: %v", message, e.Err)
 }
 
 func (e *FallbackAllFailedError) Unwrap() error {
 	return e.Err
+}
+
+func fallbackAllFailedMessage(labels []string, duration time.Duration) string {
+	return fmt.Sprintf("all STTs failed (%v) after %.9g seconds", labels, duration.Seconds())
 }
 
 func NewFallbackAdapter(stts []STT) *FallbackAdapter {

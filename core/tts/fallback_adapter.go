@@ -1066,7 +1066,7 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 }
 
 func (f *FallbackAdapter) allFailedError(startedAt time.Time) error {
-	return llm.NewAPIConnectionError(fmt.Sprintf("all TTSs failed (%v) after %s", f.labels(), time.Since(startedAt)))
+	return llm.NewAPIConnectionError(fmt.Sprintf("all TTSs failed (%v) after %.9g seconds", f.labels(), time.Since(startedAt).Seconds()))
 }
 
 func (f *FallbackAdapter) labels() []string {

@@ -583,6 +583,9 @@ func TestFallbackStreamReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T)
 	if allFailed.Duration <= 0 {
 		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
 	}
+	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
+		t.Fatalf("Next error = %q, want reference seconds duration", err)
+	}
 }
 
 func TestFallbackStreamClosesRecoveriesWhenRuntimeProvidersExhausted(t *testing.T) {
@@ -676,6 +679,9 @@ func TestFallbackStreamStartReturnsAllFailedErrorWhenProvidersExhausted(t *testi
 	}
 	if allFailed.Duration <= 0 {
 		t.Fatalf("all failed Duration = %s, want positive duration", allFailed.Duration)
+	}
+	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
+		t.Fatalf("Stream error = %q, want reference seconds duration", err)
 	}
 }
 
@@ -934,6 +940,9 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 	if !strings.Contains(err.Error(), "all STTs failed") {
 		t.Fatalf("Recognize error = %q, want all STTs failed message", err)
+	}
+	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
+		t.Fatalf("Recognize error = %q, want reference seconds duration", err)
 	}
 	waitForRecognizeCalls(t, primary, 2)
 	waitForRecognizeCalls(t, fallback, 2)

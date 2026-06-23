@@ -184,6 +184,9 @@ func TestFallbackAdapterReportsAllFailedWhenFinalStreamFailsBeforeChunk(t *testi
 	if !strings.Contains(apiErr.Message, "all LLMs failed ([primary.LLM]) after") {
 		t.Fatalf("APIConnectionError.Message = %q, want all-failed message", apiErr.Message)
 	}
+	if !strings.Contains(apiErr.Message, " seconds") || strings.Contains(apiErr.Message, "µs") || strings.Contains(apiErr.Message, "ms") || strings.Contains(apiErr.Message, "ns") {
+		t.Fatalf("APIConnectionError.Message = %q, want reference seconds duration", apiErr.Message)
+	}
 	if strings.Contains(err.Error(), firstErr.Error()) {
 		t.Fatalf("Next error = %q, want public all-failed message without raw provider detail", err)
 	}
