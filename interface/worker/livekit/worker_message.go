@@ -143,9 +143,13 @@ func RunWorkerMessageLoop(ctx context.Context, opts WorkerMessageLoopOptions) er
 func workerMessageLoopReadError(err error) error {
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
+		statusCode := closeErr.Code
+		if statusCode == 0 {
+			statusCode = -1
+		}
 		return llm.NewAPIStatusError(
 			"worker connection closed unexpectedly",
-			closeErr.Code,
+			statusCode,
 			"",
 			fmt.Sprintf("msg.data=%q msg.extra=%q", closeErr.Text, closeErr.Error()),
 		)

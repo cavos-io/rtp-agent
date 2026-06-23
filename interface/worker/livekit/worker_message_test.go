@@ -808,29 +808,42 @@ func TestRunWorkerMessageLoopSkipsDecodeErrorsAndContinues(t *testing.T) {
 }
 
 func TestRunWorkerMessageLoopReturnsAPIStatusErrorOnUnexpectedClose(t *testing.T) {
-	reader := &workerMessageLoopReader{
-		frames: []workerMessageLoopFrame{
-			{err: &websocket.CloseError{Code: websocket.CloseGoingAway, Text: "server shutting down"}},
-		},
-		closed: make(chan struct{}),
+	tests := []struct {
+		name       string
+		closeCode  int
+		wantStatus int
+	}{
+		{name: "known close code", closeCode: websocket.CloseGoingAway, wantStatus: websocket.CloseGoingAway},
+		{name: "unknown close code", closeCode: 0, wantStatus: -1},
 	}
 
-	err := workerlivekit.RunWorkerMessageLoop(context.Background(), workerlivekit.WorkerMessageLoopOptions{
-		Reader: reader,
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &workerMessageLoopReader{
+				frames: []workerMessageLoopFrame{
+					{err: &websocket.CloseError{Code: tt.closeCode, Text: "server shutting down"}},
+				},
+				closed: make(chan struct{}),
+			}
 
-	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("RunWorkerMessageLoop() error = %T %v, want APIStatusError", err, err)
-	}
-	if statusErr.Message != "worker connection closed unexpectedly" {
-		t.Fatalf("APIStatusError.Message = %q, want worker connection closed unexpectedly", statusErr.Message)
-	}
-	if statusErr.StatusCode != websocket.CloseGoingAway {
-		t.Fatalf("APIStatusError.StatusCode = %d, want %d", statusErr.StatusCode, websocket.CloseGoingAway)
-	}
-	if !statusErr.Retryable {
-		t.Fatal("APIStatusError.Retryable = false, want retryable unexpected worker close")
+			err := workerlivekit.RunWorkerMessageLoop(context.Background(), workerlivekit.WorkerMessageLoopOptions{
+				Reader: reader,
+			})
+
+			var statusErr *llm.APIStatusError
+			if !errors.As(err, &statusErr) {
+				t.Fatalf("RunWorkerMessageLoop() error = %T %v, want APIStatusError", err, err)
+			}
+			if statusErr.Message != "worker connection closed unexpectedly" {
+				t.Fatalf("APIStatusError.Message = %q, want worker connection closed unexpectedly", statusErr.Message)
+			}
+			if statusErr.StatusCode != tt.wantStatus {
+				t.Fatalf("APIStatusError.StatusCode = %d, want %d", statusErr.StatusCode, tt.wantStatus)
+			}
+			if !statusErr.Retryable {
+				t.Fatal("APIStatusError.Retryable = false, want retryable unexpected worker close")
+			}
+		})
 	}
 }
 
