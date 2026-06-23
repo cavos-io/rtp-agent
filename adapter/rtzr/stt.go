@@ -3,6 +3,7 @@ package rtzr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -351,7 +352,8 @@ func (s *rtzrStream) readLoop() {
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			var closeErr *websocket.CloseError
+			if !errors.As(err, &closeErr) && err != io.EOF {
 				s.errCh <- err
 			}
 			return
