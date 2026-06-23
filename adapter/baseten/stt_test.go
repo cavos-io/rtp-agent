@@ -461,6 +461,38 @@ func TestBasetenSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	errCh := make(chan error, 1)
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			errCh <- err
+			return
+		}
+		_, _, _ = conn.ReadMessage()
+	})
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after local Close = (%#v, %v), want EOF", event, err)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatal(err)
+	default:
+	}
+}
+
 func TestBasetenSTTStreamAfterCloseIsRejected(t *testing.T) {
 	dials := 0
 	provider := mustNewBasetenSTT(t, "test-key", "",

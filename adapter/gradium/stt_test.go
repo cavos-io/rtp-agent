@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -301,6 +302,12 @@ func TestGradiumSTTStreamSendsSetupAudioAndCloseMessages(t *testing.T) {
 	closeMsg := receiveGradiumMessage(t, closeCh, "close")
 	if closeMsg["terminate_session"] != true {
 		t.Fatalf("close = %#v, want terminate session", closeMsg)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x03, 0x04}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 

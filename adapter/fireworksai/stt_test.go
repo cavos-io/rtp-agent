@@ -420,6 +420,26 @@ func TestFireworksSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+			_, _, _ = conn.ReadMessage()
+		}),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after local Close = (%#v, %v), want EOF", event, err)
+	}
+}
+
 func TestFireworksSTTStreamAfterCloseIsRejected(t *testing.T) {
 	dialCalls := 0
 	provider := NewFireworksSTT("test-key",

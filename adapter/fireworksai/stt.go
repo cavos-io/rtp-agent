@@ -545,6 +545,17 @@ func (s *fireworksStream) Close() error {
 }
 
 func (s *fireworksStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		return nil, io.EOF
+	}
+
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -559,8 +570,20 @@ func (s *fireworksStream) Next() (*stt.SpeechEvent, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
+}
+
+func (s *fireworksStream) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 type fireworksStreamState struct {

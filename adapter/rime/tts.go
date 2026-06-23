@@ -449,7 +449,7 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("rime tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	s.pendingText += text
 	if err := s.sendCompleteSentencesLocked(); err != nil {
@@ -463,7 +463,7 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("rime tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")

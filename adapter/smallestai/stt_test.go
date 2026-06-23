@@ -208,8 +208,11 @@ func TestSmallestAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 1,
-	}); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushFrame after provider Close error = %v, want closed stream error", err)
+	}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 	provider.mu.Lock()
 	active := len(provider.streams)

@@ -294,7 +294,7 @@ func (s *gradiumSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("gradium stt stream is closed")
+		return io.ErrClosedPipe
 	}
 	return s.writeAudioFramesLocked(s.audioBStream.Write(frame.Data))
 }
@@ -303,7 +303,7 @@ func (s *gradiumSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("gradium stt stream is closed")
+		return io.ErrClosedPipe
 	}
 	return s.writeAudioFramesLocked(s.audioBStream.Flush())
 }

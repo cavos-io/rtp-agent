@@ -476,7 +476,7 @@ func (s *smallestaiTTSSynthesizeStream) PushText(text string) error {
 		return nil
 	}
 	if s.closed {
-		return fmt.Errorf("smallestai tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	_, err := s.pendingText.WriteString(text)
 	return err
@@ -486,7 +486,7 @@ func (s *smallestaiTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("smallestai tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	text := strings.TrimSpace(s.pendingText.String())
 	s.pendingText.Reset()

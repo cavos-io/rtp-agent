@@ -386,6 +386,26 @@ func TestTelnyxSTTStreamCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &telnyxSTTStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after local Close = (%#v, %v), want EOF", event, err)
+	}
+}
+
 func TestTelnyxSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

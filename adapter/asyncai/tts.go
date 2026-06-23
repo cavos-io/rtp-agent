@@ -367,7 +367,7 @@ func (s *asyncAITTSStream) PushText(text string) error {
 		return nil
 	}
 	if s.closed {
-		return fmt.Errorf("asyncai tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	if _, err := s.pendingText.WriteString(text); err != nil {
 		return err
@@ -386,7 +386,7 @@ func (s *asyncAITTSStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("asyncai tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	if s.conn == nil && s.writeMessage == nil {
 		s.pendingText.Reset()

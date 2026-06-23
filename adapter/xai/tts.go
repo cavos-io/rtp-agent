@@ -326,7 +326,7 @@ func (s *xaiTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("xai tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	for _, token := range s.pushTextTokensLocked(text) {
 		if err := s.writeMessageData(buildXaiTTSTextDeltaMessage(token)); err != nil {
@@ -341,7 +341,7 @@ func (s *xaiTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("xai tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	tokens := s.flushTextTokensLocked()
 	if len(tokens) == 0 && s.conn == nil {

@@ -460,8 +460,11 @@ func TestNeuphonicTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
-	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushText after write failure error = %v, want closed stream error", err)
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("PushText after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after write failure error = %v, want nil", err)
@@ -493,8 +496,11 @@ func TestNeuphonicTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
-	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 
