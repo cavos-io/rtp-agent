@@ -159,9 +159,13 @@ type spitchTTSChunkedStream struct {
 	started      bool
 	hasAudio     bool
 	finalSent    bool
+	closed       bool
 }
 
 func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	if s.outputFormat == "mp3" {
 		return s.nextDecodedMP3()
 	}
@@ -229,8 +233,16 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 }
 
 func (s *spitchTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.finalSent = true
 	if s.decoder != nil {
 		_ = s.decoder.Close()
+	}
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
 	}
 	return s.resp.Body.Close()
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime"
 	"mime/multipart"
@@ -437,6 +438,33 @@ func TestSpitchTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyMP3Audio(t *te
 	}
 }
 
+func TestSpitchTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &spitchCloseErrorBody{reader: bytes.NewReader(spitchTestWAV([]byte{0x01, 0x00}, 24000, 1))}
+	stream := &spitchTTSChunkedStream{
+		resp:         &http.Response{Body: body},
+		outputFormat: "wav",
+		sampleRate:   24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("close count = %d, want %d", got, want)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %#v, want nil", audio)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next after Close err = %v, want EOF", err)
+	}
+}
+
 type spitchRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f spitchRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -448,6 +476,26 @@ func assertSpitchPayload(t *testing.T, payload map[string]any, key string, want 
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+type spitchCloseErrorBody struct {
+	reader     *bytes.Reader
+	closeCount int
+}
+
+func (b *spitchCloseErrorBody) Read(p []byte) (int, error) {
+	if b.closeCount > 0 {
+		return 0, errors.New("read after close")
+	}
+	return b.reader.Read(p)
+}
+
+func (b *spitchCloseErrorBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("already closed")
+	}
+	return nil
 }
 
 func spitchTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
