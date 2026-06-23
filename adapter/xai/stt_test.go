@@ -628,6 +628,32 @@ func TestXaiSTTStreamCloseFlushesBufferedAudioBeforeDone(t *testing.T) {
 	assertXaiSTTMessage(t, messages, handlerErr, `{"type":"audio.done"}`)
 }
 
+func TestXaiSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	handlerErr := make(chan error, 2)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if err := conn.WriteJSON(map[string]any{"type": "transcript.created"}); err != nil {
+			handlerErr <- err
+			return
+		}
+		_, _, _ = conn.ReadMessage()
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after local Close = (%#v, %v), want EOF", event, err)
+	}
+}
+
 func TestXaiSTTFlushEmitsReferenceRecognitionUsage(t *testing.T) {
 	var writes [][]byte
 	stream := &xaiSTTStream{
