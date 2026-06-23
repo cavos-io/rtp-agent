@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -755,6 +756,11 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 			}
 		default:
 		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+		}
 		return nil, io.EOF
 	}
 	select {
@@ -893,7 +899,7 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 				s.mu.Unlock()
 				return
 			}
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || errors.Is(err, io.EOF) {
 				s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 				s.mu.Unlock()
 				return

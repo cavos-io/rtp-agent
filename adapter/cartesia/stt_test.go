@@ -147,6 +147,99 @@ func TestCartesiaSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) 
 	}
 }
 
+func TestCartesiaSTTUpdateOptionsReconnectsLegacyActiveStream(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	audioWrites := make(chan int, 2)
+	oldDialer := websocket.DefaultDialer
+	var cleanupMu sync.Mutex
+	var cleanup []func()
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			_ = ctx
+			_ = network
+			_ = address
+			clientConn, serverConn := net.Pipe()
+			listener := &singleCartesiaConnListener{conn: serverConn}
+			upgrader := websocket.Upgrader{}
+			server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests <- r.Clone(r.Context())
+				ws, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("upgrade websocket: %v", err)
+					return
+				}
+				defer ws.Close()
+				for {
+					msgType, payload, err := ws.ReadMessage()
+					if err != nil {
+						return
+					}
+					if msgType == websocket.BinaryMessage {
+						audioWrites <- len(payload)
+					}
+				}
+			})}
+			go func() {
+				if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+					t.Errorf("cartesia reconnect test server: %v", err)
+				}
+			}()
+			cleanupMu.Lock()
+			cleanup = append(cleanup, func() {
+				_ = server.Close()
+				_ = listener.Close()
+				_ = clientConn.Close()
+				_ = serverConn.Close()
+			})
+			cleanupMu.Unlock()
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+		cleanupMu.Lock()
+		defer cleanupMu.Unlock()
+		for _, cleanupFn := range cleanup {
+			cleanupFn()
+		}
+	})
+
+	provider := NewCartesiaSTT("test-key",
+		WithCartesiaSTTBaseURL("http://cartesia.test"),
+		WithCartesiaSTTModel("ink-whisper"),
+		WithCartesiaSTTLanguage("en"),
+		WithCartesiaSTTAudioChunkDurationMS(10),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	firstReq := receiveCartesiaTestValue(t, requests, "initial websocket request")
+	if got := firstReq.URL.Query().Get("language"); got != "en" {
+		t.Fatalf("initial language query = %q, want en", got)
+	}
+
+	provider.UpdateOptions("fr-FR")
+	if err := stream.PushFrame(&audiomodel.AudioFrame{
+		Data:              make([]byte, defaultCartesiaSTTSampleRate/100*2),
+		SampleRate:        defaultCartesiaSTTSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(defaultCartesiaSTTSampleRate / 100),
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+
+	reconnectReq := receiveCartesiaTestValue(t, requests, "reconnect websocket request")
+	if got := reconnectReq.URL.Query().Get("language"); got != "fr" {
+		t.Fatalf("reconnect language query = %q, want fr", got)
+	}
+	if got := receiveCartesiaTestValue(t, audioWrites, "reconnected audio"); got == 0 {
+		t.Fatal("reconnected audio length = 0, want audio")
+	}
+}
+
 func TestCartesiaSTTStreamLanguageOverrideDoesNotPersistLikeReference(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})

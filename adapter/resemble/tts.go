@@ -494,12 +494,20 @@ func (s *resembleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
+func (s *resembleTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *resembleTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			s.errCh <- resembleTTSReadError(err)
+			if !s.isClosed() {
+				s.errCh <- resembleTTSReadError(err)
+			}
 			return
 		}
 		if msgType != websocket.TextMessage {
