@@ -382,6 +382,7 @@ func buildRimeTTSFlushMessage(contextID string) ([]byte, error) {
 type rimeTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	finalSent  bool
 }
 
 func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -402,6 +403,10 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if err != nil {
 		if err == io.EOF {
+			if !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		return nil, err
@@ -420,6 +425,7 @@ func (s *rimeTTSChunkedStream) Close() error {
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}
+	s.finalSent = true
 	body := s.resp.Body
 	s.resp = nil
 	return body.Close()
