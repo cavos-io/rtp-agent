@@ -687,6 +687,13 @@ func TestFallbackAdapterPassesAttemptConnectOptionsToProvider(t *testing.T) {
 	}
 	defer stream.Close()
 
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Delta.Content; got != "ok" {
+		t.Fatalf("chunk content = %q, want ok", got)
+	}
 	if len(primary.options) != 1 {
 		t.Fatalf("captured options = %d, want 1", len(primary.options))
 	}
@@ -798,23 +805,29 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 		fallback,
 	})
 
-	_, err := adapter.Chat(context.Background(), NewChatContext())
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error = %v, want stream creation to succeed like reference", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Chat error = nil, want all LLMs failed error")
+		t.Fatal("Next error = nil, want all LLMs failed error")
 	}
 	if !errors.Is(err, secondErr) {
-		t.Fatalf("Chat error = %v, want to wrap final provider error", err)
+		t.Fatalf("Next error = %v, want to wrap final provider error", err)
 	}
 	if !strings.Contains(err.Error(), "all LLMs failed") {
-		t.Fatalf("Chat error = %q, want all LLMs failed message", err)
+		t.Fatalf("Next error = %q, want all LLMs failed message", err)
 	}
 	var allFailed *FallbackAllFailedError
 	if !errors.As(err, &allFailed) {
-		t.Fatalf("Chat error type = %T, want FallbackAllFailedError", err)
+		t.Fatalf("Next error type = %T, want FallbackAllFailedError", err)
 	}
 	var connectionErr *APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Chat error type = %T, want APIConnectionError", err)
+		t.Fatalf("Next error type = %T, want APIConnectionError", err)
 	}
 	if !connectionErr.Retryable {
 		t.Fatal("APIConnectionError retryable = false, want true")
@@ -823,15 +836,13 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 		t.Fatalf("FallbackAllFailedError.Labels = %q, want %q", got, want)
 	}
 	if !strings.Contains(err.Error(), "primary.LLM") || !strings.Contains(err.Error(), "fallback.LLM") {
-		t.Fatalf("Chat error = %q, want exhausted provider labels", err)
+		t.Fatalf("Next error = %q, want exhausted provider labels", err)
 	}
 	if strings.Contains(err.Error(), secondErr.Error()) {
-		t.Fatalf("Chat error = %q, want public all-failed message without raw provider detail", err)
+		t.Fatalf("Next error = %q, want public all-failed message without raw provider detail", err)
 	}
-	waitForFallbackCalls(t, primary, 2)
-	waitForFallbackCalls(t, fallback, 2)
-	if primary.calls != 2 || fallback.calls != 2 {
-		t.Fatalf("provider calls = (%d, %d), want one startup attempt and one recovery probe per provider", primary.calls, fallback.calls)
+	if primary.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("provider calls before returning all-failed error = (%d, %d), want one startup attempt per provider", primary.calls, fallback.calls)
 	}
 }
 
@@ -1273,7 +1284,6 @@ func TestFallbackAdapterStartsRecoveryWithoutRetryIntervalDelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)
 	}
-	<-recoveryStarted // first primary attempt
 	chunk, err := stream.Next()
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
@@ -1281,6 +1291,7 @@ func TestFallbackAdapterStartsRecoveryWithoutRetryIntervalDelay(t *testing.T) {
 	if got := chunk.Delta.Content; got != "fallback" {
 		t.Fatalf("fallback content = %q, want fallback", got)
 	}
+	<-recoveryStarted // first primary attempt
 
 	select {
 	case <-recoveryStarted:

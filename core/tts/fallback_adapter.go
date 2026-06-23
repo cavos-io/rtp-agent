@@ -627,11 +627,6 @@ func (f *FallbackAdapter) Synthesize(ctx context.Context, text string) (ChunkedS
 		metrics:   fallbackMetricsState{startedAt: startedAt},
 	}
 
-	if err := s.tryStartStream(0); err != nil {
-		cancel()
-		return nil, err
-	}
-
 	go s.monitorStream()
 
 	return s, nil
@@ -678,6 +673,13 @@ func (s *fallbackChunkedStream) tryStartStream(index int) error {
 func (s *fallbackChunkedStream) monitorStream() {
 	defer close(s.doneCh)
 	defer s.cancel()
+
+	if err := s.tryStartStream(0); err != nil {
+		s.markDone(err)
+		emitTTSError(s.adapter, err, false)
+		s.errCh <- err
+		return
+	}
 
 	outputSent := false
 	var pending *SynthesizedAudio
@@ -929,7 +931,10 @@ func (s *fallbackChunkedStream) Close() error {
 	active := s.activeStream
 	s.mu.Unlock()
 
-	err := active.Close()
+	var err error
+	if !isNilChunkedStream(active) {
+		err = active.Close()
+	}
 	<-s.doneCh
 	return err
 }
@@ -1009,17 +1014,20 @@ func (f *FallbackAdapter) Stream(ctx context.Context) (SynthesizeStream, error) 
 		metrics:   fallbackMetricsState{startedAt: startedAt},
 	}
 
-	if err := s.tryStartStream(0); err != nil {
-		cancel()
-		return nil, err
-	}
-
 	go s.monitorStream()
 
 	return s, nil
 }
 
 func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
+	return s.tryStartStreamWithActivation(index, false)
+}
+
+func (s *fallbackSynthesizeStream) tryStartStreamLocked(index int) error {
+	return s.tryStartStreamWithActivation(index, true)
+}
+
+func (s *fallbackSynthesizeStream) tryStartStreamWithActivation(index int, activationLocked bool) error {
 	for i := index; i < len(s.adapter.ttss); i++ {
 		if !s.adapter.shouldTry(i) {
 			continue
@@ -1044,7 +1052,9 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 				break
 			}
 
-			if err := s.replayBufferedText(stream); err != nil {
+			includeFlush := isNilSynthesizeStream(s.activeStream)
+			inputs, inputDone := s.activateProviderStream(stream, i, activationLocked)
+			if err := replaySynthesizeInputs(stream, inputs, inputDone, includeFlush); err != nil {
 				stream.Close()
 				if s.canRetryTTS(i) {
 					emitTTSError(s.adapter, err, true)
@@ -1056,8 +1066,6 @@ func (s *fallbackSynthesizeStream) tryStartStream(index int) error {
 				break
 			}
 
-			s.activeStream = stream
-			s.activeIndex = i
 			return nil
 		}
 	}
@@ -1090,9 +1098,27 @@ func (s *fallbackSynthesizeStream) startProviderStream(tts TTS) (SynthesizeStrea
 	return stream, nil
 }
 
-func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) error {
-	for _, input := range s.inputBuffer {
+func (s *fallbackSynthesizeStream) activateProviderStream(stream SynthesizeStream, index int, locked bool) ([]fallbackSynthesizeInput, bool) {
+	if !locked {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+	}
+	inputs := append([]fallbackSynthesizeInput(nil), s.inputBuffer...)
+	inputDone := s.inputDone
+	s.activeStream = stream
+	s.activeIndex = index
+	return inputs, inputDone
+}
+
+func replaySynthesizeInputs(stream SynthesizeStream, inputs []fallbackSynthesizeInput, inputDone bool, includeFlush bool) error {
+	for _, input := range inputs {
 		if input.flush {
+			if !includeFlush {
+				continue
+			}
+			if err := stream.Flush(); err != nil {
+				return err
+			}
 			continue
 		}
 		if input.text == "" {
@@ -1102,7 +1128,7 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 			return err
 		}
 	}
-	if s.inputDone {
+	if inputDone {
 		return endSynthesizeStreamInput(stream)
 	}
 	return nil
@@ -1111,6 +1137,13 @@ func (s *fallbackSynthesizeStream) replayBufferedText(stream SynthesizeStream) e
 func (s *fallbackSynthesizeStream) monitorStream() {
 	defer close(s.doneCh)
 	defer s.cancel()
+
+	if err := s.tryStartStream(0); err != nil {
+		s.markDone(err)
+		emitTTSError(s.adapter, err, false)
+		s.errCh <- err
+		return
+	}
 
 	outputSent := false
 	var pending *SynthesizedAudio
@@ -1193,7 +1226,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				s.adapter.tryRecoverStream(s.activeIndex, s.inputBuffer)
 			}
 
-			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+			if fbErr := s.tryStartStreamLocked(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
 				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
@@ -1242,7 +1275,7 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 				s.adapter.tryRecoverStream(s.activeIndex, s.inputBuffer)
 			}
 
-			if fbErr := s.tryStartStream(nextIndex); fbErr != nil {
+			if fbErr := s.tryStartStreamLocked(nextIndex); fbErr != nil {
 				s.markDoneLocked(fbErr)
 				emitTTSError(s.adapter, fbErr, false)
 				s.errCh <- fbErr
@@ -1402,6 +1435,9 @@ func (s *fallbackSynthesizeStream) PushText(text string) error {
 	}
 	s.started = true
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{text: text})
+	if isNilSynthesizeStream(s.activeStream) {
+		return nil
+	}
 	return s.activeStream.PushText(text)
 }
 
@@ -1418,6 +1454,9 @@ func (s *fallbackSynthesizeStream) Flush() error {
 		s.flushed = true
 	}
 	s.inputBuffer = append(s.inputBuffer, fallbackSynthesizeInput{flush: true})
+	if isNilSynthesizeStream(s.activeStream) {
+		return nil
+	}
 	return s.activeStream.Flush()
 }
 
@@ -1433,6 +1472,9 @@ func (s *fallbackSynthesizeStream) EndInput() error {
 	s.inputDone = true
 	if s.started {
 		s.flushed = true
+	}
+	if isNilSynthesizeStream(s.activeStream) {
+		return nil
 	}
 	return endSynthesizeStreamInput(s.activeStream)
 }
@@ -1450,7 +1492,10 @@ func (s *fallbackSynthesizeStream) Close() error {
 	active := s.activeStream
 	s.mu.Unlock()
 
-	err := active.Close()
+	var err error
+	if !isNilSynthesizeStream(active) {
+		err = active.Close()
+	}
 	<-s.doneCh
 	return err
 }
