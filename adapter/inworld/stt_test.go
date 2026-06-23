@@ -408,6 +408,43 @@ func TestInworldSTTStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInworldSTTClosedStreamNextDrainsQueuedEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &inworldSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+		state:  &inworldSTTStreamState{language: "en-US", requestID: "req-close"},
+		sendMessage: func(map[string]any) error {
+			return nil
+		},
+	}
+	want := &stt.SpeechEvent{
+		Type:      stt.SpeechEventFinalTranscript,
+		RequestID: "req-close",
+		Alternatives: []stt.SpeechData{{
+			Text:     "final words",
+			Language: "en-US",
+		}},
+	}
+	stream.events <- want
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	got, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() after Close error = %v, want queued event", err)
+	}
+	if got != want {
+		t.Fatalf("Next() after Close event = %#v, want queued final transcript", got)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next() after Close = (%#v, %v), want nil EOF", event, err)
+	}
+}
+
 func TestInworldSTTStreamRejectsInputAfterClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	var sent []map[string]any
