@@ -255,7 +255,7 @@ func (s *telnyxTTSStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("telnyx tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	s.pendingText += text
 	return nil
@@ -265,7 +265,7 @@ func (s *telnyxTTSStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("telnyx tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	if s.pendingText == "" {
 		return nil
