@@ -383,8 +383,11 @@ func TestInferenceTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if !conn.closed.Load() {
 		t.Fatal("websocket not closed")
 	}
-	if err := stream.PushText("hello"); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	if err := stream.PushText("hello"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 

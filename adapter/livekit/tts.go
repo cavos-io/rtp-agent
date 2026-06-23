@@ -563,7 +563,7 @@ func (s *inferenceTTSStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("stream closed")
+		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
@@ -575,7 +575,7 @@ func (s *inferenceTTSStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("stream closed")
+		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
