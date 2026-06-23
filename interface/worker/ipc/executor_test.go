@@ -100,6 +100,41 @@ func TestThreadJobExecutorCloseWaitsForEntrypoint(t *testing.T) {
 	}
 }
 
+func TestThreadJobExecutorCloseTimeoutStillWaitsForEntrypoint(t *testing.T) {
+	release := make(chan struct{})
+	executor := NewThreadJobExecutor("exec-close-timeout", func() error {
+		<-release
+		return nil
+	})
+
+	if err := executor.LaunchJob(context.Background(), &livekit.Job{Id: "job-close-timeout"}); err != nil {
+		t.Fatalf("LaunchJob() error = %v", err)
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- executor.Close(closeCtx)
+	}()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close() returned before entrypoint completed after timeout: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() after timeout error = %v, want nil after entrypoint completion", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not return after entrypoint completed")
+	}
+}
+
 func TestThreadJobExecutorRejectsDuplicateLaunchWithReferenceError(t *testing.T) {
 	release := make(chan struct{})
 	executor := NewThreadJobExecutor("exec-duplicate", func() error {

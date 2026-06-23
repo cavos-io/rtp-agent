@@ -153,7 +153,9 @@ func (e *ThreadJobExecutor) Close(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		return ctx.Err()
+		logger.Logger.Errorw("job shutdown is taking too much time..", ctx.Err(), "executor_id", e.id, "job_id", JobID(e.job))
+		<-done
+		return nil
 	}
 }
 
