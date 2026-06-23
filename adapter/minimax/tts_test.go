@@ -9,11 +9,14 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -761,6 +764,58 @@ func TestMinimaxTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 	if dialCalls != 0 {
 		t.Fatalf("websocket dials after Close = %d, want 0", dialCalls)
+	}
+}
+
+func TestMinimaxTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &minimaxTTSSynthesizeStream{
+		conn:       conn,
+		traceID:    "trace-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:      make(chan error, 1),
+	}
+	go stream.readLoop()
+
+	select {
+	case err := <-stream.errCh:
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("readLoop error = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != websocket.CloseUnsupportedData {
+			t.Fatalf("StatusCode = %d, want close code", statusErr.StatusCode)
+		}
+		if statusErr.RequestID != "trace-1" {
+			t.Fatalf("RequestID = %q, want trace id", statusErr.RequestID)
+		}
+		if !strings.Contains(err.Error(), "MiniMax connection closed unexpectedly") {
+			t.Fatalf("readLoop error = %q, want MiniMax close context", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for websocket close error")
 	}
 }
 
