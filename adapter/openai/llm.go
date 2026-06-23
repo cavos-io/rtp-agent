@@ -898,13 +898,8 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, l.defaultReasoning, l.strictToolSchema)
 	client := l.client
-	if body := openAIExtraBodyParams(effectiveOptions.ExtraParams); len(body) > 0 {
-		config := l.clientConfig
-		config.HTTPClient = &extraBodyHTTPClient{
-			base: config.HTTPClient,
-			body: body,
-		}
-		client = openai.NewClientWithConfig(config)
+	if callClient := l.openAIClientWithCallExtras(effectiveOptions.ExtraParams); callClient != nil {
+		client = callClient
 	}
 
 	var lastErr error
@@ -1007,6 +1002,36 @@ func waitOpenAIRetryInterval(ctx context.Context, interval time.Duration) error 
 	}
 }
 
+func (l *OpenAILLM) openAIClientWithCallExtras(params map[string]any) *openai.Client {
+	headers := openAIExtraHeaderParams(params)
+	query := openAIExtraQueryParams(params)
+	body := openAIExtraBodyParams(params)
+	if len(headers) == 0 && len(query) == 0 && len(body) == 0 {
+		return nil
+	}
+
+	config := l.clientConfig
+	if len(headers) > 0 {
+		config.HTTPClient = &extraHeadersHTTPClient{
+			base:    config.HTTPClient,
+			headers: headers,
+		}
+	}
+	if len(query) > 0 {
+		config.HTTPClient = &extraQueryHTTPClient{
+			base:  config.HTTPClient,
+			query: query,
+		}
+	}
+	if len(body) > 0 {
+		config.HTTPClient = &extraBodyHTTPClient{
+			base: config.HTTPClient,
+			body: body,
+		}
+	}
+	return openai.NewClientWithConfig(config)
+}
+
 func mergeOpenAIExtraParams(callParams, providerParams map[string]any) map[string]any {
 	merged := make(map[string]any, len(callParams)+len(providerParams))
 	for key, value := range callParams {
@@ -1016,6 +1041,20 @@ func mergeOpenAIExtraParams(callParams, providerParams map[string]any) map[strin
 		merged[key] = value
 	}
 	return merged
+}
+
+func openAIExtraHeaderParams(params map[string]any) map[string]string {
+	if len(params) == 0 {
+		return nil
+	}
+	return cloneOpenAIStringMap(asStringMap(params["extra_headers"]))
+}
+
+func openAIExtraQueryParams(params map[string]any) map[string]string {
+	if len(params) == 0 {
+		return nil
+	}
+	return cloneOpenAIStringMap(asStringMap(params["extra_query"]))
 }
 
 func openAIExtraBodyParams(params map[string]any) map[string]any {
