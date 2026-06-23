@@ -453,6 +453,22 @@ func TestWriteReadMessageRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWriteMessageRejectsShortFrameWrite(t *testing.T) {
+	msg, err := NewMessage(&PingRequest{Timestamp: 42})
+	if err != nil {
+		t.Fatalf("NewMessage: %v", err)
+	}
+
+	writer := &shortPayloadWriter{limit: 4}
+	err = WriteMessage(writer, msg)
+	if err == nil {
+		t.Fatal("WriteMessage error = nil, want short write error")
+	}
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("WriteMessage error = %v, want io.ErrShortWrite", err)
+	}
+}
+
 func TestReadMessageRejectsTruncatedFrame(t *testing.T) {
 	buf := bytes.NewBuffer([]byte{0, 0, 0, 4, '{'})
 
@@ -463,4 +479,20 @@ func TestReadMessageRejectsTruncatedFrame(t *testing.T) {
 	if !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("ReadMessage error = %v, want io.ErrUnexpectedEOF", err)
 	}
+}
+
+type shortPayloadWriter struct {
+	writes int
+	limit  int
+}
+
+func (w *shortPayloadWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == 1 {
+		return len(p), nil
+	}
+	if len(p) > w.limit {
+		return w.limit, nil
+	}
+	return len(p), nil
 }

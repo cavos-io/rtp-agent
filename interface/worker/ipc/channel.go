@@ -14,8 +14,18 @@ func WriteMessage(w io.Writer, msg Message) error {
 	if err := binary.Write(w, binary.BigEndian, uint32(len(data))); err != nil {
 		return err
 	}
-	_, err = w.Write(data)
-	return err
+	return writeFull(w, data)
+}
+
+func writeFull(w io.Writer, data []byte) error {
+	n, err := w.Write(data)
+	if err != nil {
+		return err
+	}
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func ReadMessage(r io.Reader) (Message, error) {
