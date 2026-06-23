@@ -198,9 +198,13 @@ type speechifyTTSChunkedStream struct {
 	emitted    bool
 	hasAudio   bool
 	finalSent  bool
+	closed     bool
 }
 
 func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	if s.emitted {
 		if s.hasAudio && !s.finalSent {
 			s.finalSent = true
@@ -230,6 +234,13 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *speechifyTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
 	return s.resp.Body.Close()
 }
 

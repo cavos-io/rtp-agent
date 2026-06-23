@@ -493,6 +493,55 @@ func TestGoogleSTTStreamIgnoresTranscriptOnVoiceActivityEvent(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{
+				SpeechEventTime: durationpb.New(400 * time.Millisecond),
+				RequestId:       123,
+			},
+			{
+				TotalBilledTime: durationpb.New(time.Second),
+				RequestId:       456,
+			},
+		},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("first event type = %v, want recognition_usage", first.Type)
+	}
+	if first.RequestID != "123" {
+		t.Fatalf("first request id = %q, want 123", first.RequestID)
+	}
+	if first.RecognitionUsage == nil || first.RecognitionUsage.AudioDuration != 0.4 {
+		t.Fatalf("first usage = %+v, want 0.4s", first.RecognitionUsage)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("second event type = %v, want recognition_usage", second.Type)
+	}
+	if second.RequestID != "456" {
+		t.Fatalf("second request id = %q, want 456", second.RequestID)
+	}
+	if second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.6 {
+		t.Fatalf("second usage = %+v, want billed delta 0.6s", second.RecognitionUsage)
+	}
+}
+
 func TestGoogleSTTStreamPropagatesClientErrors(t *testing.T) {
 	wantErr := errors.New("stream error")
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: wantErr})

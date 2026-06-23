@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -259,6 +260,32 @@ func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t 
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &speechmaticsCloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     body,
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("close count = %d, want %d", got, want)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %+v, want nil", audio)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func assertSpeechmaticsTTSQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
@@ -285,6 +312,26 @@ type partialEOFReader struct{}
 func (partialEOFReader) Read(p []byte) (int, error) {
 	p[0] = 0x01
 	return 1, io.EOF
+}
+
+type speechmaticsCloseCountBody struct {
+	reader     *bytes.Reader
+	closeCount int
+}
+
+func (b *speechmaticsCloseCountBody) Read(p []byte) (int, error) {
+	if b.closeCount > 0 {
+		return 0, errors.New("read after close")
+	}
+	return b.reader.Read(p)
+}
+
+func (b *speechmaticsCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("already closed")
+	}
+	return nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

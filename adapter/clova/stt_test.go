@@ -153,6 +153,48 @@ func TestClovaSTTRecognizeResamplesAudioToReferenceInputRate(t *testing.T) {
 	}
 }
 
+func TestClovaSTTRecognizeDownmixesStereoToReferenceMonoWAV(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 4*2*2),
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 4,
+	}
+	samples := []int16{
+		100, 300,
+		-200, 600,
+		1000, -500,
+		-1000, -300,
+	}
+	for i, sample := range samples {
+		binary.LittleEndian.PutUint16(frame.Data[i*2:i*2+2], uint16(sample))
+	}
+
+	wav, err := clovaSTTWAVBytesFromFrames([]*model.AudioFrame{frame})
+	if err != nil {
+		t.Fatalf("build wav: %v", err)
+	}
+	if len(wav) < 44 {
+		t.Fatalf("wav length = %d, want RIFF header", len(wav))
+	}
+	if got := binary.LittleEndian.Uint16(wav[22:24]); got != 1 {
+		t.Fatalf("wav channels = %d, want mono", got)
+	}
+	if got := binary.LittleEndian.Uint32(wav[40:44]); got != 4*2 {
+		t.Fatalf("wav data size = %d, want four mono samples", got)
+	}
+	got := make([]int16, 4)
+	for i := range got {
+		got[i] = int16(binary.LittleEndian.Uint16(wav[44+i*2 : 46+i*2]))
+	}
+	want := []int16{200, 200, 250, -650}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("mono sample %d = %d, want %d from averaged stereo channels", i, got[i], want[i])
+		}
+	}
+}
+
 func TestClovaSTTSpeechEventAndThreshold(t *testing.T) {
 	provider := NewClovaSTT("secret", "https://clova.example",
 		WithClovaSTTLanguage("ko-KR"),

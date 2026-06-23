@@ -229,6 +229,33 @@ func TestMurfTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	}
 }
 
+func TestMurfTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &murfTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
 func TestMurfTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewMurfTTS("test-key", "",
 		WithMurfTTSBaseURL("https://murf.example"),

@@ -152,7 +152,11 @@ func clovaSTTWAVBytesFromFrames(frames []*model.AudioFrame) ([]byte, error) {
 		if frame == nil {
 			continue
 		}
-		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultClovaSTTInputSampleRate)
+		mono, err := clovaSTTDownmixToMono(frame)
+		if err != nil {
+			return nil, err
+		}
+		resampled, err := coreaudio.ResampleAudioFrame(mono, defaultClovaSTTInputSampleRate)
 		if err != nil {
 			return nil, err
 		}
@@ -161,6 +165,44 @@ func clovaSTTWAVBytesFromFrames(frames []*model.AudioFrame) ([]byte, error) {
 		}
 	}
 	return clovaSTTWAVBytes(audio.Bytes(), defaultClovaSTTInputSampleRate, clovaSTTNumChannels), nil
+}
+
+func clovaSTTDownmixToMono(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil {
+		return frame, nil
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot downmix clova stt audio with zero channels")
+	}
+	if frame.NumChannels == 1 {
+		return frame, nil
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot downmix non-16-bit PCM clova stt audio")
+	}
+	channels := int(frame.NumChannels)
+	samples := len(frame.Data) / (channels * 2)
+	if samples == 0 {
+		mono := *frame
+		mono.Data = nil
+		mono.NumChannels = 1
+		mono.SamplesPerChannel = 0
+		return &mono, nil
+	}
+	out := make([]byte, samples*2)
+	for sampleIdx := 0; sampleIdx < samples; sampleIdx++ {
+		sum := 0
+		for ch := 0; ch < channels; ch++ {
+			offset := (sampleIdx*channels + ch) * 2
+			sum += int(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		binary.LittleEndian.PutUint16(out[sampleIdx*2:sampleIdx*2+2], uint16(int16(sum/channels)))
+	}
+	mono := *frame
+	mono.Data = out
+	mono.NumChannels = 1
+	mono.SamplesPerChannel = uint32(samples)
+	return &mono, nil
 }
 
 type clovaSTTResponse struct {
