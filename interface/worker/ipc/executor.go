@@ -274,9 +274,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	exe, err := processExecutable()
 	if err != nil {
 		e.mu.Lock()
-		e.status = JobStatusFailed
-		e.started = false
-		e.done = nil
+		e.clearFailedLaunchLocked()
 		e.mu.Unlock()
 		return err
 	}
@@ -284,9 +282,7 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	env, err := ProcessJobEnv(os.Environ(), e.id, info)
 	if err != nil {
 		e.mu.Lock()
-		e.status = JobStatusFailed
-		e.started = false
-		e.done = nil
+		e.clearFailedLaunchLocked()
 		e.mu.Unlock()
 		return err
 	}
@@ -317,6 +313,14 @@ func (e *ProcessJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJ
 	}()
 
 	return nil
+}
+
+func (e *ProcessJobExecutor) clearFailedLaunchLocked() {
+	e.status = JobStatusFailed
+	e.started = false
+	e.job = nil
+	e.runningJob = nil
+	e.done = nil
 }
 
 func (e *ProcessJobExecutor) pingTask(ctx context.Context) {

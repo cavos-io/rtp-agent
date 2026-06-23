@@ -646,6 +646,9 @@ func TestProcessJobExecutorLaunchExecutableFailureDoesNotStart(t *testing.T) {
 	if executor.Started() {
 		t.Fatal("Started() = true after executable lookup failed")
 	}
+	if got := executor.RunningJob(); got != nil {
+		t.Fatalf("RunningJob() after executable lookup failed = %#v, want nil", got)
+	}
 	if got := executor.Status(); got != JobStatusFailed {
 		t.Fatalf("Status() after executable lookup failed = %q, want %q", got, JobStatusFailed)
 	}
