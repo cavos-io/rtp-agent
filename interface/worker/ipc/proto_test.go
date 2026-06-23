@@ -469,6 +469,22 @@ func TestWriteMessageRejectsShortFrameWrite(t *testing.T) {
 	}
 }
 
+func TestWriteMessageRejectsShortFrameHeaderWrite(t *testing.T) {
+	msg, err := NewMessage(&PingRequest{Timestamp: 42})
+	if err != nil {
+		t.Fatalf("NewMessage: %v", err)
+	}
+
+	writer := &shortHeaderWriter{limit: 2}
+	err = WriteMessage(writer, msg)
+	if err == nil {
+		t.Fatal("WriteMessage error = nil, want short header write error")
+	}
+	if !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("WriteMessage error = %v, want io.ErrShortWrite", err)
+	}
+}
+
 func TestReadMessageRejectsTruncatedFrame(t *testing.T) {
 	buf := bytes.NewBuffer([]byte{0, 0, 0, 4, '{'})
 
@@ -491,6 +507,17 @@ func (w *shortPayloadWriter) Write(p []byte) (int, error) {
 	if w.writes == 1 {
 		return len(p), nil
 	}
+	if len(p) > w.limit {
+		return w.limit, nil
+	}
+	return len(p), nil
+}
+
+type shortHeaderWriter struct {
+	limit int
+}
+
+func (w *shortHeaderWriter) Write(p []byte) (int, error) {
 	if len(p) > w.limit {
 		return w.limit, nil
 	}
