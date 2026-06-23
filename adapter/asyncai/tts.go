@@ -307,6 +307,7 @@ func buildAsyncAITTSEndMessage(contextID string) ([]byte, error) {
 type asyncAITTSWebsocketChunkedStream struct {
 	conn       *websocket.Conn
 	sampleRate int
+	finalSeen  bool
 }
 
 func (s *asyncAITTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -316,7 +317,7 @@ func (s *asyncAITTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+			if s.finalSeen && (websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF) {
 				return nil, io.EOF
 			}
 			return nil, asyncAITTSReadError(err)
@@ -329,6 +330,7 @@ func (s *asyncAITTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 			return nil, err
 		}
 		if done {
+			s.finalSeen = true
 			return audio, nil
 		}
 		if audio != nil {
@@ -353,6 +355,7 @@ type asyncAITTSStream struct {
 	contextID   string
 	sampleRate  int
 	pendingText bytes.Buffer
+	finalSeen   bool
 	mu          sync.Mutex
 	closed      bool
 
@@ -521,7 +524,15 @@ func (s *asyncAITTSStream) Next() (*tts.SynthesizedAudio, error) {
 		default:
 		}
 	}
-	return (&asyncAITTSWebsocketChunkedStream{conn: s.conn, sampleRate: s.sampleRate}).Next()
+	s.mu.Lock()
+	finalSeen := s.finalSeen
+	s.mu.Unlock()
+	chunked := &asyncAITTSWebsocketChunkedStream{conn: s.conn, sampleRate: s.sampleRate, finalSeen: finalSeen}
+	audio, err := chunked.Next()
+	s.mu.Lock()
+	s.finalSeen = chunked.finalSeen
+	s.mu.Unlock()
+	return audio, err
 }
 
 func asyncAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {

@@ -350,6 +350,82 @@ func TestAsyncAITTSWebsocketNextUnexpectedCloseReturnsAPIStatusError(t *testing.
 	}
 }
 
+func TestAsyncAITTSWebsocketNextNormalCloseBeforeFinalReturnsAPIStatusError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &asyncAITTSWebsocketChunkedStream{conn: conn, sampleRate: 32000}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
+	}
+}
+
+func TestAsyncAITTSStreamNextReturnsEOFAfterReferenceFinalMarker(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"context_id":"ctx-1","final":true}`)); err != nil {
+			t.Errorf("write final message: %v", err)
+		}
+		if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+			t.Errorf("write close message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &asyncAITTSStream{conn: conn, sampleRate: 32000}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.SegmentID != "ctx-1" {
+		t.Fatalf("final = %#v, want reference final marker with segment", final)
+	}
+
+	_, err = stream.Next()
+	if err != io.EOF {
+		t.Fatalf("Next after final = %v, want io.EOF", err)
+	}
+}
+
 func TestAsyncAITTSStreamBuffersTextUntilFlush(t *testing.T) {
 	stream := &asyncAITTSStream{}
 	if err := stream.PushText("hello "); err != nil {
