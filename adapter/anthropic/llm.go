@@ -305,6 +305,7 @@ type anthropicStream struct {
 	resp   *http.Response
 	reader *bufio.Reader
 	cancel context.CancelFunc
+	closed bool
 
 	// internal states for tracking tool calls over multiple chunks
 	toolCallID string
@@ -553,9 +554,13 @@ func anthropicGroupID(itemID string, groupID *string) string {
 
 func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 	for {
+		if s.closed {
+			return nil, io.EOF
+		}
+
 		line, err := s.reader.ReadString('\n')
 		if err != nil {
-			if err == io.EOF {
+			if err == io.EOF || s.closed {
 				return nil, io.EOF
 			}
 			return nil, err
@@ -675,6 +680,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *anthropicStream) Close() error {
+	s.closed = true
 	err := s.resp.Body.Close()
 	if s.cancel != nil {
 		s.cancel()
