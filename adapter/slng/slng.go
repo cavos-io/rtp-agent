@@ -236,9 +236,13 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 func (s *STT) UpdateOptions(opts ...STTOption) {
 	s.mu.Lock()
 	before := slngSTTActiveOptions{
-		language:          s.language,
-		partials:          s.enablePartialTranscript,
-		bufferSizeSeconds: s.bufferSizeSeconds,
+		language:                s.language,
+		partials:                s.enablePartialTranscript,
+		bufferSizeSeconds:       s.bufferSizeSeconds,
+		diarization:             s.enableDiarization,
+		vadThreshold:            s.vadThreshold,
+		vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
+		vadSpeechPadMS:          s.vadSpeechPadMS,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -246,9 +250,13 @@ func (s *STT) UpdateOptions(opts ...STTOption) {
 		}
 	}
 	after := slngSTTActiveOptions{
-		language:          s.language,
-		partials:          s.enablePartialTranscript,
-		bufferSizeSeconds: s.bufferSizeSeconds,
+		language:                s.language,
+		partials:                s.enablePartialTranscript,
+		bufferSizeSeconds:       s.bufferSizeSeconds,
+		diarization:             s.enableDiarization,
+		vadThreshold:            s.vadThreshold,
+		vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
+		vadSpeechPadMS:          s.vadSpeechPadMS,
 	}
 	streams := make([]*sttStream, 0, len(s.streams))
 	if before != after {
@@ -264,9 +272,13 @@ func (s *STT) UpdateOptions(opts ...STTOption) {
 }
 
 type slngSTTActiveOptions struct {
-	language          string
-	partials          bool
-	bufferSizeSeconds float64
+	language                string
+	partials                bool
+	bufferSizeSeconds       float64
+	diarization             bool
+	vadThreshold            float64
+	vadMinSilenceDurationMS int
+	vadSpeechPadMS          int
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -375,13 +387,17 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 			s.modelEndpoints = append([]string(nil), endpoints[endpointIndex:]...)
 		}
 		stream := &sttStream{
-			provider:          s,
-			conn:              conn,
-			language:          s.resolveLanguage(language),
-			partials:          s.enablePartialTranscript,
-			sampleRate:        s.sampleRate,
-			bufferSizeSeconds: s.bufferSizeSeconds,
-			encoding:          s.encoding,
+			provider:                s,
+			conn:                    conn,
+			language:                s.resolveLanguage(language),
+			partials:                s.enablePartialTranscript,
+			sampleRate:              s.sampleRate,
+			bufferSizeSeconds:       s.bufferSizeSeconds,
+			encoding:                s.encoding,
+			diarization:             s.enableDiarization,
+			vadThreshold:            s.vadThreshold,
+			vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
+			vadSpeechPadMS:          s.vadSpeechPadMS,
 		}
 		if !s.registerStream(stream) {
 			stream.Close()
@@ -1200,19 +1216,23 @@ func normalizeSLNGResults(message map[string]any) map[string]any {
 }
 
 type sttStream struct {
-	mu                sync.Mutex
-	provider          *STT
-	conn              *websocket.Conn
-	language          string
-	partials          bool
-	sampleRate        int
-	bufferSizeSeconds float64
-	encoding          string
-	audioBuffer       []byte
-	pendingEvents     []*stt.SpeechEvent
-	speechStarted     bool
-	speechDuration    float64
-	closed            bool
+	mu                      sync.Mutex
+	provider                *STT
+	conn                    *websocket.Conn
+	language                string
+	partials                bool
+	sampleRate              int
+	bufferSizeSeconds       float64
+	encoding                string
+	diarization             bool
+	vadThreshold            float64
+	vadMinSilenceDurationMS int
+	vadSpeechPadMS          int
+	audioBuffer             []byte
+	pendingEvents           []*stt.SpeechEvent
+	speechStarted           bool
+	speechDuration          float64
+	closed                  bool
 }
 
 func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
@@ -1307,6 +1327,10 @@ func (s *sttStream) updateOptions(opts slngSTTActiveOptions) {
 	if opts.bufferSizeSeconds > 0 {
 		s.bufferSizeSeconds = opts.bufferSizeSeconds
 	}
+	s.diarization = opts.diarization
+	s.vadThreshold = opts.vadThreshold
+	s.vadMinSilenceDurationMS = opts.vadMinSilenceDurationMS
+	s.vadSpeechPadMS = opts.vadSpeechPadMS
 }
 
 func slngSTTBytesPerSample(encoding string) int {

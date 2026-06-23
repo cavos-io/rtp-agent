@@ -261,6 +261,7 @@ func TestSLNGSTTUpdateOptionsAffectsFutureInitAndActiveStream(t *testing.T) {
 		WithSTTVADThreshold(0.7),
 		WithSTTVADMinSilenceDurationMS(450),
 		WithSTTVADSpeechPadMS(80),
+		WithSTTDiarization(true, 2, 4),
 	)
 
 	payload := buildSTTInitPayload(provider)
@@ -270,6 +271,7 @@ func TestSLNGSTTUpdateOptionsAffectsFutureInitAndActiveStream(t *testing.T) {
 	assertSLNGNestedField(t, payload, "config", "vad_threshold", float64(0.7))
 	assertSLNGNestedField(t, payload, "config", "vad_min_silence_duration_ms", float64(450))
 	assertSLNGNestedField(t, payload, "config", "vad_speech_pad_ms", float64(80))
+	assertSLNGNestedField(t, payload, "config", "enable_diarization", true)
 
 	if stream.language != "id" {
 		t.Fatalf("active stream language = %q, want id", stream.language)
@@ -279,6 +281,18 @@ func TestSLNGSTTUpdateOptionsAffectsFutureInitAndActiveStream(t *testing.T) {
 	}
 	if stream.bufferSizeSeconds != 0.02 {
 		t.Fatalf("active stream buffer size = %v, want 0.02", stream.bufferSizeSeconds)
+	}
+	if stream.vadThreshold != 0.7 {
+		t.Fatalf("active stream vad threshold = %v, want 0.7", stream.vadThreshold)
+	}
+	if stream.vadMinSilenceDurationMS != 450 {
+		t.Fatalf("active stream vad min silence = %v, want 450", stream.vadMinSilenceDurationMS)
+	}
+	if stream.vadSpeechPadMS != 80 {
+		t.Fatalf("active stream vad speech pad = %v, want 80", stream.vadSpeechPadMS)
+	}
+	if !stream.diarization {
+		t.Fatal("active stream diarization = false, want true")
 	}
 }
 
