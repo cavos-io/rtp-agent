@@ -3,6 +3,7 @@ package cambai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -159,8 +160,9 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 
 	return &cambaiTTSChunkedStream{
-		resp:       resp,
-		sampleRate: t.sampleRate,
+		resp:         resp,
+		sampleRate:   t.sampleRate,
+		outputFormat: t.outputFormat,
 	}, nil
 }
 
@@ -195,15 +197,20 @@ func (t *CambaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type cambaiTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	finalSent  bool
-	closed     bool
+	resp         *http.Response
+	sampleRate   int
+	outputFormat string
+	emitted      bool
+	finalSent    bool
+	closed       bool
 }
 
 func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed {
 		return nil, io.EOF
+	}
+	if s.outputFormat == "wav" {
+		return s.nextWAV()
 	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
@@ -237,12 +244,89 @@ func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *cambaiTTSChunkedStream) nextWAV() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if s.emitted {
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	s.emitted = true
+	data, err := io.ReadAll(s.resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	frame, err := decodeCambaiWAVPCM16(data)
+	if err != nil {
+		return nil, err
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
 func (s *cambaiTTSChunkedStream) Close() error {
 	if s.closed {
 		return nil
 	}
 	s.closed = true
 	return s.resp.Body.Close()
+}
+
+func decodeCambaiWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid cambai wav data")
+	}
+	var (
+		audioFormat   uint16
+		numChannels   uint16
+		sampleRate    uint32
+		bitsPerSample uint16
+		pcmData       []byte
+	)
+	for offset := 12; offset+8 <= len(data); {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid cambai wav chunk size")
+		}
+		chunk := data[offset : offset+chunkSize]
+		switch chunkID {
+		case "fmt ":
+			if len(chunk) < 16 {
+				return nil, fmt.Errorf("invalid cambai wav fmt chunk")
+			}
+			audioFormat = binary.LittleEndian.Uint16(chunk[0:2])
+			numChannels = binary.LittleEndian.Uint16(chunk[2:4])
+			sampleRate = binary.LittleEndian.Uint32(chunk[4:8])
+			bitsPerSample = binary.LittleEndian.Uint16(chunk[14:16])
+		case "data":
+			pcmData = append([]byte(nil), chunk...)
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if audioFormat != 1 || bitsPerSample != 16 {
+		return nil, fmt.Errorf("unsupported cambai wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+	}
+	if sampleRate == 0 || numChannels == 0 {
+		return nil, fmt.Errorf("missing cambai wav format metadata")
+	}
+	if pcmData == nil {
+		return nil, fmt.Errorf("missing cambai wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcmData,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(numChannels),
+		SamplesPerChannel: uint32(len(pcmData)) / (uint32(numChannels) * 2),
+	}, nil
 }
 
 func cambaiSampleRateForModel(model string) int {

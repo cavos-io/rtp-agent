@@ -3,6 +3,7 @@ package cambai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -260,6 +261,38 @@ func TestCambaiTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestCambaiTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x02, 0x00}
+	stream := &cambaiTTSChunkedStream{
+		resp:         &http.Response{Body: io.NopCloser(bytes.NewReader(cambaiTestWAV(pcm, 48000, 1)))},
+		sampleRate:   22050,
+		outputFormat: "wav",
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("audio = %#v, want decoded WAV frame", audio)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("audio data = %#v, want decoded PCM without WAV header", audio.Frame.Data)
+	}
+	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("frame = %+v, want WAV metadata 48 kHz mono", audio.Frame)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final = %#v, want final marker", final)
+	}
+}
+
 func TestCambaiTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &cambaiTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -359,4 +392,25 @@ func assertCambaiPayload(t *testing.T, payload map[string]any, key string, want 
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+func cambaiTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	blockAlign := channels * 2
+	byteRate := sampleRate * uint32(blockAlign)
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }
