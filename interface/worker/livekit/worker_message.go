@@ -2,10 +2,12 @@ package livekit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/gorilla/websocket"
 	lkprotocol "github.com/livekit/protocol/livekit"
 )
@@ -118,7 +120,7 @@ func RunWorkerMessageLoop(ctx context.Context, opts WorkerMessageLoopOptions) er
 			return ctx.Err()
 		case result := <-readDone:
 			if result.err != nil {
-				return result.err
+				return workerMessageLoopReadError(result.err)
 			}
 
 			msg, err := ServerMessageWebSocketFrame(result.msgType, result.data)
@@ -136,6 +138,19 @@ func RunWorkerMessageLoop(ctx context.Context, opts WorkerMessageLoopOptions) er
 			}
 		}
 	}
+}
+
+func workerMessageLoopReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIStatusError(
+			"worker connection closed unexpectedly",
+			closeErr.Code,
+			"",
+			fmt.Sprintf("msg.data=%q msg.extra=%q", closeErr.Text, closeErr.Error()),
+		)
+	}
+	return err
 }
 
 func AvailableWorkerStatusMessage(load float64, jobCount uint32, canAcceptJob bool) *lkprotocol.WorkerMessage {
