@@ -216,7 +216,43 @@ func TestGradiumTTSWebsocketMessageMapsAudioAndEnd(t *testing.T) {
 	}
 }
 
-func TestGradiumTTSWebsocketNonNormalCloseReturnsEOF(t *testing.T) {
+func TestGradiumTTSWebsocketCloseEmitsReferenceFinalMarker(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &gradiumTTSWebsocketChunkedStream{conn: conn, sampleRate: 48000}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want reference final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("Next = %+v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final marker error = %v, want EOF", err)
+	}
+}
+
+func TestGradiumTTSWebsocketNonNormalCloseEmitsReferenceFinalMarker(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -240,8 +276,15 @@ func TestGradiumTTSWebsocketNonNormalCloseReturnsEOF(t *testing.T) {
 	defer conn.Close()
 
 	stream := &gradiumTTSWebsocketChunkedStream{conn: conn, sampleRate: 48000}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want reference final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("Next = %+v, want boundary-only final marker", final)
+	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %T %v, want EOF", err, err)
+		t.Fatalf("Next after final marker error = %v, want EOF", err)
 	}
 }
 
