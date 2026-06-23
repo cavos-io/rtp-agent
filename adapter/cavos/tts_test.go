@@ -3,12 +3,29 @@ package cavos
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
+
+type cavosTTSCloseErrorBody struct {
+	closed bool
+}
+
+func (b *cavosTTSCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *cavosTTSCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
 
 func TestCavosTTSDefaultsMatchCacatuaEndpoint(t *testing.T) {
 	provider := NewTTS()
@@ -116,6 +133,24 @@ func TestCavosTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	audio, err = stream.Next()
 	if err != io.EOF || audio != nil {
 		t.Fatalf("Next after final marker = (%+v, %v), want EOF", audio, err)
+	}
+}
+
+func TestCavosTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &cavosTTSCloseErrorBody{}
+	stream := &ttsStream{
+		resp:       body,
+		sampleRate: 44100,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close = (%+v, %v), want EOF", audio, err)
 	}
 }
 
