@@ -8,8 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -621,27 +621,7 @@ func TestFishAudioTTSStreamAfterCloseIsRejected(t *testing.T) {
 }
 
 func TestFishAudioTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
-		}
-		_ = conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
-			time.Now().Add(time.Second),
-		)
-		_ = conn.Close()
-	}))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
+	conn := newFishAudioProviderCloseWebsocketConn(t, websocket.CloseUnsupportedData)
 
 	stream := &fishAudioTTSSynthesizeStream{
 		conn:       conn,
@@ -670,27 +650,7 @@ func TestFishAudioTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 }
 
 func TestFishAudioTTSStreamNormalCloseBeforeFinishReturnsAPIStatusError(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
-		}
-		_ = conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-			time.Now().Add(time.Second),
-		)
-		_ = conn.Close()
-	}))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
+	conn := newFishAudioProviderCloseWebsocketConn(t, websocket.CloseNormalClosure)
 
 	stream := &fishAudioTTSSynthesizeStream{
 		conn:       conn,
@@ -710,10 +670,104 @@ func TestFishAudioTTSStreamNormalCloseBeforeFinishReturnsAPIStatusError(t *testi
 		if statusErr.StatusCode != websocket.CloseNormalClosure {
 			t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
 		}
+		if !strings.Contains(err.Error(), "Fish Audio websocket connection closed unexpectedly") {
+			t.Fatalf("readLoop error = %q, want Fish Audio close context", err)
+		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for normal websocket close error")
+		t.Fatal("timed out waiting for websocket normal close error")
 	}
 }
+
+func newFishAudioProviderCloseWebsocketConn(t *testing.T, closeCode int) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newFishAudioSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(closeCode, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://fish.audio.test/stream", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn
+}
+
+type fishAudioSingleConnListener struct {
+	conn   net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newFishAudioSingleConnListener(conn net.Conn) *fishAudioSingleConnListener {
+	return &fishAudioSingleConnListener{conn: conn, closed: make(chan struct{})}
+}
+
+func (l *fishAudioSingleConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() {
+		conn = l.conn
+	})
+	if conn != nil {
+		return conn, nil
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *fishAudioSingleConnListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *fishAudioSingleConnListener) Addr() net.Addr {
+	return fishAudioTestAddr("fish.audio.test:443")
+}
+
+type fishAudioTestAddr string
+
+func (a fishAudioTestAddr) Network() string { return "tcp" }
+
+func (a fishAudioTestAddr) String() string { return string(a) }
 
 func TestFishAudioTTSAudioFromStreamMessage(t *testing.T) {
 	pcm := []byte{1, 2, 3, 4}

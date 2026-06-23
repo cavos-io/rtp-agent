@@ -760,7 +760,9 @@ func (s *inworldTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			s.errCh <- inworldTTSReadError(err)
+			if !s.isClosed() {
+				s.errCh <- inworldTTSReadError(err)
+			}
 			return
 		}
 		if msgType != websocket.TextMessage {

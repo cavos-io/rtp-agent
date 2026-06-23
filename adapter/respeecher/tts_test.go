@@ -9,8 +9,8 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -487,27 +487,7 @@ func TestRespeecherTTSStreamAfterCloseIsRejected(t *testing.T) {
 }
 
 func TestRespeecherTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
-		}
-		_ = conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
-			time.Now().Add(time.Second),
-		)
-		_ = conn.Close()
-	}))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
+	conn := newRespeecherProviderCloseWebsocketConn(t, websocket.CloseUnsupportedData)
 
 	stream := &respeecherTTSSynthesizeStream{
 		conn:      conn,
@@ -536,27 +516,7 @@ func TestRespeecherTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 }
 
 func TestRespeecherTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
-		}
-		_ = conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-			time.Now().Add(time.Second),
-		)
-		_ = conn.Close()
-	}))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
+	conn := newRespeecherProviderCloseWebsocketConn(t, websocket.CloseNormalClosure)
 
 	stream := &respeecherTTSSynthesizeStream{
 		conn:      conn,
@@ -576,10 +536,104 @@ func TestRespeecherTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testin
 		if statusErr.StatusCode != websocket.CloseNormalClosure {
 			t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
 		}
+		if !strings.Contains(err.Error(), "Respeecher connection closed unexpectedly") {
+			t.Fatalf("readLoop error = %q, want Respeecher close context", err)
+		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for normal websocket close error")
+		t.Fatal("timed out waiting for websocket normal close error")
 	}
 }
+
+func newRespeecherProviderCloseWebsocketConn(t *testing.T, closeCode int) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newRespeecherSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(closeCode, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://respeecher.test/stream", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn
+}
+
+type respeecherSingleConnListener struct {
+	conn   net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newRespeecherSingleConnListener(conn net.Conn) *respeecherSingleConnListener {
+	return &respeecherSingleConnListener{conn: conn, closed: make(chan struct{})}
+}
+
+func (l *respeecherSingleConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() {
+		conn = l.conn
+	})
+	if conn != nil {
+		return conn, nil
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *respeecherSingleConnListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *respeecherSingleConnListener) Addr() net.Addr {
+	return respeecherTestAddr("respeecher.test:443")
+}
+
+type respeecherTestAddr string
+
+func (a respeecherTestAddr) Network() string { return "tcp" }
+
+func (a respeecherTestAddr) String() string { return string(a) }
 
 type respeecherRoundTripFunc func(*http.Request) (*http.Response, error)
 

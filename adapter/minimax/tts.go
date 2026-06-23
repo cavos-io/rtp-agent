@@ -776,12 +776,20 @@ func (s *minimaxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
+func (s *minimaxTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *minimaxTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			s.errCh <- minimaxTTSReadError(err, s.traceID)
+			if !s.isClosed() {
+				s.errCh <- minimaxTTSReadError(err, s.traceID)
+			}
 			return
 		}
 		if msgType != websocket.TextMessage {

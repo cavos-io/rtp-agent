@@ -611,12 +611,20 @@ func (s *fishAudioTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
+func (s *fishAudioTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *fishAudioTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			s.errCh <- fishAudioTTSReadError(err)
+			if !s.isClosed() {
+				s.errCh <- fishAudioTTSReadError(err)
+			}
 			return
 		}
 		if msgType != websocket.BinaryMessage {
