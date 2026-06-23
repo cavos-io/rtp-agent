@@ -905,6 +905,48 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "chunked_recovery_no_audio":
+		var synthesizeCalls int
+		primary := &fakeScenarioTTS{
+			label:        "primary",
+			provider:     "primary",
+			chunkedCalls: &synthesizeCalls,
+			chunkedStreams: []lktts.ChunkedStream{
+				&fakeScenarioChunkedStream{err: errors.New("primary stream failed")},
+				&fakeScenarioChunkedStream{},
+			},
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		availabilityCh := make(chan lktts.AvailabilityChangedEvent, 4)
+		unsubscribe := adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			availabilityCh <- event
+		})
+		defer unsubscribe()
+		stream, err := adapter.Synthesize(context.Background(), "hello")
+		errorClass := ""
+		if err == nil {
+			defer stream.Close()
+			_, err = stream.Next()
+		}
+		if err != nil {
+			var connectionErr *lkllm.APIConnectionError
+			if errors.As(err, &connectionErr) {
+				errorClass = "APIConnectionError"
+			}
+		}
+		waitForScenarioTTSCalls(&synthesizeCalls, 2)
+		time.Sleep(10 * time.Millisecond)
+		return map[string]any{
+			"contract": "tts-fallback-chunked-recovery-no-audio",
+			"events": []map[string]any{
+				{
+					"name":                "chunked_recovery_no_audio",
+					"error_class":         errorClass,
+					"availability_events": drainScenarioTTSAvailability(availabilityCh),
+					"synthesize_calls":    synthesizeCalls,
+				},
+			},
+		}, nil
 	case "stream_start_all_failed":
 		var streamCalls int
 		primary := &fakeScenarioTTS{
@@ -1602,6 +1644,21 @@ func waitForScenarioTTSAvailable(availabilityCh <-chan lktts.AvailabilityChanged
 			}
 		case <-deadline:
 			return events, fmt.Errorf("timed out waiting for recovered TTS availability")
+		}
+	}
+}
+
+func drainScenarioTTSAvailability(availabilityCh <-chan lktts.AvailabilityChangedEvent) []map[string]any {
+	events := []map[string]any{}
+	for {
+		select {
+		case event := <-availabilityCh:
+			events = append(events, map[string]any{
+				"available": event.Available,
+				"label":     event.TTS.Label(),
+			})
+		default:
+			return events
 		}
 	}
 }

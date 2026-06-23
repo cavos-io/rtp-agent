@@ -1124,6 +1124,80 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "chunked_recovery_no_audio":
+        class FailingPlainStream:
+            async def __aenter__(self) -> Any:
+                return self
+
+            async def __aexit__(self, *args: Any) -> None:
+                return None
+
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> Any:
+                raise RuntimeError("primary stream failed")
+
+        class EmptyChunkedStream(module.ChunkedStream):
+            async def _run(self, output_emitter: Any) -> None:
+                return None
+
+        class RecoveringTTS(ScenarioTTS):
+            def __init__(self) -> None:
+                super().__init__()
+                self._label = "primary"
+                self.synthesize_calls = 0
+
+            def synthesize(self, text: str, *, conn_options: Any = None) -> Any:
+                self.synthesize_calls += 1
+                if self.synthesize_calls == 1:
+                    return FailingPlainStream()
+                return EmptyChunkedStream(
+                    tts=self,
+                    input_text=text,
+                    conn_options=conn_options,
+                )
+
+        primary = RecoveringTTS()
+        adapter = module.FallbackAdapter([primary], max_retry_per_tts=0)
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "tts_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.tts.label,
+                }
+            ),
+        )
+        error_class = ""
+
+        async def run() -> None:
+            nonlocal error_class
+            stream = adapter.synthesize("hello")
+            try:
+                async with stream:
+                    async for _ in stream:
+                        pass
+            except Exception as exc:
+                error_class = type(exc).__name__
+            deadline = time.monotonic() + 2
+            while primary.synthesize_calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.01)
+
+        asyncio.run(run())
+        return {
+            "contract": "tts-fallback-chunked-recovery-no-audio",
+            "events": [
+                {
+                    "name": "chunked_recovery_no_audio",
+                    "error_class": error_class,
+                    "availability_events": availability_events,
+                    "synthesize_calls": primary.synthesize_calls,
+                }
+            ],
+        }
     if action == "stream_start_all_failed":
         class FailingStreamStartTTS(ScenarioTTS):
             def __init__(self) -> None:
