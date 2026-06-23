@@ -246,9 +246,13 @@ type sarvamLLMStream struct {
 	resp    *http.Response
 	scanner *bufio.Scanner
 	cancel  context.CancelFunc
+	closed  bool
 }
 
 func (s *sarvamLLMStream) Next() (*llm.ChatChunk, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	for s.scanner.Scan() {
 		line := strings.TrimSpace(s.scanner.Text())
 		if line == "" {
@@ -271,12 +275,16 @@ func (s *sarvamLLMStream) Next() (*llm.ChatChunk, error) {
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
+		if s.closed {
+			return nil, io.EOF
+		}
 		return nil, err
 	}
 	return nil, io.EOF
 }
 
 func (s *sarvamLLMStream) Close() error {
+	s.closed = true
 	if s.cancel != nil {
 		s.cancel()
 	}
