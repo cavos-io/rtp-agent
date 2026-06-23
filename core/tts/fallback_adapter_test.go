@@ -655,7 +655,7 @@ func TestFallbackAdapterEmitsErrorOnChunkedFailure(t *testing.T) {
 	}
 }
 
-func TestFallbackChunkedStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
+func TestFallbackChunkedStreamReportsNoAudioForAPIStatus499BeforeAudio(t *testing.T) {
 	fallback := &metadataTTS{
 		label:       "fallback",
 		sampleRate:  24000,
@@ -688,16 +688,29 @@ func TestFallbackChunkedStreamTreatsAPIStatus499AsGracefulEOF(t *testing.T) {
 	if audio != nil {
 		t.Fatalf("Next audio = %#v, want nil when provider returned client closed", audio)
 	}
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want io.EOF for APIStatusError 499", err)
+	if err == nil {
+		t.Fatal("Next error = nil, want no-audio APIError for APIStatusError 499 before audio")
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed") {
+		t.Fatalf("Next error = %q, want no-audio message", err)
 	}
 	if fallback.synthesizeCalls != 0 {
-		t.Fatal("fallback TTS was called for client-closed status, want graceful EOF")
+		t.Fatal("fallback TTS was called for client-closed status, want terminal no-audio error")
 	}
 	select {
 	case got := <-errCh:
-		t.Fatalf("emitted TTS error for APIStatusError 499: %#v", got)
-	default:
+		if got.Label != adapter.Label() {
+			t.Fatalf("error label = %q, want %q", got.Label, adapter.Label())
+		}
+		if !errors.Is(got.Err, err) {
+			t.Fatalf("emitted error = %v, want %v", got.Err, err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for no-audio TTS error")
 	}
 }
 

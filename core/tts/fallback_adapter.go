@@ -704,8 +704,8 @@ func (s *fallbackChunkedStream) monitorStream() {
 					s.adapter.markUnavailable(s.activeIndex)
 				}
 				_ = stream.Close()
-				if !clientClosed && errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
-					err := fmt.Errorf("no audio frames were pushed for text: %s", s.text)
+				if errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.text) != "" {
+					err := llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 					s.markDone(err)
 					emitTTSError(s.adapter, err, false)
 					s.errCh <- err
