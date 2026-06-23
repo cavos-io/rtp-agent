@@ -1971,6 +1971,7 @@ func TestFallbackSynthesizeStreamIgnoresEmptyText(t *testing.T) {
 	if err := stream.PushText("hello"); err != nil {
 		t.Fatalf("PushText(hello) returned error: %v", err)
 	}
+	waitForSynthesizeStreamCalls(t, providerStream, 1)
 	if len(providerStream.calls) != 1 || providerStream.calls[0] != "push:hello" {
 		t.Fatalf("provider stream calls = %#v, want later non-empty push", providerStream.calls)
 	}
@@ -3819,27 +3820,30 @@ func TestFallbackChunkedStreamStartReportsAllFailedWhenProviderCannotStart(t *te
 	}, FallbackAdapterOptions{DisableRetries: true})
 
 	stream, err := adapter.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error = %v, want stream creation to succeed like reference", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	if err == nil {
-		if stream != nil {
-			stream.Close()
-		}
-		t.Fatal("Synthesize error = nil, want all-failed connection error")
+		t.Fatal("Next error = nil, want all-failed connection error")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error type = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error type = %T %v, want APIConnectionError", err, err)
 	}
 	if !connectionErr.Retryable {
 		t.Fatal("APIConnectionError retryable = false, want true")
 	}
 	if !strings.Contains(err.Error(), "all TTSs failed") || !strings.Contains(err.Error(), "primary") {
-		t.Fatalf("Synthesize error = %q, want all-failed message with provider label", err)
+		t.Fatalf("Next error = %q, want all-failed message with provider label", err)
 	}
 	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
-		t.Fatalf("Synthesize error = %q, want reference seconds duration", err)
+		t.Fatalf("Next error = %q, want reference seconds duration", err)
 	}
 	if errors.Is(err, providerErr) {
-		t.Fatalf("Synthesize error wraps raw provider error %v, want reference all-failed connection error", providerErr)
+		t.Fatalf("Next error wraps raw provider error %v, want reference all-failed connection error", providerErr)
 	}
 }
 
@@ -3992,27 +3996,36 @@ func TestFallbackSynthesizeStreamStartReportsAllFailedWhenProviderCannotStart(t 
 	}, FallbackAdapterOptions{DisableRetries: true})
 
 	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error = %v, want stream creation to succeed like reference", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput error = %v", err)
+	}
+	_, err = stream.Next()
 	if err == nil {
-		if stream != nil {
-			stream.Close()
-		}
-		t.Fatal("Stream error = nil, want all-failed connection error")
+		t.Fatal("Next error = nil, want all-failed connection error")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Stream error type = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error type = %T %v, want APIConnectionError", err, err)
 	}
 	if !connectionErr.Retryable {
 		t.Fatal("APIConnectionError retryable = false, want true")
 	}
 	if !strings.Contains(err.Error(), "all TTSs failed") || !strings.Contains(err.Error(), "primary") {
-		t.Fatalf("Stream error = %q, want all-failed message with provider label", err)
+		t.Fatalf("Next error = %q, want all-failed message with provider label", err)
 	}
 	if !strings.Contains(err.Error(), " seconds") || strings.Contains(err.Error(), "µs") || strings.Contains(err.Error(), "ms") || strings.Contains(err.Error(), "ns") {
-		t.Fatalf("Stream error = %q, want reference seconds duration", err)
+		t.Fatalf("Next error = %q, want reference seconds duration", err)
 	}
 	if errors.Is(err, providerErr) {
-		t.Fatalf("Stream error wraps raw provider error %v, want reference all-failed connection error", providerErr)
+		t.Fatalf("Next error wraps raw provider error %v, want reference all-failed connection error", providerErr)
 	}
 }
 
@@ -4379,6 +4392,18 @@ type metadataSynthesizeStream struct {
 	err    error
 	calls  []string
 	closed bool
+}
+
+func waitForSynthesizeStreamCalls(t *testing.T, stream *metadataSynthesizeStream, count int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(stream.calls) >= count {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("provider stream calls = %#v, want at least %d", stream.calls, count)
 }
 
 func (m *metadataSynthesizeStream) PushText(text string) error {
