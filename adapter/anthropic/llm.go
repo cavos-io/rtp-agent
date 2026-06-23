@@ -151,9 +151,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		resp, err := l.startAnthropicStream(ctx, jsonBody)
 		if err == nil {
 			return &anthropicStream{
-				resp:   resp,
-				reader: bufio.NewReader(resp.Body),
-				cancel: cancel,
+				resp:     resp,
+				reader:   bufio.NewReader(resp.Body),
+				cancel:   cancel,
+				hasTools: len(options.Tools) > 0,
 			}, nil
 		}
 		lastErr = err
@@ -316,9 +317,11 @@ type anthropicStream struct {
 	closed bool
 
 	// internal states for tracking tool calls over multiple chunks
-	toolCallID string
-	toolName   string
-	toolArgs   string
+	toolCallID  string
+	toolName    string
+	toolArgs    string
+	hasTools    bool
+	ignoringCoT bool
 }
 
 func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
@@ -639,10 +642,14 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" {
+				text := s.visibleAnthropicTextDelta(event.Delta.Text)
+				if text == "" {
+					continue
+				}
 				return &llm.ChatChunk{
 					Delta: &llm.ChoiceDelta{
 						Role:    llm.ChatRoleAssistant,
-						Content: event.Delta.Text,
+						Content: text,
 					},
 				}, nil
 			} else if event.Delta.Type == "input_json_delta" {
@@ -685,6 +692,23 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			return nil, llm.NewAPIError(message, body, true)
 		}
 	}
+}
+
+func (s *anthropicStream) visibleAnthropicTextDelta(text string) string {
+	if !s.hasTools {
+		return text
+	}
+	if strings.HasPrefix(text, "<thinking>") {
+		s.ignoringCoT = true
+	}
+	if s.ignoringCoT {
+		if _, after, ok := strings.Cut(text, "</thinking>"); ok {
+			s.ignoringCoT = false
+			return after
+		}
+		return ""
+	}
+	return text
 }
 
 func (s *anthropicStream) Close() error {

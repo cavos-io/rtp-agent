@@ -484,6 +484,46 @@ func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
+	transport := &captureRoundTripper{
+		responseBody: strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"<thinking>hidden"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":" still hidden"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"</thinking>visible answer"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"),
+	}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("message_start Next() error = %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("visible text Next() error = %v", err)
+	}
+	if chunk.Delta == nil {
+		t.Fatalf("chunk Delta = nil, want visible text")
+	}
+	if chunk.Delta.Content != "visible answer" {
+		t.Fatalf("content = %q, want visible answer without thinking text", chunk.Delta.Content)
+	}
+}
+
 func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &anthropicCloseErrorBody{}
 	stream := &anthropicStream{
