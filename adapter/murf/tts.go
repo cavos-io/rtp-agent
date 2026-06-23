@@ -509,6 +509,12 @@ func (s *murfTTSSynthesizeStream) writeMessageLocked(message []byte) error {
 	return nil
 }
 
+func (s *murfTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *murfTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
 	case audio, ok := <-s.events:
@@ -533,7 +539,9 @@ func (s *murfTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			s.errCh <- murfTTSReadError(err)
+			if !s.isClosed() {
+				s.errCh <- murfTTSReadError(err)
+			}
 			return
 		}
 		if msgType != websocket.TextMessage {
