@@ -212,6 +212,50 @@ func TestFireworksSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closeNow := make(chan struct{})
+	closed := make(chan struct{})
+	dialer := newFireworksSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		<-closeNow
+		_ = conn.Close()
+		close(closed)
+	})
+
+	provider := NewFireworksSTT("test-key",
+		WithFireworksBaseURL("ws://fireworks.test/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	close(closeNow)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for provider websocket close")
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{1}, 1600)})
+	if err == nil {
+		t.Fatal("PushFrame error = nil, want websocket write failure")
+	}
+	fireworksStream, ok := stream.(*fireworksStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *fireworksStream", stream)
+	}
+	if !fireworksStream.isClosed() {
+		t.Fatal("stream remains open after audio write failure, want closed")
+	}
+	err = stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{2}, 1600)})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v, want nil", err)
+	}
+}
+
 func TestFireworksSTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	endpoints := make(chan string, 2)
 	errCh := make(chan error, 2)

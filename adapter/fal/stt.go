@@ -87,6 +87,9 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 	if err := validateFalSTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
+	if language != "" {
+		s.language = language
+	}
 
 	// For Fal, we typically need to provide an audio URL or base64 encoded data
 	var buf bytes.Buffer
@@ -94,7 +97,7 @@ func (s *FalSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 		buf.Write(f.Data)
 	}
 
-	resolvedLanguage := s.resolveLanguage(language)
+	resolvedLanguage := s.resolveLanguage("")
 	req, err := buildFalSTTRequest(ctx, s, buf.Bytes(), resolvedLanguage)
 	if err != nil {
 		return nil, err

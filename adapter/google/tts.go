@@ -555,7 +555,7 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 				s.streams = s.streams[1:]
 			}
 			s.mu.Unlock()
-			continue
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if err != nil {
 			return nil, err
@@ -570,13 +570,6 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			},
 		}, nil
 	}
-}
-
-func (s *googleTTSSynthesizeStream) markClosed() {
-	s.mu.Lock()
-	s.markClosedLocked()
-	s.mu.Unlock()
-	s.unregister()
 }
 
 func (s *googleTTSSynthesizeStream) markClosedLocked() {

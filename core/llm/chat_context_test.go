@@ -1045,6 +1045,21 @@ func TestChatContextTruncateZeroKeepsReferenceItems(t *testing.T) {
 	}
 }
 
+func TestChatContextTruncateZeroDropsLeadingFunctionSequence(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup"},
+		&FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+	}
+
+	ctx.Truncate(0)
+
+	if got, want := itemIDs(ctx.Items), "user"; got != want {
+		t.Fatalf("Truncate(0) item IDs = %q, want %q", got, want)
+	}
+}
+
 func TestChatContextTruncateNegativeKeepsReferenceSliceBehavior(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

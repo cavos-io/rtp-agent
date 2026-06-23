@@ -129,6 +129,18 @@ func TestFalSTTOptionsAndRecognizeLanguageOverrideMatchReference(t *testing.T) {
 	assertFalSTTPayload(t, payload, "version", "2")
 }
 
+func TestFalSTTRecognizeLanguageOverridePersistsLikeReference(t *testing.T) {
+	provider := NewFalSTT("test-key", WithFalSTTLanguage("fr"))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _ = provider.Recognize(ctx, nil, "de")
+
+	if provider.language != "de" {
+		t.Fatalf("provider language = %q, want recognize override to persist like reference", provider.language)
+	}
+}
+
 func TestFalSTTResponsePreservesReferenceLanguage(t *testing.T) {
 	event := falSTTResponseToEvent(falSTTResponse{Text: "bonjour"}, "fr")
 

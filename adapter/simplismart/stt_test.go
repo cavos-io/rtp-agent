@@ -420,6 +420,68 @@ func TestSimplismartSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) 
 	}
 }
 
+func TestSimplismartSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closeNow := make(chan struct{})
+	closed := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read initial config: %v", err)
+			return
+		}
+		<-closeNow
+		_ = conn.UnderlyingConn().Close()
+		close(closed)
+	}))
+	defer server.Close()
+
+	provider := NewSimplismartSTT("test-key",
+		WithSimplismartSTTStreaming(true),
+		WithSimplismartSTTBaseURL(server.URL),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	simplismartStream, ok := stream.(*simplismartSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *simplismartSTTStream", stream)
+	}
+	close(closeNow)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("server did not close websocket")
+	}
+
+	frame := &model.AudioFrame{Data: bytes.Repeat([]byte{0x11}, 1600)}
+	for i := 0; i < 3; i++ {
+		if err = stream.PushFrame(frame); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		t.Fatal("PushFrame after server close error = nil, want write failure")
+	}
+	if !simplismartStream.isClosed() {
+		t.Fatal("stream remains open after audio write failure")
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+}
+
 func assertSimplismartPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {

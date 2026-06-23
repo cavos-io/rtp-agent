@@ -169,10 +169,11 @@ type ttsStream struct {
 	resp       io.ReadCloser
 	sampleRate int
 	finalSent  bool
+	closed     bool
 }
 
 func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.finalSent {
+	if s.finalSent || s.closed {
 		return nil, io.EOF
 	}
 	buf := make([]byte, 4096)
@@ -195,5 +196,9 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *ttsStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	return s.resp.Close()
 }

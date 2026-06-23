@@ -485,7 +485,11 @@ func (s *fireworksStream) PushFrame(frame *model.AudioFrame) error {
 	if s.reconnecting || s.conn == nil {
 		return nil
 	}
-	return s.writeBufferedAudioLocked(false)
+	if err := s.writeBufferedAudioLocked(false); err != nil {
+		s.closeLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *fireworksStream) Flush() error {
@@ -500,7 +504,11 @@ func (s *fireworksStream) Flush() error {
 	if s.reconnecting || s.conn == nil {
 		return nil
 	}
-	return s.writeBufferedAudioLocked(true)
+	if err := s.writeBufferedAudioLocked(true); err != nil {
+		s.closeLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *fireworksStream) writeBufferedAudioLocked(flush bool) error {
@@ -534,8 +542,17 @@ func (s *fireworksStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	return s.closeLocked()
+}
+
+func (s *fireworksStream) closeLocked() error {
+	if s.closed {
+		return nil
+	}
 	s.closed = true
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(closeMessage))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	if s.owner != nil {

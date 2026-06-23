@@ -218,6 +218,33 @@ func TestRimeTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final marker error = %v, want EOF", err)
+	}
+}
+
 func TestRimeTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte{0x01, 0x02})}
 	stream := &rimeTTSChunkedStream{

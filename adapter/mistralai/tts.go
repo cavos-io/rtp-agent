@@ -207,6 +207,7 @@ type mistralAITTSChunkedStream struct {
 	responseFormat string
 	done           bool
 	jsonRead       bool
+	finalSent      bool
 }
 
 func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -254,6 +255,10 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	s.done = true
+	if !s.finalSent {
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
 	return nil, io.EOF
 }
 

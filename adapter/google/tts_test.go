@@ -192,6 +192,52 @@ func TestGoogleTTSStreamNextWaitsForFlushedAudio(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamEmitsReferenceFinalMarkerAfterAudio(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{
+				AudioContent: []byte{1, 2, 3, 4},
+			}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	googleStream, ok := stream.(*googleTTSSynthesizeStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *googleTTSSynthesizeStream", stream)
+	}
+	if err := googleStream.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final marker error = %v, want EOF", err)
+	}
+}
+
 func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

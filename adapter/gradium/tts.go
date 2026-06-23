@@ -224,9 +224,14 @@ func (s *gradiumTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 		if err != nil {
 			var closeErr *websocket.CloseError
 			if errors.As(err, &closeErr) || err == io.EOF {
-				return nil, io.EOF
+				s.completed = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
 			return nil, err
+		}
+		if msgType == websocket.CloseMessage {
+			s.completed = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -243,7 +248,7 @@ func (s *gradiumTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 		}
 		if done {
 			s.completed = true
-			return nil, io.EOF
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 	}
 }
