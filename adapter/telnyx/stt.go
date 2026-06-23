@@ -341,7 +341,7 @@ func (s *telnyxSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("telnyx stt stream is closed")
+		return io.ErrClosedPipe
 	}
 	if s.audioBStream == nil {
 		s.audioBStream = newTelnyxSTTAudioByteStream(frame)
@@ -359,7 +359,7 @@ func (s *telnyxSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("telnyx stt stream is closed")
+		return io.ErrClosedPipe
 	}
 	if s.audioBStream == nil {
 		return nil

@@ -218,6 +218,10 @@ func (m *XaiRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return caps
 }
 
+func (m *XaiRealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	return m.inner.UpdateOptions(options)
+}
+
 func (m *XaiRealtimeModel) Session() (llm.RealtimeSession, error) {
 	if m.apiKey == "" {
 		return nil, fmt.Errorf("xAI API key is required, either as argument or set XAI_API_KEY environment variable")

@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -378,11 +380,11 @@ func TestInworldTTSStreamClosesAfterFlushWriteFailure(t *testing.T) {
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
-	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushText after write failure error = %v, want closed stream error", err)
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after write failure error = %v, want io.ErrClosedPipe", err)
 	}
-	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("Flush after write failure error = %v, want closed stream error", err)
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after write failure error = %v, want nil", err)
@@ -418,8 +420,11 @@ func TestInworldTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
-	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushText after provider Close error = %v, want closed stream error", err)
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
@@ -741,6 +746,51 @@ func TestInworldTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 	if dialCalls != 0 {
 		t.Fatalf("websocket dials after Close = %d, want 0", dialCalls)
+	}
+}
+
+func TestInworldTTSStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &inworldTTSSynthesizeStream{
+		conn:       conn,
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:      make(chan error, 1),
+	}
+	go stream.readLoop()
+
+	select {
+	case err := <-stream.errCh:
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(err, &connectionErr) {
+			t.Fatalf("readLoop error = %T %v, want APIConnectionError", err, err)
+		}
+		if !strings.Contains(err.Error(), "Inworld websocket receive failed") {
+			t.Fatalf("readLoop error = %q, want Inworld close context", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for websocket close error")
 	}
 }
 

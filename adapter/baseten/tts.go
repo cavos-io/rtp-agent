@@ -418,7 +418,7 @@ func (s *basetenTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("baseten tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	message, err := buildBasetenTTSTextMessage(text)
 	if err != nil {

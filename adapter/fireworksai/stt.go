@@ -477,7 +477,7 @@ func (s *fireworksStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("fireworks stt stream is closed")
+		return io.ErrClosedPipe
 	}
 	if _, err := s.audio.Write(frame.Data); err != nil {
 		return err
@@ -492,7 +492,7 @@ func (s *fireworksStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("fireworks stt stream is closed")
+		return io.ErrClosedPipe
 	}
 	if s.audio.Len() == 0 {
 		return nil

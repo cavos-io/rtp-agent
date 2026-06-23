@@ -391,7 +391,7 @@ func (s *respeecherTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("respeecher tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	s.pendingText += text
 	return s.sendCompleteSentencesLocked()
@@ -401,7 +401,7 @@ func (s *respeecherTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("respeecher tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")

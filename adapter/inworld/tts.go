@@ -561,7 +561,7 @@ func (s *inworldTTSSynthesizeStream) PushText(text string) error {
 		return nil
 	}
 	if s.closed {
-		return fmt.Errorf("inworld tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	if _, err := s.pendingText.WriteString(text); err != nil {
 		return err
@@ -577,7 +577,7 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("inworld tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	text := s.pendingText.String()
 	s.pendingText.Reset()
@@ -761,7 +761,7 @@ func (s *inworldTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- inworldTTSReadError(err)
 			}
 			return
 		}
@@ -780,6 +780,14 @@ func (s *inworldTTSSynthesizeStream) readLoop() {
 			return
 		}
 	}
+}
+
+func inworldTTSReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIConnectionError(fmt.Sprintf("Inworld websocket receive failed: close %d: %s", closeErr.Code, closeErr.Text))
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Inworld websocket receive failed: %v", err))
 }
 
 func (s *inworldTTSSynthesizeStream) handleWebsocketMessage(payload []byte) (*tts.SynthesizedAudio, bool, error) {

@@ -5,12 +5,17 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestGnaniTTSDefaultsMatchReference(t *testing.T) {
@@ -345,6 +350,55 @@ func TestGnaniTTSAudioFromWebsocketMessageStripsWAVAndDetectsComplete(t *testing
 
 	if _, _, err := gnaniTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 16000, 1); err == nil {
 		t.Fatal("error message returned nil error, want stream error")
+	}
+}
+
+func TestGnaniTTSStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &gnaniTTSSynthesizeStream{
+		conn:        conn,
+		ctx:         ctx,
+		cancel:      cancel,
+		sampleRate:  16000,
+		numChannels: 1,
+		events:      make(chan *tts.SynthesizedAudio, 1),
+		errCh:       make(chan error, 1),
+	}
+	go stream.readLoop()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Gnani TTS WebSocket closed") {
+		t.Fatalf("Next error = %q, want Gnani close context", err)
 	}
 }
 

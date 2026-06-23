@@ -272,6 +272,46 @@ func TestRtzrSTTStreamLanguageArgumentDoesNotMutateReferenceLanguage(t *testing.
 	}
 }
 
+func TestRtzrSTTStreamNonNormalCloseReturnsEOF(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad speech stream"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &rtzrStream{
+		conn:   conn,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+		state:  &rtzrTranscriptState{language: "ko"},
+	}
+	go stream.readLoop()
+
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %T %v, want EOF", err, err)
+	}
+}
+
 func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 	queryCh := make(chan url.Values, 1)
 	authCh := make(chan string, 1)

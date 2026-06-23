@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -317,7 +319,7 @@ func (s *asyncAITTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
 				return nil, io.EOF
 			}
-			return nil, err
+			return nil, asyncAITTSReadError(err)
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -333,6 +335,14 @@ func (s *asyncAITTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 			return audio, nil
 		}
 	}
+}
+
+func asyncAITTSReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIStatusError("Async connection closed unexpectedly", closeErr.Code, "", err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Async websocket receive failed: %v", err))
 }
 
 type asyncAITTSStream struct {

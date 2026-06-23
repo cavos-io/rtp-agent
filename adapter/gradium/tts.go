@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -221,7 +222,8 @@ func (s *gradiumTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) || err == io.EOF {
 				return nil, io.EOF
 			}
 			return nil, err
