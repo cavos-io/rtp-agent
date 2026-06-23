@@ -1111,7 +1111,24 @@ func (s *deepgramStream) closeConnection() error {
 	return s.conn.Close()
 }
 
+func (s *deepgramStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		return nil, io.EOF
+	}
+
 	select {
 	case <-s.ctx.Done():
 		return nil, io.EOF
