@@ -195,6 +195,7 @@ type xaiStream struct {
 	resp     *http.Response
 	scanner  *bufio.Scanner
 	thinking bool
+	closed   bool
 }
 
 func buildXAIMessages(chatCtx *llm.ChatContext) []xaiMessage {
@@ -397,6 +398,9 @@ func buildXAIToolOutput(toolOutput *llm.FunctionCallOutput) xaiMessage {
 }
 
 func (s *xaiStream) Next() (*llm.ChatChunk, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp.Body)
 		s.scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -469,6 +473,7 @@ func xaiFunctionToolCalls(toolCalls []xaiToolCall) []llm.FunctionToolCall {
 }
 
 func (s *xaiStream) Close() error {
+	s.closed = true
 	return s.resp.Body.Close()
 }
 
