@@ -6,10 +6,13 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -374,6 +377,41 @@ func TestTelnyxSTTStreamCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestTelnyxSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read wav header: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil on provider close", event)
+	}
+	if err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want reference provider close error", err)
 	}
 }
 

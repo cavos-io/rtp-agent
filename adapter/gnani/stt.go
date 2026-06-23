@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -345,7 +346,11 @@ func (s *gnaniSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+				if !s.isClosed() {
+					s.errCh <- llm.NewAPIConnectionError("Gnani STT WebSocket closed unexpectedly")
+				}
+			} else {
 				s.errCh <- err
 			}
 			return
@@ -363,6 +368,15 @@ func (s *gnaniSTTStream) readLoop() {
 			s.signalDrainEvent()
 		}
 	}
+}
+
+func (s *gnaniSTTStream) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *gnaniSTTStream) signalDrainEvent() {

@@ -16,6 +16,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -412,7 +413,11 @@ func (s *simplismartSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+				if !s.isClosed() {
+					s.errCh <- llm.NewAPIConnectionError("Simplismart STT WebSocket closed unexpectedly")
+				}
+			} else {
 				s.errCh <- err
 			}
 			return
@@ -424,6 +429,15 @@ func (s *simplismartSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *simplismartSTTStream) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *simplismartSTTStream) PushFrame(frame *model.AudioFrame) error {

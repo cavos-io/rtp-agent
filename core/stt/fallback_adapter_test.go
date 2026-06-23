@@ -1547,6 +1547,94 @@ func TestFallbackStreamRecoversFailedProviderInBackground(t *testing.T) {
 	}
 }
 
+func TestFallbackStreamRecoveryIgnoresEmptyFinalTranscript(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		alternatives []SpeechData
+	}{
+		{name: "empty_text", alternatives: []SpeechData{{Text: ""}}},
+		{name: "no_alternatives"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			firstFrame := &model.AudioFrame{Data: []byte("1"), SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}
+			primaryFailure := &blockingFailRecognizeStream{
+				err:     errors.New("primary stream failed"),
+				release: make(chan struct{}),
+			}
+			recovery := &metadataRecognizeStream{events: []*SpeechEvent{{
+				Type:         SpeechEventFinalTranscript,
+				Alternatives: tt.alternatives,
+			}}}
+			active := &metadataRecognizeStream{events: []*SpeechEvent{{
+				Type:         SpeechEventFinalTranscript,
+				Alternatives: []SpeechData{{Text: "primary active"}},
+			}}}
+			primary := &metadataSTT{
+				label:        "primary",
+				capabilities: STTCapabilities{Streaming: true},
+				streams: []RecognizeStream{
+					primaryFailure,
+					recovery,
+					active,
+				},
+			}
+			fallback := &metadataSTT{
+				label:        "fallback",
+				capabilities: STTCapabilities{Streaming: true},
+				streams: []RecognizeStream{
+					&metadataRecognizeStream{events: []*SpeechEvent{{
+						Type:         SpeechEventFinalTranscript,
+						Alternatives: []SpeechData{{Text: "fallback first"}},
+					}}},
+					&metadataRecognizeStream{events: []*SpeechEvent{{
+						Type:         SpeechEventFinalTranscript,
+						Alternatives: []SpeechData{{Text: "fallback second"}},
+					}}},
+				},
+			}
+			adapter := NewFallbackAdapterWithOptions([]STT{primary, fallback}, FallbackAdapterOptions{
+				DisableRetries: true,
+			})
+
+			stream, err := adapter.Stream(context.Background(), "en")
+			if err != nil {
+				t.Fatalf("Stream returned error: %v", err)
+			}
+			defer stream.Close()
+			if err := stream.PushFrame(firstFrame); err != nil {
+				t.Fatalf("PushFrame returned error: %v", err)
+			}
+
+			close(primaryFailure.release)
+
+			event, err := stream.Next()
+			if err != nil {
+				t.Fatalf("Next returned error: %v", err)
+			}
+			if got := event.Alternatives[0].Text; got != "fallback first" {
+				t.Fatalf("first stream text = %q, want fallback first", got)
+			}
+
+			waitForStreamCalls(t, primary, 2)
+			assertProviderAvailability(t, adapter, 0, false)
+
+			nextStream, err := adapter.Stream(context.Background(), "en")
+			if err != nil {
+				t.Fatalf("second Stream returned error: %v", err)
+			}
+			defer nextStream.Close()
+
+			event, err = nextStream.Next()
+			if err != nil {
+				t.Fatalf("second Next returned error: %v", err)
+			}
+			if got := event.Alternatives[0].Text; got != "fallback second" {
+				t.Fatalf("second stream text = %q, want fallback second while primary recovery emitted %s final", got, tt.name)
+			}
+		})
+	}
+}
+
 func TestFallbackStreamPropagatesTimingAnchorsToRecoveryStream(t *testing.T) {
 	primaryFailure := &blockingFailRecognizeStream{
 		err:     errors.New("primary stream failed"),
@@ -2526,6 +2614,16 @@ func waitForStreamCalls(t *testing.T, stt *metadataSTT, want int) {
 			t.Fatalf("stream calls did not reach %d", want)
 		case <-ticker.C:
 		}
+	}
+}
+
+func assertProviderAvailability(t *testing.T, adapter *FallbackAdapter, index int, want bool) {
+	t.Helper()
+	adapter.mu.Lock()
+	got := adapter.available[index]
+	adapter.mu.Unlock()
+	if got != want {
+		t.Fatalf("provider availability[%d] = %v, want %v", index, got, want)
 	}
 }
 

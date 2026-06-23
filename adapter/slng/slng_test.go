@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -686,6 +687,46 @@ func TestSLNGSTTStreamNextPreservesReferenceEventSequence(t *testing.T) {
 		if event.Type != wantType {
 			t.Fatalf("event type = %s, want %s", event.Type, wantType)
 		}
+	}
+}
+
+func TestSLNGSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+
+	provider := NewSTT("test-key", WithSTTEndpoint(endpoint))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next() event = %#v, want nil on provider close", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next() error = %v, want reference provider status error", err)
+	}
+	if statusErr.StatusCode != websocket.CloseNormalClosure {
+		t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
 	}
 }
 

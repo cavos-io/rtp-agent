@@ -11,6 +11,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -461,7 +462,11 @@ func (s *speechmaticsSTTStream) readLoop() {
 	for {
 		_, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure) {
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure) || err == io.EOF {
+				if !s.isClosed() {
+					s.errCh <- llm.NewAPIConnectionError("Speechmatics STT WebSocket closed unexpectedly")
+				}
+			} else {
 				s.errCh <- err
 			}
 			return
@@ -483,6 +488,15 @@ func (s *speechmaticsSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *speechmaticsSTTStream) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {

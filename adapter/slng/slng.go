@@ -16,6 +16,7 @@ import (
 	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -1347,7 +1348,10 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 		}
 		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
-			return nil, err
+			if s.isClosed() {
+				return nil, io.EOF
+			}
+			return nil, slngSTTReadError(err)
 		}
 		if msgType != websocket.TextMessage {
 			continue
@@ -1364,6 +1368,23 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 			return event, nil
 		}
 	}
+}
+
+func (s *sttStream) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func slngSTTReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIStatusError("SLNG connection closed unexpectedly", closeErr.Code, "", err.Error())
+	}
+	return err
 }
 
 type ttsStream struct {

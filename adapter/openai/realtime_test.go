@@ -2467,6 +2467,26 @@ func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventPreservesEmptyFinalInputTranscription(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "",
+		"transcript": "",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent empty item/transcript returned ok=false, want final transcription event")
+	}
+	if ev.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+		t.Fatalf("event type = %q, want input audio transcription", ev.Type)
+	}
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want empty final transcription payload")
+	}
+	if ev.InputTranscription.ItemID != "" || ev.InputTranscription.Transcript != "" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final empty item transcript", ev.InputTranscription)
+	}
+}
+
 func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":          "conversation.item.input_audio_transcription.delta",
@@ -3212,6 +3232,36 @@ func TestOpenAIRealtimeIgnoresCancellationFailedErrorEvent(t *testing.T) {
 		t.Fatalf("openAIRealtimeEvent = %#v, true; want benign cancellation error ignored", ev)
 	}
 
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type": "error",
+		"error": map[string]any{
+			"message": "invalid request",
+			"type":    "invalid_request_error",
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want ordinary provider error event")
+	}
+	if ev.Type != llm.RealtimeEventTypeError {
+		t.Fatalf("event type = %q, want error", ev.Type)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(ev.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", ev.Error, ev.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API returned an error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok || body["message"] != "invalid request" {
+		t.Fatalf("APIError body = %#v, want provider error body", apiErr.Body)
+	}
+}
+
+func TestOpenAIRealtimeErrorEventReturnsRetryableAPIError(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "error",
 		"error": map[string]any{

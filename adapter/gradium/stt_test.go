@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -300,6 +301,37 @@ func TestGradiumSTTStreamSendsSetupAudioAndCloseMessages(t *testing.T) {
 	closeMsg := receiveGradiumMessage(t, closeCh, "close")
 	if closeMsg["terminate_session"] != true {
 		t.Fatalf("close = %#v, want terminate session", closeMsg)
+	}
+}
+
+func TestGradiumSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
+	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read setup: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	})
+
+	provider := NewGradiumSTT("test-key",
+		WithGradiumSTTModelEndpoint("ws://gradium.test/asr"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil on provider close", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %v, want reference provider status error", err)
 	}
 }
 
