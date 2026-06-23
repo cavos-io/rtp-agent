@@ -541,6 +541,12 @@ func (s *neuphonicTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	}
 }
 
+func (s *neuphonicTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *neuphonicTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
 	case audio, ok := <-s.events:
@@ -565,7 +571,9 @@ func (s *neuphonicTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			s.errCh <- neuphonicTTSReadError(err)
+			if !s.isClosed() {
+				s.errCh <- neuphonicTTSReadError(err)
+			}
 			return
 		}
 		if msgType != websocket.TextMessage {
