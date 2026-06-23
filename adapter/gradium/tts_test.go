@@ -5,10 +5,16 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/gorilla/websocket"
 )
 
 func TestGradiumTTSDefaultsMatchReference(t *testing.T) {
@@ -207,6 +213,35 @@ func TestGradiumTTSWebsocketMessageMapsAudioAndEnd(t *testing.T) {
 	}
 	if audio.Frame != nil {
 		t.Fatalf("final marker frame = %+v, want no audio frame", audio.Frame)
+	}
+}
+
+func TestGradiumTTSWebsocketNonNormalCloseReturnsEOF(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &gradiumTTSWebsocketChunkedStream{conn: conn, sampleRate: 48000}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %T %v, want EOF", err, err)
 	}
 }
 
