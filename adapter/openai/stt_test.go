@@ -2137,6 +2137,43 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTCompletedEmptyTranscriptEmitsUsageOnly(t *testing.T) {
+	state := &openAIRealtimeSTTMessageState{}
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"silent","audio_start_ms":100}`), state)
+	if err != nil {
+		t.Fatalf("speech started: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want timing-only speech start", events)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"silent","audio_end_ms":900}`), state)
+	if err != nil {
+		t.Fatalf("speech stopped: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want timing-only speech stop", events)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"silent","transcript":"","usage":{"input_tokens":2,"output_tokens":0}}`), state)
+	if err != nil {
+		t.Fatalf("completed: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want only recognition usage for empty transcript", events)
+	}
+	if events[0].Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("event type = %q, want recognition usage", events[0].Type)
+	}
+	if events[0].RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil, want usage event")
+	}
+	if events[0].RecognitionUsage.AudioDuration != 0.8 || events[0].RecognitionUsage.InputTokens != 2 {
+		t.Fatalf("RecognitionUsage = %+v, want duration 0.8 and input tokens 2", events[0].RecognitionUsage)
+	}
+}
+
 func TestOpenAIRealtimeSTTSpeechStartedClearsStaleCurrentItemID(t *testing.T) {
 	now := time.Unix(100, 0)
 	state := &openAIRealtimeSTTMessageState{
