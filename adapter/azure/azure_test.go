@@ -1211,6 +1211,37 @@ func TestAzureSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	receiveAzureTestSignal(t, serverClosed, "server close")
 }
 
+func TestAzureSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{})
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestHoldOpenDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event after Close = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)
+	}
+	receiveAzureTestSignal(t, serverClosed, "server close")
+}
+
 func TestAzureSTTStreamAfterCloseIsRejected(t *testing.T) {
 	dials := 0
 	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
