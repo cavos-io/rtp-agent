@@ -298,9 +298,6 @@ func (c *ChatContext) Messages() []*ChatMessage {
 
 func (c *ChatContext) Truncate(maxItems int) *ChatContext {
 	c.ensureMutable()
-	if maxItems == 0 {
-		return c
-	}
 	if len(c.Items) <= maxItems {
 		return c
 	}
@@ -314,7 +311,9 @@ func (c *ChatContext) Truncate(maxItems int) *ChatContext {
 	}
 
 	start := len(c.Items) - maxItems
-	if maxItems < 0 {
+	if maxItems == 0 {
+		start = 0
+	} else if maxItems < 0 {
 		start = -maxItems
 	}
 	if start > len(c.Items) {
