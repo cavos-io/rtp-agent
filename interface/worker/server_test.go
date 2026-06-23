@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/livekit/protocol/auth"
 	"github.com/livekit/protocol/livekit"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeWorkerHTTPListener struct {
@@ -57,6 +59,35 @@ func (l *fakeWorkerHTTPListener) Close() error {
 
 func (l *fakeWorkerHTTPListener) Addr() net.Addr {
 	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: l.port}
+}
+
+type singleConnListener struct {
+	conn   net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newSingleConnListener(conn net.Conn) *singleConnListener {
+	return &singleConnListener{conn: conn, closed: make(chan struct{})}
+}
+
+func (l *singleConnListener) Accept() (net.Conn, error) {
+	if l.conn != nil {
+		conn := l.conn
+		l.conn = nil
+		return conn, nil
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *singleConnListener) Close() error {
+	l.once.Do(func() { close(l.closed) })
+	return nil
+}
+
+func (l *singleConnListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0}
 }
 
 func stubWorkerHTTPListener(t *testing.T) {
@@ -4223,6 +4254,123 @@ func TestRunStartsConfiguredPrometheusServerBeforeDial(t *testing.T) {
 	}
 
 	_ = server.Run(context.Background())
+}
+
+func TestRunRetriesInitialRegisterExchangeFailure(t *testing.T) {
+	stubWorkerHTTPListener(t)
+	oldSleep := workerRetrySleep
+	oldDial := workerDialContext
+	t.Cleanup(func() {
+		workerRetrySleep = oldSleep
+		workerDialContext = oldDial
+	})
+	workerRetrySleep = func(context.Context, time.Duration) error {
+		return nil
+	}
+
+	var upgrader websocket.Upgrader
+	var mu sync.Mutex
+	attempts := 0
+	registered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("Upgrade() error = %v", err)
+			return
+		}
+		defer conn.Close()
+
+		mu.Lock()
+		attempts++
+		attempt := attempts
+		mu.Unlock()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("ReadMessage register attempt %d error = %v", attempt, err)
+			return
+		}
+		if attempt == 1 {
+			return
+		}
+
+		msg := &livekit.ServerMessage{
+			Message: &livekit.ServerMessage_Register{
+				Register: &livekit.RegisterWorkerResponse{WorkerId: "worker-retry"},
+			},
+		}
+		data, err := proto.Marshal(msg)
+		if err != nil {
+			t.Errorf("proto.Marshal register response error = %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+			t.Errorf("WriteMessage register response error = %v", err)
+			return
+		}
+		registered <- struct{}{}
+		<-release
+	})
+	defer close(release)
+	workerDialContext = func(ctx context.Context, _ *websocket.Dialer, rawURL string, header http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		listener := newSingleConnListener(serverConn)
+		server := &http.Server{Handler: handler}
+		go func() {
+			_ = server.Serve(listener)
+		}()
+		go func() {
+			<-ctx.Done()
+			_ = server.Close()
+		}()
+		wsURL, err := url.Parse(rawURL)
+		if err != nil {
+			return nil, nil, err
+		}
+		conn, response, err := websocket.NewClient(clientConn, wsURL, header, 1024, 1024)
+		if err != nil {
+			_ = clientConn.Close()
+			_ = server.Close()
+			return nil, response, err
+		}
+		return conn, response, nil
+	}
+
+	server := NewAgentServer(WorkerOptions{
+		WSRL:      "ws://livekit.test",
+		APIKey:    "run-key",
+		APISecret: "run-secret",
+		MaxRetry:  1,
+		DevMode:   true,
+		Host:      "127.0.0.1",
+	})
+	if err := server.RTCSession(func(ctx *JobContext) error { return nil }, nil, nil); err != nil {
+		t.Fatalf("RTCSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- server.Run(ctx)
+	}()
+
+	select {
+	case <-registered:
+	case err := <-doneCh:
+		t.Fatalf("Run() returned before retry registration: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not retry initial register exchange")
+	}
+	cancel()
+	select {
+	case err := <-doneCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run() after cancel error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not return after context cancellation")
+	}
 }
 
 func TestRunUnregisteredStartsHTTPAndSkipsLiveKitCredentials(t *testing.T) {

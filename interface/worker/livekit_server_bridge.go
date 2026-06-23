@@ -20,6 +20,10 @@ var livekitRunServerMessageLoop = workerlivekit.RunServerMessageLoop
 
 var livekitOpenServerWorkerWebSocket = workerlivekit.OpenServerWorkerWebSocket
 
+var livekitRetryDelay = workerlivekit.RetryDelay
+
+var livekitConnectFailureError = workerlivekit.ConnectFailureError
+
 var livekitRouteServerWorkerMessage = workerlivekit.RouteServerWorkerMessage
 
 var livekitWriteServerWorkerMessageWebSocket = workerlivekit.WriteServerWorkerMessageWebSocket

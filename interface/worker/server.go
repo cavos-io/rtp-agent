@@ -1364,6 +1364,32 @@ func (s *AgentServer) Run(ctx context.Context) error {
 		}()
 	}
 
+	return s.runLiveKitConnectionWithRetry(ctx)
+}
+
+func (s *AgentServer) runLiveKitConnectionWithRetry(ctx context.Context) error {
+	retryCount := 0
+	for {
+		err := s.runLiveKitConnectionOnce(ctx)
+		if err == nil {
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if retryCount >= s.Options.MaxRetry {
+			s.setConnectionFailed(true)
+			return livekitConnectFailureError(s.Options.WSRL, retryCount, err)
+		}
+		delay := livekitRetryDelay(retryCount)
+		retryCount++
+		if err := workerRetrySleep(ctx, delay); err != nil {
+			return err
+		}
+	}
+}
+
+func (s *AgentServer) runLiveKitConnectionOnce(ctx context.Context) error {
 	openResult, err := s.openWorkerWebSocket(ctx, WorkerWebSocketOpenOptions{
 		WSURL:       s.Options.WSRL,
 		WorkerToken: s.Options.WorkerToken,
