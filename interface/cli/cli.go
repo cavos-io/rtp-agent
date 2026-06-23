@@ -31,6 +31,7 @@ import (
 
 type CliArgs struct {
 	LogLevel   string
+	LogFormat  string
 	URL        string
 	APIKey     string
 	APISecret  string
@@ -180,7 +181,7 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 			logger.Logger.Errorw("Failed to apply worker options", err)
 			os.Exit(1)
 		}
-		configureCLIProtocolLogger(server.Options.LogLevel, server.Options.DevMode)
+		configureCLIProtocolLogger(server.Options.LogLevel, server.Options.DevMode, args.LogFormat)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		if handled, err := runProcessJobFromEnv(ctx, server, currentEnvMap()); handled {
@@ -202,7 +203,7 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 			logger.Logger.Errorw("Failed to apply worker options", err)
 			os.Exit(1)
 		}
-		configureCLIProtocolLogger(server.Options.LogLevel, server.Options.DevMode)
+		configureCLIProtocolLogger(server.Options.LogLevel, server.Options.DevMode, args.LogFormat)
 		applyDevReloadCompatibility(&args)
 		if !args.Reload {
 			runWorker(server, true)
@@ -234,7 +235,7 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 }
 
 func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
-	args := CliArgs{DevMode: devMode, Reload: devMode}
+	args := CliArgs{DevMode: devMode, Reload: devMode, LogFormat: "json"}
 	var drainTimeout *int
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
@@ -248,6 +249,12 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 				return CliArgs{}, nil, fmt.Errorf("unknown log level %q", argv[i])
 			}
 			args.LogLevel = logLevel
+		case "--log-format":
+			i++
+			if i >= len(argv) {
+				return CliArgs{}, nil, fmt.Errorf("missing value for --log-format")
+			}
+			args.LogFormat = strings.ToLower(argv[i])
 		case "--url":
 			i++
 			if i >= len(argv) {
@@ -330,7 +337,7 @@ func applyWorkerArgs(server *worker.AgentServer, args CliArgs, drainTimeout *int
 	return server.UpdateOptions(opts)
 }
 
-func cliProtocolLoggerConfig(logLevel string, devMode bool) protologger.Config {
+func cliProtocolLoggerConfig(logLevel string, devMode bool, logFormats ...string) protologger.Config {
 	if strings.TrimSpace(logLevel) == "" {
 		if devMode {
 			logLevel = "DEBUG"
@@ -338,14 +345,18 @@ func cliProtocolLoggerConfig(logLevel string, devMode bool) protologger.Config {
 			logLevel = "INFO"
 		}
 	}
+	coloredLogs := devMode
+	if len(logFormats) > 0 && logFormats[0] == "colored" {
+		coloredLogs = true
+	}
 	return protologger.Config{
 		Level: strings.ToLower(logLevel),
-		JSON:  !devMode,
+		JSON:  !coloredLogs,
 	}
 }
 
-func configureCLIProtocolLogger(logLevel string, devMode bool) {
-	cfg := cliProtocolLoggerConfig(logLevel, devMode)
+func configureCLIProtocolLogger(logLevel string, devMode bool, logFormats ...string) {
+	cfg := cliProtocolLoggerConfig(logLevel, devMode, logFormats...)
 	protologger.InitFromConfig(&cfg, "worker")
 	logger.SetLogger(protologger.GetLogger())
 }

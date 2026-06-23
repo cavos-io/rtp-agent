@@ -553,6 +553,7 @@ func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
 	args, drainTimeout, err := parseWorkerArgs([]string{
 		"worker", "start",
 		"--log-level", "warn",
+		"--log-format", "colored",
 		"--url", "wss://livekit.example",
 		"--api-key", "api-key",
 		"--api-secret", "api-secret",
@@ -564,6 +565,9 @@ func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
 
 	if args.LogLevel != "WARN" {
 		t.Fatalf("LogLevel = %q, want WARN", args.LogLevel)
+	}
+	if args.LogFormat != "colored" {
+		t.Fatalf("LogFormat = %q, want colored", args.LogFormat)
 	}
 	if args.URL != "wss://livekit.example" {
 		t.Fatalf("URL = %q, want wss://livekit.example", args.URL)
@@ -847,6 +851,17 @@ func TestCLIProtocolLoggerConfigUsesReferenceProductionJSON(t *testing.T) {
 	}
 	if !cfg.JSON {
 		t.Fatal("JSON = false, want true for production CLI logging")
+	}
+}
+
+func TestCLIProtocolLoggerConfigUsesReferenceColoredLogFormat(t *testing.T) {
+	cfg := cliProtocolLoggerConfig("WARN", false, "colored")
+
+	if cfg.Level != "warn" {
+		t.Fatalf("Level = %q, want warn", cfg.Level)
+	}
+	if cfg.JSON {
+		t.Fatal("JSON = true, want false for colored CLI logging")
 	}
 }
 
