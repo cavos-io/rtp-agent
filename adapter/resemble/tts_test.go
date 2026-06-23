@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -204,6 +205,39 @@ func TestResembleTTSChunkedStreamDecodesReferenceResponse(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", audio.Frame.SampleRate)
+	}
+}
+
+func TestResembleTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x02, 0x00}
+	wav := resembleTestWAV(pcm, 24000, 1)
+	payload := `{"success":true,"audio_content":"` + base64.StdEncoding.EncodeToString(wav) + `"}`
+	stream := &resembleTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(payload)))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("audio data = %#v, want decoded PCM %#v", audio.Frame.Data, pcm)
+	}
+	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("frame = rate %d channels %d samples %d, want 24000/1/2", audio.Frame.SampleRate, audio.Frame.NumChannels, audio.Frame.SamplesPerChannel)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
 	}
 }
 
@@ -525,6 +559,27 @@ type resembleRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f resembleRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func resembleTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	byteRate := sampleRate * uint32(channels) * 2
+	blockAlign := channels * 2
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func newResembleClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
