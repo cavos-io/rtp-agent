@@ -1028,6 +1028,52 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "recovery_client_closed":
+		primary := &fakeScenarioLLM{label: "primary", streams: []lkllm.LLMStream{
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{{err: errors.New("primary stream failed")}}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{err: lkllm.NewAPIStatusError("client closed", 499, "req_recovery", nil)},
+			}},
+			&fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+				{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "primary active"}}},
+			}},
+		}}
+		fallback := &fakeScenarioLLM{label: "fallback", stream: &fakeScenarioLLMStream{events: []fakeScenarioLLMEvent{
+			{chunk: &lkllm.ChatChunk{Delta: &lkllm.ChoiceDelta{Content: "fallback"}}},
+		}}}
+		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
+		first, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		firstChunks, err := collectScenarioLLMStreamChunks(first)
+		if err != nil {
+			return nil, err
+		}
+		availabilityEvents, err := waitForScenarioLLMAvailable(adapter)
+		if err != nil {
+			return nil, err
+		}
+		second, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err != nil {
+			return nil, err
+		}
+		secondChunks, err := collectScenarioLLMStreamChunks(second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "llm-fallback-recovery-client-closed",
+			"events": []map[string]any{
+				{
+					"name":                "recovery_client_closed",
+					"first_chunks":        firstChunks,
+					"second_chunks":       secondChunks,
+					"availability_events": availabilityEvents,
+					"primary_calls":       primary.calls,
+				},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported LLM fallback action %q", payload.Action)
 	}
@@ -1108,6 +1154,25 @@ func collectScenarioLLMAvailability(adapter *lkllm.FallbackAdapter) []map[string
 	}
 }
 
+func waitForScenarioLLMAvailable(adapter *lkllm.FallbackAdapter) ([]map[string]any, error) {
+	events := []map[string]any{}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-adapter.AvailabilityChangedCh():
+			entry := map[string]any{
+				"available": event.Available,
+				"label":     lkllm.Label(event.LLM),
+			}
+			events = append(events, entry)
+			if event.Available {
+				return events, nil
+			}
+		case <-deadline:
+			return events, fmt.Errorf("timed out waiting for recovered LLM availability")
+		}
+	}
+}
 func runLLMChatContext(input json.RawMessage) (any, error) {
 	var payload struct {
 		Action string `json:"action"`
