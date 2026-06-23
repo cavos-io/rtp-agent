@@ -962,6 +962,79 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "stream_client_closed":
+		var primaryCalls int
+		var fallbackCalls int
+		primary := &fakeScenarioTTS{
+			label:             "primary",
+			provider:          "primary",
+			capabilities:      lktts.TTSCapabilities{Streaming: true},
+			streamCalls:       &primaryCalls,
+			streamStreamError: lkllm.NewAPIStatusError("client closed", 499, "req_499", nil),
+		}
+		fallback := &fakeScenarioTTS{
+			label:             "fallback",
+			provider:          "fallback",
+			capabilities:      lktts.TTSCapabilities{Streaming: true},
+			streamCalls:       &fallbackCalls,
+			streamStreamError: lkllm.NewAPIStatusError("client closed", 499, "req_499", nil),
+		}
+		adapter := lktts.NewFallbackAdapter([]lktts.TTS{primary, fallback})
+		errorEvents := make([]string, 0)
+		unsubscribe := adapter.OnError(func(err lktts.TTSError) {
+			errorEvents = append(errorEvents, err.Label)
+		})
+		defer unsubscribe()
+		stream, err := adapter.Stream(context.Background())
+		eof := false
+		audioSeen := false
+		errorClass := ""
+		hasNoAudio := false
+		if err == nil {
+			defer stream.Close()
+			if pushErr := stream.PushText("hello"); pushErr != nil {
+				err = pushErr
+			} else if endErr := lktts.EndSynthesizeStreamInput(stream); endErr != nil {
+				err = endErr
+			} else {
+				for {
+					audio, nextErr := stream.Next()
+					if audio != nil {
+						audioSeen = true
+					}
+					if errors.Is(nextErr, io.EOF) {
+						eof = true
+						break
+					}
+					if nextErr != nil {
+						err = nextErr
+						break
+					}
+				}
+			}
+		}
+		if err != nil {
+			var apiErr *lkllm.APIError
+			if errors.As(err, &apiErr) {
+				errorClass = "APIError"
+			}
+			hasNoAudio = strings.Contains(err.Error(), "no audio frames were pushed")
+		}
+		return map[string]any{
+			"contract": "tts-fallback-stream-client-closed",
+			"events": []map[string]any{
+				{
+					"name":           "stream_client_closed",
+					"eof":            eof,
+					"audio_seen":     audioSeen,
+					"error_class":    errorClass,
+					"has_no_audio":   hasNoAudio,
+					"primary_calls":  primaryCalls,
+					"fallback_calls": fallbackCalls,
+					"error_events":   errorEvents,
+				},
+			},
+		}, nil
 	case "availability_panic_isolated":
 		primary := &fakeScenarioTTS{
 			provider:     "primary",

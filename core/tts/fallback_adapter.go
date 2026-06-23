@@ -1165,8 +1165,8 @@ func (s *fallbackSynthesizeStream) monitorStream() {
 			}
 			if errors.Is(err, io.EOF) {
 				_ = stream.Close()
-				if !clientClosed && errors.Is(err, io.EOF) && !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
-					err := fmt.Errorf("no audio frames were pushed for text: %s", s.pushedText())
+				if !outputSent && pending == nil && strings.TrimSpace(s.pushedText()) != "" {
+					err := llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.pushedText()), nil, true)
 					s.markDone(err)
 					emitTTSError(s.adapter, err, false)
 					s.errCh <- err

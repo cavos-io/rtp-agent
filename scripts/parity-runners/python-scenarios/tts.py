@@ -1151,6 +1151,80 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "stream_client_closed":
+        exceptions_module = sys.modules["livekit.agents._exceptions"]
+
+        class ClientClosedSynthesizeStream(module.SynthesizeStream):
+            async def _run(self, output_emitter: Any) -> None:
+                raise exceptions_module.APIStatusError(
+                    "client closed",
+                    status_code=499,
+                    request_id="req_499",
+                )
+
+        class ClientClosedStreamingTTS(ScenarioTTS):
+            def __init__(self) -> None:
+                super().__init__()
+                self._label = "primary"
+                self._capabilities = module.TTSCapabilities(streaming=True)
+                self.stream_calls = 0
+
+            def stream(self, *, conn_options: Any = None) -> Any:
+                self.stream_calls += 1
+                return ClientClosedSynthesizeStream(tts=self, conn_options=conn_options)
+
+        class FallbackStreamingTTS(ScenarioTTS):
+            def __init__(self) -> None:
+                super().__init__()
+                self._label = "fallback"
+                self._capabilities = module.TTSCapabilities(streaming=True)
+                self.stream_calls = 0
+
+            def stream(self, *, conn_options: Any = None) -> Any:
+                self.stream_calls += 1
+                return ClientClosedSynthesizeStream(tts=self, conn_options=conn_options)
+
+        primary = ClientClosedStreamingTTS()
+        fallback = FallbackStreamingTTS()
+        adapter = module.FallbackAdapter([primary, fallback])
+        error_events: list[str] = []
+        adapter.on("error", lambda error: error_events.append("tts.FallbackAdapter"))
+        eof = False
+        audio_seen = False
+        error_class = ""
+        has_no_audio = False
+
+        async def consume() -> None:
+            nonlocal eof, audio_seen
+            stream = adapter.stream()
+            stream.push_text("hello")
+            stream.end_input()
+            async with stream:
+                async for _ in stream:
+                    audio_seen = True
+            eof = True
+
+        try:
+            asyncio.run(consume())
+        except Exception as exc:
+            error_class = type(exc).__name__
+            has_no_audio = "no audio frames were pushed" in str(exc)
+
+        return {
+            "contract": "tts-fallback-stream-client-closed",
+            "events": [
+                {
+                    "name": "stream_client_closed",
+                    "eof": eof,
+                    "audio_seen": audio_seen,
+                    "error_class": error_class,
+                    "has_no_audio": has_no_audio,
+                    "primary_calls": primary.stream_calls,
+                    "fallback_calls": fallback.stream_calls,
+                    "error_events": error_events,
+                }
+            ],
+        }
     if action == "availability_panic_isolated":
         primary = ScenarioTTS()
         adapter = module.FallbackAdapter([primary])
