@@ -150,9 +150,13 @@ type speechmaticsTTSChunkedStream struct {
 	sampleRate int
 	pending    []byte
 	finalSent  bool
+	closed     bool
 }
 
 func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed || s.finalSent {
+		return nil, io.EOF
+	}
 	for {
 		buf := make([]byte, 4096)
 		n, err := s.stream.Read(buf)
@@ -200,6 +204,13 @@ func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error
 }
 
 func (s *speechmaticsTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	s.finalSent = true
+	if s.stream == nil {
+		return nil
+	}
 	return s.stream.Close()
 }
