@@ -1379,6 +1379,50 @@ func TestPipelineAgentSayReturnsDirectSpeechToListeningWithoutIdle(t *testing.T)
 	}
 }
 
+// TestPipelineAgentTextSpeechWithoutAssistantMessageDoesNotPanic reproduces the
+// injected-filler case: a text-only speech with a nil AssistantMessage. Once the
+// speech completes playout (canCommit), the commit path must not attempt to
+// insert a nil chat item (which would nil-panic) and must return to listening.
+func TestPipelineAgentTextSpeechWithoutAssistantMessageDoesNotPanic(t *testing.T) {
+	baseAgent := NewAgent("test")
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(baseAgent, session)
+	session.activity = activity
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "Oke." // filler text, no AssistantMessage set
+	activity.currentSpeech = speech
+	speech.AddDoneCallback(activity.OnPipelineReplyDone)
+	agent := NewPipelineAgent(nil, nil, nil, &fakePipelineTTS{
+		stream: &fakePipelineTTSStream{
+			frames: []*model.AudioFrame{{
+				Data:              []byte{1, 2},
+				SampleRate:        1000,
+				NumChannels:       1,
+				SamplesPerChannel: 100,
+			}},
+		},
+	}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	// Must not panic on a nil Generation.AssistantMessage.
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	var got []AgentState
+	for {
+		select {
+		case ev := <-session.AgentStateChangedCh:
+			got = append(got, ev.NewState)
+		default:
+			want := []AgentState{AgentStateSpeaking, AgentStateListening}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("agent states = %#v, want %#v", got, want)
+			}
+			return
+		}
+	}
+}
+
 func TestPipelineAgentGenerateReplyReturnsToListeningWithoutIdle(t *testing.T) {
 	baseAgent := NewAgent("test")
 	chatCtx := llm.NewChatContext()
