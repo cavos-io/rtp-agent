@@ -152,9 +152,13 @@ type upliftAITTSChunkedStream struct {
 	once      sync.Once
 	err       error
 	finalSent bool
+	closed    bool
 }
 
 func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.resp.Body.Read(buf)
@@ -183,6 +187,7 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *upliftAITTSChunkedStream) Close() error {
 	s.once.Do(func() {
+		s.closed = true
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}

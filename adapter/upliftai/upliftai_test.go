@@ -227,6 +227,29 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *tes
 	}
 }
 
+func TestUpliftAITTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &upliftAICloseCountBody{reader: strings.NewReader("audio")}
+	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("close count = %d, want %d", got, want)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() after Close audio = %#v, want nil", audio)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next() after Close error = %v, want EOF", err)
+	}
+}
+
 type upliftAIRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f upliftAIRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -239,6 +262,9 @@ type upliftAICloseCountBody struct {
 }
 
 func (b *upliftAICloseCountBody) Read(p []byte) (int, error) {
+	if b.closeCount > 0 {
+		return 0, errors.New("read after close")
+	}
 	return b.reader.Read(p)
 }
 
