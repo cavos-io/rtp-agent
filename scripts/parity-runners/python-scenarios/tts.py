@@ -909,6 +909,60 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "chunked_stream_all_failed":
+        class FailingChunkedStream(module.ChunkedStream):
+            async def _run(self, output_emitter: Any) -> None:
+                raise module.APIConnectionError("provider failed")
+
+        class FailingStreamTTS(ScenarioTTS):
+            def __init__(self) -> None:
+                super().__init__()
+                self._label = "primary"
+                self.synthesize_calls = 0
+
+            def synthesize(self, text: str, *, conn_options: Any = None) -> Any:
+                self.synthesize_calls += 1
+                return FailingChunkedStream(tts=self, input_text=text, conn_options=conn_options)
+
+        primary = FailingStreamTTS()
+        adapter = module.FallbackAdapter([primary], max_retry_per_tts=0)
+        stream_created = False
+        error_class = ""
+        retryable = False
+        has_all_failed = False
+        has_provider_label = False
+
+        async def consume() -> None:
+            nonlocal stream_created
+            stream = adapter.synthesize("hello")
+            stream_created = True
+            async with stream:
+                async for _ in stream:
+                    pass
+
+        try:
+            asyncio.run(consume())
+        except Exception as exc:
+            error_class = type(exc).__name__
+            retryable = getattr(exc, "retryable", False)
+            message = str(exc)
+            has_all_failed = "all TTSs failed" in message
+            has_provider_label = "primary" in message
+
+        return {
+            "contract": "tts-fallback-chunked-stream-all-failed",
+            "events": [
+                {
+                    "name": "chunked_stream_all_failed",
+                    "stream_created": stream_created,
+                    "error_class": error_class,
+                    "retryable": retryable,
+                    "has_all_failed": has_all_failed,
+                    "has_provider_label": has_provider_label,
+                    "synthesize_calls": primary.synthesize_calls,
+                }
+            ],
+        }
     if action == "stream_start_all_failed":
         class FailingStreamStartTTS(ScenarioTTS):
             def __init__(self) -> None:

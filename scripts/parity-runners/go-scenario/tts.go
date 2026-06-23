@@ -752,6 +752,50 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "chunked_stream_all_failed":
+		var synthesizeCalls int
+		primary := &fakeScenarioTTS{
+			label:              "primary",
+			provider:           "primary",
+			chunkedCalls:       &synthesizeCalls,
+			chunkedStreamError: lkllm.NewAPIConnectionError("provider failed"),
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		stream, err := adapter.Synthesize(context.Background(), "hello")
+		streamCreated := err == nil
+		errorClass := ""
+		retryable := false
+		hasAllFailed := false
+		hasProviderLabel := false
+		if err == nil {
+			defer stream.Close()
+			_, err = stream.Next()
+		}
+		if err != nil {
+			var connectionErr *lkllm.APIConnectionError
+			if errors.As(err, &connectionErr) {
+				errorClass = "APIConnectionError"
+				retryable = connectionErr.Retryable
+			}
+			message := err.Error()
+			hasAllFailed = strings.Contains(message, "all TTSs failed")
+			hasProviderLabel = strings.Contains(message, "primary")
+		}
+		waitForScenarioTTSCalls(&synthesizeCalls, 2)
+		return map[string]any{
+			"contract": "tts-fallback-chunked-stream-all-failed",
+			"events": []map[string]any{
+				{
+					"name":               "chunked_stream_all_failed",
+					"stream_created":     streamCreated,
+					"error_class":        errorClass,
+					"retryable":          retryable,
+					"has_all_failed":     hasAllFailed,
+					"has_provider_label": hasProviderLabel,
+					"synthesize_calls":   synthesizeCalls,
+				},
+			},
+		}, nil
 	case "stream_start_all_failed":
 		var streamCalls int
 		primary := &fakeScenarioTTS{
@@ -1108,19 +1152,20 @@ type fakeScenarioTTS struct {
 	lktts.MetricsEmitter
 	lktts.ErrorEmitter
 
-	sampleRate    int
-	numChannels   int
-	capabilities  lktts.TTSCapabilities
-	label         string
-	model         string
-	provider      string
-	prewarmCalls  int
-	closeCalls    int
-	chunkedEvents []*lktts.SynthesizedAudio
-	chunkedError  error
-	chunkedCalls  *int
-	streamError   error
-	streamCalls   *int
+	sampleRate         int
+	numChannels        int
+	capabilities       lktts.TTSCapabilities
+	label              string
+	model              string
+	provider           string
+	prewarmCalls       int
+	closeCalls         int
+	chunkedEvents      []*lktts.SynthesizedAudio
+	chunkedError       error
+	chunkedCalls       *int
+	chunkedStreamError error
+	streamError        error
+	streamCalls        *int
 }
 
 func (t fakeScenarioTTS) Label() string {
@@ -1164,6 +1209,9 @@ func (t fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStrea
 	if t.chunkedError != nil {
 		return nil, t.chunkedError
 	}
+	if t.chunkedStreamError != nil {
+		return &fakeScenarioChunkedStream{err: t.chunkedStreamError}, nil
+	}
 	if t.chunkedEvents != nil {
 		return &fakeScenarioChunkedStream{events: append([]*lktts.SynthesizedAudio(nil), t.chunkedEvents...)}, nil
 	}
@@ -1181,10 +1229,14 @@ func (t fakeScenarioTTS) Stream(context.Context) (lktts.SynthesizeStream, error)
 
 type fakeScenarioChunkedStream struct {
 	events []*lktts.SynthesizedAudio
+	err    error
 	index  int
 }
 
 func (s *fakeScenarioChunkedStream) Next() (*lktts.SynthesizedAudio, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	if s.index >= len(s.events) {
 		return nil, io.EOF
 	}
