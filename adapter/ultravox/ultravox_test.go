@@ -3,11 +3,28 @@ package ultravox
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 )
+
+type ultravoxTTSCloseErrorBody struct {
+	closed bool
+}
+
+func (b *ultravoxTTSCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *ultravoxTTSCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
 
 func TestUltravoxPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.ultravox" {
@@ -75,5 +92,22 @@ func TestUltravoxTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	audio, err = stream.Next()
 	if err != io.EOF || audio != nil {
 		t.Fatalf("Next after final marker = (%+v, %v), want EOF", audio, err)
+	}
+}
+
+func TestUltravoxTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &ultravoxTTSCloseErrorBody{}
+	stream := &ultravoxTTSChunkedStream{
+		resp: &http.Response{Body: body},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	_, err := stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
 	}
 }
