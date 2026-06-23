@@ -345,7 +345,7 @@ func (s *resembleTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("resemble tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	s.pendingText += text
 	return s.sendCompleteSentencesLocked()
@@ -354,6 +354,9 @@ func (s *resembleTTSSynthesizeStream) PushText(text string) error {
 func (s *resembleTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
