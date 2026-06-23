@@ -561,7 +561,7 @@ func (s *inworldTTSSynthesizeStream) PushText(text string) error {
 		return nil
 	}
 	if s.closed {
-		return fmt.Errorf("inworld tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	if _, err := s.pendingText.WriteString(text); err != nil {
 		return err
@@ -577,7 +577,7 @@ func (s *inworldTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("inworld tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	text := s.pendingText.String()
 	s.pendingText.Reset()
