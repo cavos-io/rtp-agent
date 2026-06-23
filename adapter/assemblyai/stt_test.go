@@ -700,6 +700,44 @@ func TestAssemblyAISTTStreamCloseSendsReferenceTerminate(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTClosedStreamNextReturnsEOF(t *testing.T) {
+	stream := &assemblyAISTTStream{
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error),
+		writeJSON: func(any) error {
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	type nextResult struct {
+		event *stt.SpeechEvent
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		event, err := stream.Next()
+		resultCh <- nextResult{event: event, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.event != nil {
+			t.Fatalf("Next() event = %#v, want nil", got.event)
+		}
+		if !errors.Is(got.err, io.EOF) {
+			t.Fatalf("Next() error = %v, want io.EOF", got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Next after Close")
+	}
+}
+
 func TestAssemblyAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewAssemblyAISTT("test-key")
 	var messages []map[string]string
