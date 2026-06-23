@@ -916,9 +916,6 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 			if s.isClosed() || s.ctx.Err() != nil {
 				return
 			}
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				return
-			}
 			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
 				if s.isClosed() || s.ctx.Err() != nil {
 					return

@@ -854,6 +854,73 @@ func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTStreamReconnectsAfterUnexpectedNormalClose(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	sendFinal := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if attempt == 1 {
+				_ = conn.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+					time.Now().Add(time.Second),
+				)
+				return
+			}
+			close(secondConnected)
+			<-sendFinal
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"conversation.item.input_audio_transcription.completed",
+				"item_id":"item-2",
+				"transcript":"after normal close reconnect"
+			}`)); err != nil {
+				t.Errorf("write final transcript: %v", err)
+			}
+			<-releaseSecond
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not reconnect after unexpected normal close")
+	}
+	close(sendFinal)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error after normal close reconnect = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %v, want FINAL_TRANSCRIPT", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "after normal close reconnect" {
+		t.Fatalf("transcript = %q, want after normal close reconnect", got)
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want 2", got)
+	}
+}
+
 func TestOpenAISTTStreamRecyclesAfterMaxSessionDuration(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
