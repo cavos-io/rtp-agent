@@ -325,6 +325,32 @@ func TestBasetenTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &basetenCloseErrorBody{reader: strings.NewReader("ab")}
+	stream := &basetenTTSChunkedStream{
+		body:       body,
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("close count = %d, want %d", got, want)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %#v, want nil", audio)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestBasetenTTSStreamSendsReferenceSetupTextAndEnd(t *testing.T) {
 	setupCh := make(chan map[string]any, 1)
 	textCh := make(chan string, 1)
@@ -825,6 +851,26 @@ type recordingReadCloser struct {
 
 func (r *recordingReadCloser) Close() error {
 	r.closed = true
+	return nil
+}
+
+type basetenCloseErrorBody struct {
+	reader     *strings.Reader
+	closeCount int
+}
+
+func (b *basetenCloseErrorBody) Read(p []byte) (int, error) {
+	if b.closeCount > 0 {
+		return 0, errors.New("read after close")
+	}
+	return b.reader.Read(p)
+}
+
+func (b *basetenCloseErrorBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("already closed")
+	}
 	return nil
 }
 
