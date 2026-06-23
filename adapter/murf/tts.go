@@ -373,10 +373,11 @@ type murfTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	finalSent  bool
+	closed     bool
 }
 
 func (s *murfTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.finalSent {
+	if s.closed || s.finalSent {
 		return nil, io.EOF
 	}
 	buf := make([]byte, 4096)
@@ -399,7 +400,14 @@ func (s *murfTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *murfTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
 	s.finalSent = true
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
 	return s.resp.Body.Close()
 }
 

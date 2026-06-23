@@ -850,16 +850,16 @@ func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sa
 		return nil, false, traceID, nil
 	case "task_continued":
 		if data.Data.Audio == "" {
-			return nil, data.IsFinal, traceID, nil
+			return nil, false, traceID, nil
 		}
 		audio, err := hex.DecodeString(data.Data.Audio)
 		if err != nil {
 			return nil, false, traceID, err
 		}
 		if len(audio) == 0 {
-			return nil, data.IsFinal, traceID, nil
+			return nil, false, traceID, nil
 		}
-		return minimaxTTSAudioFrame(audio, sampleRate, traceID), data.IsFinal, traceID, nil
+		return minimaxTTSAudioFrame(audio, sampleRate, traceID), false, traceID, nil
 	case "task_finished":
 		return &tts.SynthesizedAudio{RequestID: traceID, IsFinal: true}, true, traceID, nil
 	case "task_failed":

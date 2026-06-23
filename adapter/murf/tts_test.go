@@ -256,6 +256,32 @@ func TestMurfTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestMurfTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &murfCloseErrorBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
+	stream := &murfTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if got, want := body.closeCount, 1; got != want {
+		t.Fatalf("close count = %d, want %d", got, want)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next after Close audio = %#v, want nil", audio)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestMurfTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewMurfTTS("test-key", "",
 		WithMurfTTSBaseURL("https://murf.example"),
@@ -845,4 +871,24 @@ func (r *finalReadMurfReader) Read(p []byte) (int, error) {
 	copy(p, r.data)
 	r.done = true
 	return len(r.data), io.EOF
+}
+
+type murfCloseErrorBody struct {
+	reader     *bytes.Reader
+	closeCount int
+}
+
+func (b *murfCloseErrorBody) Read(p []byte) (int, error) {
+	if b.closeCount > 0 {
+		return 0, errors.New("read after close")
+	}
+	return b.reader.Read(p)
+}
+
+func (b *murfCloseErrorBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("already closed")
+	}
+	return nil
 }

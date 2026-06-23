@@ -892,6 +892,20 @@ func TestMinimaxTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("frame = %+v, want 24000 Hz mono", audio.Frame)
 	}
 
+	audio, done, traceID, err = minimaxAudioFromWebsocketMessage([]byte(`{"event":"task_continued","trace_id":"trace-final","is_final":true,"data":{"audio":"0506"}}`), "fallback", 24000)
+	if err != nil {
+		t.Fatalf("final task_continued message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for final task_continued, want task_finished to own stream finality")
+	}
+	if traceID != "trace-final" {
+		t.Fatalf("final task_continued trace id = %q, want trace-final", traceID)
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{5, 6}) {
+		t.Fatalf("final task_continued audio = %+v, want decoded audio frame", audio)
+	}
+
 	started, done, traceID, err := minimaxAudioFromWebsocketMessage([]byte(`{"event":"task_started","session_id":"session-1","base_resp":{"trace_id":"trace-2","status_code":0}}`), "fallback", 24000)
 	if err != nil {
 		t.Fatalf("task_started message: %v", err)

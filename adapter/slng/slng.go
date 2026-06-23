@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -236,9 +237,13 @@ func (s *STT) Capabilities() stt.STTCapabilities {
 func (s *STT) UpdateOptions(opts ...STTOption) {
 	s.mu.Lock()
 	before := slngSTTActiveOptions{
-		language:          s.language,
-		partials:          s.enablePartialTranscript,
-		bufferSizeSeconds: s.bufferSizeSeconds,
+		language:                s.language,
+		partials:                s.enablePartialTranscript,
+		bufferSizeSeconds:       s.bufferSizeSeconds,
+		diarization:             s.enableDiarization,
+		vadThreshold:            s.vadThreshold,
+		vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
+		vadSpeechPadMS:          s.vadSpeechPadMS,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -246,9 +251,13 @@ func (s *STT) UpdateOptions(opts ...STTOption) {
 		}
 	}
 	after := slngSTTActiveOptions{
-		language:          s.language,
-		partials:          s.enablePartialTranscript,
-		bufferSizeSeconds: s.bufferSizeSeconds,
+		language:                s.language,
+		partials:                s.enablePartialTranscript,
+		bufferSizeSeconds:       s.bufferSizeSeconds,
+		diarization:             s.enableDiarization,
+		vadThreshold:            s.vadThreshold,
+		vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
+		vadSpeechPadMS:          s.vadSpeechPadMS,
 	}
 	streams := make([]*sttStream, 0, len(s.streams))
 	if before != after {
@@ -264,9 +273,13 @@ func (s *STT) UpdateOptions(opts ...STTOption) {
 }
 
 type slngSTTActiveOptions struct {
-	language          string
-	partials          bool
-	bufferSizeSeconds float64
+	language                string
+	partials                bool
+	bufferSizeSeconds       float64
+	diarization             bool
+	vadThreshold            float64
+	vadMinSilenceDurationMS int
+	vadSpeechPadMS          int
 }
 
 func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -375,13 +388,18 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 			s.modelEndpoints = append([]string(nil), endpoints[endpointIndex:]...)
 		}
 		stream := &sttStream{
-			provider:          s,
-			conn:              conn,
-			language:          s.resolveLanguage(language),
-			partials:          s.enablePartialTranscript,
-			sampleRate:        s.sampleRate,
-			bufferSizeSeconds: s.bufferSizeSeconds,
-			encoding:          s.encoding,
+			ctx:                     ctx,
+			provider:                s,
+			conn:                    conn,
+			language:                s.resolveLanguage(language),
+			partials:                s.enablePartialTranscript,
+			sampleRate:              s.sampleRate,
+			bufferSizeSeconds:       s.bufferSizeSeconds,
+			encoding:                s.encoding,
+			diarization:             s.enableDiarization,
+			vadThreshold:            s.vadThreshold,
+			vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
+			vadSpeechPadMS:          s.vadSpeechPadMS,
 		}
 		if !s.registerStream(stream) {
 			stream.Close()
@@ -1200,19 +1218,25 @@ func normalizeSLNGResults(message map[string]any) map[string]any {
 }
 
 type sttStream struct {
-	mu                sync.Mutex
-	provider          *STT
-	conn              *websocket.Conn
-	language          string
-	partials          bool
-	sampleRate        int
-	bufferSizeSeconds float64
-	encoding          string
-	audioBuffer       []byte
-	pendingEvents     []*stt.SpeechEvent
-	speechStarted     bool
-	speechDuration    float64
-	closed            bool
+	mu                      sync.Mutex
+	ctx                     context.Context
+	provider                *STT
+	conn                    *websocket.Conn
+	language                string
+	partials                bool
+	sampleRate              int
+	bufferSizeSeconds       float64
+	encoding                string
+	diarization             bool
+	vadThreshold            float64
+	vadMinSilenceDurationMS int
+	vadSpeechPadMS          int
+	audioBuffer             []byte
+	pendingEvents           []*stt.SpeechEvent
+	speechStarted           bool
+	speechDuration          float64
+	reconnectRequested      bool
+	closed                  bool
 }
 
 func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
@@ -1223,6 +1247,11 @@ func (s *sttStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
+	}
+	if s.reconnectRequested {
+		if err := s.reconnectLocked(); err != nil {
+			return err
+		}
 	}
 	s.audioBuffer = append(s.audioBuffer, frame.Data...)
 	chunkSize := s.audioChunkBytes()
@@ -1296,8 +1325,8 @@ func (s *sttStream) audioChunkBytes() int {
 
 func (s *sttStream) updateOptions(opts slngSTTActiveOptions) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return
 	}
 	if opts.language != "" {
@@ -1307,6 +1336,80 @@ func (s *sttStream) updateOptions(opts slngSTTActiveOptions) {
 	if opts.bufferSizeSeconds > 0 {
 		s.bufferSizeSeconds = opts.bufferSizeSeconds
 	}
+	s.diarization = opts.diarization
+	s.vadThreshold = opts.vadThreshold
+	s.vadMinSilenceDurationMS = opts.vadMinSilenceDurationMS
+	s.vadSpeechPadMS = opts.vadSpeechPadMS
+	s.reconnectRequested = true
+	conn := s.conn
+	s.mu.Unlock()
+
+	if conn != nil {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		_ = conn.Close()
+	}
+}
+
+func (s *sttStream) reconnectLocked() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	provider := s.provider
+	if provider == nil {
+		return io.ErrClosedPipe
+	}
+
+	provider.mu.Lock()
+	attempt := STT{
+		apiKey:                  provider.apiKey,
+		endpoint:                provider.endpoint,
+		model:                   provider.model,
+		regionOverride:          provider.regionOverride,
+		sampleRate:              s.sampleRate,
+		bufferSizeSeconds:       s.bufferSizeSeconds,
+		encoding:                s.encoding,
+		enablePartialTranscript: s.partials,
+		vadThreshold:            s.vadThreshold,
+		vadMinSilenceDurationMS: s.vadMinSilenceDurationMS,
+		vadSpeechPadMS:          s.vadSpeechPadMS,
+		enableDiarization:       s.diarization,
+		language:                s.language,
+		modelOptions:            cloneSLNGMap(provider.modelOptions),
+	}
+	if provider.minSpeakers != nil {
+		minSpeakers := *provider.minSpeakers
+		attempt.minSpeakers = &minSpeakers
+	}
+	if provider.maxSpeakers != nil {
+		maxSpeakers := *provider.maxSpeakers
+		attempt.maxSpeakers = &maxSpeakers
+	}
+	provider.mu.Unlock()
+	endpoint := attempt.endpoint
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, buildSTTWebsocketHeaders(&attempt))
+	if err != nil {
+		return fmt.Errorf("failed to reconnect slng stt websocket: %w", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(&attempt)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	if s.closed {
+		_ = conn.Close()
+		return io.ErrClosedPipe
+	}
+	s.conn = conn
+	s.reconnectRequested = false
+	s.audioBuffer = nil
+	s.pendingEvents = nil
+	s.speechStarted = false
+	s.speechDuration = 0
+	return nil
 }
 
 func slngSTTBytesPerSample(encoding string) int {
@@ -1337,17 +1440,36 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 		s.mu.Lock()
 		closed := s.closed
 		conn := s.conn
-		s.mu.Unlock()
 		if closed || conn == nil {
+			s.mu.Unlock()
 			return nil, io.EOF
 		}
 		if len(s.pendingEvents) > 0 {
 			event := s.pendingEvents[0]
 			s.pendingEvents = s.pendingEvents[1:]
+			s.mu.Unlock()
 			return event, nil
 		}
+		if s.reconnectRequested {
+			if err := s.reconnectLocked(); err != nil {
+				s.mu.Unlock()
+				return nil, err
+			}
+			s.mu.Unlock()
+			continue
+		}
+		s.mu.Unlock()
 		msgType, payload, err := conn.ReadMessage()
 		if err != nil {
+			if s.shouldReconnect() {
+				s.mu.Lock()
+				err := s.reconnectLocked()
+				s.mu.Unlock()
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if s.isClosed() {
 				return nil, io.EOF
 			}
@@ -1368,6 +1490,12 @@ func (s *sttStream) Next() (*stt.SpeechEvent, error) {
 			return event, nil
 		}
 	}
+}
+
+func (s *sttStream) shouldReconnect() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && s.reconnectRequested
 }
 
 func (s *sttStream) isClosed() bool {

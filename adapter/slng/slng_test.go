@@ -261,6 +261,7 @@ func TestSLNGSTTUpdateOptionsAffectsFutureInitAndActiveStream(t *testing.T) {
 		WithSTTVADThreshold(0.7),
 		WithSTTVADMinSilenceDurationMS(450),
 		WithSTTVADSpeechPadMS(80),
+		WithSTTDiarization(true, 2, 4),
 	)
 
 	payload := buildSTTInitPayload(provider)
@@ -270,6 +271,7 @@ func TestSLNGSTTUpdateOptionsAffectsFutureInitAndActiveStream(t *testing.T) {
 	assertSLNGNestedField(t, payload, "config", "vad_threshold", float64(0.7))
 	assertSLNGNestedField(t, payload, "config", "vad_min_silence_duration_ms", float64(450))
 	assertSLNGNestedField(t, payload, "config", "vad_speech_pad_ms", float64(80))
+	assertSLNGNestedField(t, payload, "config", "enable_diarization", true)
 
 	if stream.language != "id" {
 		t.Fatalf("active stream language = %q, want id", stream.language)
@@ -279,6 +281,110 @@ func TestSLNGSTTUpdateOptionsAffectsFutureInitAndActiveStream(t *testing.T) {
 	}
 	if stream.bufferSizeSeconds != 0.02 {
 		t.Fatalf("active stream buffer size = %v, want 0.02", stream.bufferSizeSeconds)
+	}
+	if stream.vadThreshold != 0.7 {
+		t.Fatalf("active stream vad threshold = %v, want 0.7", stream.vadThreshold)
+	}
+	if stream.vadMinSilenceDurationMS != 450 {
+		t.Fatalf("active stream vad min silence = %v, want 450", stream.vadMinSilenceDurationMS)
+	}
+	if stream.vadSpeechPadMS != 80 {
+		t.Fatalf("active stream vad speech pad = %v, want 80", stream.vadSpeechPadMS)
+	}
+	if !stream.diarization {
+		t.Fatal("active stream diarization = false, want true")
+	}
+}
+
+func TestSLNGSTTUpdateOptionsReconnectsActiveStreamBeforeAudio(t *testing.T) {
+	initPayloads := make(chan map[string]any, 2)
+	audioWrites := make(chan int, 2)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read init payload: %v", err)
+			return
+		}
+		var init map[string]any
+		if err := json.Unmarshal(payload, &init); err != nil {
+			t.Errorf("decode init payload: %v", err)
+			return
+		}
+		initPayloads <- init
+
+		msgType, audio, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		if msgType == websocket.BinaryMessage {
+			audioWrites <- len(audio)
+		}
+	})
+	endpoint := newSLNGInMemoryWebsocketEndpoints(t, handler)[0]
+
+	provider := NewSTT("test-key",
+		WithSTTEndpoint(endpoint+"/v1/stt/deepgram/nova:3"),
+		WithSTTLanguage("en"),
+		WithSTTBufferSizeSeconds(0.01),
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	readInit := func(label string) map[string]any {
+		t.Helper()
+		select {
+		case init := <-initPayloads:
+			return init
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s init payload", label)
+			return nil
+		}
+	}
+	readInit("initial")
+
+	provider.UpdateOptions(
+		WithSTTLanguage("id"),
+		WithSTTVADThreshold(0.7),
+		WithSTTVADMinSilenceDurationMS(450),
+		WithSTTVADSpeechPadMS(80),
+		WithSTTDiarization(true, 2, 4),
+	)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, defaultSLNGSTTSampleRate/100*2),
+		SampleRate:        defaultSLNGSTTSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(defaultSLNGSTTSampleRate / 100),
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+
+	reconnected := readInit("reconnect")
+	reconnectedPayload, err := json.Marshal(reconnected)
+	if err != nil {
+		t.Fatalf("marshal reconnected init: %v", err)
+	}
+	assertSLNGNestedField(t, reconnectedPayload, "config", "language", "id")
+	assertSLNGNestedField(t, reconnectedPayload, "config", "vad_threshold", float64(0.7))
+	assertSLNGNestedField(t, reconnectedPayload, "config", "vad_min_silence_duration_ms", float64(450))
+	assertSLNGNestedField(t, reconnectedPayload, "config", "vad_speech_pad_ms", float64(80))
+	assertSLNGNestedField(t, reconnectedPayload, "config", "enable_diarization", true)
+	select {
+	case got := <-audioWrites:
+		if got == 0 {
+			t.Fatal("audio write length = 0, want reconnected audio")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio on reconnected websocket")
 	}
 }
 

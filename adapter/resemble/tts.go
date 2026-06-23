@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -281,10 +282,15 @@ type resembleTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
 	done       bool
+	finalSent  bool
 }
 
 func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.done {
+		if !s.finalSent {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
 		return nil, io.EOF
 	}
 	s.done = true
@@ -308,19 +314,80 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err != nil {
 		return nil, err
 	}
+	frame, err := decodeResembleAudio(audio, s.sampleRate)
+	if err != nil {
+		return nil, err
+	}
 
 	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              audio,
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(len(audio) / 2),
-		},
+		Frame: frame,
 	}, nil
 }
 
 func (s *resembleTTSChunkedStream) Close() error {
 	return s.resp.Body.Close()
+}
+
+func decodeResembleAudio(audio []byte, sampleRate int) (*model.AudioFrame, error) {
+	if len(audio) >= 12 && string(audio[:4]) == "RIFF" && string(audio[8:12]) == "WAVE" {
+		return decodeResembleWAVPCM16(audio)
+	}
+	return &model.AudioFrame{
+		Data:              audio,
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(audio) / 2),
+	}, nil
+}
+
+func decodeResembleWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	var (
+		audioFormat   uint16
+		numChannels   uint16
+		sampleRate    uint32
+		bitsPerSample uint16
+		pcmData       []byte
+	)
+	for offset := 12; offset+8 <= len(data); {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid resemble wav chunk size")
+		}
+		chunk := data[offset : offset+chunkSize]
+		switch chunkID {
+		case "fmt ":
+			if len(chunk) < 16 {
+				return nil, fmt.Errorf("invalid resemble wav fmt chunk")
+			}
+			audioFormat = binary.LittleEndian.Uint16(chunk[0:2])
+			numChannels = binary.LittleEndian.Uint16(chunk[2:4])
+			sampleRate = binary.LittleEndian.Uint32(chunk[4:8])
+			bitsPerSample = binary.LittleEndian.Uint16(chunk[14:16])
+		case "data":
+			pcmData = chunk
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 && offset < len(data) {
+			offset++
+		}
+	}
+	if audioFormat != 1 || bitsPerSample != 16 {
+		return nil, fmt.Errorf("unsupported resemble wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+	}
+	if sampleRate == 0 || numChannels == 0 {
+		return nil, fmt.Errorf("missing resemble wav format metadata")
+	}
+	if pcmData == nil {
+		return nil, fmt.Errorf("missing resemble wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              append([]byte(nil), pcmData...),
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(numChannels),
+		SamplesPerChannel: uint32(len(pcmData) / int(numChannels) / 2),
+	}, nil
 }
 
 type resembleTTSSynthesizeStream struct {
