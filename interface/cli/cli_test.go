@@ -602,6 +602,19 @@ func TestParseWorkerArgsSupportsReferenceSimulationOption(t *testing.T) {
 	}
 }
 
+func TestParseWorkerArgsRejectsReloadAddrOutsideDev(t *testing.T) {
+	_, _, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--reload-addr", "127.0.0.1:9999",
+	}, false)
+	if err == nil {
+		t.Fatal("parseWorkerArgs() error = nil, want reload addr dev-mode error")
+	}
+	if got, want := err.Error(), "--reload-addr requires --dev"; got != want {
+		t.Fatalf("parseWorkerArgs() error = %q, want %q", got, want)
+	}
+}
+
 func TestParseWorkerArgsSupportsReferenceDevOptions(t *testing.T) {
 	args, drainTimeout, err := parseWorkerArgs([]string{
 		"worker", "dev",
@@ -609,6 +622,7 @@ func TestParseWorkerArgsSupportsReferenceDevOptions(t *testing.T) {
 		"--url", "wss://dev.example",
 		"--api-key", "dev-key",
 		"--api-secret", "dev-secret",
+		"--reload-addr", "127.0.0.1:9999",
 		"--no-reload",
 	}, true)
 	if err != nil {
@@ -632,6 +646,9 @@ func TestParseWorkerArgsSupportsReferenceDevOptions(t *testing.T) {
 	}
 	if args.Reload {
 		t.Fatal("Reload = true, want false after --no-reload")
+	}
+	if args.ReloadAddr != "127.0.0.1:9999" {
+		t.Fatalf("ReloadAddr = %q, want 127.0.0.1:9999", args.ReloadAddr)
 	}
 	if drainTimeout != nil {
 		t.Fatalf("drainTimeout = %v, want nil for dev", drainTimeout)

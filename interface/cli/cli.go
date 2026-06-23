@@ -37,6 +37,7 @@ type CliArgs struct {
 	DevMode    bool
 	Simulation bool
 	Reload     bool
+	ReloadAddr string
 
 	// ReloadCount tracks how many times the dev-mode worker has been reloaded.
 	ReloadCount int
@@ -293,6 +294,15 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 				return CliArgs{}, nil, fmt.Errorf("--no-reload is only supported by dev")
 			}
 			args.Reload = false
+		case "--reload-addr":
+			i++
+			if i >= len(argv) {
+				return CliArgs{}, nil, fmt.Errorf("missing value for --reload-addr")
+			}
+			if !devMode {
+				return CliArgs{}, nil, fmt.Errorf("--reload-addr requires --dev")
+			}
+			args.ReloadAddr = argv[i]
 		default:
 			return CliArgs{}, nil, fmt.Errorf("unknown worker option %q", argv[i])
 		}
