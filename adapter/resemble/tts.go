@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
@@ -322,17 +324,17 @@ func (s *resembleTTSChunkedStream) Close() error {
 }
 
 type resembleTTSSynthesizeStream struct {
-	conn      *websocket.Conn
-	ctx       context.Context
-	cancel    context.CancelFunc
-	provider  *ResembleTTS
-	events    chan *tts.SynthesizedAudio
-	errCh     chan error
-	mu        sync.Mutex
-	closed    bool
-	requestID int
-	lastID    int
-	flushed   bool
+	conn        *websocket.Conn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	provider    *ResembleTTS
+	events      chan *tts.SynthesizedAudio
+	errCh       chan error
+	mu          sync.Mutex
+	closed      bool
+	requestID   int
+	lastID      int
+	flushed     bool
 	pendingText string
 }
 
@@ -428,7 +430,7 @@ func (s *resembleTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- resembleTTSReadError(err)
 			}
 			return
 		}
@@ -447,6 +449,14 @@ func (s *resembleTTSSynthesizeStream) readLoop() {
 			return
 		}
 	}
+}
+
+func resembleTTSReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIStatusError("Resemble connection closed unexpectedly", closeErr.Code, "", err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Resemble websocket receive failed: %v", err))
 }
 
 func (s *resembleTTSSynthesizeStream) shouldStopAfterAudioEnd(requestID int) bool {
