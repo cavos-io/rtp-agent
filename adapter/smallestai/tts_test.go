@@ -449,12 +449,32 @@ func TestSmallestAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if stream == nil {
 		t.Fatal("Synthesize stream = nil, want active stream")
 	}
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	streaming := &smallestaiTTSSynthesizeStream{
+		provider: provider,
+		ctx:      streamCtx,
+		cancel:   streamCancel,
+	}
+	if !provider.registerStreamingStream(streaming) {
+		t.Fatal("registerStreamingStream = false, want active stream")
+	}
 
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
 	if got, want := body.closeCount, 1; got != want {
 		t.Fatalf("active stream close count = %d, want %d", got, want)
+	}
+	select {
+	case <-streamCtx.Done():
+	default:
+		t.Fatal("stream context still active after provider Close")
+	}
+	if err := streaming.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := streaming.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("second Close error = %v", err)
