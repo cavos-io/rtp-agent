@@ -781,7 +781,23 @@ func (s *sarvamSTTRecognizeStream) Close() error {
 	return conn.Close()
 }
 
+func (s *sarvamSTTRecognizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *sarvamSTTRecognizeStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		return nil, io.EOF
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -796,6 +812,9 @@ func (s *sarvamSTTRecognizeStream) Next() (*stt.SpeechEvent, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
 }
