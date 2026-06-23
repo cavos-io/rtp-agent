@@ -612,6 +612,39 @@ func TestAnthropicChatMapsNamedToolChoice(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatToolChoiceNoneClearsTools(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+		llm.WithToolChoice("none"),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools = %#v, want empty list", transport.body["tools"])
+	}
+	if len(tools) != 0 {
+		t.Fatalf("tools length = %d, want 0 for tool_choice none", len(tools))
+	}
+	if _, ok := transport.body["tool_choice"]; ok {
+		t.Fatalf("tool_choice = %#v, want omitted for tool_choice none", transport.body["tool_choice"])
+	}
+}
+
 func TestAnthropicDefaultsMatchReference(t *testing.T) {
 	model, err := NewAnthropicLLM("test-key", "")
 	if err != nil {
