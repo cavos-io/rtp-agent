@@ -100,6 +100,21 @@ func TestAvailabilityResponseAcceptUsesCustomArguments(t *testing.T) {
 	}
 }
 
+func TestAvailabilityResponseAcceptAttributesCanOverrideAgentName(t *testing.T) {
+	resp := workerlivekit.AvailabilityResponseForAccept(&lkprotocol.AvailabilityRequest{
+		Job: &lkprotocol.Job{Id: "job_custom"},
+	}, workerlivekit.AvailabilityAcceptOptions{
+		Attributes: map[string]string{
+			workerlivekit.ParticipantAttributeAgentName: "custom-visible-agent",
+		},
+	}, "configured-agent")
+
+	availability := resp.GetAvailability()
+	if availability.ParticipantAttributes[workerlivekit.ParticipantAttributeAgentName] != "custom-visible-agent" {
+		t.Fatalf("agent attribute = %q, want custom-visible-agent", availability.ParticipantAttributes[workerlivekit.ParticipantAttributeAgentName])
+	}
+}
+
 func TestAvailabilityResponseRejectsJob(t *testing.T) {
 	resp := workerlivekit.AvailabilityResponseForReject(&lkprotocol.AvailabilityRequest{
 		Job: &lkprotocol.Job{Id: "job_reject"},
