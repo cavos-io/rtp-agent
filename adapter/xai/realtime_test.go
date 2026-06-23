@@ -191,6 +191,86 @@ func TestXaiRealtimeNilTurnDetectionDisablesReferenceVAD(t *testing.T) {
 	}
 }
 
+func TestXaiRealtimeUpdateOptionsForwardsToActiveSession(t *testing.T) {
+	messages := make(chan map[string]any, 2)
+	handlerDone := make(chan struct{})
+	handlerErr := make(chan error, 1)
+	dialer := newXaiRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer close(handlerDone)
+		for i := 0; i < 2; i++ {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				handlerErr <- fmt.Errorf("read websocket message: %w", err)
+				return
+			}
+			var msg map[string]any
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				handlerErr <- fmt.Errorf("decode websocket message: %w", err)
+				return
+			}
+			messages <- msg
+		}
+	})
+
+	model := NewXaiRealtimeModel("test-key",
+		WithXaiRealtimeBaseURL("ws://xai.test/v1/realtime"),
+		WithXaiRealtimeWebsocketDialer(dialer),
+	)
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session() error = %v", err)
+	}
+
+	<-messages
+	if err := model.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetection: map[string]any{
+			"type":                "server_vad",
+			"threshold":           0.35,
+			"prefix_padding_ms":   180,
+			"silence_duration_ms": 650,
+			"create_response":     false,
+			"interrupt_response":  false,
+		},
+	}); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	var update map[string]any
+	select {
+	case update = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for options update")
+	}
+	if update["type"] != "session.update" {
+		t.Fatalf("update type = %#v, want session.update", update["type"])
+	}
+	sessionPayload := update["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" ||
+		turnDetection["threshold"] != 0.35 ||
+		turnDetection["prefix_padding_ms"] != float64(180) ||
+		turnDetection["silence_duration_ms"] != float64(650) ||
+		turnDetection["create_response"] != false ||
+		turnDetection["interrupt_response"] != false {
+		t.Fatalf("turn_detection = %#v, want updated server_vad", turnDetection)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket handler")
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatal(err)
+	default:
+	}
+}
+
 func TestXaiRealtimeCustomVoiceMatchesReference(t *testing.T) {
 	messages := make(chan map[string]any, 1)
 	handlerDone := make(chan struct{})
