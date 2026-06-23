@@ -311,6 +311,25 @@ func TestGradiumSTTStreamSendsSetupAudioAndCloseMessages(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &gradiumSTTStream{
+		ctx:    ctx,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error),
+		closed: true,
+	}
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}
+
 func TestGradiumSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
