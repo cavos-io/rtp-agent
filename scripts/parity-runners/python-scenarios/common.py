@@ -403,10 +403,15 @@ def load_reference_tts():
     )
     metrics_base_mod = types.ModuleType("livekit.agents.metrics.base")
     log_mod = sys.modules.get("livekit.agents.log") or types.ModuleType("livekit.agents.log")
+    voice_mod = sys.modules.get("livekit.agents.voice") or types.ModuleType("livekit.agents.voice")
+    voice_io_mod = sys.modules.get("livekit.agents.voice.io") or types.ModuleType(
+        "livekit.agents.voice.io"
+    )
     telemetry_mod = sys.modules.get("livekit.agents.telemetry") or types.ModuleType(
         "livekit.agents.telemetry"
     )
     trace_types_mod = types.ModuleType("livekit.agents.telemetry.trace_types")
+    trace_types_mod.__getattr__ = lambda name: name
     tracer_mod = types.ModuleType("livekit.agents.telemetry.tracer")
     telemetry_utils_mod = types.ModuleType("livekit.agents.telemetry.utils")
     utils_mod = sys.modules.get("livekit.agents.utils") or types.ModuleType(
@@ -439,6 +444,56 @@ def load_reference_tts():
                 except Exception:
                     continue
 
+    class Chan:
+        _closed = object()
+
+        def __init__(self) -> None:
+            self._queue: asyncio.Queue[Any] = asyncio.Queue()
+            self.closed = False
+
+        def __class_getitem__(cls, item: Any) -> type:
+            return cls
+
+        def send_nowait(self, item: Any) -> None:
+            if self.closed:
+                raise RuntimeError("channel is closed")
+            self._queue.put_nowait(item)
+
+        def close(self) -> None:
+            if not self.closed:
+                self.closed = True
+                self._queue.put_nowait(self._closed)
+
+        def __aiter__(self) -> "Chan":
+            return self
+
+        async def __anext__(self) -> Any:
+            item = await self._queue.get()
+            if item is self._closed:
+                self._queue.put_nowait(self._closed)
+                raise StopAsyncIteration
+            return item
+
+    class Tee:
+        def __init__(self, source: Any, count: int) -> None:
+            self._branches = [source]
+            self._branches.extend(_EmptyAsyncIterator() for _ in range(count - 1))
+
+        def __iter__(self) -> Any:
+            return iter(self._branches)
+
+        async def aclose(self) -> None:
+            close = getattr(self._branches[0], "close", None)
+            if close is not None:
+                close()
+
+    class _EmptyAsyncIterator:
+        def __aiter__(self) -> "_EmptyAsyncIterator":
+            return self
+
+        async def __anext__(self) -> Any:
+            raise StopAsyncIteration
+
     class AudioFrame:
         pass
 
@@ -449,6 +504,9 @@ def load_reference_tts():
     class TTSMetrics:
         def __init__(self, **kwargs: Any) -> None:
             self.__dict__.update(kwargs)
+
+    class TimedString:
+        pass
 
     class Logger:
         def info(self, *args: Any, **kwargs: Any) -> None:
@@ -469,7 +527,21 @@ def load_reference_tts():
                 setattr(self, key, value)
 
     class Span:
-        pass
+        def set_attribute(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def set_attributes(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def end(self) -> None:
+            pass
+
+    class SpanContext:
+        def __enter__(self) -> Span:
+            return Span()
+
+        def __exit__(self, exc_type: Any, exc: Any, exc_tb: Any) -> None:
+            return None
 
     pydantic_mod = sys.modules.get("pydantic") or types.ModuleType("pydantic")
     if not hasattr(pydantic_mod, "BaseModel"):
@@ -483,6 +555,7 @@ def load_reference_tts():
     opentelemetry_mod = sys.modules.get("opentelemetry") or types.ModuleType("opentelemetry")
     trace_mod = sys.modules.get("opentelemetry.trace") or types.ModuleType("opentelemetry.trace")
     trace_mod.Span = Span
+    trace_mod.get_current_span = lambda: Span()
     opentelemetry_mod.trace = trace_mod
     sys.modules["opentelemetry"] = opentelemetry_mod
     sys.modules["opentelemetry.trace"] = trace_mod
@@ -492,10 +565,16 @@ def load_reference_tts():
     livekit_mod.rtc = rtc_mod
     metrics_base_mod.Metadata = Metadata
     metrics_mod.TTSMetrics = TTSMetrics
+    voice_io_mod.TimedString = TimedString
+    voice_mod.io = voice_io_mod
     log_mod.logger = Logger()
     telemetry_mod.trace_types = trace_types_mod
     telemetry_mod.tracer = tracer_mod
     telemetry_mod.utils = telemetry_utils_mod
+    tracer_mod.start_as_current_span = lambda *args, **kwargs: SpanContext()
+    telemetry_utils_mod.record_exception = lambda *args, **kwargs: None
+    aio_mod.Chan = Chan
+    aio_mod.itertools = types.SimpleNamespace(tee=lambda source, count: Tee(source, count))
     utils_mod.aio = aio_mod
     utils_mod.audio = audio_mod
     utils_mod.codecs = codecs_mod
@@ -506,6 +585,8 @@ def load_reference_tts():
     sys.modules["livekit.rtc"] = rtc_mod
     sys.modules["livekit.agents"] = agents_mod
     sys.modules["livekit.agents.tts"] = tts_pkg
+    sys.modules["livekit.agents.voice"] = voice_mod
+    sys.modules["livekit.agents.voice.io"] = voice_io_mod
     sys.modules["livekit.agents.metrics"] = metrics_mod
     sys.modules["livekit.agents.metrics.base"] = metrics_base_mod
     sys.modules["livekit.agents.log"] = log_mod
@@ -549,7 +630,7 @@ def load_reference_tts_fallback():
             task.cancel()
             try:
                 await task
-            except Exception:
+            except BaseException:
                 pass
 
         aio_mod.cancel_and_wait = cancel_and_wait

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	lkllm "github.com/cavos-io/rtp-agent/core/llm"
 	lktts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
@@ -707,6 +708,50 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "chunked_start_all_failed":
+		var synthesizeCalls int
+		primary := &fakeScenarioTTS{
+			label:        "primary",
+			provider:     "primary",
+			chunkedError: lkllm.NewAPIConnectionError("provider unavailable"),
+			chunkedCalls: &synthesizeCalls,
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		stream, err := adapter.Synthesize(context.Background(), "hello")
+		streamCreated := err == nil
+		errorClass := ""
+		retryable := false
+		hasAllFailed := false
+		hasProviderLabel := false
+		if err == nil {
+			defer stream.Close()
+			_, err = stream.Next()
+		}
+		if err != nil {
+			var connectionErr *lkllm.APIConnectionError
+			if errors.As(err, &connectionErr) {
+				errorClass = "APIConnectionError"
+				retryable = connectionErr.Retryable
+			}
+			message := err.Error()
+			hasAllFailed = strings.Contains(message, "all TTSs failed")
+			hasProviderLabel = strings.Contains(message, "primary")
+		}
+		waitForScenarioTTSCalls(&synthesizeCalls, 2)
+		return map[string]any{
+			"contract": "tts-fallback-chunked-start-all-failed",
+			"events": []map[string]any{
+				{
+					"name":               "chunked_start_all_failed",
+					"stream_created":     streamCreated,
+					"error_class":        errorClass,
+					"retryable":          retryable,
+					"has_all_failed":     hasAllFailed,
+					"has_provider_label": hasProviderLabel,
+					"synthesize_calls":   synthesizeCalls,
+				},
+			},
+		}, nil
 	case "availability_panic_isolated":
 		primary := &fakeScenarioTTS{
 			provider:     "primary",
@@ -999,21 +1044,38 @@ func runTTSFallbackSynthesize(adapter *lktts.FallbackAdapter) error {
 	return err
 }
 
+func waitForScenarioTTSCalls(calls *int, want int) {
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if calls != nil && *calls >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 type fakeScenarioTTS struct {
 	lktts.MetricsEmitter
 	lktts.ErrorEmitter
 
 	sampleRate    int
 	numChannels   int
+	label         string
 	model         string
 	provider      string
 	prewarmCalls  int
 	closeCalls    int
 	chunkedEvents []*lktts.SynthesizedAudio
 	chunkedError  error
+	chunkedCalls  *int
 }
 
-func (fakeScenarioTTS) Label() string { return "fake-scenario-tts" }
+func (t fakeScenarioTTS) Label() string {
+	if t.label != "" {
+		return t.label
+	}
+	return "fake-scenario-tts"
+}
 func (fakeScenarioTTS) Capabilities() lktts.TTSCapabilities {
 	return lktts.TTSCapabilities{}
 }
@@ -1043,6 +1105,9 @@ func (t *fakeScenarioTTS) Close() error {
 	return nil
 }
 func (t fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStream, error) {
+	if t.chunkedCalls != nil {
+		(*t.chunkedCalls)++
+	}
 	if t.chunkedError != nil {
 		return nil, t.chunkedError
 	}
