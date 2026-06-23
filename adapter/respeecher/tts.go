@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -525,7 +527,7 @@ func (s *respeecherTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- respeecherTTSReadError(err)
 			}
 			return
 		}
@@ -544,6 +546,14 @@ func (s *respeecherTTSSynthesizeStream) readLoop() {
 			return
 		}
 	}
+}
+
+func respeecherTTSReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIStatusError("Respeecher connection closed unexpectedly", closeErr.Code, "", err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Respeecher WebSocket transport error: %v", err))
 }
 
 func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampleRate int) (*tts.SynthesizedAudio, bool, error) {
