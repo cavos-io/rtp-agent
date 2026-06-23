@@ -74,11 +74,7 @@ type FallbackAllFailedError struct {
 }
 
 func (e *FallbackAllFailedError) Error() string {
-	message := fallbackAllFailedMessage(e.Labels, e.Duration)
-	if e.Err == nil {
-		return message
-	}
-	return fmt.Sprintf("%s: %v", message, e.Err)
+	return fallbackAllFailedMessage(e.Labels, e.Duration)
 }
 
 func (e *FallbackAllFailedError) Unwrap() error {
