@@ -69,11 +69,14 @@ func (s *BufferedTokenStream) PushText(text string) error {
 		}
 
 		tokIdx := strings.Index(s.inBuf, tok)
-		if tokIdx >= 0 {
-			s.inBuf = strings.TrimLeftFunc(s.inBuf[tokIdx+len(tok):], unicode.IsSpace)
-		} else {
-			break
+		if tokIdx < 0 {
+			tokIdx = 0
 		}
+		adv := tokIdx + len(tok)
+		if adv > len(s.inBuf) {
+			adv = len(s.inBuf)
+		}
+		s.inBuf = strings.TrimLeftFunc(s.inBuf[adv:], unicode.IsSpace)
 	}
 	return nil
 }

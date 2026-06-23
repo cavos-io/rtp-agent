@@ -109,6 +109,49 @@ func TestBufferedTokenStreamKeepsLastTokenAsContext(t *testing.T) {
 	}
 }
 
+func TestBufferedSentenceStreamMultilineNumberedListDoesNotDumpGiantToken(t *testing.T) {
+	text := "Aku bisa membantu banyak hal, antara lain:\n\n" +
+		"1. Menjawab pertanyaan  \n   seputar pengetahuan umum dan teknologi.\n\n" +
+		"2. Membantu tugas tulis  \n   seperti rangkuman dan penjelasan materi.\n\n" +
+		"3. Belajar bahasa  \n   seperti menerjemahkan dan memperbaiki grammar.\n\n" +
+		"Kamu mau aku bantu apa hari ini?"
+
+	stream := NewBasicSentenceTokenizer().Stream("en")
+	if err := stream.PushText(text); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	var tokens []string
+	for {
+		tok, err := stream.Next()
+		if err != nil {
+			break
+		}
+		tokens = append(tokens, tok.Token)
+	}
+
+	if len(tokens) < 4 {
+		t.Fatalf("got %d tokens, want at least one per sentence; tokens=%#v", len(tokens), tokens)
+	}
+
+	for _, tok := range tokens {
+		if strings.Contains(tok, "1.") && strings.Contains(tok, "3.") {
+			t.Fatalf("token spans multiple list items (giant-token bug): %q", tok)
+		}
+		if len([]rune(tok)) > 200 {
+			t.Fatalf("token is unexpectedly large (%d runes): %q", len([]rune(tok)), tok)
+		}
+	}
+
+	joined := strings.Join(tokens, "\x00")
+	if got := strings.Count(joined, "Menjawab pertanyaan"); got != 1 {
+		t.Fatalf("first list item appears %d times across tokens, want exactly 1; tokens=%#v", got, tokens)
+	}
+}
+
 func TestBufferedTokenStreamTrimsReferenceWhitespaceContext(t *testing.T) {
 	stream := NewBufferedTokenStream(func(text string) []string {
 		if strings.HasPrefix(text, "\t") {
