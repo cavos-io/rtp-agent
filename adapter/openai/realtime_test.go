@@ -2467,6 +2467,26 @@ func TestRealtimeEventMapsInputAudioTranscriptionCompleted(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventPreservesEmptyFinalInputTranscription(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":       "conversation.item.input_audio_transcription.completed",
+		"item_id":    "",
+		"transcript": "",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent empty item/transcript returned ok=false, want final transcription event")
+	}
+	if ev.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted {
+		t.Fatalf("event type = %q, want input audio transcription", ev.Type)
+	}
+	if ev.InputTranscription == nil {
+		t.Fatal("InputTranscription = nil, want empty final transcription payload")
+	}
+	if ev.InputTranscription.ItemID != "" || ev.InputTranscription.Transcript != "" || !ev.InputTranscription.IsFinal {
+		t.Fatalf("InputTranscription = %#v, want final empty item transcript", ev.InputTranscription)
+	}
+}
+
 func TestRealtimeEventMapsInputAudioTranscriptionDelta(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type":          "conversation.item.input_audio_transcription.delta",
