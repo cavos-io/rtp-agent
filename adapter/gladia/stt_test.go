@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -274,7 +273,7 @@ func TestGladiaSTTStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
-func TestGladiaSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
+func TestGladiaSTTUnexpectedNormalCloseReturnsEOF(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -313,9 +312,16 @@ func TestGladiaSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	if event != nil {
 		t.Fatalf("Next event = %#v, want nil on provider close", event)
 	}
-	var connectionErr *llm.APIConnectionError
-	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Next error = %v, want reference provider connection error", err)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF after reference normal close", err)
+	}
+
+	event, err = stream.Next()
+	if event != nil {
+		t.Fatalf("second Next event = %#v, want nil after stream completion", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want stable EOF after stream completion", err)
 	}
 }
 

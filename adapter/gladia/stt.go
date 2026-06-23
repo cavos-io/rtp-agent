@@ -17,7 +17,6 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
-	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -823,15 +822,6 @@ func (s *gladiaSTTStream) Close() error {
 	return err
 }
 
-func (s *gladiaSTTStream) isClosed() bool {
-	if s == nil {
-		return true
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
-}
-
 func (s *gladiaSTTStream) updateOptions(provider *GladiaSTT) {
 	if s == nil || provider == nil {
 		return
@@ -917,11 +907,7 @@ func (s *gladiaSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				if !s.isClosed() {
-					s.errCh <- llm.NewAPIConnectionError("Gladia STT WebSocket closed unexpectedly")
-				}
-			} else {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
 				s.errCh <- err
 			}
 			return
