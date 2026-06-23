@@ -277,6 +277,12 @@ type RoomIO struct {
 	transcriptionPacketPublisher     func(*livekit.Transcription) error
 	transcriptionParticipantIdentity func() string
 
+	agentTextStreamOpener     func(lksdk.StreamTextOptions) roomIOTextStreamWriter
+	agentTextStreamMu         sync.Mutex
+	agentTextStreamWriter     roomIOTextStreamWriter
+	agentTextStreamSegmentID  string
+	agentTextStreamHasContent bool
+
 	sessionCloseCancel context.CancelFunc
 	deletingRoom       bool
 	deleteRoomDone     chan struct{}
@@ -300,6 +306,7 @@ func NewRoomIO(room *lksdk.Room, session *agent.AgentSession, opts RoomOptions) 
 		textInput:    roomIOTextInputCallback(opts),
 	}
 	rio.transcriptionTextPublisher = rio.publishTranscriptionText
+	rio.agentTextStreamOpener = rio.openRoomTextStream
 	rio.transcriptionPacketPublisher = rio.publishTranscriptionPacket
 	rio.transcriptionParticipantIdentity = rio.localParticipantIdentity
 	rio.roomName = rio.liveKitRoomName
@@ -457,6 +464,7 @@ func (rio *RoomIO) startAgentTranscriptionListener() {
 				rio.agentTranscriptionSegmentID = ""
 				rio.agentTranscriptionText = ""
 				rio.mu.Unlock()
+				rio.closeAgentTextStream()
 			}
 		}
 	}()
@@ -598,10 +606,7 @@ func (rio *RoomIO) handleAgentOutputTranscribed(ev agent.AgentOutputTranscribedE
 	legacyEv := ev
 	legacyEv.Transcript = legacyText
 	rio.publishLegacyAgentTranscription(legacyEv, segmentID)
-	if rio.transcriptionTextPublisher == nil {
-		return
-	}
-	rio.transcriptionTextPublisher(streamText, lksdk.StreamTextOptions{
+	rio.publishAgentTranscriptionStream(streamText, lksdk.StreamTextOptions{
 		Topic:      RoomIOTranscriptionTopic,
 		Attributes: attributes,
 	})
@@ -770,6 +775,120 @@ func (rio *RoomIO) publishTranscriptionText(text string, opts lksdk.StreamTextOp
 		return
 	}
 	rio.Room.LocalParticipant.SendText(text, opts)
+}
+
+type roomIOTextStreamWriter interface {
+	Write(text string)
+	Close()
+}
+
+const roomIOTextStreamWriteTimeout = 2 * time.Second
+
+type lkTextStreamWriter interface {
+	Write(data string, onDone *func())
+	Close()
+}
+
+type roomIOSDKTextStreamWriter struct {
+	writer       lkTextStreamWriter
+	writeTimeout time.Duration
+}
+
+func (w roomIOSDKTextStreamWriter) Write(text string) {
+	if w.writer == nil {
+		return
+	}
+	done := make(chan struct{})
+	cb := func() { close(done) }
+	w.writer.Write(text, &cb)
+	timeout := w.writeTimeout
+	if timeout <= 0 {
+		timeout = roomIOTextStreamWriteTimeout
+	}
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
+}
+
+func (w roomIOSDKTextStreamWriter) Close() {
+	if w.writer != nil {
+		w.writer.Close()
+	}
+}
+
+func (rio *RoomIO) openRoomTextStream(opts lksdk.StreamTextOptions) roomIOTextStreamWriter {
+	if rio == nil || rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return nil
+	}
+	if rio.Room.ConnectionState() != lksdk.ConnectionStateConnected {
+		return nil
+	}
+	return roomIOSDKTextStreamWriter{writer: rio.Room.LocalParticipant.StreamText(opts)}
+}
+
+func (rio *RoomIO) publishAgentTranscriptionStream(text string, opts lksdk.StreamTextOptions) {
+	if rio == nil {
+		return
+	}
+	if rio.agentTextStreamOpener == nil {
+		if rio.transcriptionTextPublisher != nil {
+			rio.transcriptionTextPublisher(text, opts)
+		}
+		return
+	}
+
+	segmentID := opts.Attributes[RoomIOTranscriptionSegmentIDAttribute]
+	final := opts.Attributes[RoomIOTranscriptionFinalAttribute] == "true"
+
+	rio.agentTextStreamMu.Lock()
+	defer rio.agentTextStreamMu.Unlock()
+
+	if rio.agentTextStreamWriter != nil && rio.agentTextStreamSegmentID != segmentID {
+		rio.agentTextStreamWriter.Close()
+		rio.agentTextStreamWriter = nil
+		rio.agentTextStreamSegmentID = ""
+		rio.agentTextStreamHasContent = false
+	}
+
+	if rio.agentTextStreamWriter == nil {
+		writer := rio.agentTextStreamOpener(opts)
+		if writer == nil {
+			return
+		}
+		rio.agentTextStreamWriter = writer
+		rio.agentTextStreamSegmentID = segmentID
+		rio.agentTextStreamHasContent = false
+	}
+
+	if !final {
+		if text != "" {
+			rio.agentTextStreamWriter.Write(text)
+			rio.agentTextStreamHasContent = true
+		}
+		return
+	}
+	if !rio.agentTextStreamHasContent && text != "" {
+		rio.agentTextStreamWriter.Write(text)
+	}
+	rio.agentTextStreamWriter.Close()
+	rio.agentTextStreamWriter = nil
+	rio.agentTextStreamSegmentID = ""
+	rio.agentTextStreamHasContent = false
+}
+
+func (rio *RoomIO) closeAgentTextStream() {
+	if rio == nil {
+		return
+	}
+	rio.agentTextStreamMu.Lock()
+	defer rio.agentTextStreamMu.Unlock()
+	if rio.agentTextStreamWriter != nil {
+		rio.agentTextStreamWriter.Close()
+		rio.agentTextStreamWriter = nil
+	}
+	rio.agentTextStreamSegmentID = ""
+	rio.agentTextStreamHasContent = false
 }
 
 func (rio *RoomIO) publishTranscriptionPacket(transcription *livekit.Transcription) error {
@@ -2148,6 +2267,7 @@ func (rio *RoomIO) Close() error {
 	}
 	deleteRoomDone := rio.deleteRoomDone
 	rio.mu.Unlock()
+	rio.closeAgentTextStream()
 	rio.releaseAudioSubscriptionWaiters()
 	rio.finishPlayback(true, "")
 
