@@ -222,11 +222,11 @@ func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 		NumChannels:       1,
 		SamplesPerChannel: 800,
 	})
-	if err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushFrame after write failure error = %v, want closed stream error", err)
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
 	}
-	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("Flush after write failure error = %v, want closed stream error", err)
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after write failure error = %v, want nil", err)
@@ -253,8 +253,11 @@ func TestTelnyxSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushFrame after provider Close error = %v, want closed error", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 
@@ -277,8 +280,11 @@ func TestTelnyxSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushFrame after rejected registration error = %v, want closed error", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after rejected registration error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after rejected registration error = %v, want io.ErrClosedPipe", err)
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
