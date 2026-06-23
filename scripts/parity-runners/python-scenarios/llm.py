@@ -1265,6 +1265,91 @@ def llm_fallback(input_data: Any) -> dict[str, Any]:
             }
 
         return asyncio.run(run())
+    if action == "recovery_client_closed":
+        exceptions = sys.modules["livekit.agents._exceptions"]
+
+        class ClientClosedCleanStream(FakeStream):
+            async def _iter_events(self) -> Any:
+                try:
+                    raise exceptions.APIStatusError(
+                        message="client closed",
+                        status_code=499,
+                        request_id="req_recovery",
+                        body=None,
+                    )
+                except exceptions.APIStatusError as exc:
+                    if exc.status_code == 499:
+                        if False:
+                            yield None
+                        return
+                    raise
+
+        class RecoveryClientClosedLLM(FakeLLM):
+            def chat(self, **kwargs: Any) -> FakeStream:
+                self.calls += 1
+                self.options.append(kwargs.get("conn_options"))
+                if self.calls == 1:
+                    return FakeStream(
+                        [RuntimeError("primary stream failed")],
+                        chat_ctx=kwargs["chat_ctx"],
+                        tools=kwargs.get("tools") or [],
+                    )
+                if self.calls == 2:
+                    return ClientClosedCleanStream(
+                        [],
+                        chat_ctx=kwargs["chat_ctx"],
+                        tools=kwargs.get("tools") or [],
+                    )
+                return FakeStream(
+                    [FakeChunk("primary active")],
+                    chat_ctx=kwargs["chat_ctx"],
+                    tools=kwargs.get("tools") or [],
+                )
+
+        primary = RecoveryClientClosedLLM("primary")
+        fallback = FakeLLM("fallback", [FakeChunk("fallback")])
+        adapter = module.FallbackAdapter([primary, fallback])
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "llm_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.llm.label,
+                }
+            ),
+        )
+
+        async def run() -> dict[str, Any]:
+            first = adapter.chat(chat_ctx=module.ChatContext())
+            await first._run()
+            first_chunks = [chunk_kind(chunk) for chunk in first._event_ch.items]
+
+            deadline = time.monotonic() + 2
+            while (
+                not any(event["available"] for event in availability_events)
+                and time.monotonic() < deadline
+            ):
+                await asyncio.sleep(0.01)
+
+            second = adapter.chat(chat_ctx=module.ChatContext())
+            await second._run()
+            second_chunks = [chunk_kind(chunk) for chunk in second._event_ch.items]
+
+            return {
+                "contract": "llm-fallback-recovery-client-closed",
+                "events": [
+                    {
+                        "name": "recovery_client_closed",
+                        "first_chunks": first_chunks,
+                        "second_chunks": second_chunks,
+                        "availability_events": availability_events,
+                        "primary_calls": primary.calls,
+                    }
+                ],
+            }
+
+        return asyncio.run(run())
     if action == "retry_failed_recovery":
         primary = FakeLLM(
             "primary",
