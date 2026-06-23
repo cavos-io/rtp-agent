@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -967,6 +968,58 @@ func TestSarvamTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSStreamNonGracefulCloseReturnsAPIStatusError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &sarvamTTSSynthesizeStream{
+		conn:             conn,
+		ctx:              ctx,
+		cancel:           cancel,
+		sampleRate:       22050,
+		outputAudioCodec: "wav",
+		events:           make(chan *tts.SynthesizedAudio, 1),
+		errCh:            make(chan error, 1),
+	}
+	go stream.readLoop()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != websocket.CloseUnsupportedData {
+		t.Fatalf("StatusCode = %d, want close code", statusErr.StatusCode)
+	}
+	if !strings.Contains(err.Error(), "Sarvam TTS WebSocket closed with non-graceful status") {
+		t.Fatalf("Next error = %q, want Sarvam close context", err)
+	}
+}
+
 func newSarvamTTSMessageCapture(t *testing.T) (*websocket.Conn, <-chan []byte, func()) {
 	t.Helper()
 	messages := make(chan []byte, 8)
@@ -1149,26 +1202,6 @@ func assertSarvamJSONField(t *testing.T, payload map[string]any, key string, wan
 	t.Helper()
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %#v", key, got, want)
-	}
-}
-
-func receiveSarvamMessage(t *testing.T, ch <-chan map[string]any, label string) map[string]any {
-	t.Helper()
-	select {
-	case message := <-ch:
-		return message
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for %s", label)
-		return nil
-	}
-}
-
-func assertNoSarvamMessage(t *testing.T, ch <-chan map[string]any) {
-	t.Helper()
-	select {
-	case message := <-ch:
-		t.Fatalf("unexpected message = %#v, want buffered partial audio", message)
-	case <-time.After(100 * time.Millisecond):
 	}
 }
 

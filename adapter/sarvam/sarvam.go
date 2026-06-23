@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
@@ -727,15 +729,6 @@ func (s *sarvamSTTRecognizeStream) PushFrame(frame *model.AudioFrame) error {
 		s.audioPosition += float64(chunk.SamplesPerChannel) / float64(sampleRate)
 	}
 	return nil
-}
-
-func (s *sarvamSTTRecognizeStream) addAudioPosition(samplesPerChannel uint32, sampleRate int) {
-	if samplesPerChannel == 0 || sampleRate <= 0 {
-		return
-	}
-	s.mu.Lock()
-	s.audioPosition += float64(samplesPerChannel) / float64(sampleRate)
-	s.mu.Unlock()
 }
 
 func (s *sarvamSTTRecognizeStream) currentAudioPosition() float64 {
@@ -1765,7 +1758,7 @@ func (s *sarvamTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- sarvamTTSReadError(err)
 			}
 			return
 		}
@@ -1784,6 +1777,24 @@ func (s *sarvamTTSSynthesizeStream) readLoop() {
 			return
 		}
 	}
+}
+
+func sarvamTTSReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		body := map[string]any{
+			"close_code":   closeErr.Code,
+			"close_reason": closeErr.Text,
+		}
+		payload, _ := json.Marshal(body)
+		return llm.NewAPIStatusError(
+			fmt.Sprintf("Sarvam TTS WebSocket closed with non-graceful status: %s", payload),
+			closeErr.Code,
+			"",
+			string(payload),
+		)
+	}
+	return err
 }
 
 func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int, outputAudioCodec string) (*tts.SynthesizedAudio, bool, error) {
