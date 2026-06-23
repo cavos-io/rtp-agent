@@ -1079,6 +1079,57 @@ func runTTSFallback(input json.RawMessage) (any, error) {
 				},
 			},
 		}, nil
+	case "stream_recovery_client_closed":
+		var streamCalls int
+		primary := &fakeScenarioTTS{
+			label:        "primary",
+			provider:     "primary",
+			capabilities: lktts.TTSCapabilities{Streaming: true},
+			streamCalls:  &streamCalls,
+			streamStreams: []lktts.SynthesizeStream{
+				&fakeScenarioSynthesizeStream{err: errors.New("primary stream failed")},
+				&fakeScenarioSynthesizeStream{err: lkllm.NewAPIStatusError("client closed", 499, "req_recovery", nil)},
+			},
+		}
+		adapter := lktts.NewFallbackAdapterWithOptions([]lktts.TTS{primary}, lktts.FallbackAdapterOptions{DisableRetries: true})
+		availabilityCh := make(chan lktts.AvailabilityChangedEvent, 4)
+		unsubscribe := adapter.OnAvailabilityChanged(func(event lktts.AvailabilityChangedEvent) {
+			availabilityCh <- event
+		})
+		defer unsubscribe()
+		stream, err := adapter.Stream(context.Background())
+		errorClass := ""
+		if err == nil {
+			defer stream.Close()
+			if pushErr := stream.PushText("hello"); pushErr != nil {
+				err = pushErr
+			} else if endErr := lktts.EndSynthesizeStreamInput(stream); endErr != nil {
+				err = endErr
+			} else {
+				_, err = stream.Next()
+			}
+		}
+		if err != nil {
+			var connectionErr *lkllm.APIConnectionError
+			if errors.As(err, &connectionErr) {
+				errorClass = "APIConnectionError"
+			}
+		}
+		availabilityEvents, err := waitForScenarioTTSAvailable(availabilityCh)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"contract": "tts-fallback-stream-recovery-client-closed",
+			"events": []map[string]any{
+				{
+					"name":                "stream_recovery_client_closed",
+					"error_class":         errorClass,
+					"availability_events": availabilityEvents,
+					"stream_calls":        streamCalls,
+				},
+			},
+		}, nil
 	case "availability_panic_isolated":
 		primary := &fakeScenarioTTS{
 			provider:     "primary",
@@ -1400,6 +1451,7 @@ type fakeScenarioTTS struct {
 	chunkedStreamError error
 	streamError        error
 	streamCalls        *int
+	streamStreams      []lktts.SynthesizeStream
 	streamStreamError  error
 }
 
@@ -1463,11 +1515,21 @@ func (t fakeScenarioTTS) Synthesize(context.Context, string) (lktts.ChunkedStrea
 	return nil, nil
 }
 func (t fakeScenarioTTS) Stream(context.Context) (lktts.SynthesizeStream, error) {
+	callIndex := 0
+	if t.streamCalls != nil {
+		callIndex = *t.streamCalls
+	}
 	if t.streamCalls != nil {
 		(*t.streamCalls)++
 	}
 	if t.streamError != nil {
 		return nil, t.streamError
+	}
+	if t.streamStreams != nil {
+		if callIndex >= len(t.streamStreams) {
+			return &fakeScenarioSynthesizeStream{}, nil
+		}
+		return t.streamStreams[callIndex], nil
 	}
 	if t.streamStreamError != nil {
 		return &fakeScenarioSynthesizeStream{err: t.streamStreamError}, nil
