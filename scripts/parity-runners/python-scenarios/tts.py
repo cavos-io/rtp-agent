@@ -1454,6 +1454,70 @@ def tts_fallback(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "stream_recovery_no_audio":
+        class FailingSynthesizeStream(module.SynthesizeStream):
+            async def _run(self, output_emitter: Any) -> None:
+                raise RuntimeError("primary stream failed")
+
+        class EmptySynthesizeStream(module.SynthesizeStream):
+            async def _run(self, output_emitter: Any) -> None:
+                return None
+
+        class RecoveringStreamingTTS(ScenarioTTS):
+            def __init__(self) -> None:
+                super().__init__()
+                self._label = "primary"
+                self._capabilities = module.TTSCapabilities(streaming=True)
+                self.stream_calls = 0
+
+            def stream(self, *, conn_options: Any = None) -> Any:
+                self.stream_calls += 1
+                if self.stream_calls == 1:
+                    return FailingSynthesizeStream(tts=self, conn_options=conn_options)
+                return EmptySynthesizeStream(tts=self, conn_options=conn_options)
+
+        primary = RecoveringStreamingTTS()
+        adapter = module.FallbackAdapter([primary], max_retry_per_tts=0)
+        availability_events: list[dict[str, Any]] = []
+        adapter.on(
+            "tts_availability_changed",
+            lambda event: availability_events.append(
+                {
+                    "available": event.available,
+                    "label": event.tts.label,
+                }
+            ),
+        )
+        error_class = ""
+
+        async def run() -> None:
+            nonlocal error_class
+            stream = adapter.stream()
+            stream.push_text("hello")
+            stream.end_input()
+            try:
+                async with stream:
+                    async for _ in stream:
+                        pass
+            except Exception as exc:
+                error_class = type(exc).__name__
+            deadline = time.monotonic() + 2
+            while primary.stream_calls < 2 and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.01)
+
+        asyncio.run(run())
+        return {
+            "contract": "tts-fallback-stream-recovery-no-audio",
+            "events": [
+                {
+                    "name": "stream_recovery_no_audio",
+                    "error_class": error_class,
+                    "availability_events": availability_events,
+                    "stream_calls": primary.stream_calls,
+                }
+            ],
+        }
     if action == "availability_panic_isolated":
         primary = ScenarioTTS()
         adapter = module.FallbackAdapter([primary])
