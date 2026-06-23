@@ -342,6 +342,38 @@ func TestSpeechmaticsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	stream := &speechmaticsSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if event != nil {
+			result <- errors.New("Next returned event after Close")
+			return
+		}
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next after Close blocked, want EOF")
+	}
+}
+
 func TestSpeechmaticsSTTStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	if err := provider.Close(); err != nil {

@@ -472,6 +472,26 @@ func TestCartesiaSTTCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &cartesiaSTTStream{
+		state:     &cartesiaSTTStreamState{mode: "auto"},
+		events:    make(chan *stt.SpeechEvent, 1),
+		errCh:     make(chan error, 1),
+		ctx:       ctx,
+		cancel:    cancel,
+		writeText: func([]byte) error { return nil },
+		closeConn: func() error { return nil },
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after local Close = (%#v, %v), want EOF", event, err)
+	}
+}
+
 func TestCartesiaSTTAutoFlushFlushesBufferedAudio(t *testing.T) {
 	var writes [][]byte
 	var textMessages []string

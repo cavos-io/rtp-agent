@@ -381,6 +381,28 @@ func TestMistralAISTTRealtimeStreamRejectsNegativeTimingAnchors(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRealtimeClosedStreamNextReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &mistralAISTTRealtimeStream{
+		conn:   &mistralAISTTFakeRealtimeConn{},
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event after Close = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)
+	}
+}
+
 func assertMistralAIPanicsWithMessage(t *testing.T, want string, fn func()) {
 	t.Helper()
 	defer func() {

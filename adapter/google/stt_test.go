@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/speech/apiv1/speechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -546,6 +547,36 @@ func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestGoogleSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	stream := &googleSTTStream{
+		stream: &fakeGoogleStreamingRecognizeClient{},
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		if event != nil {
+			result <- errors.New("Next returned event after Close")
+			return
+		}
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next after Close blocked, want EOF")
 	}
 }
 

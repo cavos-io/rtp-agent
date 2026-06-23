@@ -555,6 +555,27 @@ func TestSarvamSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSarvamSTTClosedStreamNextReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &sarvamSTTRecognizeStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event after Close = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)
+	}
+}
+
 func TestSarvamSTTStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewSarvamSTT("test-key")
 	if err := provider.Close(); err != nil {

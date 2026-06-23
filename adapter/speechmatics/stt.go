@@ -736,6 +736,16 @@ func (s *speechmaticsSTTStream) closeWebsocketConn() error {
 }
 
 func (s *speechmaticsSTTStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		return nil, io.EOF
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {

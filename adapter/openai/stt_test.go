@@ -1477,6 +1477,38 @@ func TestOpenAIRealtimeSTTNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTClosedStreamNextDrainsQueuedEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	want := &stt.SpeechEvent{
+		Type:      stt.SpeechEventFinalTranscript,
+		RequestID: "req-final",
+		Alternatives: []stt.SpeechData{{
+			Text:     "final words",
+			Language: "en",
+		}},
+	}
+	stream := &openAIRealtimeSTTStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.events <- want
+	cancel()
+
+	got, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next after Close error = %v, want queued event", err)
+	}
+	if got != want {
+		t.Fatalf("Next after Close event = %#v, want queued final transcript", got)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next after Close = (%#v, %v), want nil EOF", event, err)
+	}
+}
+
 func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              data,

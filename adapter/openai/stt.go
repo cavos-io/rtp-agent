@@ -874,6 +874,13 @@ func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, io.EOF
 	}
 
