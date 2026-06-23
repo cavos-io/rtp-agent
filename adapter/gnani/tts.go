@@ -402,12 +402,18 @@ func (s *gnaniTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
+func (s *gnaniTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *gnaniTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if !s.isClosed() {
 				s.errCh <- gnaniTTSReadError(err)
 			}
 			return

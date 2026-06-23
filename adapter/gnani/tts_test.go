@@ -7,9 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -354,27 +355,7 @@ func TestGnaniTTSAudioFromWebsocketMessageStripsWAVAndDetectsComplete(t *testing
 }
 
 func TestGnaniTTSStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
-			return
-		}
-		_ = conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad audio stream"),
-			time.Now().Add(time.Second),
-		)
-		_ = conn.Close()
-	}))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
-	}
-	defer conn.Close()
+	conn := newGnaniProviderCloseWebsocketConn(t, websocket.CloseUnsupportedData)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -389,7 +370,7 @@ func TestGnaniTTSStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
 	}
 	go stream.readLoop()
 
-	_, err = stream.Next()
+	_, err := stream.Next()
 	if err == nil {
 		t.Fatal("Next error = nil, want APIConnectionError")
 	}
@@ -401,6 +382,126 @@ func TestGnaniTTSStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
 		t.Fatalf("Next error = %q, want Gnani close context", err)
 	}
 }
+
+func TestGnaniTTSStreamNormalCloseBeforeCompleteReturnsAPIConnectionError(t *testing.T) {
+	conn := newGnaniProviderCloseWebsocketConn(t, websocket.CloseNormalClosure)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &gnaniTTSSynthesizeStream{
+		conn:        conn,
+		ctx:         ctx,
+		cancel:      cancel,
+		sampleRate:  16000,
+		numChannels: 1,
+		events:      make(chan *tts.SynthesizedAudio, 1),
+		errCh:       make(chan error, 1),
+	}
+	go stream.readLoop()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Gnani TTS WebSocket closed") {
+		t.Fatalf("Next error = %q, want Gnani close context", err)
+	}
+}
+
+func newGnaniProviderCloseWebsocketConn(t *testing.T, closeCode int) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newGnaniSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(closeCode, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://gnani.test/api/v1/tts", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn
+}
+
+type gnaniSingleConnListener struct {
+	conn   net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newGnaniSingleConnListener(conn net.Conn) *gnaniSingleConnListener {
+	return &gnaniSingleConnListener{conn: conn, closed: make(chan struct{})}
+}
+
+func (l *gnaniSingleConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() {
+		conn = l.conn
+	})
+	if conn != nil {
+		return conn, nil
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *gnaniSingleConnListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *gnaniSingleConnListener) Addr() net.Addr {
+	return gnaniTestAddr("gnani.test:443")
+}
+
+type gnaniTestAddr string
+
+func (a gnaniTestAddr) Network() string { return "tcp" }
+
+func (a gnaniTestAddr) String() string { return string(a) }
 
 func TestGnaniTTSStreamEmptyFlushCompletesWithoutDialing(t *testing.T) {
 	provider := NewTTS("test-key")
