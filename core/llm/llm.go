@@ -1868,9 +1868,6 @@ func (f *FallbackAdapter) Chat(ctx context.Context, chatCtx *ChatContext, opts .
 		opt(&options)
 	}
 	stream.tools = append([]Tool(nil), options.Tools...)
-	if err := stream.tryStart(0); err != nil {
-		return nil, err
-	}
 	return stream, nil
 }
 
@@ -2006,6 +2003,7 @@ func (f *FallbackAdapter) finishRecovery(index int, available bool) {
 func (s *fallbackLLMStream) tryStart(index int) error {
 	start := time.Now()
 	var lastErr error
+	recoverAfterStart := make([]int, 0)
 	allUnavailable := s.adapter.allUnavailable()
 	for i := index; i < len(s.adapter.llms); i++ {
 		if !s.adapter.isAvailable(i, allUnavailable) {
@@ -2026,11 +2024,15 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 				s.activeCtxSet = false
 				s.lastChatCtx = nil
 				s.lastTools = nil
+				for _, recoverIndex := range recoverAfterStart {
+					s.tryRecovery(recoverIndex)
+				}
 				return nil
 			}
 			cancel()
 			lastErr = err
-			s.markUnavailable(i, true)
+			s.markUnavailable(i, false)
+			recoverAfterStart = append(recoverAfterStart, i)
 			break
 		}
 	}
@@ -2059,6 +2061,11 @@ func (f *FallbackAdapter) labels() []string {
 func (s *fallbackLLMStream) Next() (*ChatChunk, error) {
 	if s.closed {
 		return nil, io.EOF
+	}
+	if isNilLLMStream(s.activeStream) {
+		if err := s.tryStart(0); err != nil {
+			return nil, err
+		}
 	}
 	for {
 		chunk, err := s.activeStream.Next()

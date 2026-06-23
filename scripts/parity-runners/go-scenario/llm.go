@@ -766,7 +766,11 @@ func runLLMFallback(input json.RawMessage) (any, error) {
 		primary := &fakeScenarioLLM{label: "primary", err: errors.New("primary unavailable")}
 		fallback := &fakeScenarioLLM{label: "fallback", err: errors.New("fallback unavailable")}
 		adapter := lkllm.NewFallbackAdapter([]lkllm.LLM{primary, fallback})
-		_, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		stream, err := adapter.Chat(context.Background(), lkllm.NewChatContext())
+		if err == nil {
+			defer stream.Close()
+			_, err = stream.Next()
+		}
 		message := ""
 		if err != nil {
 			message = err.Error()
