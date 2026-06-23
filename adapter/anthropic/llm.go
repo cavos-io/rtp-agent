@@ -320,6 +320,7 @@ type anthropicStream struct {
 	toolCallID  string
 	toolName    string
 	toolArgs    string
+	requestID   string
 	hasTools    bool
 	ignoringCoT bool
 }
@@ -624,6 +625,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		switch event.Type {
 		case "message_start":
+			s.requestID = event.Message.ID
 			return &llm.ChatChunk{
 				ID: event.Message.ID,
 				Usage: &llm.CompletionUsage{
@@ -647,6 +649,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					continue
 				}
 				return &llm.ChatChunk{
+					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
 						Role:    llm.ChatRoleAssistant,
 						Content: text,
@@ -659,6 +662,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		case "content_block_stop":
 			if s.toolCallID != "" {
 				chunk := &llm.ChatChunk{
+					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
 						Role: llm.ChatRoleAssistant,
 						ToolCalls: []llm.FunctionToolCall{

@@ -524,6 +524,27 @@ func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamTextChunkCarriesReferenceRequestID(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			``,
+		}, "\n"))),
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("message_start Next() error = %v", err)
+	}
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text delta Next() error = %v", err)
+	}
+	if chunk.ID != "msg_1" {
+		t.Fatalf("text chunk ID = %q, want msg_1", chunk.ID)
+	}
+}
+
 func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &anthropicCloseErrorBody{}
 	stream := &anthropicStream{
