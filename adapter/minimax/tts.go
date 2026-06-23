@@ -639,7 +639,7 @@ func (s *minimaxTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("minimax tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	s.pendingText += text
 	if err := s.sendCompleteSentencesLocked(); err != nil {
@@ -653,7 +653,7 @@ func (s *minimaxTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return fmt.Errorf("minimax tts stream is closed")
+		return io.ErrClosedPipe
 	}
 	if s.pendingText == "" {
 		return nil
