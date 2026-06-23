@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -406,7 +408,7 @@ func (s *gnaniTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- err
+				s.errCh <- gnaniTTSReadError(err)
 			}
 			return
 		}
@@ -430,6 +432,14 @@ func (s *gnaniTTSSynthesizeStream) readLoop() {
 			}
 		}
 	}
+}
+
+func gnaniTTSReadError(err error) error {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return llm.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket closed: %v", err))
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket error: %v", err))
 }
 
 func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChannels int) (*tts.SynthesizedAudio, bool, error) {
