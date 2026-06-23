@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strconv"
 	"sync"
 
 	speech "cloud.google.com/go/speech/apiv1"
@@ -365,6 +366,7 @@ type googleSTTStream struct {
 
 func (s *googleSTTStream) readLoop() {
 	defer close(s.events)
+	var lastUsageEventTime float64
 	for {
 		resp, err := s.stream.Recv()
 		if err != nil {
@@ -381,17 +383,39 @@ func (s *googleSTTStream) readLoop() {
 			s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 		}
 
-		if resp.GetSpeechEventType() != speechpb.StreamingRecognizeResponse_SPEECH_EVENT_UNSPECIFIED {
-			continue
-		}
-
-		if data, eventType, ok := googleSpeechDataFromStreamingResults(resp.Results, s.minConfidence); ok {
-			s.events <- &stt.SpeechEvent{
-				Type:         eventType,
-				Alternatives: []stt.SpeechData{data},
+		if resp.GetSpeechEventType() == speechpb.StreamingRecognizeResponse_SPEECH_EVENT_UNSPECIFIED {
+			if data, eventType, ok := googleSpeechDataFromStreamingResults(resp.Results, s.minConfidence); ok {
+				s.events <- &stt.SpeechEvent{
+					Type:         eventType,
+					Alternatives: []stt.SpeechData{data},
+				}
 			}
 		}
+
+		if audioDuration := googleStreamingAudioDuration(resp, lastUsageEventTime); audioDuration > 0 {
+			s.events <- &stt.SpeechEvent{
+				Type:      stt.SpeechEventRecognitionUsage,
+				RequestID: strconv.FormatInt(resp.GetRequestId(), 10),
+				RecognitionUsage: &stt.RecognitionUsage{
+					AudioDuration: audioDuration,
+				},
+			}
+			lastUsageEventTime += audioDuration
+		}
 	}
+}
+
+func googleStreamingAudioDuration(resp *speechpb.StreamingRecognizeResponse, lastUsageEventTime float64) float64 {
+	if resp == nil {
+		return 0
+	}
+	var total float64
+	if resp.GetTotalBilledTime() != nil {
+		total = resp.GetTotalBilledTime().AsDuration().Seconds()
+	} else if resp.GetSpeechEventTime() != nil {
+		total = resp.GetSpeechEventTime().AsDuration().Seconds()
+	}
+	return total - lastUsageEventTime
 }
 
 func googleSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, minConfidence float64) (stt.SpeechData, stt.SpeechEventType, bool) {
