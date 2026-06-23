@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -278,6 +279,24 @@ func TestSpeechifyTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *te
 	}
 }
 
+func TestSpeechifyTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &speechifyCloseCountBody{Reader: strings.NewReader("audio")}
+	stream := &speechifyTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v, want nil", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close count = %d, want one close", body.closeCount)
+	}
+}
+
 func assertSpeechifyPayload(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {
@@ -310,4 +329,17 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type speechifyCloseCountBody struct {
+	*strings.Reader
+	closeCount int
+}
+
+func (b *speechifyCloseCountBody) Close() error {
+	b.closeCount++
+	if b.closeCount > 1 {
+		return errors.New("closed twice")
+	}
+	return nil
 }
