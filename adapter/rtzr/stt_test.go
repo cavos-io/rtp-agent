@@ -227,6 +227,27 @@ func TestRtzrSTTRecognizeMatchesReferenceUnsupportedOffline(t *testing.T) {
 	}
 }
 
+func TestRtzrSTTStreamDoesNotDialUntilAudioLikeReference(t *testing.T) {
+	dials := 0
+	provider := NewRtzrSTT("client-id",
+		WithRtzrAccessToken("access-token"),
+		withRtzrWebsocketDialer(func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			dials++
+			return nil, nil, errors.New("unexpected dial before audio")
+		}),
+	)
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error before audio: %v", err)
+	}
+	defer stream.Close()
+
+	if dials != 0 {
+		t.Fatalf("websocket dials = %d, want none before audio", dials)
+	}
+}
+
 func TestRtzrSTTStreamLanguageArgumentDoesNotMutateReferenceLanguage(t *testing.T) {
 	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"start_at":0,"duration":100,"final":true,"alternatives":[{"text":"hello"}]}`)); err != nil {
@@ -246,6 +267,14 @@ func TestRtzrSTTStreamLanguageArgumentDoesNotMutateReferenceLanguage(t *testing.
 		t.Fatalf("Stream returned error: %v", err)
 	}
 	defer stream.Close()
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800*2),
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
 
 	event, err := stream.Next()
 	if err != nil {
@@ -291,6 +320,14 @@ func TestRtzrSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800*2),
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
 	}
 
 	if err := stream.Close(); err != nil {
@@ -343,7 +380,7 @@ func TestRtzrSTTStreamNonNormalCloseReturnsEOF(t *testing.T) {
 		cancel: cancel,
 		state:  &rtzrTranscriptState{language: "ko"},
 	}
-	go stream.readLoop()
+	go stream.readLoop(conn)
 
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %T %v, want EOF", err, err)
@@ -388,6 +425,17 @@ func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 		t.Fatalf("Stream returned error: %v", err)
 	}
 
+	firstPartial := []byte{0x01, 0x02}
+	if err := stream.PushFrame(&model.AudioFrame{Data: firstPartial}); err != nil {
+		t.Fatalf("PushFrame(partial) returned error: %v", err)
+	}
+	assertNoRtzrBytes(t, audioCh)
+
+	remainder := bytes.Repeat([]byte{0x03}, 1598)
+	if err := stream.PushFrame(&model.AudioFrame{Data: remainder}); err != nil {
+		t.Fatalf("PushFrame(remainder) returned error: %v", err)
+	}
+
 	query := receiveRtzrQuery(t, queryCh)
 	if query.Get("model_name") != defaultModelName || query.Get("sample_rate") != "8000" {
 		t.Fatalf("stream query = %v, want default model/sample rate", query)
@@ -411,16 +459,6 @@ func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 		t.Fatalf("second event = %#v, want interim hello", event)
 	}
 
-	firstPartial := []byte{0x01, 0x02}
-	if err := stream.PushFrame(&model.AudioFrame{Data: firstPartial}); err != nil {
-		t.Fatalf("PushFrame(partial) returned error: %v", err)
-	}
-	assertNoRtzrBytes(t, audioCh)
-
-	remainder := bytes.Repeat([]byte{0x03}, 1598)
-	if err := stream.PushFrame(&model.AudioFrame{Data: remainder}); err != nil {
-		t.Fatalf("PushFrame(remainder) returned error: %v", err)
-	}
 	wantChunk := append(append([]byte(nil), firstPartial...), remainder...)
 	if got := receiveRtzrBytes(t, audioCh); !bytes.Equal(got, wantChunk) {
 		t.Fatalf("audio chunk length=%d first=%v last=%v, want buffered 100ms chunk length=%d", len(got), got[:2], got[len(got)-2:], len(wantChunk))

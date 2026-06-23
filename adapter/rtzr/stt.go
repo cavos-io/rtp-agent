@@ -221,27 +221,16 @@ func (s *RtzrSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *RtzrSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	token, err := s.token(ctx)
-	if err != nil {
-		return nil, err
-	}
-	header := make(http.Header)
-	header.Set("Authorization", "bearer "+token)
-	conn, _, err := s.dialWebsocket(ctx, buildRtzrStreamURL(s, buildRtzrConfig(s)), header)
-	if err != nil {
-		return nil, fmt.Errorf("failed to dial rtzr websocket: %w", err)
-	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rtzrStream{
-		conn:         conn,
 		events:       make(chan *stt.SpeechEvent, 100),
 		errCh:        make(chan error, 1),
 		ctx:          streamCtx,
 		cancel:       cancel,
+		provider:     s,
 		state:        &rtzrTranscriptState{language: s.language},
 		audioBStream: newRtzrAudioByteStream(s.sampleRate),
 	}
-	go stream.readLoop()
 	return stream, nil
 }
 
@@ -342,15 +331,16 @@ type rtzrStream struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+	provider *RtzrSTT
 	state  *rtzrTranscriptState
 
 	audioBStream *audio.AudioByteStream
 }
 
-func (s *rtzrStream) readLoop() {
+func (s *rtzrStream) readLoop(conn *websocket.Conn) {
 	defer close(s.events)
 	for {
-		msgType, message, err := s.conn.ReadMessage()
+		msgType, message, err := conn.ReadMessage()
 		if err != nil {
 			var closeErr *websocket.CloseError
 			if !errors.As(err, &closeErr) && err != io.EOF {
@@ -392,14 +382,24 @@ func (s *rtzrStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.audioBStream != nil {
-		if err := s.writeAudioFramesLocked(s.audioBStream.Flush()); err != nil {
+		frames := s.audioBStream.Flush()
+		if err := s.writeAudioFramesLocked(frames); err != nil {
 			return err
 		}
+	}
+	if s.conn == nil {
+		return nil
 	}
 	return s.conn.WriteMessage(websocket.TextMessage, []byte("EOS"))
 }
 
 func (s *rtzrStream) writeAudioFramesLocked(frames []*model.AudioFrame) error {
+	if len(frames) == 0 {
+		return nil
+	}
+	if err := s.ensureConnectedLocked(); err != nil {
+		return err
+	}
 	for _, frame := range frames {
 		if frame == nil || len(frame.Data) == 0 {
 			continue
@@ -408,6 +408,25 @@ func (s *rtzrStream) writeAudioFramesLocked(frames []*model.AudioFrame) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *rtzrStream) ensureConnectedLocked() error {
+	if s.conn != nil {
+		return nil
+	}
+	token, err := s.provider.token(s.ctx)
+	if err != nil {
+		return err
+	}
+	header := make(http.Header)
+	header.Set("Authorization", "bearer "+token)
+	conn, _, err := s.provider.dialWebsocket(s.ctx, buildRtzrStreamURL(s.provider, buildRtzrConfig(s.provider)), header)
+	if err != nil {
+		return fmt.Errorf("failed to dial rtzr websocket: %w", err)
+	}
+	s.conn = conn
+	go s.readLoop(conn)
 	return nil
 }
 
@@ -427,6 +446,9 @@ func (s *rtzrStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	if s.conn == nil {
+		return nil
+	}
 	_ = s.conn.WriteMessage(websocket.TextMessage, []byte("EOS"))
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
