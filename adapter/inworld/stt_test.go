@@ -330,7 +330,7 @@ func TestInworldSTTStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
-func TestInworldSTTStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
+func TestInworldSTTStreamUnexpectedNormalCloseReturnsEOF(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -338,12 +338,10 @@ func TestInworldSTTStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) 
 			t.Errorf("upgrade websocket: %v", err)
 			return
 		}
-		_ = conn.WriteControl(
-			websocket.CloseMessage,
-			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad speech stream"),
-			time.Now().Add(time.Second),
-		)
-		_ = conn.Close()
+		defer conn.Close()
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
 	}))
 	defer server.Close()
 
@@ -357,21 +355,25 @@ func TestInworldSTTStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) 
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 1),
 		errCh:  make(chan error, 1),
+		ctx:    context.Background(),
 		state:  &inworldSTTStreamState{language: "en-US", requestID: "req-close"},
 	}
 	go stream.readLoop()
 
-	select {
-	case err := <-stream.errCh:
-		var connectionErr *llm.APIConnectionError
-		if !errors.As(err, &connectionErr) {
-			t.Fatalf("readLoop error = %T %v, want APIConnectionError", err, err)
-		}
-		if !strings.Contains(err.Error(), "Inworld STT websocket receive failed") {
-			t.Fatalf("readLoop error = %q, want Inworld STT close context", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for websocket close error")
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil on provider close", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF after reference normal close", err)
+	}
+
+	event, err = stream.Next()
+	if event != nil {
+		t.Fatalf("second Next event = %#v, want nil after stream completion", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want stable EOF after stream completion", err)
 	}
 }
 

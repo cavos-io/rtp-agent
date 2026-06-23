@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -421,7 +420,7 @@ func (s *inworldSTTStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- inworldSTTReadError(err)
+				s.errCh <- err
 			}
 			return
 		}
@@ -436,14 +435,6 @@ func (s *inworldSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
-}
-
-func inworldSTTReadError(err error) error {
-	var closeErr *websocket.CloseError
-	if errors.As(err, &closeErr) {
-		return llm.NewAPIConnectionError(fmt.Sprintf("Inworld STT websocket receive failed: close %d: %s", closeErr.Code, closeErr.Text))
-	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("Inworld STT websocket receive failed: %v", err))
 }
 
 type inworldSTTStreamState struct {
