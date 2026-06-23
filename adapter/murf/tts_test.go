@@ -518,6 +518,51 @@ func TestMurfTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestMurfTTSStreamNormalCloseBeforeFinalReturnsAPIStatusError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &murfTTSSynthesizeStream{
+		conn:       conn,
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:      make(chan error, 1),
+	}
+	go stream.readLoop()
+
+	select {
+	case err := <-stream.errCh:
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("readLoop error = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != websocket.CloseNormalClosure {
+			t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for normal websocket close error")
+	}
+}
+
 func newMurfClosingWebsocketConn(t *testing.T) (*websocket.Conn, <-chan struct{}) {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()

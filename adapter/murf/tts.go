@@ -519,9 +519,7 @@ func (s *murfTTSSynthesizeStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
-				s.errCh <- murfTTSReadError(err)
-			}
+			s.errCh <- murfTTSReadError(err)
 			return
 		}
 		if msgType != websocket.TextMessage {
