@@ -281,10 +281,14 @@ func validateRespeecherAPIKey(apiKey string) error {
 type respeecherTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	closed     bool
 	finalSent  bool
 }
 
 func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if n > 0 {
@@ -322,6 +326,7 @@ func (s *respeecherTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) 
 }
 
 func (s *respeecherTTSChunkedStream) Close() error {
+	s.closed = true
 	s.finalSent = true
 	return s.resp.Body.Close()
 }

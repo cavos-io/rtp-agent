@@ -34,6 +34,22 @@ func (r *respeecherFinalEOFReader) Read(p []byte) (int, error) {
 
 func (r *respeecherFinalEOFReader) Close() error { return nil }
 
+type respeecherCloseErrorBody struct {
+	closed bool
+}
+
+func (b *respeecherCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *respeecherCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestRespeecherTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "")
 
@@ -313,6 +329,21 @@ func TestRespeecherTTSWebsocketMessagesMatchReference(t *testing.T) {
 	assertRespeecherPayload(t, payload, "transcript", " ")
 	if payload["continue"] != false {
 		t.Fatalf("continue = %#v, want false", payload["continue"])
+	}
+}
+
+func TestRespeecherTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &respeecherCloseErrorBody{}
+	stream := &respeecherTTSChunkedStream{resp: &http.Response{Body: body}}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want nil EOF", audio, err)
 	}
 }
 
