@@ -758,6 +758,14 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 
 	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 24000); err == nil {
 		t.Fatal("error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Rime ws error: bad text" {
+			t.Fatalf("APIError message = %q, want reference message", apiErr.Message)
+		}
 	}
 }
 
