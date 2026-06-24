@@ -530,6 +530,19 @@ func TestCartesiaTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &cartesiaTTSStream{
+		audio:  make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.audio <- &tts.SynthesizedAudio{}
+
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
