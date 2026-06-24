@@ -179,7 +179,7 @@ func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("resemble tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Resemble TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &resembleTTSChunkedStream{
