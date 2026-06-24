@@ -530,6 +530,19 @@ func (s *murfTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	select {
 	case audio, ok := <-s.events:
+		if ok {
+			return audio, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	default:
+	}
+	select {
+	case audio, ok := <-s.events:
 		if !ok {
 			select {
 			case err := <-s.errCh:
