@@ -268,6 +268,47 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	}
 }
 
+func TestProcPoolCloseContextHonorsExplicitZeroTimeout(t *testing.T) {
+	ctx, cancel := closeContext(0)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("closeContext(0) is not already expired")
+	}
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("closeContext(0) error = %v, want context deadline exceeded", ctx.Err())
+	}
+}
+
+func TestProcPoolPassesCloseTimeoutToProcessExecutors(t *testing.T) {
+	pool := NewProcPool(1, ExecutorTypeProcess, nil)
+	timeout := 3 * time.Second
+	pool.SetCloseTimeout(timeout)
+
+	executor := pool.createExecutorLocked()
+	processExecutor, ok := executor.(*ProcessJobExecutor)
+	if !ok {
+		t.Fatalf("executor type = %T, want *ProcessJobExecutor", executor)
+	}
+	processExecutor.mu.Lock()
+	got := processExecutor.closeTimeout
+	processExecutor.mu.Unlock()
+	if got != timeout {
+		t.Fatalf("process executor closeTimeout = %v, want %v", got, timeout)
+	}
+
+	updated := 7 * time.Second
+	pool.SetCloseTimeout(updated)
+	processExecutor.mu.Lock()
+	got = processExecutor.closeTimeout
+	processExecutor.mu.Unlock()
+	if got != updated {
+		t.Fatalf("existing process executor closeTimeout after update = %v, want %v", got, updated)
+	}
+}
+
 func TestProcPoolTargetIdleProcesses(t *testing.T) {
 	pool := NewProcPool(4, ExecutorTypeThread, nil)
 

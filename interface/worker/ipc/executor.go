@@ -177,6 +177,7 @@ type ProcessJobExecutor struct {
 	shutdownAcked    bool
 	shuttingDown     chan struct{}
 	shuttingDownSeen bool
+	closeTimeout     time.Duration
 }
 
 func NewProcessJobExecutor(id string) *ProcessJobExecutor {
@@ -184,7 +185,14 @@ func NewProcessJobExecutor(id string) *ProcessJobExecutor {
 		id:           id,
 		shutdownAck:  make(chan struct{}),
 		shuttingDown: make(chan struct{}),
+		closeTimeout: processShutdownGraceTimeout,
 	}
+}
+
+func (e *ProcessJobExecutor) SetCloseTimeout(timeout time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.closeTimeout = timeout
 }
 
 func (e *ProcessJobExecutor) ID() string {
@@ -405,6 +413,7 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	shutdownWriter := e.pingWriter
 	shutdownAck := e.shutdownAck
 	shuttingDown := e.shuttingDown
+	closeTimeout := e.closeTimeout
 	e.mu.Unlock()
 	if !started || done == nil {
 		return nil
@@ -432,8 +441,8 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 
 		if shutdownSent {
 			acked := false
-			if processShutdownGraceTimeout > 0 {
-				graceTimer := time.NewTimer(processShutdownGraceTimeout)
+			if closeTimeout > 0 {
+				graceTimer := time.NewTimer(closeTimeout)
 				select {
 				case <-done:
 					graceTimer.Stop()
@@ -446,8 +455,8 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 				case <-graceTimer.C:
 				}
 			}
-			if acked && processShutdownGraceTimeout > 0 {
-				shuttingDownTimer := time.NewTimer(processShutdownGraceTimeout)
+			if acked && closeTimeout > 0 {
+				shuttingDownTimer := time.NewTimer(closeTimeout)
 				select {
 				case <-done:
 					shuttingDownTimer.Stop()
@@ -459,8 +468,8 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 				case <-shuttingDownTimer.C:
 				}
 			}
-			if acked && processShutdownGraceTimeout > 0 {
-				exitTimer := time.NewTimer(processShutdownGraceTimeout)
+			if acked && closeTimeout > 0 {
+				exitTimer := time.NewTimer(closeTimeout)
 				select {
 				case <-done:
 					exitTimer.Stop()

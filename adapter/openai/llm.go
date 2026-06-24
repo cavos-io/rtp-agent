@@ -250,7 +250,14 @@ func WithOpenAILLMReasoningEffort(reasoningEffort string) OpenAILLMOption {
 
 func WithOpenAILLMExtraParams(params map[string]any) OpenAILLMOption {
 	return func(l *OpenAILLM) {
-		l.extraParams = cloneOpenAIAnyMap(params)
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		for key, value := range params {
+			if _, exists := l.extraParams[key]; !exists {
+				l.extraParams[key] = value
+			}
+		}
 	}
 }
 
@@ -1484,10 +1491,11 @@ func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model str
 		Tools:    tools,
 		Stream:   true,
 	}
+	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
+
 	if options.ParallelToolCallsSet {
 		req.ParallelToolCalls = &options.ParallelToolCalls
 	}
-
 	if options.ToolChoice != nil {
 		if toolChoice := buildOpenAIToolChoice(options.ToolChoice); toolChoice != nil {
 			req.ToolChoice = toolChoice
@@ -1496,8 +1504,6 @@ func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model str
 	if responseFormat := buildOpenAIResponseFormat(options.ResponseFormat); responseFormat != nil {
 		req.ResponseFormat = responseFormat
 	}
-
-	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
 	if defaultReasoning && req.ReasoningEffort == "" {
 		req.ReasoningEffort = defaultOpenAIReasoningEffort(model, len(options.Tools) > 0)
 	}

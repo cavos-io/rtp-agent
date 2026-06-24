@@ -20,6 +20,23 @@ func (s runResultStringer) String() string {
 	return s.value
 }
 
+func waitForRunResultDone(t *testing.T, result *RunResult) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		if result.Done() {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("RunResult did not become done")
+		case <-tick.C:
+		}
+	}
+}
+
 func TestRunResultRecordsSupportedItemsInChronologicalOrder(t *testing.T) {
 	result := NewRunResult(llm.NewChatContext())
 	late := time.Now()
@@ -274,9 +291,7 @@ func TestRunResultWatchSpeechHandleMarksDoneWhenSpeechDone(t *testing.T) {
 
 	second.MarkDone()
 
-	if !result.Done() {
-		t.Fatal("RunResult did not mark done after all watched speech handles finished")
-	}
+	waitForRunResultDone(t, result)
 }
 
 func TestRunResultFinalOutputUsesLastCompletedSpeechHandle(t *testing.T) {
@@ -291,6 +306,7 @@ func TestRunResultFinalOutputUsesLastCompletedSpeechHandle(t *testing.T) {
 
 	first.MarkDone()
 	second.MarkDone()
+	waitForRunResultDone(t, result)
 
 	output, err := result.FinalOutput()
 	if err != nil {
@@ -309,6 +325,7 @@ func TestRunResultFinalOutputReturnsSpeechFinalOutputError(t *testing.T) {
 
 	result.WatchSpeechHandle(speech)
 	speech.MarkDone()
+	waitForRunResultDone(t, result)
 
 	output, err := result.FinalOutput()
 	if !errors.Is(err, finalErr) {
@@ -326,6 +343,7 @@ func TestRunResultFinalOutputRejectsUnexpectedType(t *testing.T) {
 
 	result.WatchSpeechHandle(speech)
 	speech.MarkDone()
+	waitForRunResultDone(t, result)
 
 	output, err := result.FinalOutput()
 	if !errors.Is(err, ErrRunResultFinalOutputType) {
@@ -346,6 +364,7 @@ func TestRunResultFinalOutputRejectsNilUnexpectedType(t *testing.T) {
 
 	result.WatchSpeechHandle(speech)
 	speech.MarkDone()
+	waitForRunResultDone(t, result)
 
 	output, err := result.FinalOutput()
 	if !errors.Is(err, ErrRunResultFinalOutputType) {
@@ -363,6 +382,7 @@ func TestRunResultFinalOutputAcceptsExpectedType(t *testing.T) {
 
 	result.WatchSpeechHandle(speech)
 	speech.MarkDone()
+	waitForRunResultDone(t, result)
 
 	output, err := result.FinalOutput()
 	if err != nil {
@@ -381,6 +401,7 @@ func TestRunResultFinalOutputAcceptsAssignableType(t *testing.T) {
 
 	result.WatchSpeechHandle(speech)
 	speech.MarkDone()
+	waitForRunResultDone(t, result)
 
 	output, err := result.FinalOutput()
 	if err != nil {

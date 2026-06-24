@@ -462,8 +462,17 @@ func newDevModeWatcher(cliArgs *CliArgs, onChange func()) *Watcher {
 
 func startArgsForDevReload(args CliArgs) []string {
 	startArgs := make([]string, 0, 8)
+	if args.DevMode {
+		startArgs = append(startArgs, "--dev")
+	}
+	if args.Simulation {
+		startArgs = append(startArgs, "--simulation")
+	}
 	if args.LogLevel != "" {
 		startArgs = append(startArgs, "--log-level", args.LogLevel)
+	}
+	if args.LogFormat != "" {
+		startArgs = append(startArgs, "--log-format", args.LogFormat)
 	}
 	if args.URL != "" {
 		startArgs = append(startArgs, "--url", args.URL)

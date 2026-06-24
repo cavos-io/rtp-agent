@@ -589,6 +589,19 @@ func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
 	}
 }
 
+func TestParseWorkerArgsRejectsUnknownReferenceLogFormat(t *testing.T) {
+	_, _, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--log-format", "plain",
+	}, false)
+	if err == nil {
+		t.Fatal("parseWorkerArgs() error = nil, want unknown log format error")
+	}
+	if got, want := err.Error(), "unknown log format \"plain\""; got != want {
+		t.Fatalf("parseWorkerArgs() error = %q, want %q", got, want)
+	}
+}
+
 func TestParseWorkerArgsSupportsReferenceSimulationOption(t *testing.T) {
 	args, drainTimeout, err := parseWorkerArgs([]string{
 		"worker", "start",
@@ -603,6 +616,54 @@ func TestParseWorkerArgsSupportsReferenceSimulationOption(t *testing.T) {
 
 	if !args.Simulation {
 		t.Fatal("Simulation = false, want true")
+	}
+}
+
+func TestParseWorkerArgsSupportsReferenceStartDevFlag(t *testing.T) {
+	args, drainTimeout, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--reload-addr", "127.0.0.1:9999",
+		"--dev",
+	}, false)
+	if err != nil {
+		t.Fatalf("parseWorkerArgs() error = %v", err)
+	}
+
+	if !args.DevMode {
+		t.Fatal("DevMode = false, want true for reference start --dev")
+	}
+	if args.Reload {
+		t.Fatal("Reload = true, want false for reference start --dev without target watcher")
+	}
+	if args.ReloadAddr != "127.0.0.1:9999" {
+		t.Fatalf("ReloadAddr = %q, want 127.0.0.1:9999", args.ReloadAddr)
+	}
+	if drainTimeout != nil {
+		t.Fatalf("drainTimeout = %v, want nil", drainTimeout)
+	}
+}
+
+func TestWorkerStartActionUsesReferenceDevReloadWhenReloadAddrPresent(t *testing.T) {
+	args := CliArgs{DevMode: true, ReloadAddr: "127.0.0.1:9999"}
+
+	if got, want := workerStartActionForArgs(args), workerStartActionDevReload; got != want {
+		t.Fatalf("workerStartActionForArgs() = %q, want %q", got, want)
+	}
+}
+
+func TestParseWorkerArgsPreservesReferenceStartSimulationDuringDevReload(t *testing.T) {
+	args, _, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--dev",
+		"--reload-addr", "127.0.0.1:9999",
+		"--simulation",
+	}, true)
+	if err != nil {
+		t.Fatalf("parseWorkerArgs() error = %v", err)
+	}
+
+	if !args.Simulation {
+		t.Fatal("Simulation = false, want true for reference start --dev --simulation")
 	}
 }
 
@@ -879,16 +940,36 @@ func TestCLIProtocolLoggerConfigUsesReferenceDevText(t *testing.T) {
 func TestStartArgsForDevReloadForwardsReferenceConnectionOptions(t *testing.T) {
 	got := startArgsForDevReload(CliArgs{
 		LogLevel:  "TRACE",
+		LogFormat: "colored",
 		URL:       "wss://livekit.example",
 		APIKey:    "api-key",
 		APISecret: "api-secret",
 	})
 	want := []string{
 		"--log-level", "TRACE",
+		"--log-format", "colored",
 		"--url", "wss://livekit.example",
 		"--api-key", "api-key",
 		"--api-secret", "api-secret",
 	}
+
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("startArgsForDevReload() = %#v, want %#v", got, want)
+	}
+}
+
+func TestStartArgsForDevReloadForwardsReferenceDevFlag(t *testing.T) {
+	got := startArgsForDevReload(CliArgs{DevMode: true})
+	want := []string{"--dev"}
+
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("startArgsForDevReload() = %#v, want %#v", got, want)
+	}
+}
+
+func TestStartArgsForDevReloadForwardsReferenceSimulationFlag(t *testing.T) {
+	got := startArgsForDevReload(CliArgs{DevMode: true, Simulation: true})
+	want := []string{"--dev", "--simulation"}
 
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("startArgsForDevReload() = %#v, want %#v", got, want)

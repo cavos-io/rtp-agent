@@ -1127,6 +1127,36 @@ func TestOpenAIChatAppliesProviderTemperature(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatProviderTypedOptionsOverrideGenericExtraParams(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMTemperature(0.3),
+		WithOpenAILLMExtraParams(map[string]any{
+			"temperature": 0.9,
+			"metadata":    map[string]any{"trace": "abc"},
+		}),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"temperature":0.3`) {
+		t.Fatalf("request body = %s, want typed provider temperature", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, `"temperature":0.9`) {
+		t.Fatalf("request body = %s, want typed temperature to override generic extra params", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"metadata":{"trace":"abc"}`) {
+		t.Fatalf("request body = %s, want generic metadata preserved", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesProviderTopP(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
@@ -1692,6 +1722,31 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamToolChoice(t *testing.
 
 	if req.ToolChoice != "none" {
 		t.Fatalf("ToolChoice = %#v, want none", req.ToolChoice)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestToolPolicyOverridesExtraParams(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ParallelToolCalls:    true,
+		ParallelToolCallsSet: true,
+		ToolChoice:           "required",
+		ExtraParams: map[string]any{
+			"parallel_tool_calls": false,
+			"tool_choice":         "none",
+			"metadata": map[string]any{
+				"trace": "abc",
+			},
+		},
+	})
+
+	if got, ok := req.ParallelToolCalls.(*bool); !ok || got == nil || !*got {
+		t.Fatalf("ParallelToolCalls = %#v, want pointer to true", req.ParallelToolCalls)
+	}
+	if req.ToolChoice != "required" {
+		t.Fatalf("ToolChoice = %#v, want required", req.ToolChoice)
+	}
+	if req.Metadata["trace"] != "abc" {
+		t.Fatalf("Metadata = %#v, want generic metadata preserved", req.Metadata)
 	}
 }
 
@@ -2492,6 +2547,39 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamResponseFormat(t *test
 	}
 	if req.ResponseFormat.Type != openaisdk.ChatCompletionResponseFormatTypeJSONObject {
 		t.Fatalf("ResponseFormat.Type = %q, want json_object", req.ResponseFormat.Type)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestResponseFormatOverridesExtraParam(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ResponseFormat: map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "Answer",
+				"strict": true,
+			},
+		},
+		ExtraParams: map[string]any{
+			"response_format": map[string]any{
+				"type": "json_object",
+			},
+			"metadata": map[string]any{
+				"trace": "abc",
+			},
+		},
+	})
+
+	if req.ResponseFormat == nil {
+		t.Fatal("ResponseFormat = nil, want explicit response format")
+	}
+	if req.ResponseFormat.Type != openaisdk.ChatCompletionResponseFormatTypeJSONSchema {
+		t.Fatalf("ResponseFormat.Type = %q, want json_schema", req.ResponseFormat.Type)
+	}
+	if req.ResponseFormat.JSONSchema == nil || req.ResponseFormat.JSONSchema.Name != "Answer" || !req.ResponseFormat.JSONSchema.Strict {
+		t.Fatalf("ResponseFormat.JSONSchema = %#v, want strict Answer", req.ResponseFormat.JSONSchema)
+	}
+	if req.Metadata["trace"] != "abc" {
+		t.Fatalf("Metadata = %#v, want generic metadata preserved", req.Metadata)
 	}
 }
 

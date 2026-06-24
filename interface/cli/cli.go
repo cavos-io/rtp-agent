@@ -76,6 +76,13 @@ type ConsoleArgs struct {
 
 type EvalRunner func(context.Context) (string, error)
 
+type workerStartAction string
+
+const (
+	workerStartActionRunWorker workerStartAction = "run_worker"
+	workerStartActionDevReload workerStartAction = "dev_reload"
+)
+
 type consoleAudioDevice struct {
 	Index             int
 	Name              string
@@ -191,7 +198,14 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 			}
 			return
 		}
-		runWorker(server, false)
+		if workerStartActionForArgs(args) == workerStartActionDevReload {
+			if err := RunWithDevMode(os.Args); err != nil {
+				logger.Logger.Errorw("Dev mode error", err)
+				os.Exit(1)
+			}
+			return
+		}
+		runWorker(server, args.DevMode)
 	case "dev":
 		args, drainTimeout, err := parseWorkerArgs(os.Args, true)
 		if err != nil {
@@ -237,6 +251,10 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 	args := CliArgs{DevMode: devMode, Reload: devMode, LogFormat: "json"}
 	var drainTimeout *int
+	subcommand := ""
+	if len(argv) > 1 {
+		subcommand = argv[1]
+	}
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
 		case "--log-level":
@@ -254,7 +272,13 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			if i >= len(argv) {
 				return CliArgs{}, nil, fmt.Errorf("missing value for --log-format")
 			}
-			args.LogFormat = strings.ToLower(argv[i])
+			logFormat := strings.ToLower(argv[i])
+			switch logFormat {
+			case "json", "colored":
+				args.LogFormat = logFormat
+			default:
+				return CliArgs{}, nil, fmt.Errorf("unknown log format %q", argv[i])
+			}
 		case "--url":
 			i++
 			if i >= len(argv) {
@@ -274,7 +298,7 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			}
 			args.APISecret = argv[i]
 		case "--drain-timeout":
-			if devMode {
+			if devMode || args.DevMode {
 				return CliArgs{}, nil, fmt.Errorf("--drain-timeout is only supported by start")
 			}
 			i++
@@ -287,10 +311,12 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			}
 			drainTimeout = &value
 		case "--simulation":
-			if devMode {
+			if subcommand != "start" {
 				return CliArgs{}, nil, fmt.Errorf("--simulation is only supported by start")
 			}
 			args.Simulation = true
+		case "--dev":
+			args.DevMode = true
 		case "--reload":
 			if !devMode {
 				return CliArgs{}, nil, fmt.Errorf("--reload is only supported by dev")
@@ -306,15 +332,22 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			if i >= len(argv) {
 				return CliArgs{}, nil, fmt.Errorf("missing value for --reload-addr")
 			}
-			if !devMode {
-				return CliArgs{}, nil, fmt.Errorf("--reload-addr requires --dev")
-			}
 			args.ReloadAddr = argv[i]
 		default:
 			return CliArgs{}, nil, fmt.Errorf("unknown worker option %q", argv[i])
 		}
 	}
+	if args.ReloadAddr != "" && !args.DevMode {
+		return CliArgs{}, nil, fmt.Errorf("--reload-addr requires --dev")
+	}
 	return args, drainTimeout, nil
+}
+
+func workerStartActionForArgs(args CliArgs) workerStartAction {
+	if args.DevMode && args.ReloadAddr != "" {
+		return workerStartActionDevReload
+	}
+	return workerStartActionRunWorker
 }
 
 func applyWorkerArgs(server *worker.AgentServer, args CliArgs, drainTimeout *int) error {

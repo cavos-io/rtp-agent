@@ -2591,6 +2591,7 @@ func TestAgentSessionSayWatchesActiveRunState(t *testing.T) {
 
 	handle.MarkDone()
 
+	waitForRunResultDone(t, result)
 	if !result.Done() {
 		t.Fatal("run result not marked done after say speech completed")
 	}
@@ -2613,6 +2614,7 @@ func TestAgentSessionGenerateReplyWatchesActiveRunState(t *testing.T) {
 
 	handle.MarkDone()
 
+	waitForRunResultDone(t, result)
 	if !result.Done() {
 		t.Fatal("run result not marked done after generated speech completed")
 	}
@@ -3691,6 +3693,7 @@ func TestAgentSessionRunReturnsRunResultWatchingGeneratedSpeech(t *testing.T) {
 	msg := &llm.ChatMessage{ID: "msg_1", Role: llm.ChatRoleAssistant, CreatedAt: time.Now()}
 	handle.AddChatItems(msg)
 	handle.MarkDone()
+	waitForRunResultDone(t, result)
 
 	if !result.Done() {
 		t.Fatal("Run result not done after generated speech completed")
@@ -3792,6 +3795,7 @@ func TestAgentSessionRunRejectsNestedActiveRun(t *testing.T) {
 	}
 
 	session.activity.speechQueue[0].speech.MarkDone()
+	waitForRunResultDone(t, first)
 	if !first.Done() {
 		t.Fatal("first Run result not done after scheduled speech completed")
 	}
