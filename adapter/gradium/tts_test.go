@@ -288,6 +288,24 @@ func TestGradiumTTSWebsocketNonNormalCloseEmitsReferenceFinalMarker(t *testing.T
 	}
 }
 
+func TestGradiumTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &gradiumTTSSynthesizeStream{
+		ctx:        ctx,
+		cancel:     cancel,
+		sampleRate: 48000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	_, err := stream.Next()
+
+	if err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func assertGradiumSetup(t *testing.T, payload map[string]any, key string, want string) {
 	t.Helper()
 	if got := payload[key]; got != want {

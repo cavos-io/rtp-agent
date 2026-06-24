@@ -427,6 +427,28 @@ func TestRespeecherTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestRespeecherTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &respeecherTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error),
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	_, err := stream.Next()
+
+	if err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestRespeecherTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	var httpCalls int
 	oldClient := http.DefaultClient

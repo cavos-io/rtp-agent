@@ -228,6 +228,27 @@ func TestSmallestAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTClosedStreamNextReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &smallestAISTTStream{
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error),
+		ctx:    ctx,
+		cancel: cancel,
+		done:   make(chan struct{}),
+		state:  &smallestAISTTStreamState{sessionID: "session-1"},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	_, err := stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestSmallestAISTTStreamAfterCloseIsRejected(t *testing.T) {
 	dials := 0
 	provider := NewSmallestAISTT("test-key",

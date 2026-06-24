@@ -898,6 +898,12 @@ func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		s.mu.Lock()
+		closed := s.closed
+		s.mu.Unlock()
+		if closed {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
 }

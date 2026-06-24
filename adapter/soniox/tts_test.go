@@ -277,6 +277,25 @@ func TestSonioxTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &sonioxTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	_, err := stream.Next()
+
+	if err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestSonioxTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	dialCalls := 0

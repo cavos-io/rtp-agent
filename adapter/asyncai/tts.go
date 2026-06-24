@@ -520,6 +520,9 @@ func (s *asyncAITTSStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.ctx != nil {
 		select {
 		case <-s.ctx.Done():
+			if s.isClosed() {
+				return nil, io.EOF
+			}
 			return nil, s.ctx.Err()
 		default:
 		}
@@ -533,6 +536,12 @@ func (s *asyncAITTSStream) Next() (*tts.SynthesizedAudio, error) {
 	s.finalSeen = chunked.finalSeen
 	s.mu.Unlock()
 	return audio, err
+}
+
+func (s *asyncAITTSStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func asyncAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, error) {

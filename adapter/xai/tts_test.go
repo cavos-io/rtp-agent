@@ -248,6 +248,21 @@ func TestXaiTTSStreamDoesNotDialBeforeInput(t *testing.T) {
 	}
 }
 
+func TestXaiTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	provider := NewXaiTTS("test-key", "ara", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if audio, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestXaiTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	handlerDone := make(chan struct{})
 	handlerErr := make(chan error, 1)

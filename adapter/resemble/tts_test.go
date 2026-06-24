@@ -434,6 +434,25 @@ func TestResembleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestResembleTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &resembleTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *coretts.SynthesizedAudio),
+		errCh:  make(chan error),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	_, err := stream.Next()
+
+	if err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestResembleTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	var httpCalls int
 	oldClient := http.DefaultClient

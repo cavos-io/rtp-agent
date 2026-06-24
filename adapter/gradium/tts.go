@@ -329,13 +329,25 @@ func (s *gradiumTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	if s.conn == nil {
+		return nil
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
+}
+
+func (s *gradiumTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *gradiumTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	default:
 	}

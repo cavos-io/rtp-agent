@@ -615,6 +615,20 @@ func TestAsyncAITTSStreamCloseWithoutWebsocket(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &asyncAITTSStream{ctx: ctx, cancel: cancel}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close err = %v, want nil", err)
+	}
+	_, err := stream.Next()
+
+	if err != io.EOF {
+		t.Fatalf("Next after Close err = %v, want EOF", err)
+	}
+}
+
 func TestAsyncAITTSStreamNextReturnsContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

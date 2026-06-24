@@ -467,6 +467,12 @@ func (s *resembleTTSSynthesizeStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	if s.conn == nil {
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return nil
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	err := s.conn.Close()
 	if s.provider != nil {
@@ -490,6 +496,9 @@ func (s *resembleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
 }

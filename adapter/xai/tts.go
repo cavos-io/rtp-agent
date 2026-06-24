@@ -465,6 +465,9 @@ func (s *xaiTTSSynthesizeStream) flushTextTokensLocked() []string {
 func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	select {
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	default:
 	}
@@ -498,6 +501,12 @@ func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return audio, nil
 		}
 	}
+}
+
+func (s *xaiTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *xaiTTSSynthesizeStream) finalAudioDone() *tts.SynthesizedAudio {

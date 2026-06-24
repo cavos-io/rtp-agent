@@ -201,6 +201,28 @@ func TestTelnyxTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &telnyxTTSStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error),
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	_, err := stream.Next()
+
+	if err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestTelnyxTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	cancelled := false
 	closeCalls := 0

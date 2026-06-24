@@ -330,6 +330,35 @@ func TestGradiumSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTPendingNextReturnsEOFAfterClose(t *testing.T) {
+	ctx := newGradiumControlledCancelContext()
+	stream := &gradiumSTTStream{
+		ctx:    ctx,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error),
+	}
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		resultCh <- err
+	}()
+	<-ctx.doneObserved
+
+	stream.mu.Lock()
+	stream.closed = true
+	stream.mu.Unlock()
+	ctx.cancel()
+
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("pending Next after Close error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for pending Next after Close")
+	}
+}
+
 func TestGradiumSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
@@ -641,6 +670,26 @@ func TestGradiumSTTProcessMessagesMapsTextAndVADFinal(t *testing.T) {
 	assertGradiumSTTEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
 }
 
+func TestGradiumSTTZeroVADBucketDisablesFinalizationLikeReference(t *testing.T) {
+	bucket := 0
+	state := &gradiumSTTMessageState{language: "en", vadBucket: &bucket, vadThreshold: 0.9, delayInTokens: 1}
+
+	if _, err := processGradiumSTTMessage(state, []byte(`{"type":"text","text":"hello","start_s":0}`), 0); err != nil {
+		t.Fatalf("process text: %v", err)
+	}
+
+	events, err := processGradiumSTTMessage(state, []byte(`{"type":"step","vad":[{"inactivity_prob":0.95}]}`), 0)
+	if err != nil {
+		t.Fatalf("process first vad step: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want no events when reference treats vad_bucket=0 as disabled", events)
+	}
+	if state.remainingSteps != nil {
+		t.Fatalf("remainingSteps = %d, want nil when vad_bucket=0 disables VAD", *state.remainingSteps)
+	}
+}
+
 func TestGradiumSTTProcessReadyUpdatesTimingDefaults(t *testing.T) {
 	state := &gradiumSTTMessageState{}
 	_, err := processGradiumSTTMessage(state, []byte(`{"type":"ready","delay_in_tokens":9,"frame_size":960}`), 0)
@@ -698,6 +747,42 @@ func gradiumBytesOfLength(length int, value byte) []byte {
 		data[i] = value
 	}
 	return data
+}
+
+type gradiumControlledCancelContext struct {
+	context.Context
+	done         chan struct{}
+	doneObserved chan struct{}
+}
+
+func newGradiumControlledCancelContext() *gradiumControlledCancelContext {
+	return &gradiumControlledCancelContext{
+		Context:      context.Background(),
+		done:         make(chan struct{}),
+		doneObserved: make(chan struct{}),
+	}
+}
+
+func (c *gradiumControlledCancelContext) Done() <-chan struct{} {
+	select {
+	case <-c.doneObserved:
+	default:
+		close(c.doneObserved)
+	}
+	return c.done
+}
+
+func (c *gradiumControlledCancelContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (c *gradiumControlledCancelContext) cancel() {
+	close(c.done)
 }
 
 func assertGradiumSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventType stt.SpeechEventType, text string) {

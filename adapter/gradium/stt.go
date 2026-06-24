@@ -395,6 +395,9 @@ func (s *gradiumSTTStream) Next() (*stt.SpeechEvent, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
 }
@@ -461,7 +464,7 @@ func processGradiumSTTMessage(state *gradiumSTTMessageState, payload []byte, sta
 }
 
 func processGradiumSTTStep(state *gradiumSTTMessageState, raw map[string]any) []*stt.SpeechEvent {
-	if !state.speaking || state.vadBucket == nil {
+	if !state.speaking || state.vadBucket == nil || *state.vadBucket == 0 {
 		return nil
 	}
 	vad, ok := raw["vad"].([]any)
