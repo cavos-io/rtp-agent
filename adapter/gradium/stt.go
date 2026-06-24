@@ -461,7 +461,7 @@ func processGradiumSTTMessage(state *gradiumSTTMessageState, payload []byte, sta
 }
 
 func processGradiumSTTStep(state *gradiumSTTMessageState, raw map[string]any) []*stt.SpeechEvent {
-	if !state.speaking || state.vadBucket == nil {
+	if !state.speaking || state.vadBucket == nil || *state.vadBucket == 0 {
 		return nil
 	}
 	vad, ok := raw["vad"].([]any)

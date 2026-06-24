@@ -641,6 +641,26 @@ func TestGradiumSTTProcessMessagesMapsTextAndVADFinal(t *testing.T) {
 	assertGradiumSTTEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
 }
 
+func TestGradiumSTTZeroVADBucketDisablesFinalizationLikeReference(t *testing.T) {
+	bucket := 0
+	state := &gradiumSTTMessageState{language: "en", vadBucket: &bucket, vadThreshold: 0.9, delayInTokens: 1}
+
+	if _, err := processGradiumSTTMessage(state, []byte(`{"type":"text","text":"hello","start_s":0}`), 0); err != nil {
+		t.Fatalf("process text: %v", err)
+	}
+
+	events, err := processGradiumSTTMessage(state, []byte(`{"type":"step","vad":[{"inactivity_prob":0.95}]}`), 0)
+	if err != nil {
+		t.Fatalf("process first vad step: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want no events when reference treats vad_bucket=0 as disabled", events)
+	}
+	if state.remainingSteps != nil {
+		t.Fatalf("remainingSteps = %d, want nil when vad_bucket=0 disables VAD", *state.remainingSteps)
+	}
+}
+
 func TestGradiumSTTProcessReadyUpdatesTimingDefaults(t *testing.T) {
 	state := &gradiumSTTMessageState{}
 	_, err := processGradiumSTTMessage(state, []byte(`{"type":"ready","delay_in_tokens":9,"frame_size":960}`), 0)
