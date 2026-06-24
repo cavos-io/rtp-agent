@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -316,7 +317,7 @@ func (s *SmallestAISTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("smallestai stt error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("SmallestAI STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result smallestAIBatchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
