@@ -268,6 +268,20 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	}
 }
 
+func TestProcPoolCloseContextHonorsExplicitZeroTimeout(t *testing.T) {
+	ctx, cancel := closeContext(0)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("closeContext(0) is not already expired")
+	}
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("closeContext(0) error = %v, want context deadline exceeded", ctx.Err())
+	}
+}
+
 func TestProcPoolPassesCloseTimeoutToProcessExecutors(t *testing.T) {
 	pool := NewProcPool(1, ExecutorTypeProcess, nil)
 	timeout := 3 * time.Second

@@ -387,9 +387,6 @@ func (p *ProcPool) closeContext() (context.Context, context.CancelFunc) {
 }
 
 func closeContext(closeTimeout time.Duration) (context.Context, context.CancelFunc) {
-	if closeTimeout <= 0 {
-		closeTimeout = 5 * time.Second
-	}
 	return context.WithTimeout(context.Background(), closeTimeout)
 }
 
