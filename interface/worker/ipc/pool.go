@@ -46,6 +46,10 @@ type ProcPool struct {
 	executorFactory func(id string) JobExecutor
 }
 
+type closeTimeoutSetter interface {
+	SetCloseTimeout(time.Duration)
+}
+
 func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() error) *ProcPool {
 	pool := &ProcPool{
 		maxProcesses: maxProcesses,
@@ -62,7 +66,9 @@ func NewProcPool(maxProcesses int, executorType ExecutorType, entrypoint func() 
 func (p *ProcPool) newExecutor(id string) JobExecutor {
 	switch p.executorType {
 	case ExecutorTypeProcess:
-		return NewProcessJobExecutor(id)
+		executor := NewProcessJobExecutor(id)
+		executor.SetCloseTimeout(p.closeTimeout)
+		return executor
 	case ExecutorTypeThread:
 		return NewThreadJobExecutor(id, p.entrypoint)
 	default:
@@ -292,6 +298,11 @@ func (p *ProcPool) SetCloseTimeout(timeout time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closeTimeout = timeout
+	for _, executor := range p.executors {
+		if setter, ok := executor.(closeTimeoutSetter); ok {
+			setter.SetCloseTimeout(timeout)
+		}
+	}
 }
 
 func (p *ProcPool) On(event ProcPoolEvent, handler func(JobExecutor)) {
