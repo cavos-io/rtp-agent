@@ -220,7 +220,7 @@ func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("minimax tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("MiniMax TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &minimaxTTSChunkedStream{

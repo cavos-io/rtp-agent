@@ -12,6 +12,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -146,7 +147,7 @@ func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("lmnt tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("LMNT TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &lmntTTSChunkedStream{

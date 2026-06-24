@@ -167,7 +167,7 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("gnani tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Gnani TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &ttsChunkedStream{resp: resp, sampleRate: t.sampleRate, numChannels: t.numChannels}, nil
 }

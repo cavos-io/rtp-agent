@@ -226,7 +226,7 @@ func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("fishaudio tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("FishAudio TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &fishaudioTTSChunkedStream{

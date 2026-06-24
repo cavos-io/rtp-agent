@@ -208,7 +208,7 @@ func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("neuphonic tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Neuphonic TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &neuphonicTTSChunkedStream{

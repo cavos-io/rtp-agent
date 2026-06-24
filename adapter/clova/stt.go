@@ -221,9 +221,8 @@ func clovaSTTResponseToEvent(s *ClovaSTT, resp clovaSTTResponse) (*stt.SpeechEve
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventInterimTranscript,
 		Alternatives: []stt.SpeechData{{
-			Text:       resp.Text,
-			Language:   s.language,
-			Confidence: resp.Confidence,
+			Text:     resp.Text,
+			Language: s.language,
 		}},
 	}, nil
 }

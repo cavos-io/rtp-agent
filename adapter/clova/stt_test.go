@@ -215,6 +215,21 @@ func TestClovaSTTSpeechEventAndThreshold(t *testing.T) {
 	}
 }
 
+func TestClovaSTTAcceptedTranscriptOmitsProviderConfidenceLikeReference(t *testing.T) {
+	provider := NewClovaSTT("secret", "https://clova.example",
+		WithClovaSTTThreshold(0.6),
+	)
+
+	event, err := clovaSTTResponseToEvent(provider, clovaSTTResponse{Text: "hello", Confidence: 0.9})
+	if err != nil {
+		t.Fatalf("response event: %v", err)
+	}
+
+	if event.Alternatives[0].Confidence != 0 {
+		t.Fatalf("confidence = %v, want reference default 0 after threshold filtering", event.Alternatives[0].Confidence)
+	}
+}
+
 func readClovaMultipartFields(t *testing.T, req *http.Request) map[string]string {
 	t.Helper()
 	body, err := io.ReadAll(req.Body)

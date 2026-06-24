@@ -146,6 +146,36 @@ func TestGnaniTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestGnaniTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniTTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewTTS("test-key")
+
+	stream, err := provider.Synthesize(context.Background(), "namaste")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
 func TestGnaniTTSOptionsMatchReference(t *testing.T) {
 	provider := NewTTS("test-key",
 		WithBaseURL("https://gnani.example/"),
@@ -535,4 +565,10 @@ func gnaniTestWAV(payload []byte) []byte {
 	copy(header[0:4], "RIFF")
 	copy(header[8:12], "WAVE")
 	return append(header, payload...)
+}
+
+type gnaniTTSRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f gnaniTTSRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
