@@ -593,6 +593,9 @@ func (s *rimeTTSSynthesizeStream) isClosed() bool {
 }
 
 func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case audio, ok := <-s.events:
 		if !ok {
