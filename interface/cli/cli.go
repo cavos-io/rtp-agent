@@ -76,6 +76,13 @@ type ConsoleArgs struct {
 
 type EvalRunner func(context.Context) (string, error)
 
+type workerStartAction string
+
+const (
+	workerStartActionRunWorker workerStartAction = "run_worker"
+	workerStartActionDevReload workerStartAction = "dev_reload"
+)
+
 type consoleAudioDevice struct {
 	Index             int
 	Name              string
@@ -187,6 +194,13 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 		if handled, err := runProcessJobFromEnv(ctx, server, currentEnvMap()); handled {
 			if err != nil && !errors.Is(err, context.Canceled) {
 				logger.Logger.Errorw("Process job error", err)
+				os.Exit(1)
+			}
+			return
+		}
+		if workerStartActionForArgs(args) == workerStartActionDevReload {
+			if err := RunWithDevMode(os.Args); err != nil {
+				logger.Logger.Errorw("Dev mode error", err)
 				os.Exit(1)
 			}
 			return
@@ -323,6 +337,13 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 		return CliArgs{}, nil, fmt.Errorf("--reload-addr requires --dev")
 	}
 	return args, drainTimeout, nil
+}
+
+func workerStartActionForArgs(args CliArgs) workerStartAction {
+	if args.DevMode && args.ReloadAddr != "" {
+		return workerStartActionDevReload
+	}
+	return workerStartActionRunWorker
 }
 
 func applyWorkerArgs(server *worker.AgentServer, args CliArgs, drainTimeout *int) error {

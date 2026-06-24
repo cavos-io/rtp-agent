@@ -643,6 +643,14 @@ func TestParseWorkerArgsSupportsReferenceStartDevFlag(t *testing.T) {
 	}
 }
 
+func TestWorkerStartActionUsesReferenceDevReloadWhenReloadAddrPresent(t *testing.T) {
+	args := CliArgs{DevMode: true, ReloadAddr: "127.0.0.1:9999"}
+
+	if got, want := workerStartActionForArgs(args), workerStartActionDevReload; got != want {
+		t.Fatalf("workerStartActionForArgs() = %q, want %q", got, want)
+	}
+}
+
 func TestParseWorkerArgsRejectsReloadAddrOutsideDev(t *testing.T) {
 	_, _, err := parseWorkerArgs([]string{
 		"worker", "start",
