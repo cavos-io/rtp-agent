@@ -89,6 +89,7 @@ type SpeechHandle struct {
 	scheduledCh        chan struct{}
 	authorizationCh    chan struct{}
 	generationChs      []chan struct{}
+	interruptTimer     *time.Timer
 	nextCallbackID     uint64
 	doneCallbacks      map[uint64]func(*SpeechHandle)
 	itemAddedCallbacks map[uint64]func(llm.ChatItem)
@@ -154,13 +155,11 @@ func (s *SpeechHandle) Interrupt(force bool) error {
 	if !s.IsInterrupted() && !s.IsDone() {
 		close(s.interruptCh)
 
-		// Start a timeout to force-close doneCh if it doesn't resolve naturally
-		go func() {
-			time.Sleep(InterruptionTimeout)
+		s.interruptTimer = time.AfterFunc(InterruptionTimeout, func() {
 			if !s.IsDone() {
 				s.MarkDone()
 			}
-		}()
+		})
 	}
 
 	return nil
@@ -274,6 +273,10 @@ func (s *SpeechHandle) MarkDone() {
 	s.cancelPrecomputedGenerationLocked()
 	if !alreadyDone {
 		close(s.doneCh)
+	}
+	if s.interruptTimer != nil {
+		s.interruptTimer.Stop()
+		s.interruptTimer = nil
 	}
 	if len(s.generationChs) > 0 {
 		s.closeGenerationLocked(len(s.generationChs) - 1)

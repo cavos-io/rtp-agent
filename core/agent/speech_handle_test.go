@@ -152,6 +152,23 @@ func TestSpeechHandleWaitIfNotInterruptedReturnsOnInterrupt(t *testing.T) {
 	}
 }
 
+func TestSpeechHandleMarkDoneCancelsInterruptTimeout(t *testing.T) {
+	speech := NewSpeechHandle(true, DefaultInputDetails())
+
+	if err := speech.Interrupt(false); err != nil {
+		t.Fatalf("Interrupt(false) error = %v, want nil", err)
+	}
+	if speech.interruptTimer == nil {
+		t.Fatal("interrupt timeout not armed after interrupt")
+	}
+
+	speech.MarkDone()
+
+	if speech.interruptTimer != nil {
+		t.Fatal("interrupt timeout still armed after MarkDone")
+	}
+}
+
 func TestSpeechHandleGenerationIDsTrackSteps(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
 
