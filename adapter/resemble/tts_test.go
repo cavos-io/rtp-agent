@@ -22,6 +22,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type resembleCloseErrorBody struct {
+	closed bool
+}
+
+func (b *resembleCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *resembleCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestResembleTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewResembleTTS("test-key", "")
 
@@ -234,6 +250,21 @@ func TestResembleTTSChunkedStreamDecodesReferenceResponse(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", audio.Frame.SampleRate)
+	}
+}
+
+func TestResembleTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &resembleCloseErrorBody{}
+	stream := &resembleTTSChunkedStream{resp: &http.Response{Body: body}}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want nil EOF", audio, err)
 	}
 }
 
