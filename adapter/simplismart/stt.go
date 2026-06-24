@@ -446,6 +446,9 @@ func (s *simplismartSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = newSimplismartSTTAudioByteStream()
 	}
@@ -455,6 +458,9 @@ func (s *simplismartSTTStream) PushFrame(frame *model.AudioFrame) error {
 func (s *simplismartSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if s.audioBStream == nil {
 		return nil
 	}
@@ -467,6 +473,7 @@ func (s *simplismartSTTStream) writeAudioFramesLocked(frames []*model.AudioFrame
 			continue
 		}
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, frame.Data); err != nil {
+			_ = s.closeLocked()
 			return err
 		}
 	}
@@ -481,6 +488,10 @@ func newSimplismartSTTAudioByteStream() *audio.AudioByteStream {
 func (s *simplismartSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *simplismartSTTStream) closeLocked() error {
 	if s.closed {
 		return nil
 	}
