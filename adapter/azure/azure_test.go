@@ -1242,6 +1242,36 @@ func TestAzureSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	receiveAzureTestSignal(t, serverClosed, "server close")
 }
 
+func TestAzureSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued final",
+		}},
+	}
+
+	for i := 0; i < 64; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		stream := &azureSTTStream{
+			ctx:    ctx,
+			cancel: cancel,
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+		}
+		stream.events <- want
+		stream.errCh <- errors.New("stream failed")
+
+		got, err := stream.Next()
+		cancel()
+		if err != nil {
+			t.Fatalf("iteration %d: Next() error = %v, want queued event before stream error", i, err)
+		}
+		if got != want {
+			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
+		}
+	}
+}
+
 func TestAzureSTTStreamAfterCloseIsRejected(t *testing.T) {
 	dials := 0
 	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
