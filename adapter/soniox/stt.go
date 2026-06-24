@@ -353,10 +353,16 @@ func (s *sonioxStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
 }
 
 func (s *sonioxStream) Flush() error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	return nil
 }
 

@@ -290,6 +290,23 @@ func TestSonioxSTTClosedStreamNextIgnoresQueuedTranscript(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTClosedStreamRejectsInput(t *testing.T) {
+	stream := &sonioxStream{closed: true}
+	frame := &model.AudioFrame{
+		Data:              []byte{0, 0},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+}
+
 func TestSonioxSTTOptionsBuildReferenceConfig(t *testing.T) {
 	provider := NewSonioxSTT("test-key",
 		WithSonioxBaseURL("ws://soniox.example/ws"),
