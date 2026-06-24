@@ -222,10 +222,14 @@ type ttsChunkedStream struct {
 	resp        *http.Response
 	sampleRate  int
 	numChannels int
+	closed      bool
 	finalSent   bool
 }
 
 func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if err != nil {
@@ -254,6 +258,7 @@ func (s *ttsChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *ttsChunkedStream) Close() error {
+	s.closed = true
 	s.finalSent = true
 	return s.resp.Body.Close()
 }

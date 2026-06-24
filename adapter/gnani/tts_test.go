@@ -19,6 +19,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type gnaniTTSCloseErrorBody struct {
+	closed bool
+}
+
+func (b *gnaniTTSCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *gnaniTTSCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestGnaniTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewTTS("test-key")
 
@@ -300,6 +316,25 @@ func TestGnaniTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testin
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
+func TestGnaniTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &gnaniTTSCloseErrorBody{}
+	stream := &ttsChunkedStream{
+		resp:        &http.Response{Body: body},
+		sampleRate:  16000,
+		numChannels: 1,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want nil EOF", audio, err)
 	}
 }
 
