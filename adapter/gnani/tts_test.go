@@ -403,6 +403,22 @@ func TestGnaniTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestGnaniTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &gnaniTTSSynthesizeStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestGnaniTTSStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
 	conn := newGnaniProviderCloseWebsocketConn(t, websocket.CloseUnsupportedData)
 

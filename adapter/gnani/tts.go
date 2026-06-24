@@ -384,6 +384,9 @@ func (s *gnaniTTSSynthesizeStream) Close() error {
 }
 
 func (s *gnaniTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case audio, ok := <-s.events:
 		if !ok {
