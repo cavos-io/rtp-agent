@@ -92,6 +92,36 @@ func TestWorkerMetadataJSONContract(t *testing.T) {
 	}
 }
 
+func TestWorkerMetadataIncludesCompatibilityFields(t *testing.T) {
+	metadata := workerlivekit.WorkerMetadata(workerlivekit.WorkerMetadataOptions{
+		AgentName:                 "support-agent",
+		WorkerType:                string(workerlivekit.WorkerTypeRoom),
+		SDKVersion:                "1.5.2",
+		ProtocolVersion:           1,
+		RuntimeName:               "rtp-agent",
+		RuntimeVersion:            "0.7.0",
+		CompatibilityProfile:      "livekit-console-1.5.2-basic",
+		CompatibilityFamily:       "livekit-agents-python",
+		CompatibilityCapabilities: []string{"worker_registration"},
+	})
+
+	if metadata.Runtime != "rtp-agent" {
+		t.Fatalf("Runtime = %q, want rtp-agent", metadata.Runtime)
+	}
+	if metadata.RuntimeVersion != "0.7.0" {
+		t.Fatalf("RuntimeVersion = %q, want 0.7.0", metadata.RuntimeVersion)
+	}
+	if metadata.CompatibilityProfile != "livekit-console-1.5.2-basic" {
+		t.Fatalf("CompatibilityProfile = %q, want profile", metadata.CompatibilityProfile)
+	}
+	if metadata.CompatibilityFamily != "livekit-agents-python" {
+		t.Fatalf("CompatibilityFamily = %q, want livekit-agents-python", metadata.CompatibilityFamily)
+	}
+	if len(metadata.CompatibilityCapabilities) != 1 || metadata.CompatibilityCapabilities[0] != "worker_registration" {
+		t.Fatalf("CompatibilityCapabilities = %#v, want worker_registration", metadata.CompatibilityCapabilities)
+	}
+}
+
 func TestWorkerRuntimeMetadataUsesRuntimeNodeAndHostedState(t *testing.T) {
 	metadata := workerlivekit.WorkerRuntimeMetadata(workerlivekit.WorkerRuntimeMetadataOptions{
 		AgentName:       "support-agent",

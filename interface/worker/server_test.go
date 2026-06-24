@@ -557,8 +557,14 @@ func TestWorkerHTTPHandlerReportsWorkerMetadata(t *testing.T) {
 		`"worker_type":"JT_ROOM"`,
 		`"worker_load":0.42`,
 		`"active_jobs":1`,
+		`"sdk_version":"1.5.2"`,
 		`"protocol_version":1`,
 		`"project_type":"go"`,
+		`"runtime":"rtp-agent"`,
+		`"runtime_version":"0.1.0"`,
+		`"compatibility_profile":"livekit-console-1.5.2-basic"`,
+		`"compatibility_family":"livekit-agents-python"`,
+		`"compatibility_capabilities":["worker_registration","job_lifecycle","worker_metadata","room_io_basic","session_metrics_basic"]`,
 		`"node_name":"`,
 		`"hosted":true`,
 	} {
@@ -609,6 +615,89 @@ func TestWorkerHTTPHandlerDoesNotExposeLiveKitMetadataForAgora(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("worker status = %d, want 404 for Agora transport", rec.Code)
+	}
+}
+
+func TestResolveWorkerOptionsDefaultsLiveKitCompatibility(t *testing.T) {
+	opts := resolveWorkerOptions(WorkerOptions{})
+
+	if opts.Version != "1.5.2" {
+		t.Fatalf("Version = %q, want LiveKit advertised compatibility version", opts.Version)
+	}
+	if opts.Compatibility.Profile != CompatibilityProfileLiveKitConsole152Basic {
+		t.Fatalf("Compatibility.Profile = %q, want %q", opts.Compatibility.Profile, CompatibilityProfileLiveKitConsole152Basic)
+	}
+	if opts.Compatibility.AdvertisedFamily != CompatibilityFamilyLiveKitAgentsPython {
+		t.Fatalf("Compatibility.AdvertisedFamily = %q, want %q", opts.Compatibility.AdvertisedFamily, CompatibilityFamilyLiveKitAgentsPython)
+	}
+}
+
+func TestResolveWorkerOptionsPreservesExplicitVersionOverride(t *testing.T) {
+	opts := resolveWorkerOptions(WorkerOptions{
+		Version:        "9.9.9",
+		RuntimeVersion: "0.7.0",
+	})
+
+	if opts.Version != "9.9.9" {
+		t.Fatalf("Version = %q, want explicit override", opts.Version)
+	}
+	if opts.Compatibility.AdvertisedVersion != "9.9.9" {
+		t.Fatalf("Compatibility.AdvertisedVersion = %q, want explicit override", opts.Compatibility.AdvertisedVersion)
+	}
+	if opts.Compatibility.RuntimeVersion != "0.7.0" {
+		t.Fatalf("Compatibility.RuntimeVersion = %q, want configured runtime version", opts.Compatibility.RuntimeVersion)
+	}
+}
+
+func TestResolveWorkerOptionsReadsCompatibilityEnvForLiveKit(t *testing.T) {
+	t.Setenv("RTP_AGENT_VERSION", "0.7.0")
+	t.Setenv("RTP_AGENT_COMPATIBILITY_PROFILE", CompatibilityProfileLiveKitConsole152Basic)
+	t.Setenv("RTP_AGENT_LIVEKIT_COMPAT_VERSION", "1.5.15")
+
+	opts := resolveWorkerOptions(WorkerOptions{})
+
+	if opts.Version != "1.5.15" {
+		t.Fatalf("Version = %q, want LiveKit compatibility override", opts.Version)
+	}
+	if opts.RuntimeVersion != "0.7.0" {
+		t.Fatalf("RuntimeVersion = %q, want env runtime version", opts.RuntimeVersion)
+	}
+	if opts.CompatibilityProfile != CompatibilityProfileLiveKitConsole152Basic {
+		t.Fatalf("CompatibilityProfile = %q, want %q", opts.CompatibilityProfile, CompatibilityProfileLiveKitConsole152Basic)
+	}
+	if opts.Compatibility.AdvertisedVersion != "1.5.15" {
+		t.Fatalf("Compatibility.AdvertisedVersion = %q, want LiveKit compatibility override", opts.Compatibility.AdvertisedVersion)
+	}
+}
+
+func TestResolveWorkerOptionsDefaultsAgoraCompatibility(t *testing.T) {
+	opts := resolveWorkerOptions(WorkerOptions{Transport: WorkerTransportAgora})
+
+	if opts.Compatibility.Profile != CompatibilityProfileAgoraRTCBasic {
+		t.Fatalf("Compatibility.Profile = %q, want %q", opts.Compatibility.Profile, CompatibilityProfileAgoraRTCBasic)
+	}
+	if opts.Compatibility.AdvertisedFamily != CompatibilityFamilyAgoraRTCTransport {
+		t.Fatalf("Compatibility.AdvertisedFamily = %q, want %q", opts.Compatibility.AdvertisedFamily, CompatibilityFamilyAgoraRTCTransport)
+	}
+	if opts.Version == "1.5.2" {
+		t.Fatalf("Version = %q, want non-LiveKit compatibility for Agora", opts.Version)
+	}
+}
+
+func TestResolveWorkerOptionsDoesNotApplyLiveKitCompatibilityEnvForAgora(t *testing.T) {
+	t.Setenv("RTP_AGENT_VERSION", "0.7.0")
+	t.Setenv("RTP_AGENT_LIVEKIT_COMPAT_VERSION", "1.5.15")
+
+	opts := resolveWorkerOptions(WorkerOptions{Transport: WorkerTransportAgora})
+
+	if opts.Compatibility.Profile != CompatibilityProfileAgoraRTCBasic {
+		t.Fatalf("Compatibility.Profile = %q, want %q", opts.Compatibility.Profile, CompatibilityProfileAgoraRTCBasic)
+	}
+	if opts.Version == "1.5.15" {
+		t.Fatalf("Version = %q, want LiveKit compatibility override ignored for Agora", opts.Version)
+	}
+	if opts.Compatibility.RuntimeVersion != "0.7.0" {
+		t.Fatalf("Compatibility.RuntimeVersion = %q, want env runtime version", opts.Compatibility.RuntimeVersion)
 	}
 }
 
@@ -781,6 +870,64 @@ func TestUpdateOptionsMergesConfiguredValuesBeforeRun(t *testing.T) {
 	}
 	if server.Options.Permissions != permissions {
 		t.Fatal("Permissions was not replaced with updated pointer")
+	}
+}
+
+func TestUpdateOptionsMergesCompatibilityValuesBeforeRun(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	err := server.UpdateOptions(WorkerOptions{
+		Version:              "1.5.15",
+		RuntimeVersion:       "0.7.0",
+		CompatibilityProfile: CompatibilityProfileLiveKitConsole152Basic,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	if server.Options.Version != "1.5.15" {
+		t.Fatalf("Version = %q, want updated compatibility version", server.Options.Version)
+	}
+	if server.Options.RuntimeVersion != "0.7.0" {
+		t.Fatalf("RuntimeVersion = %q, want updated runtime version", server.Options.RuntimeVersion)
+	}
+	if server.Options.CompatibilityProfile != CompatibilityProfileLiveKitConsole152Basic {
+		t.Fatalf("CompatibilityProfile = %q, want %q", server.Options.CompatibilityProfile, CompatibilityProfileLiveKitConsole152Basic)
+	}
+	if server.Options.Compatibility.AdvertisedVersion != "1.5.15" {
+		t.Fatalf("Compatibility.AdvertisedVersion = %q, want updated compatibility version", server.Options.Compatibility.AdvertisedVersion)
+	}
+	if server.Options.Compatibility.RuntimeVersion != "0.7.0" {
+		t.Fatalf("Compatibility.RuntimeVersion = %q, want updated runtime version", server.Options.Compatibility.RuntimeVersion)
+	}
+}
+
+func TestUpdateOptionsRejectsUnknownCompatibilityProfile(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{})
+
+	err := server.UpdateOptions(WorkerOptions{
+		CompatibilityProfile: "missing-profile",
+	})
+	if err == nil {
+		t.Fatal("UpdateOptions() error = nil, want compatibility profile error")
+	}
+	if !strings.Contains(err.Error(), `unknown worker compatibility profile "missing-profile"`) {
+		t.Fatalf("UpdateOptions() error = %q, want unknown profile error", err)
+	}
+}
+
+func TestValidateRunPreconditionsRejectsUnknownCompatibilityProfile(t *testing.T) {
+	server := NewAgentServer(WorkerOptions{
+		CompatibilityProfile: "missing-profile",
+	})
+	server.entrypointFnc = func(*JobContext) error { return nil }
+
+	err := server.validateRunPreconditions()
+	if err == nil {
+		t.Fatal("validateRunPreconditions() error = nil, want compatibility profile error")
+	}
+	if !strings.Contains(err.Error(), `unknown worker compatibility profile "missing-profile"`) {
+		t.Fatalf("validateRunPreconditions() error = %q, want unknown profile error", err)
 	}
 }
 
