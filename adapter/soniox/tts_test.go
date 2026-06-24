@@ -401,10 +401,24 @@ func TestSonioxTTSAudioFromMessageIgnoresOtherStreams(t *testing.T) {
 	}
 }
 
-func TestSonioxTTSAudioFromMessageReportsProviderError(t *testing.T) {
+func TestSonioxTTSAudioFromMessageReportsProviderErrorAsAPIStatusError(t *testing.T) {
 	_, _, _, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"stream-1","error_code":429,"error_message":"rate limited"}`), "stream-1", 24000)
-	if err == nil || !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "rate limited") {
-		t.Fatalf("error = %v, want provider error", err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != 429 {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("retryable = false, want true for rate-limit error")
+	}
+	body, ok := statusErr.Body.(string)
+	if !ok {
+		t.Fatalf("body = %T %#v, want string", statusErr.Body, statusErr.Body)
+	}
+	if !strings.Contains(err.Error(), "rate limited") || !strings.Contains(body, "stream_id=stream-1") {
+		t.Fatalf("error = %v body = %#v, want provider message and stream body", err, statusErr.Body)
 	}
 }
 

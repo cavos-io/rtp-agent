@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -554,7 +555,14 @@ func sonioxTTSAudioFromMessage(payload []byte, streamID string, sampleRate int) 
 		return nil, false, false, nil
 	}
 	if message.ErrorCode != nil {
-		return nil, false, false, fmt.Errorf("soniox tts error %v: %s", message.ErrorCode, message.ErrorMessage)
+		code := sonioxTTSErrorStatusCode(message.ErrorCode)
+		messageText := message.ErrorMessage
+		if messageText == "" {
+			messageText = "Unknown error"
+		}
+		retryable := code == http.StatusRequestTimeout || code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+		body := fmt.Sprintf("stream_id=%s %s", streamID, string(payload))
+		return nil, false, false, llm.NewAPIStatusErrorWithRetryable(messageText, code, "", body, retryable)
 	}
 	var audio *tts.SynthesizedAudio
 	if message.Audio != "" {
@@ -565,6 +573,24 @@ func sonioxTTSAudioFromMessage(payload []byte, streamID string, sampleRate int) 
 		audio = sonioxTTSAudioFrame(data, sampleRate)
 	}
 	return audio, message.AudioEnd, message.Terminated, nil
+}
+
+func sonioxTTSErrorStatusCode(code any) int {
+	switch v := code.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return int(n)
+		}
+	case string:
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return http.StatusInternalServerError
 }
 
 func sonioxTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
