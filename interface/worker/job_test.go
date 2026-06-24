@@ -201,6 +201,24 @@ func TestJobContextShutdownContinuesAfterCallbackPanic(t *testing.T) {
 	}
 }
 
+func TestJobContextShutdownDisconnectsBeforeCallbacks(t *testing.T) {
+	var calls []string
+	callbacks := []func(string){
+		func(reason string) {
+			calls = append(calls, "callback:"+reason)
+		},
+	}
+
+	livekitJobContextRunShutdown("job done", callbacks, func() {
+		calls = append(calls, "disconnect")
+	}, "job_shutdown_order")
+
+	want := []string{"disconnect", "callback:job done"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("shutdown order = %#v, want %#v", calls, want)
+	}
+}
+
 func TestNewJobContextInitializesSessionReportMetadata(t *testing.T) {
 	ctx := NewJobContext(
 		&livekit.Job{

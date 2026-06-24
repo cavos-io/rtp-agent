@@ -652,21 +652,31 @@ func (c *JobContext) Shutdown(reasons ...string) {
 		if c.shutdownDone == nil {
 			c.shutdownDone = make(chan struct{})
 		}
-		for _, callback := range c.shutdownCallbacks {
-			func(callback func(string)) {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						logger.Logger.Errorw("Shutdown callback panicked", fmt.Errorf("%v", recovered), "job_id", c.JobID())
-					}
-				}()
-				callback(reason)
-			}(callback)
-		}
+		disconnect := func() {}
 		if c.Room != nil {
-			c.Room.Disconnect()
+			disconnect = func() {
+				c.Room.Disconnect()
+			}
 		}
+		livekitJobContextRunShutdown(reason, c.shutdownCallbacks, disconnect, c.JobID())
 		close(c.shutdownDone)
 	})
+}
+
+func livekitJobContextRunShutdown(reason string, callbacks []func(string), disconnect func(), jobID string) {
+	if disconnect != nil {
+		disconnect()
+	}
+	for _, callback := range callbacks {
+		func(callback func(string)) {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logger.Logger.Errorw("Shutdown callback panicked", fmt.Errorf("%v", recovered), "job_id", jobID)
+				}
+			}()
+			callback(reason)
+		}(callback)
+	}
 }
 
 func (c *JobContext) ShutdownDone() <-chan struct{} {
