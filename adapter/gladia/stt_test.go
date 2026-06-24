@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/gorilla/websocket"
 )
@@ -570,6 +571,23 @@ func TestGladiaInterimResultsFalseSuppressesInterimTranscript(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech {
 		t.Fatalf("events = %+v, want only start_of_speech when interim_results is false", events)
+	}
+}
+
+func TestGladiaErrorMessageReturnsAPIConnectionError(t *testing.T) {
+	_, err := processGladiaMessage(&gladiaSTTStreamState{}, map[string]any{
+		"type": "error",
+		"data": map[string]any{"message": "bad audio"},
+	})
+	if err == nil {
+		t.Fatal("error message returned nil error, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("error message error = %T %v, want APIConnectionError", err, err)
+	}
+	if connErr.Message != "Gladia WebSocket error: map[message:bad audio]" {
+		t.Fatalf("APIConnectionError message = %q, want reference context", connErr.Message)
 	}
 }
 
