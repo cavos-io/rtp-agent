@@ -370,18 +370,27 @@ func murfTTSWebsocketPacket(t *MurfTTS) map[string]interface{} {
 }
 
 type murfTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	finalSent  bool
-	closed     bool
+	resp         *http.Response
+	sampleRate   int
+	pendingFinal bool
+	finalSent    bool
+	closed       bool
 }
 
 func (s *murfTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
 		return nil, io.EOF
 	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
+	if n > 0 && err == io.EOF {
+		s.pendingFinal = true
+	}
 	if err != nil && n == 0 {
 		if err == io.EOF {
 			s.finalSent = true
