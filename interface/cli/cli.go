@@ -251,6 +251,10 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 	args := CliArgs{DevMode: devMode, Reload: devMode, LogFormat: "json"}
 	var drainTimeout *int
+	subcommand := ""
+	if len(argv) > 1 {
+		subcommand = argv[1]
+	}
 	for i := 2; i < len(argv); i++ {
 		switch argv[i] {
 		case "--log-level":
@@ -307,7 +311,7 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			}
 			drainTimeout = &value
 		case "--simulation":
-			if devMode {
+			if subcommand != "start" {
 				return CliArgs{}, nil, fmt.Errorf("--simulation is only supported by start")
 			}
 			args.Simulation = true

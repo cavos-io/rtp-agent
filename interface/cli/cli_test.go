@@ -651,6 +651,22 @@ func TestWorkerStartActionUsesReferenceDevReloadWhenReloadAddrPresent(t *testing
 	}
 }
 
+func TestParseWorkerArgsPreservesReferenceStartSimulationDuringDevReload(t *testing.T) {
+	args, _, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--dev",
+		"--reload-addr", "127.0.0.1:9999",
+		"--simulation",
+	}, true)
+	if err != nil {
+		t.Fatalf("parseWorkerArgs() error = %v", err)
+	}
+
+	if !args.Simulation {
+		t.Fatal("Simulation = false, want true for reference start --dev --simulation")
+	}
+}
+
 func TestParseWorkerArgsRejectsReloadAddrOutsideDev(t *testing.T) {
 	_, _, err := parseWorkerArgs([]string{
 		"worker", "start",
