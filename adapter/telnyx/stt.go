@@ -474,6 +474,13 @@ func (s *telnyxSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, err
 	case <-s.ctx.Done():
 		if s.isClosed() {
@@ -502,8 +509,7 @@ func (s *telnyxSTTStream) readLoop() {
 		}
 		var data map[string]any
 		if err := json.Unmarshal(payload, &data); err != nil {
-			s.errCh <- err
-			return
+			continue
 		}
 		events, err := processTelnyxSTTEvent(s.state, data)
 		if err != nil {
