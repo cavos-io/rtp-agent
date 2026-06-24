@@ -682,6 +682,31 @@ func TestCollectClosesStreamAfterEOF(t *testing.T) {
 	}
 }
 
+func TestCollectIgnoresCloseErrorAfterEOFLikeReference(t *testing.T) {
+	stream := &collectChunkedStream{
+		events: []*SynthesizedAudio{
+			{Frame: &model.AudioFrame{
+				Data:              []byte{1, 0},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 1,
+			}},
+		},
+		closeErr: errors.New("response body close failed"),
+	}
+
+	frame, err := Collect(stream)
+	if err != nil {
+		t.Fatalf("Collect error = %v, want nil after successful EOF", err)
+	}
+	if frame == nil {
+		t.Fatal("Collect frame = nil, want collected audio")
+	}
+	if !stream.closed {
+		t.Fatal("Collect did not close stream after EOF")
+	}
+}
+
 type metadataDefaultsTTS struct{}
 
 func (m *metadataDefaultsTTS) Label() string {
@@ -719,9 +744,10 @@ func (m *closableMetadataTTS) Close() error {
 }
 
 type collectChunkedStream struct {
-	events []*SynthesizedAudio
-	err    error
-	closed bool
+	events   []*SynthesizedAudio
+	err      error
+	closeErr error
+	closed   bool
 }
 
 func (s *collectChunkedStream) Next() (*SynthesizedAudio, error) {
@@ -738,5 +764,5 @@ func (s *collectChunkedStream) Next() (*SynthesizedAudio, error) {
 
 func (s *collectChunkedStream) Close() error {
 	s.closed = true
-	return nil
+	return s.closeErr
 }

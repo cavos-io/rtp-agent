@@ -18,10 +18,7 @@ func CollectWithTimedTranscript(stream ChunkedStream) (frame *model.AudioFrame, 
 		return nil, nil, fmt.Errorf("TTS returned nil chunked stream")
 	}
 	defer func() {
-		closeErr := stream.Close()
-		if err == nil && closeErr != nil {
-			err = closeErr
-		}
+		_ = stream.Close()
 	}()
 
 	var combined *model.AudioFrame
