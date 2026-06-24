@@ -566,6 +566,27 @@ func (s *deepgramTTSStream) isClosed() bool {
 }
 
 func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		for {
+			select {
+			case audio, ok := <-s.audio:
+				if !ok {
+					select {
+					case err := <-s.errCh:
+						return nil, err
+					default:
+						return nil, io.EOF
+					}
+				}
+				if audio != nil && audio.IsFinal {
+					return audio, nil
+				}
+			default:
+				return nil, io.EOF
+			}
+		}
+	}
+
 	select {
 	case audio, ok := <-s.audio:
 		if !ok {

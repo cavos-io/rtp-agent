@@ -550,6 +550,27 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &deepgramTTSStream{
+		audio: make(chan *tts.SynthesizedAudio, 1),
+		errCh: make(chan error, 1),
+		writeJSON: func(any) error {
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	stream.audio <- &tts.SynthesizedAudio{}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestDeepgramTTSStreamCloseIgnoresReferenceFlushWriteFailure(t *testing.T) {
 	writeErr := errors.New("flush write failed")
 	closed := false
