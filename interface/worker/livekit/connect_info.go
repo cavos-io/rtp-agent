@@ -166,5 +166,6 @@ func JoinPreparedRoom(ctx context.Context, opts PreparedRoomConnectOptions) erro
 func ConnectOptionsForAutoSubscribe(mode string) []lksdk.ConnectOption {
 	return []lksdk.ConnectOption{
 		lksdk.WithAutoSubscribe(AutoSubscribeSDKEnabled(mode)),
+		lksdk.WithDisableRegionDiscovery(),
 	}
 }

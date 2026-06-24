@@ -131,21 +131,24 @@ type WorkerInfo struct {
 }
 
 type WorkerOptions struct {
-	AgentName       string
-	AgentNameIsEnv  bool
-	WorkerType      WorkerType
-	Transport       WorkerTransport
-	JobExecutorType JobExecutorType
-	MaxRetry        int
-	MaxRetrySet     bool
-	Version         string
-	Host            string
-	Port            int
-	PortSet         bool
-	WSURL           string
-	LoadFunc        func(*AgentServer) float64
-	HealthCheck     func(*AgentServer) error
-	SetupFunc       func(*JobProcess) error
+	AgentName            string
+	AgentNameIsEnv       bool
+	WorkerType           WorkerType
+	Transport            WorkerTransport
+	JobExecutorType      JobExecutorType
+	MaxRetry             int
+	MaxRetrySet          bool
+	Version              string
+	RuntimeVersion       string
+	CompatibilityProfile string
+	Compatibility        CompatibilityInfo
+	Host                 string
+	Port                 int
+	PortSet              bool
+	WSURL                string
+	LoadFunc             func(*AgentServer) float64
+	HealthCheck          func(*AgentServer) error
+	SetupFunc            func(*JobProcess) error
 	// WSRL is kept for backward compatibility. Prefer WSURL for new code.
 	WSRL                               string
 	APIKey                             string
@@ -587,6 +590,14 @@ func (s *AgentServer) UpdateOptions(opts WorkerOptions) error {
 	s.mu.Unlock()
 
 	updated := mergeWorkerOptions(current, opts)
+	if _, err := ResolveCompatibility(CompatibilityResolveOptions{
+		Transport:                 updated.Transport,
+		RuntimeVersion:            updated.RuntimeVersion,
+		Profile:                   updated.CompatibilityProfile,
+		AdvertisedVersionOverride: updated.Version,
+	}); err != nil {
+		return err
+	}
 	updated = resolveWorkerOptions(updated)
 	if !validWorkerLogLevel(updated.LogLevel) {
 		return invalidWorkerLogLevelError(updated.LogLevel)
@@ -638,6 +649,12 @@ func mergeWorkerOptions(current WorkerOptions, next WorkerOptions) WorkerOptions
 	}
 	if next.Version != "" {
 		current.Version = next.Version
+	}
+	if next.RuntimeVersion != "" {
+		current.RuntimeVersion = next.RuntimeVersion
+	}
+	if next.CompatibilityProfile != "" {
+		current.CompatibilityProfile = next.CompatibilityProfile
 	}
 	if next.Host != "" {
 		current.Host = next.Host
@@ -738,6 +755,29 @@ func resolveWorkerOptions(opts WorkerOptions) WorkerOptions {
 	opts.Transport = NormalizeWorkerTransport(string(opts.Transport))
 	if !opts.DevMode && opts.Transport == WorkerTransportLiveKit {
 		opts.DevMode = utils.IsDevMode()
+	}
+	if opts.RuntimeVersion == "" {
+		opts.RuntimeVersion = strings.TrimSpace(os.Getenv("RTP_AGENT_VERSION"))
+	}
+	if opts.CompatibilityProfile == "" {
+		opts.CompatibilityProfile = strings.TrimSpace(os.Getenv("RTP_AGENT_COMPATIBILITY_PROFILE"))
+	}
+	if opts.Version == "" && opts.Transport == WorkerTransportLiveKit {
+		opts.Version = strings.TrimSpace(os.Getenv("RTP_AGENT_LIVEKIT_COMPAT_VERSION"))
+	}
+	if compatibility, err := ResolveCompatibility(CompatibilityResolveOptions{
+		Transport:                 opts.Transport,
+		RuntimeVersion:            opts.RuntimeVersion,
+		Profile:                   opts.CompatibilityProfile,
+		AdvertisedVersionOverride: opts.Version,
+	}); err == nil {
+		opts.Compatibility = compatibility
+		opts.RuntimeVersion = compatibility.RuntimeVersion
+		if opts.Version == "" {
+			opts.Version = compatibility.AdvertisedVersion
+		} else {
+			opts.Compatibility.AdvertisedVersion = opts.Version
+		}
 	}
 	if opts.Version == "" {
 		opts.Version = defaultWorkerVersion
@@ -852,13 +892,18 @@ func (s *AgentServer) workerHTTPHandler() http.Handler {
 			return
 		}
 		if err := livekitWriteWorkerRuntimeMetadataHTTPResponse(w, WorkerRuntimeMetadataOptions{
-			AgentName:       s.Options.AgentName,
-			AgentNameIsEnv:  s.Options.AgentNameIsEnv,
-			WorkerType:      string(s.Options.WorkerType),
-			WorkerLoad:      s.currentLoad(),
-			ActiveJobs:      s.activeJobCount(),
-			SDKVersion:      s.Options.Version,
-			ProtocolVersion: WorkerProtocolVersion,
+			AgentName:                 s.Options.AgentName,
+			AgentNameIsEnv:            s.Options.AgentNameIsEnv,
+			WorkerType:                string(s.Options.WorkerType),
+			WorkerLoad:                s.currentLoad(),
+			ActiveJobs:                s.activeJobCount(),
+			SDKVersion:                s.Options.Version,
+			ProtocolVersion:           WorkerProtocolVersion,
+			RuntimeName:               s.Options.Compatibility.RuntimeName,
+			RuntimeVersion:            s.Options.Compatibility.RuntimeVersion,
+			CompatibilityProfile:      s.Options.Compatibility.Profile,
+			CompatibilityFamily:       s.Options.Compatibility.AdvertisedFamily,
+			CompatibilityCapabilities: s.Options.Compatibility.Capabilities,
 		}); err != nil {
 			logger.Logger.Errorw("failed to encode worker metadata", err)
 		}
@@ -1257,6 +1302,18 @@ func (s *AgentServer) availableForJobWithLoad(load float64) bool {
 
 func (s *AgentServer) validateRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
+	transport := NormalizeWorkerTransport(string(s.Options.Transport))
+	if err := ValidateWorkerTransport(transport); err != nil {
+		return err
+	}
+	if _, err := ResolveCompatibility(CompatibilityResolveOptions{
+		Transport:                 s.Options.Transport,
+		RuntimeVersion:            s.Options.RuntimeVersion,
+		Profile:                   s.Options.CompatibilityProfile,
+		AdvertisedVersionOverride: s.Options.Version,
+	}); err != nil {
+		return err
+	}
 	if s.Options.WorkerToken != "" {
 		s.Options.LoadFunc = defaultWorkerLoadFunc
 		s.Options.LoadThreshold = defaultLoadThreshold
@@ -1270,10 +1327,6 @@ func (s *AgentServer) validateRunPreconditions() error {
 	if s.entrypointFnc == nil {
 		return workerReferenceError(rtcSessionRequiredMessage)
 	}
-	transport := NormalizeWorkerTransport(string(s.Options.Transport))
-	if err := ValidateWorkerTransport(transport); err != nil {
-		return err
-	}
 	if transport == WorkerTransportAgora {
 		return nil
 	}
@@ -1286,6 +1339,18 @@ func (s *AgentServer) validateRunPreconditions() error {
 
 func (s *AgentServer) validateUnregisteredRunPreconditions() error {
 	s.Options = resolveWorkerOptions(s.Options)
+	transport := NormalizeWorkerTransport(string(s.Options.Transport))
+	if err := ValidateWorkerTransport(transport); err != nil {
+		return err
+	}
+	if _, err := ResolveCompatibility(CompatibilityResolveOptions{
+		Transport:                 s.Options.Transport,
+		RuntimeVersion:            s.Options.RuntimeVersion,
+		Profile:                   s.Options.CompatibilityProfile,
+		AdvertisedVersionOverride: s.Options.Version,
+	}); err != nil {
+		return err
+	}
 	if !validWorkerLogLevel(s.Options.LogLevel) {
 		return invalidWorkerLogLevelError(s.Options.LogLevel)
 	}
