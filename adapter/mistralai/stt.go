@@ -478,13 +478,6 @@ func (s *mistralAISTTRealtimeStream) isClosed() bool {
 
 func (s *mistralAISTTRealtimeStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
-		}
 		return nil, io.EOF
 	}
 	select {
