@@ -440,9 +440,9 @@ func TestResembleTTSStreamLogMessageDoesNotAbortReferenceStream(t *testing.T) {
 		map[string]any{"type": "audio_end", "request_id": 1},
 	)
 	stream := &resembleTTSSynthesizeStream{
-		conn:   conn,
-		events: make(chan *coretts.SynthesizedAudio, 1),
-		errCh:  make(chan error, 1),
+		conn:    conn,
+		events:  make(chan *coretts.SynthesizedAudio, 1),
+		errCh:   make(chan error, 1),
 		flushed: true,
 		lastID:  1,
 	}
@@ -523,6 +523,28 @@ func TestResembleTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 
 	if audio != nil || err != io.EOF {
 		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
+func TestResembleTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
+	providerErr := errors.New("provider failed after audio")
+	for i := range 200 {
+		want := &coretts.SynthesizedAudio{RequestID: "req-audio"}
+		stream := &resembleTTSSynthesizeStream{
+			ctx:    context.Background(),
+			events: make(chan *coretts.SynthesizedAudio, 1),
+			errCh:  make(chan error, 1),
+		}
+		stream.events <- want
+		stream.errCh <- providerErr
+
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("trial %d Next error = %v, want queued audio before stream error", i, err)
+		}
+		if audio != want {
+			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
+		}
 	}
 }
 
