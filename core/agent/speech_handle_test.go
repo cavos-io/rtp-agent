@@ -214,17 +214,38 @@ func TestSpeechHandleDoneCallbackPanicDoesNotBlockOtherCallbacks(t *testing.T) {
 	speech.MarkDone()
 }
 
-func TestSpeechHandleDoneCallbackAddedAfterDoneRunsImmediately(t *testing.T) {
+func TestSpeechHandleDoneCallbackAddedAfterDoneRunsSoonWithoutReentry(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
 	speech.MarkDone()
 
-	called := false
-	speech.AddDoneCallback(func(doneSpeech *SpeechHandle) {
-		called = doneSpeech == speech
-	})
+	entered := make(chan *SpeechHandle, 1)
+	release := make(chan struct{})
+	returned := make(chan struct{})
 
-	if !called {
-		t.Fatal("done callback added after MarkDone was not called")
+	go func() {
+		speech.AddDoneCallback(func(doneSpeech *SpeechHandle) {
+			entered <- doneSpeech
+			<-release
+		})
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("AddDoneCallback did not return while after-done callback was blocked")
+	}
+
+	select {
+	case doneSpeech := <-entered:
+		close(release)
+		if doneSpeech != speech {
+			t.Fatalf("done callback speech = %p, want %p", doneSpeech, speech)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("done callback added after MarkDone was not scheduled")
 	}
 }
 

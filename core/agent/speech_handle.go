@@ -406,7 +406,7 @@ func (s *SpeechHandle) AddDoneCallback(callback func(*SpeechHandle)) func() {
 	s.mu.Lock()
 	if s.IsDone() {
 		s.mu.Unlock()
-		callback(s)
+		go callSpeechDoneCallback(callback, s)
 		return func() {}
 	}
 
