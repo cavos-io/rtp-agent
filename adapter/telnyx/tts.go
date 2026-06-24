@@ -363,8 +363,17 @@ func (s *telnyxTTSStream) Next() (*tts.SynthesizedAudio, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
+}
+
+func (s *telnyxTTSStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *telnyxTTSStream) readLoop() {
