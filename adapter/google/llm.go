@@ -284,8 +284,9 @@ func googleToolNames(tools []llm.Tool) []string {
 }
 
 type googleLLMStream struct {
-	next func() (*genai.GenerateContentResponse, error, bool)
-	stop func()
+	next   func() (*genai.GenerateContentResponse, error, bool)
+	stop   func()
+	closed bool
 }
 
 func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
@@ -507,6 +508,10 @@ func googleGroupID(itemID string, groupID *string) string {
 }
 
 func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+
 	resp, err, ok := s.next()
 	if !ok {
 		return nil, io.EOF
@@ -555,6 +560,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *googleLLMStream) Close() error {
+	s.closed = true
 	if s.stop != nil {
 		s.stop()
 	}

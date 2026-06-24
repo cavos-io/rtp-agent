@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -253,6 +254,36 @@ func TestBuildGoogleGenerateContentConfigDropsToolsWithCachedContentLikeReferenc
 	}
 	if config.MaxOutputTokens != 128 {
 		t.Fatalf("MaxOutputTokens = %d, want 128", config.MaxOutputTokens)
+	}
+}
+
+func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
+	readAfterClose := false
+	stopped := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			readAfterClose = true
+			return &genai.GenerateContentResponse{}, nil, true
+		},
+		stop: func() {
+			stopped = true
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	_, err := stream.Next()
+
+	if err != io.EOF {
+		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+	if readAfterClose {
+		t.Fatal("Next() read provider iterator after Close")
+	}
+	if !stopped {
+		t.Fatal("Close() did not stop provider iterator")
 	}
 }
 
