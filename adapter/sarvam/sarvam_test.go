@@ -23,6 +23,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type sarvamCloseErrorBody struct {
+	closed bool
+}
+
+func (b *sarvamCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *sarvamCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestSarvamSTTDefaultsMatchReference(t *testing.T) {
 	provider := NewSarvamSTT("test-key")
 
@@ -789,6 +805,21 @@ func TestSarvamTTSChunkedStreamEmitsAllReferenceAudioChunks(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("fourth Next error = %v, want EOF", err)
+	}
+}
+
+func TestSarvamTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &sarvamCloseErrorBody{}
+	stream := &sarvamTTSChunkedStream{resp: &http.Response{Body: body}}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want nil EOF", audio, err)
 	}
 }
 
