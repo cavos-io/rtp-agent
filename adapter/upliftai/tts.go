@@ -147,22 +147,31 @@ func (t *UpliftAITTS) unregisterStream(stream *upliftAITTSChunkedStream) {
 }
 
 type upliftAITTSChunkedStream struct {
-	owner     *UpliftAITTS
-	resp      *http.Response
-	once      sync.Once
-	err       error
-	finalSent bool
-	closed    bool
+	owner        *UpliftAITTS
+	resp         *http.Response
+	once         sync.Once
+	err          error
+	pendingFinal bool
+	finalSent    bool
+	closed       bool
 }
 
 func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.closed {
+	if s.closed || s.finalSent {
 		return nil, io.EOF
+	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.resp.Body.Read(buf)
 		if n > 0 {
+			if err == io.EOF {
+				s.pendingFinal = true
+			}
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              buf[:n],
