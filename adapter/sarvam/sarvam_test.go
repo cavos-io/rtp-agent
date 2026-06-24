@@ -974,6 +974,22 @@ func TestSarvamTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &sarvamTTSSynthesizeStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestSarvamTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	provider := NewSarvamTTS("test-key", "")
 	if err := provider.Close(); err != nil {
