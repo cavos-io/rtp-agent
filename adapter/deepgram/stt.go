@@ -1142,6 +1142,13 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 	case <-s.ctx.Done():
 		return nil, io.EOF
 	case err := <-s.errCh:
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, err
 	case event, ok := <-s.events:
 		if !ok {
