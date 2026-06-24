@@ -4079,6 +4079,28 @@ func TestAgentSessionShutdownClosesSessionToolsets(t *testing.T) {
 	}
 }
 
+func TestAgentSessionStopIgnoresSessionToolsetCloseError(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	cleanupErr := errors.New("toolset cleanup failed")
+	toolset := &closeableSessionToolset{
+		fakeGenerationTool: fakeGenerationTool{name: "session_tools"},
+		tools:              []llm.Tool{&fakeGenerationTool{name: "lookup"}},
+		closeErr:           cleanupErr,
+	}
+	session.Tools = []llm.Tool{toolset}
+
+	if err := session.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error = %v, want nil when session toolset close fails like reference return_exceptions", err)
+	}
+
+	if toolset.closeCalls != 1 {
+		t.Fatalf("session toolset Close calls = %d, want 1", toolset.closeCalls)
+	}
+}
+
 func TestAgentSessionShutdownDrainsByDefaultBeforeClosing(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -6995,11 +7017,12 @@ type closeableSessionToolset struct {
 	fakeGenerationTool
 	tools      []llm.Tool
 	closeCalls int
+	closeErr   error
 }
 
 func (c *closeableSessionToolset) Tools() []llm.Tool { return c.tools }
 
 func (c *closeableSessionToolset) Close() error {
 	c.closeCalls++
-	return nil
+	return c.closeErr
 }

@@ -2974,9 +2974,7 @@ func (s *AgentSession) stop(ctx context.Context, commitPendingUserTurn bool) err
 			stopErr = err
 		}
 	}
-	if err := closeSessionToolsets(sessionTools); err != nil && stopErr == nil {
-		stopErr = err
-	}
+	_ = closeSessionToolsets(sessionTools)
 	s.flushOTelTurnMetrics()
 	if backgroundAudio != nil {
 		_ = backgroundAudio.Close()
