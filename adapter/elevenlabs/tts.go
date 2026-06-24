@@ -1212,6 +1212,10 @@ func (s *elevenLabsStream) Close() error {
 }
 
 func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
+
 	select {
 	case <-s.ctx.Done():
 		select {
