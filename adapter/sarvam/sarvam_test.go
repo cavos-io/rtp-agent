@@ -424,6 +424,20 @@ func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "bad request") {
 		t.Fatalf("error = %v, want provider error", err)
 	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != 400 {
+		t.Fatalf("status code = %d, want 400", statusErr.StatusCode)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("body = %T, want decoded payload map", statusErr.Body)
+	}
+	if body["type"] != "error" {
+		t.Fatalf("body type = %#v, want error", body["type"])
+	}
 }
 
 func TestSarvamSTTStreamSequencerAddsReferenceEndOfSpeechMetadata(t *testing.T) {

@@ -1104,17 +1104,15 @@ func sarvamStreamMessageHasError(message map[string]any) bool {
 
 func sarvamSTTStreamError(message map[string]any) error {
 	data := sarvamMap(message["data"])
-	errorText := sarvamString(message["error"])
-	if errorText == "" {
-		errorText = sarvamString(data["error"])
+	code := sarvamStatusCode(message["code"])
+	if code == -1 {
+		code = sarvamStatusCode(data["code"])
 	}
-	if errorText == "" {
-		errorText = sarvamString(data["message"])
+	payload, err := json.Marshal(message)
+	if err != nil {
+		payload = []byte(fmt.Sprint(message))
 	}
-	if errorText == "" {
-		errorText = "unknown sarvam stt stream error"
-	}
-	return fmt.Errorf("sarvam stt stream error: %s", errorText)
+	return llm.NewAPIStatusError("Sarvam streaming API error: "+sarvamCompactJSON(payload), code, "", message)
 }
 
 func sarvamMap(value any) map[string]any {
@@ -1129,6 +1127,21 @@ func sarvamString(value any) string {
 		return text
 	}
 	return ""
+}
+
+func sarvamStatusCode(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	case string:
+		code, err := strconv.Atoi(typed)
+		if err == nil {
+			return code
+		}
+	}
+	return -1
 }
 
 func sarvamSTTStreamLanguage(data map[string]any, defaultLanguage string) string {
