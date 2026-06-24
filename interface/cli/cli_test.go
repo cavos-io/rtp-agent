@@ -619,6 +619,30 @@ func TestParseWorkerArgsSupportsReferenceSimulationOption(t *testing.T) {
 	}
 }
 
+func TestParseWorkerArgsSupportsReferenceStartDevFlag(t *testing.T) {
+	args, drainTimeout, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--reload-addr", "127.0.0.1:9999",
+		"--dev",
+	}, false)
+	if err != nil {
+		t.Fatalf("parseWorkerArgs() error = %v", err)
+	}
+
+	if !args.DevMode {
+		t.Fatal("DevMode = false, want true for reference start --dev")
+	}
+	if args.Reload {
+		t.Fatal("Reload = true, want false for reference start --dev without target watcher")
+	}
+	if args.ReloadAddr != "127.0.0.1:9999" {
+		t.Fatalf("ReloadAddr = %q, want 127.0.0.1:9999", args.ReloadAddr)
+	}
+	if drainTimeout != nil {
+		t.Fatalf("drainTimeout = %v, want nil", drainTimeout)
+	}
+}
+
 func TestParseWorkerArgsRejectsReloadAddrOutsideDev(t *testing.T) {
 	_, _, err := parseWorkerArgs([]string{
 		"worker", "start",

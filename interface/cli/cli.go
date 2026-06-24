@@ -191,7 +191,7 @@ func RunApp(server *worker.AgentServer, evalRunners ...EvalRunner) {
 			}
 			return
 		}
-		runWorker(server, false)
+		runWorker(server, args.DevMode)
 	case "dev":
 		args, drainTimeout, err := parseWorkerArgs(os.Args, true)
 		if err != nil {
@@ -280,7 +280,7 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			}
 			args.APISecret = argv[i]
 		case "--drain-timeout":
-			if devMode {
+			if devMode || args.DevMode {
 				return CliArgs{}, nil, fmt.Errorf("--drain-timeout is only supported by start")
 			}
 			i++
@@ -297,6 +297,8 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 				return CliArgs{}, nil, fmt.Errorf("--simulation is only supported by start")
 			}
 			args.Simulation = true
+		case "--dev":
+			args.DevMode = true
 		case "--reload":
 			if !devMode {
 				return CliArgs{}, nil, fmt.Errorf("--reload is only supported by dev")
@@ -312,13 +314,13 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			if i >= len(argv) {
 				return CliArgs{}, nil, fmt.Errorf("missing value for --reload-addr")
 			}
-			if !devMode {
-				return CliArgs{}, nil, fmt.Errorf("--reload-addr requires --dev")
-			}
 			args.ReloadAddr = argv[i]
 		default:
 			return CliArgs{}, nil, fmt.Errorf("unknown worker option %q", argv[i])
 		}
+	}
+	if args.ReloadAddr != "" && !args.DevMode {
+		return CliArgs{}, nil, fmt.Errorf("--reload-addr requires --dev")
 	}
 	return args, drainTimeout, nil
 }
