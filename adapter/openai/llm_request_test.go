@@ -1127,6 +1127,36 @@ func TestOpenAIChatAppliesProviderTemperature(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatProviderTypedOptionsOverrideGenericExtraParams(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-4o",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMTemperature(0.3),
+		WithOpenAILLMExtraParams(map[string]any{
+			"temperature": 0.9,
+			"metadata":    map[string]any{"trace": "abc"},
+		}),
+	)
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"temperature":0.3`) {
+		t.Fatalf("request body = %s, want typed provider temperature", capture.requestBody)
+	}
+	if strings.Contains(capture.requestBody, `"temperature":0.9`) {
+		t.Fatalf("request body = %s, want typed temperature to override generic extra params", capture.requestBody)
+	}
+	if !strings.Contains(capture.requestBody, `"metadata":{"trace":"abc"}`) {
+		t.Fatalf("request body = %s, want generic metadata preserved", capture.requestBody)
+	}
+}
+
 func TestOpenAIChatAppliesProviderTopP(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,

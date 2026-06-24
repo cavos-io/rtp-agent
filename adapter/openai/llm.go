@@ -250,7 +250,14 @@ func WithOpenAILLMReasoningEffort(reasoningEffort string) OpenAILLMOption {
 
 func WithOpenAILLMExtraParams(params map[string]any) OpenAILLMOption {
 	return func(l *OpenAILLM) {
-		l.extraParams = cloneOpenAIAnyMap(params)
+		if l.extraParams == nil {
+			l.extraParams = map[string]any{}
+		}
+		for key, value := range params {
+			if _, exists := l.extraParams[key]; !exists {
+				l.extraParams[key] = value
+			}
+		}
 	}
 }
 
