@@ -345,6 +345,12 @@ func TestRtzrSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for server close")
 	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want io.ErrClosedPipe", err)
+	}
 }
 
 func TestRtzrSTTStreamNonNormalCloseReturnsEOF(t *testing.T) {
@@ -384,6 +390,59 @@ func TestRtzrSTTStreamNonNormalCloseReturnsEOF(t *testing.T) {
 
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %T %v, want EOF", err, err)
+	}
+}
+
+func TestRtzrSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closed := make(chan struct{})
+	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read first audio: %v", err)
+			return
+		}
+		_ = conn.UnderlyingConn().Close()
+		close(closed)
+	})
+
+	provider := NewRtzrSTT("client-id",
+		WithRtzrAccessToken("access-token"),
+		WithRtzrWSBase("ws://rtzr.test"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	rtzrStream, ok := stream.(*rtzrStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *rtzrStream", stream)
+	}
+
+	frame := &model.AudioFrame{Data: make([]byte, 800*2), SampleRate: 8000, NumChannels: 1, SamplesPerChannel: 800}
+	for i := 0; i < 3; i++ {
+		if err = stream.PushFrame(frame); err != nil {
+			break
+		}
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("server did not close websocket")
+	}
+	if err == nil {
+		t.Fatal("PushFrame after server close error = nil, want write failure")
+	}
+	if !rtzrStream.isClosed() {
+		t.Fatal("stream remains open after audio write failure")
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
 	}
 }
 

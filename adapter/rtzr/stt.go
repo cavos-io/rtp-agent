@@ -329,10 +329,10 @@ type rtzrStream struct {
 	mu     sync.Mutex
 	closed bool
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx      context.Context
+	cancel   context.CancelFunc
 	provider *RtzrSTT
-	state  *rtzrTranscriptState
+	state    *rtzrTranscriptState
 
 	audioBStream *audio.AudioByteStream
 }
@@ -372,6 +372,9 @@ func (s *rtzrStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = newRtzrAudioByteStream(defaultSampleRate)
 	}
@@ -381,6 +384,9 @@ func (s *rtzrStream) PushFrame(frame *model.AudioFrame) error {
 func (s *rtzrStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if s.audioBStream != nil {
 		frames := s.audioBStream.Flush()
 		if err := s.writeAudioFramesLocked(frames); err != nil {
@@ -405,6 +411,7 @@ func (s *rtzrStream) writeAudioFramesLocked(frames []*model.AudioFrame) error {
 			continue
 		}
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, frame.Data); err != nil {
+			_ = s.closeLocked()
 			return err
 		}
 	}
@@ -441,6 +448,10 @@ func newRtzrAudioByteStream(sampleRate int) *audio.AudioByteStream {
 func (s *rtzrStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *rtzrStream) closeLocked() error {
 	if s.closed {
 		return nil
 	}
