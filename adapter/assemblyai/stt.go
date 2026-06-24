@@ -572,11 +572,6 @@ func (s *assemblyAISTTStream) readLoop() {
 			return
 		}
 
-		if resp.Error != "" {
-			s.errCh <- fmt.Errorf("assemblyai error: %s", resp.Error)
-			return
-		}
-
 		for _, event := range assemblyAIRealtimeEvents(resp, s.state) {
 			s.events <- event
 		}

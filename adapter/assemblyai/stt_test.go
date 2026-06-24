@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
@@ -852,6 +853,56 @@ func TestAssemblyAISTTUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
 		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+}
+
+func TestAssemblyAISTTLogErrorMessageDoesNotAbortReferenceStream(t *testing.T) {
+	messages := []map[string]any{
+		{"error": "provider diagnostic"},
+		{
+			"type":        "Turn",
+			"transcript":  "hello",
+			"utterance":   "hello",
+			"end_of_turn": true,
+			"words": []map[string]any{
+				{"text": "hello", "start": 0, "end": 200, "confidence": 0.9},
+			},
+		},
+		{"type": "Termination"},
+	}
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer ws.Close()
+		for _, message := range messages {
+			if err := ws.WriteJSON(message); err != nil {
+				t.Errorf("write message: %v", err)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewAssemblyAISTT("test-key", WithAssemblyAISTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript after provider diagnostic", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event = %#v, want interim transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "hello" {
+		t.Fatalf("transcript = %q, want hello", got)
 	}
 }
 
