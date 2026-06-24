@@ -472,11 +472,17 @@ func TestSpeechmaticsSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
+	stream.events <- &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{Text: "stale transcript"},
+		},
+	}
 	result := make(chan error, 1)
 	go func() {
 		event, err := stream.Next()
 		if event != nil {
-			result <- errors.New("Next returned event after Close")
+			result <- errors.New("Next returned queued event after Close")
 			return
 		}
 		result <- err
