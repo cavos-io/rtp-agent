@@ -497,6 +497,22 @@ func TestMurfTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestMurfTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &murfTTSSynthesizeStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestMurfTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	originalTransport := http.DefaultClient.Transport
 	called := false
