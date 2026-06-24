@@ -3159,6 +3159,27 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
             "contract": "llm-tool-context",
             "events": [summarize(ctx, "flatten_function_order")],
         }
+    if action == "flatten_snapshot_isolated":
+        lookup = fn_tool("lookup")
+        provider = provider_tool("provider")
+        ctx = module.ToolContext([lookup, provider])
+        flattened = ctx.flatten()
+        flattened[0] = fn_tool("weather")
+        flattened.append(fn_tool("calendar"))
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    ctx,
+                    "flatten_snapshot_isolated",
+                    {
+                        "lookup_found": ctx.get_function_tool("lookup") is lookup,
+                        "weather_found": ctx.get_function_tool("weather") is not None,
+                        "snapshot_names_after_mutation": [tool.id for tool in flattened],
+                    },
+                )
+            ],
+        }
     if action == "flatten_provider_order":
         ctx = module.ToolContext(
             [provider_tool("zeta-provider"), fn_tool("lookup"), provider_tool("alpha-provider")]

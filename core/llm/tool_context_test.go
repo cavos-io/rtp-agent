@@ -401,6 +401,26 @@ func TestToolContextSeparatesAndPreservesProviderToolOrder(t *testing.T) {
 	}
 }
 
+func TestToolContextFlattenReturnsIsolatedSnapshot(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	provider := &testProviderTool{testTool: testTool{id: "provider", name: "provider"}}
+	ctx := NewToolContext([]interface{}{lookup, provider})
+
+	flattened := ctx.Flatten()
+	flattened[0] = &testTool{id: "weather", name: "weather"}
+	flattened = append(flattened, &testTool{id: "calendar", name: "calendar"})
+
+	if got := ctx.GetFunctionTool("lookup"); got != lookup {
+		t.Fatalf("GetFunctionTool(lookup) = %p, want original tool %p", got, lookup)
+	}
+	if got := ctx.GetFunctionTool("weather"); got != nil {
+		t.Fatalf("GetFunctionTool(weather) = %p, want nil after mutating flattened snapshot", got)
+	}
+	if got := len(ctx.Flatten()); got != 2 {
+		t.Fatalf("len(Flatten()) = %d, want original snapshot size 2", got)
+	}
+}
+
 func TestToolContextEqualUsesToolIdentity(t *testing.T) {
 	lookup := &testTool{id: "lookup", name: "lookup"}
 	provider := &testProviderTool{testTool: testTool{id: "provider", name: "provider"}}

@@ -5237,6 +5237,27 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 			"contract": "llm-tool-context",
 			"events":   []map[string]any{summary(ctx, "flatten_function_order", nil)},
 		}, nil
+	case "flatten_snapshot_isolated":
+		lookup := newTool("lookup", "lookup")
+		provider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "provider", name: "provider"}}
+		ctx := lkllm.NewToolContext([]interface{}{lookup, provider})
+		flattened := ctx.Flatten()
+		flattened[0] = newTool("weather", "weather")
+		flattened = append(flattened, newTool("calendar", "calendar"))
+		snapshotNames := make([]string, 0, len(flattened))
+		for _, tool := range flattened {
+			snapshotNames = append(snapshotNames, tool.ID())
+		}
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "flatten_snapshot_isolated", map[string]any{
+					"lookup_found":                  ctx.GetFunctionTool("lookup") == lookup,
+					"weather_found":                 ctx.GetFunctionTool("weather") != nil,
+					"snapshot_names_after_mutation": snapshotNames,
+				}),
+			},
+		}, nil
 	case "flatten_provider_order":
 		ctx := lkllm.NewToolContext([]interface{}{
 			&scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "zeta-provider", name: "zeta-provider"}},
