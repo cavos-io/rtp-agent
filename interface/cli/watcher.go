@@ -465,6 +465,9 @@ func startArgsForDevReload(args CliArgs) []string {
 	if args.LogLevel != "" {
 		startArgs = append(startArgs, "--log-level", args.LogLevel)
 	}
+	if args.LogFormat != "" {
+		startArgs = append(startArgs, "--log-format", args.LogFormat)
+	}
 	if args.URL != "" {
 		startArgs = append(startArgs, "--url", args.URL)
 	}

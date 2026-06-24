@@ -892,12 +892,14 @@ func TestCLIProtocolLoggerConfigUsesReferenceDevText(t *testing.T) {
 func TestStartArgsForDevReloadForwardsReferenceConnectionOptions(t *testing.T) {
 	got := startArgsForDevReload(CliArgs{
 		LogLevel:  "TRACE",
+		LogFormat: "colored",
 		URL:       "wss://livekit.example",
 		APIKey:    "api-key",
 		APISecret: "api-secret",
 	})
 	want := []string{
 		"--log-level", "TRACE",
+		"--log-format", "colored",
 		"--url", "wss://livekit.example",
 		"--api-key", "api-key",
 		"--api-secret", "api-secret",
