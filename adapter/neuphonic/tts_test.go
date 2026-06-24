@@ -810,6 +810,25 @@ func TestNeuphonicTTSAudioFromStreamMessage(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSAudioFromStreamMessageReturnsAPIError(t *testing.T) {
+	_, _, err := neuphonicAudioFromStreamMessage([]byte(`{"type":"error","message":"voice unavailable"}`), "segment-1", 22050)
+
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("stream error = %T %v, want APIError", err, err)
+	}
+	if !strings.Contains(apiErr.Error(), "NeuPhonic returned error") {
+		t.Fatalf("stream error = %q, want NeuPhonic context", apiErr.Error())
+	}
+	body, ok := apiErr.Body.(string)
+	if !ok {
+		t.Fatalf("stream error body = %T %#v, want string", apiErr.Body, apiErr.Body)
+	}
+	if !strings.Contains(body, "voice unavailable") {
+		t.Fatalf("stream error body = %#v, want provider payload", apiErr.Body)
+	}
+}
+
 func TestNeuphonicTTSImplementsStreamingInterface(t *testing.T) {
 	var _ tts.TTS = NewNeuphonicTTS("test-key", "")
 }
