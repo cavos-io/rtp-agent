@@ -19,6 +19,21 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
+type fishAudioFinalEOFReader struct {
+	data []byte
+	read bool
+}
+
+func (r *fishAudioFinalEOFReader) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, errors.New("read after final eof")
+	}
+	r.read = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *fishAudioFinalEOFReader) Close() error { return nil }
+
 func TestFishAudioTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewFishAudioTTS("test-key", "")
 
@@ -369,6 +384,36 @@ func TestFishAudioTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *te
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
+func TestFishAudioTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &fishaudioTTSChunkedStream{
+		resp:       &http.Response{Body: &fishAudioFinalEOFReader{data: []byte{0x01, 0x02}}},
+		sampleRate: 24000,
+		format:     "pcm",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame before final marker", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final read bytes", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want EOF", err)
 	}
 }
 
