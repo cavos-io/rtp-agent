@@ -547,6 +547,33 @@ func TestBasetenTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &basetenTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error, 1),
+		writeMessage: func(int, []byte) error {
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() after Close audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %v, want EOF", err)
+	}
+}
+
 func TestBasetenTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	called := false
 	client := basetenTTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
