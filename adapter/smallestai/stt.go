@@ -684,6 +684,7 @@ func (s *smallestAISTTStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			_ = s.closeLocked()
 			return err
 		}
 		s.recordUsageAudioLocked(len(chunk))
@@ -704,6 +705,7 @@ func (s *smallestAISTTStream) Flush() error {
 	chunk := bytes.Clone(s.audio.Bytes())
 	s.audio.Reset()
 	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+		_ = s.closeLocked()
 		return err
 	}
 	s.recordUsageAudioLocked(len(chunk))
@@ -761,6 +763,10 @@ func smallestAISTTAudioDuration(byteCount int, sampleRate int) float64 {
 func (s *smallestAISTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *smallestAISTTStream) closeLocked() error {
 	if s.closed {
 		return nil
 	}
