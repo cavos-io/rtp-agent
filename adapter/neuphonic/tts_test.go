@@ -126,6 +126,37 @@ func TestNeuphonicTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: neuphonicRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	provider := NewNeuphonicTTS("test-key", "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if body, ok := statusErr.Body.(string); !ok || !strings.Contains(body, "rate limited") {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
 func TestNeuphonicTTSOptionsMatchReference(t *testing.T) {
 	provider := NewNeuphonicTTS("test-key", "",
 		WithNeuphonicTTSBaseURL("https://neuphonic.example"),
