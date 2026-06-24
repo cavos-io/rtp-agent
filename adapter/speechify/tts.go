@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -137,7 +138,7 @@ func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("speechify tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Speechify TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)

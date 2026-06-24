@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -84,6 +85,37 @@ func TestSpeechifyTTSRejectsNonAudioResponse(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "non-audio") {
 		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
+	}
+}
+
+func TestSpeechifyTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechifyTTS("test-key", "", WithSpeechifyTTSBaseURL("https://speechify.example/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if body, ok := statusErr.Body.(string); !ok || !strings.Contains(body, "rate limited") {
+		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
 	}
 }
 
