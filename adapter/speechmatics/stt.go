@@ -480,10 +480,6 @@ func (s *speechmaticsSTTStream) readLoop() {
 		if resp.Message == "EndOfTranscript" {
 			return
 		}
-		if resp.Message == "Error" {
-			s.errCh <- fmt.Errorf("speechmatics error: %s", string(message))
-			return
-		}
 		for _, event := range speechmaticsEvents(resp, s.state) {
 			s.events <- event
 		}
