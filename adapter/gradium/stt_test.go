@@ -316,10 +316,11 @@ func TestGradiumSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	cancel()
 	stream := &gradiumSTTStream{
 		ctx:    ctx,
-		events: make(chan *stt.SpeechEvent),
+		events: make(chan *stt.SpeechEvent, 1),
 		errCh:  make(chan error),
 		closed: true,
 	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
 
 	event, err := stream.Next()
 	if event != nil {
