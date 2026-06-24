@@ -202,20 +202,29 @@ type cambaiTTSChunkedStream struct {
 	sampleRate   int
 	outputFormat string
 	emitted      bool
+	pendingFinal bool
 	finalSent    bool
 	closed       bool
 }
 
 func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.closed {
+	if s.closed || s.finalSent {
 		return nil, io.EOF
 	}
 	if s.outputFormat == "wav" {
 		return s.nextWAV()
 	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if n > 0 {
+		if err == io.EOF {
+			s.pendingFinal = true
+		}
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
 				Data:              buf[:n],
