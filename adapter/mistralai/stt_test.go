@@ -409,6 +409,40 @@ func TestMistralAISTTRealtimeClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRealtimeClosedStreamRejectsInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	conn := &mistralAISTTFakeRealtimeConn{}
+	stream := &mistralAISTTRealtimeStream{
+		conn:   conn,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	conn.mu.Lock()
+	writes := append([]string(nil), conn.writes...)
+	conn.mu.Unlock()
+	if len(writes) != 1 {
+		t.Fatalf("writes after Close = %v, want only input_audio.end", writes)
+	}
+}
+
 func assertMistralAIPanicsWithMessage(t *testing.T, want string, fn func()) {
 	t.Helper()
 	defer func() {

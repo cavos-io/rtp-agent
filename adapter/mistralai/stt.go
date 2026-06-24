@@ -422,6 +422,9 @@ func (s *mistralAISTTRealtimeStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	for offset := 0; offset < len(frame.Data); offset += mistralAISTTRealtimeChunkSize {
 		end := min(offset+mistralAISTTRealtimeChunkSize, len(frame.Data))
 		msg := map[string]any{
@@ -441,6 +444,9 @@ func (s *mistralAISTTRealtimeStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *mistralAISTTRealtimeStream) Flush() error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	return s.writeJSON(map[string]any{"type": "input_audio.flush"})
 }
 
