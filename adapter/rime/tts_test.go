@@ -247,6 +247,17 @@ func TestRimeTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
 		t.Fatalf("audio data = %v, want final bytes", got)
 	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %#v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
 }
 
 func TestRimeTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
@@ -793,7 +804,7 @@ type rimeFinalEOFReader struct {
 
 func (r *rimeFinalEOFReader) Read(p []byte) (int, error) {
 	if r.done {
-		return 0, io.EOF
+		return 0, errors.New("read after final eof")
 	}
 	r.done = true
 	return copy(p, r.data), io.EOF
