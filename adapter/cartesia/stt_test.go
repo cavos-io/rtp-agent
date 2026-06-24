@@ -580,6 +580,7 @@ func TestCartesiaSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
 	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after local Close = (%#v, %v), want EOF", event, err)
 	}
