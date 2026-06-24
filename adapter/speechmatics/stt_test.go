@@ -247,6 +247,33 @@ func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	for range 64 {
+		stream := &speechmaticsSTTStream{
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+		}
+		stream.events <- &stt.SpeechEvent{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{
+				{Text: "hello"},
+			},
+		}
+		stream.errCh <- errors.New("provider close")
+
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next error = %v, want queued transcript before stream error", err)
+		}
+		if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+			t.Fatalf("Next event = %#v, want queued final transcript", event)
+		}
+		if got := event.Alternatives[0].Text; got != "hello" {
+			t.Fatalf("transcript = %q, want hello", got)
+		}
+	}
+}
+
 func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeBinary: func([]byte) error {

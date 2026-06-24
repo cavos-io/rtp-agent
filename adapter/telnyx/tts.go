@@ -446,7 +446,7 @@ func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
 		Audio string `json:"audio"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, nil
 	}
 	if message.Audio == "" {
 		return nil, true, nil

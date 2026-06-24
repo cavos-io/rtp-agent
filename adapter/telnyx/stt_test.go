@@ -441,6 +441,54 @@ func TestTelnyxSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTInvalidJSONDoesNotAbortReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read wav header: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("not json")); err != nil {
+			t.Errorf("write invalid json: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"transcript": "hello",
+			"is_final":   false,
+			"confidence": 0.7,
+		}); err != nil {
+			t.Errorf("write transcript: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	for range 2 {
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next error = %v, want transcript after invalid JSON", err)
+		}
+		if event.Type == stt.SpeechEventInterimTranscript &&
+			len(event.Alternatives) == 1 &&
+			event.Alternatives[0].Text == "hello" {
+			return
+		}
+	}
+	t.Fatalf("stream did not emit transcript after invalid JSON")
+}
+
 func TestTelnyxSTTFinalTranscriptCollectsAllReferenceFinals(t *testing.T) {
 	stream := &fakeTelnyxRecognizeStream{events: []*stt.SpeechEvent{
 		{Type: stt.SpeechEventInterimTranscript, Alternatives: []stt.SpeechData{{Text: "ignored"}}},

@@ -348,6 +348,31 @@ func TestGladiaSTTUnexpectedNormalCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestGladiaSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	for range 64 {
+		stream := &gladiaSTTStream{
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+			ctx:    context.Background(),
+		}
+		stream.events <- &stt.SpeechEvent{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{
+				Text: "hello",
+			}},
+		}
+		stream.errCh <- errors.New("provider closed after transcript")
+
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next error = %v, want queued transcript before stream error", err)
+		}
+		if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+			t.Fatalf("Next event = %#v, want queued final transcript", event)
+		}
+	}
+}
+
 func TestGladiaTranslationConfigOptionsMatchReference(t *testing.T) {
 	provider := NewGladiaSTT("test-key",
 		WithGladiaTranslationConfig([]string{"es", "fr"}, "enhanced", false, false, true, "medical appointment", true),
