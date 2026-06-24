@@ -382,6 +382,9 @@ func (s *sonioxStream) isClosed() bool {
 }
 
 func (s *sonioxStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case event, ok := <-s.events:
 		if ok {
@@ -394,9 +397,6 @@ func (s *sonioxStream) Next() (*stt.SpeechEvent, error) {
 			return nil, io.EOF
 		}
 	default:
-	}
-	if s.isClosed() {
-		return nil, io.EOF
 	}
 	select {
 	case event, ok := <-s.events:
