@@ -124,6 +124,32 @@ func TestMurfTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestMurfTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: murfTTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMurfTTS("test-key", "", WithMurfTTSBaseURL("https://murf.example"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+}
+
 func TestMurfTTSOptionsMatchReference(t *testing.T) {
 	provider := NewMurfTTS("test-key", "",
 		WithMurfTTSBaseURL("https://murf.example/"),
