@@ -5048,6 +5048,21 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 				summary(ctx, "empty", map[string]any{"lookup_found": ctx.GetFunctionTool("lookup") == tool}),
 			},
 		}, nil
+	case "function_tools_copy_isolated":
+		lookup := newTool("lookup", "lookup")
+		ctx := lkllm.NewToolContext([]interface{}{lookup})
+		functionTools := ctx.FunctionTools()
+		delete(functionTools, "lookup")
+		functionTools["weather"] = newTool("weather", "weather")
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "function_tools_copy_isolated", map[string]any{
+					"lookup_found":  ctx.GetFunctionTool("lookup") == lookup,
+					"weather_found": ctx.GetFunctionTool("weather") != nil,
+				}),
+			},
+		}, nil
 	case "duplicate_constructor":
 		var errMsg string
 		func() {

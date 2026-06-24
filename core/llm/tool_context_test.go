@@ -184,6 +184,25 @@ func TestToolContextAddToolUpdatesFlattenedTools(t *testing.T) {
 	}
 }
 
+func TestToolContextFunctionToolsReturnsIsolatedCopy(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	ctx := NewToolContext([]interface{}{lookup})
+
+	functionTools := ctx.FunctionTools()
+	delete(functionTools, "lookup")
+	functionTools["weather"] = &testTool{id: "weather", name: "weather"}
+
+	if got := ctx.GetFunctionTool("lookup"); got != lookup {
+		t.Fatalf("GetFunctionTool(lookup) = %p, want original tool %p", got, lookup)
+	}
+	if got := ctx.GetFunctionTool("weather"); got != nil {
+		t.Fatalf("GetFunctionTool(weather) = %p, want nil after mutating returned map", got)
+	}
+	if got := len(ctx.FunctionTools()); got != 1 {
+		t.Fatalf("len(FunctionTools()) = %d, want original registry size 1", got)
+	}
+}
+
 func TestToolContextAddToolRejectsDifferentToolWithSameName(t *testing.T) {
 	ctx := NewToolContext([]interface{}{&testTool{id: "lookup-a", name: "lookup"}})
 

@@ -2998,6 +2998,25 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
             "contract": "llm-tool-context",
             "events": [summarize(ctx, "empty", {"lookup_found": ctx.get_function_tool("lookup") is tool})],
         }
+    if action == "function_tools_copy_isolated":
+        lookup = fn_tool("lookup")
+        ctx = module.ToolContext([lookup])
+        function_tools = ctx.function_tools
+        del function_tools["lookup"]
+        function_tools["weather"] = fn_tool("weather")
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    ctx,
+                    "function_tools_copy_isolated",
+                    {
+                        "lookup_found": ctx.get_function_tool("lookup") is lookup,
+                        "weather_found": ctx.get_function_tool("weather") is not None,
+                    },
+                )
+            ],
+        }
     if action == "duplicate_constructor":
         try:
             module.ToolContext([fn_tool("lookup"), fn_tool("lookup")])
