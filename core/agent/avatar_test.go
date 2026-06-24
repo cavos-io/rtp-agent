@@ -118,6 +118,45 @@ func TestAgentSessionUpdateAgentStateUpdatesAvatarProvider(t *testing.T) {
 	}
 }
 
+func TestAgentSessionDuplicateAgentStateUpdateIsNoopLikeReference(t *testing.T) {
+	baseAgent := NewAgent("test")
+	avatar := &recordingAvatarProvider{}
+	baseAgent.Avatar = avatar
+
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.UpdateAgentState(AgentStateSpeaking)
+	receiveAgentStateChangedEvent(t, session)
+
+	session.UpdateAgentState(AgentStateSpeaking)
+
+	if got, want := avatar.states, []AvatarState{AvatarStateSpeaking}; !equalAvatarStates(got, want) {
+		t.Fatalf("avatar states = %#v, want %#v", got, want)
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("duplicate state emitted event = %q -> %q, want no event", ev.OldState, ev.NewState)
+	default:
+	}
+}
+
+func TestAgentSessionAvatarUpdateErrorStillEmitsStateChangedEvent(t *testing.T) {
+	updateErr := errors.New("avatar update failed")
+	baseAgent := NewAgent("test")
+	avatar := &recordingAvatarProvider{updateErr: updateErr}
+	baseAgent.Avatar = avatar
+
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.UpdateAgentState(AgentStateSpeaking)
+
+	if got, want := avatar.states, []AvatarState{AvatarStateSpeaking}; !equalAvatarStates(got, want) {
+		t.Fatalf("avatar states = %#v, want %#v", got, want)
+	}
+	ev := receiveAgentStateChangedEvent(t, session)
+	if ev.OldState != AgentStateInitializing || ev.NewState != AgentStateSpeaking {
+		t.Fatalf("agent state event = %q -> %q, want initial -> speaking", ev.OldState, ev.NewState)
+	}
+}
+
 func TestAgentSessionStartUnsubscribesAvatarMetricsOnStartError(t *testing.T) {
 	errAvatar := errors.New("avatar start failed")
 	baseAgent := NewAgent("test")
@@ -186,6 +225,7 @@ type recordingAvatarProvider struct {
 	startCalls   int
 	startContext context.Context
 	startErr     error
+	updateErr    error
 	state        AvatarState
 	states       []AvatarState
 	metrics      AvatarMetricsHandler
@@ -200,7 +240,7 @@ func (r *recordingAvatarProvider) Start(ctx context.Context) error {
 func (r *recordingAvatarProvider) UpdateState(state AvatarState) error {
 	r.state = state
 	r.states = append(r.states, state)
-	return nil
+	return r.updateErr
 }
 
 func (r *recordingAvatarProvider) OnMetricsCollected(handler AvatarMetricsHandler) func() {
@@ -214,6 +254,18 @@ func (r *recordingAvatarProvider) emitMetrics(metrics *telemetry.AvatarMetrics) 
 	if r.metrics != nil {
 		r.metrics(metrics)
 	}
+}
+
+func equalAvatarStates(a, b []AvatarState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type failingStartAssistant struct {

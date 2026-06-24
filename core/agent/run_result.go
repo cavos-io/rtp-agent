@@ -59,6 +59,7 @@ type RunResult struct {
 	finalOutputSet  bool
 	finalOutputType reflect.Type
 	watchedSpeech   map[*SpeechHandle]runResultSpeechWatch
+	completedSpeech map[*SpeechHandle]struct{}
 	lastSpeech      *SpeechHandle
 	mu              sync.Mutex
 }
@@ -99,6 +100,7 @@ func newRunResult(chatCtx *llm.ChatContext, userInput string, outputType reflect
 		doneCh:          make(chan struct{}),
 		finalOutputType: outputType,
 		watchedSpeech:   make(map[*SpeechHandle]runResultSpeechWatch),
+		completedSpeech: make(map[*SpeechHandle]struct{}),
 	}
 	result.Expect = &RunAssert{ChatCtx: chatCtx, result: result}
 	return result
@@ -343,6 +345,7 @@ func (r *RunResult) UnwatchSpeechHandle(speech *SpeechHandle) bool {
 	watch, ok := r.watchedSpeech[speech]
 	if ok {
 		delete(r.watchedSpeech, speech)
+		delete(r.completedSpeech, speech)
 	}
 	r.mu.Unlock()
 	if !ok {
@@ -367,11 +370,27 @@ func (r *RunResult) markDoneIfNeeded(doneSpeech *SpeechHandle) {
 	}
 	if doneSpeech != nil {
 		r.lastSpeech = doneSpeech
+		r.completedSpeech[doneSpeech] = struct{}{}
 	}
 	for speech := range r.watchedSpeech {
 		if !speech.IsDone() {
 			return
 		}
+		if _, ok := r.completedSpeech[speech]; !ok {
+			return
+		}
+	}
+
+	var latestSpeech *SpeechHandle
+	var latestSequence uint64
+	for speech := range r.watchedSpeech {
+		if sequence := speech.DoneSequence(); sequence >= latestSequence {
+			latestSpeech = speech
+			latestSequence = sequence
+		}
+	}
+	if latestSpeech != nil {
+		r.lastSpeech = latestSpeech
 	}
 	if r.lastSpeech != nil {
 		if output, ok := r.lastSpeech.RunFinalOutput(); ok {

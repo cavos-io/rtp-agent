@@ -306,6 +306,30 @@ func TestChatContextMessagesReturnsReferenceEmptyList(t *testing.T) {
 	}
 }
 
+func TestChatContextMessagesFiltersMessagesInReferenceOrder(t *testing.T) {
+	ctx := NewChatContext()
+	ctx.Items = []ChatItem{
+		&FunctionCall{ID: "call", Name: "lookup"},
+		&ChatMessage{ID: "user", Role: ChatRoleUser, Content: []ChatContent{{Text: "hello"}}},
+		&FunctionCallOutput{ID: "output", Name: "lookup"},
+		&AgentConfigUpdate{ID: "config"},
+		&ChatMessage{ID: "assistant", Role: ChatRoleAssistant, Content: []ChatContent{{Text: "hi"}}},
+	}
+
+	messages := ctx.Messages()
+
+	if len(messages) != 2 {
+		t.Fatalf("len(Messages()) = %d, want 2", len(messages))
+	}
+	if got, want := messages[0].ID+","+messages[1].ID, "user,assistant"; got != want {
+		t.Fatalf("Messages() IDs = %q, want %q", got, want)
+	}
+	messages[0] = &ChatMessage{ID: "mutated", Role: ChatRoleSystem}
+	if got := ctx.Messages()[0].ID; got != "user" {
+		t.Fatalf("Messages() returned mutable backing slice; first message = %q, want user", got)
+	}
+}
+
 func TestChatContextCopyFiltersOutFunctionItemsOutsideTools(t *testing.T) {
 	ctx := NewChatContext()
 	ctx.Items = []ChatItem{

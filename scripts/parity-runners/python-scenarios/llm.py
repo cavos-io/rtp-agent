@@ -2362,6 +2362,25 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
             "contract": "llm-tool-context",
             "events": [summarize(ctx, "empty", {"lookup_found": ctx.get_function_tool("lookup") is tool})],
         }
+    if action == "function_tools_copy_isolated":
+        lookup = fn_tool("lookup")
+        ctx = module.ToolContext([lookup])
+        function_tools = ctx.function_tools
+        del function_tools["lookup"]
+        function_tools["weather"] = fn_tool("weather")
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    ctx,
+                    "function_tools_copy_isolated",
+                    {
+                        "lookup_found": ctx.get_function_tool("lookup") is lookup,
+                        "weather_found": ctx.get_function_tool("weather") is not None,
+                    },
+                )
+            ],
+        }
     if action == "duplicate_constructor":
         try:
             module.ToolContext([fn_tool("lookup"), fn_tool("lookup")])
@@ -2430,11 +2449,55 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "copy_identity_isolation":
+        lookup = fn_tool("lookup")
+        provider = provider_tool("provider")
+        original = module.ToolContext([lookup, provider])
+        copied = original.copy()
+        before_equal = copied == original
+        copied.update_tools([*copied._tools, fn_tool("weather")])
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    copied,
+                    "copy_identity_isolation",
+                    {
+                        "before_equal": before_equal,
+                        "same_context": copied is original,
+                        "original_function_names": list(original.function_tools.keys()),
+                        "copy_function_names": list(copied.function_tools.keys()),
+                        "after_equal": copied == original,
+                    },
+                )
+            ],
+        }
     if action == "flatten_function_order":
         ctx = module.ToolContext([fn_tool("zeta"), fn_tool("alpha"), fn_tool("middle")])
         return {
             "contract": "llm-tool-context",
             "events": [summarize(ctx, "flatten_function_order")],
+        }
+    if action == "flatten_snapshot_isolated":
+        lookup = fn_tool("lookup")
+        provider = provider_tool("provider")
+        ctx = module.ToolContext([lookup, provider])
+        flattened = ctx.flatten()
+        flattened[0] = fn_tool("weather")
+        flattened.append(fn_tool("calendar"))
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    ctx,
+                    "flatten_snapshot_isolated",
+                    {
+                        "lookup_found": ctx.get_function_tool("lookup") is lookup,
+                        "weather_found": ctx.get_function_tool("weather") is not None,
+                        "snapshot_names_after_mutation": [tool.id for tool in flattened],
+                    },
+                )
+            ],
         }
     if action == "flatten_provider_order":
         ctx = module.ToolContext(

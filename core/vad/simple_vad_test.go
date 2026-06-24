@@ -233,6 +233,98 @@ func TestSimpleVADEmitsMetricsCollected(t *testing.T) {
 	}
 }
 
+func TestSimpleVADMetricsCadenceUsesUpdateInterval(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 0.5})
+	metricsCh := make(chan *telemetry.VADMetrics, 1)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("metrics emitted after one inference = %#v, want cadence to wait for two inferences", metrics)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 6000)); err != nil {
+		t.Fatalf("second PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	select {
+	case metrics := <-metricsCh:
+		if metrics.InferenceCount != 2 {
+			t.Fatalf("metrics InferenceCount = %d, want 2", metrics.InferenceCount)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for second-inference VAD metrics")
+	}
+}
+
+func TestSimpleVADMetricsCadenceUsesUpdatedInterval(t *testing.T) {
+	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
+	metricsCh := make(chan *telemetry.VADMetrics, 2)
+	detector.OnMetricsCollected(func(metrics *telemetry.VADMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := detector.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	select {
+	case metrics := <-metricsCh:
+		if metrics.InferenceCount != 1 {
+			t.Fatalf("first metrics InferenceCount = %d, want 1", metrics.InferenceCount)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for first VAD metrics")
+	}
+
+	detector.UpdateOptions(SimpleVADOptions{UpdateInterval: 0.5})
+	if got := detector.Capabilities().UpdateInterval; got != 0.5 {
+		t.Fatalf("Capabilities().UpdateInterval = %v, want 0.5", got)
+	}
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("second PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("metrics emitted after one updated-interval inference = %#v, want cadence to wait for two", metrics)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.PushFrame(audioFrame(16000, 160, 0)); err != nil {
+		t.Fatalf("third PushFrame() error = %v", err)
+	}
+	assertEventType(t, stream, VADEventInferenceDone)
+	select {
+	case metrics := <-metricsCh:
+		if metrics.InferenceCount != 2 {
+			t.Fatalf("updated metrics InferenceCount = %d, want 2", metrics.InferenceCount)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for updated-interval VAD metrics")
+	}
+}
+
 func TestSimpleVADMetricsHandlerCanCloseStream(t *testing.T) {
 	detector := NewSimpleVADWithOptions(SimpleVADOptions{UpdateInterval: 1})
 	var stream VADStream

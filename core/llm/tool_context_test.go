@@ -184,6 +184,25 @@ func TestToolContextAddToolUpdatesFlattenedTools(t *testing.T) {
 	}
 }
 
+func TestToolContextFunctionToolsReturnsIsolatedCopy(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	ctx := NewToolContext([]interface{}{lookup})
+
+	functionTools := ctx.FunctionTools()
+	delete(functionTools, "lookup")
+	functionTools["weather"] = &testTool{id: "weather", name: "weather"}
+
+	if got := ctx.GetFunctionTool("lookup"); got != lookup {
+		t.Fatalf("GetFunctionTool(lookup) = %p, want original tool %p", got, lookup)
+	}
+	if got := ctx.GetFunctionTool("weather"); got != nil {
+		t.Fatalf("GetFunctionTool(weather) = %p, want nil after mutating returned map", got)
+	}
+	if got := len(ctx.FunctionTools()); got != 1 {
+		t.Fatalf("len(FunctionTools()) = %d, want original registry size 1", got)
+	}
+}
+
 func TestToolContextAddToolRejectsDifferentToolWithSameName(t *testing.T) {
 	ctx := NewToolContext([]interface{}{&testTool{id: "lookup-a", name: "lookup"}})
 
@@ -382,6 +401,26 @@ func TestToolContextSeparatesAndPreservesProviderToolOrder(t *testing.T) {
 	}
 }
 
+func TestToolContextFlattenReturnsIsolatedSnapshot(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	provider := &testProviderTool{testTool: testTool{id: "provider", name: "provider"}}
+	ctx := NewToolContext([]interface{}{lookup, provider})
+
+	flattened := ctx.Flatten()
+	flattened[0] = &testTool{id: "weather", name: "weather"}
+	flattened = append(flattened, &testTool{id: "calendar", name: "calendar"})
+
+	if got := ctx.GetFunctionTool("lookup"); got != lookup {
+		t.Fatalf("GetFunctionTool(lookup) = %p, want original tool %p", got, lookup)
+	}
+	if got := ctx.GetFunctionTool("weather"); got != nil {
+		t.Fatalf("GetFunctionTool(weather) = %p, want nil after mutating flattened snapshot", got)
+	}
+	if got := len(ctx.Flatten()); got != 2 {
+		t.Fatalf("len(Flatten()) = %d, want original snapshot size 2", got)
+	}
+}
+
 func TestToolContextEqualUsesToolIdentity(t *testing.T) {
 	lookup := &testTool{id: "lookup", name: "lookup"}
 	provider := &testProviderTool{testTool: testTool{id: "provider", name: "provider"}}
@@ -396,6 +435,34 @@ func TestToolContextEqualUsesToolIdentity(t *testing.T) {
 	other := NewToolContext([]interface{}{otherLookup, provider})
 	if left.Equal(other) {
 		t.Fatal("Equal() = true, want false for same function name backed by a different tool")
+	}
+}
+
+func TestToolContextCopyPreservesToolIdentitiesAndIsolatesMutations(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	provider := &testProviderTool{testTool: testTool{id: "provider", name: "provider"}}
+	original := NewToolContext([]interface{}{lookup, provider})
+
+	copied := original.Copy()
+	if copied == original {
+		t.Fatal("Copy() returned original context, want distinct ToolContext")
+	}
+	if !copied.Equal(original) {
+		t.Fatal("Copy() not equal to original, want same tool identities like reference copy")
+	}
+
+	weather := &testTool{id: "weather", name: "weather"}
+	if err := copied.AddTool(weather); err != nil {
+		t.Fatalf("copied.AddTool() error = %v", err)
+	}
+	if original.GetFunctionTool("weather") != nil {
+		t.Fatal("original ToolContext gained copied mutation, want isolated top-level tool list")
+	}
+	if copied.GetFunctionTool("weather") != weather {
+		t.Fatal("copied ToolContext missing added tool")
+	}
+	if copied.Equal(original) {
+		t.Fatal("mutated copy Equal(original) = true, want false after isolated mutation")
 	}
 }
 

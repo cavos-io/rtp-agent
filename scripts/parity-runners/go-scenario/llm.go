@@ -3978,6 +3978,21 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 				summary(ctx, "empty", map[string]any{"lookup_found": ctx.GetFunctionTool("lookup") == tool}),
 			},
 		}, nil
+	case "function_tools_copy_isolated":
+		lookup := newTool("lookup", "lookup")
+		ctx := lkllm.NewToolContext([]interface{}{lookup})
+		functionTools := ctx.FunctionTools()
+		delete(functionTools, "lookup")
+		functionTools["weather"] = newTool("weather", "weather")
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "function_tools_copy_isolated", map[string]any{
+					"lookup_found":  ctx.GetFunctionTool("lookup") == lookup,
+					"weather_found": ctx.GetFunctionTool("weather") != nil,
+				}),
+			},
+		}, nil
 	case "duplicate_constructor":
 		var errMsg string
 		func() {
@@ -4054,6 +4069,39 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 				{"name": "equal_identity", "same_identity_equal": left.Equal(right), "different_function_equal": left.Equal(other)},
 			},
 		}, nil
+	case "copy_identity_isolation":
+		lookup := newTool("lookup", "lookup")
+		provider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "provider", name: "provider"}}
+		original := lkllm.NewToolContext([]interface{}{lookup, provider})
+		copied := original.Copy()
+		beforeEqual := copied.Equal(original)
+		if err := copied.AddTool(newTool("weather", "weather")); err != nil {
+			return nil, err
+		}
+		originalFunctionNames := make([]string, 0)
+		for _, tool := range original.Flatten() {
+			if _, ok := tool.(lkllm.ProviderTool); !ok {
+				originalFunctionNames = append(originalFunctionNames, tool.ID())
+			}
+		}
+		copyFunctionNames := make([]string, 0)
+		for _, tool := range copied.Flatten() {
+			if _, ok := tool.(lkllm.ProviderTool); !ok {
+				copyFunctionNames = append(copyFunctionNames, tool.ID())
+			}
+		}
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(copied, "copy_identity_isolation", map[string]any{
+					"before_equal":            beforeEqual,
+					"same_context":            copied == original,
+					"original_function_names": originalFunctionNames,
+					"copy_function_names":     copyFunctionNames,
+					"after_equal":             copied.Equal(original),
+				}),
+			},
+		}, nil
 	case "flatten_function_order":
 		ctx := lkllm.NewToolContext([]interface{}{
 			newTool("zeta", "zeta"),
@@ -4063,6 +4111,27 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 		return map[string]any{
 			"contract": "llm-tool-context",
 			"events":   []map[string]any{summary(ctx, "flatten_function_order", nil)},
+		}, nil
+	case "flatten_snapshot_isolated":
+		lookup := newTool("lookup", "lookup")
+		provider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "provider", name: "provider"}}
+		ctx := lkllm.NewToolContext([]interface{}{lookup, provider})
+		flattened := ctx.Flatten()
+		flattened[0] = newTool("weather", "weather")
+		flattened = append(flattened, newTool("calendar", "calendar"))
+		snapshotNames := make([]string, 0, len(flattened))
+		for _, tool := range flattened {
+			snapshotNames = append(snapshotNames, tool.ID())
+		}
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(ctx, "flatten_snapshot_isolated", map[string]any{
+					"lookup_found":                  ctx.GetFunctionTool("lookup") == lookup,
+					"weather_found":                 ctx.GetFunctionTool("weather") != nil,
+					"snapshot_names_after_mutation": snapshotNames,
+				}),
+			},
 		}, nil
 	case "flatten_provider_order":
 		ctx := lkllm.NewToolContext([]interface{}{

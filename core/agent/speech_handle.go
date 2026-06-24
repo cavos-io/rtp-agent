@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -29,6 +30,7 @@ var (
 
 	errSpeechWaitNoActiveGeneration = speechHandleNoActiveGenerationError("cannot use wait_for_generation: no active generation is running.")
 	errSpeechMarkNoActiveGeneration = speechHandleNoActiveGenerationError("cannot use mark_generation_done: no active generation is running.")
+	speechHandleDoneSequence        atomic.Uint64
 )
 
 type speechHandleReferenceError string
@@ -89,9 +91,11 @@ type SpeechHandle struct {
 	scheduledCh        chan struct{}
 	authorizationCh    chan struct{}
 	generationChs      []chan struct{}
+	interruptTimer     *time.Timer
 	nextCallbackID     uint64
 	doneCallbacks      map[uint64]func(*SpeechHandle)
 	itemAddedCallbacks map[uint64]func(llm.ChatItem)
+	doneSequence       uint64
 
 	mu sync.Mutex
 }
@@ -124,6 +128,13 @@ func (s *SpeechHandle) IsDone() bool {
 	}
 }
 
+func (s *SpeechHandle) DoneSequence() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.doneSequence
+}
+
 func (s *SpeechHandle) IsInterrupted() bool {
 	select {
 	case <-s.interruptCh:
@@ -154,13 +165,11 @@ func (s *SpeechHandle) Interrupt(force bool) error {
 	if !s.IsInterrupted() && !s.IsDone() {
 		close(s.interruptCh)
 
-		// Start a timeout to force-close doneCh if it doesn't resolve naturally
-		go func() {
-			time.Sleep(InterruptionTimeout)
+		s.interruptTimer = time.AfterFunc(InterruptionTimeout, func() {
 			if !s.IsDone() {
 				s.MarkDone()
 			}
-		}()
+		})
 	}
 
 	return nil
@@ -274,6 +283,11 @@ func (s *SpeechHandle) MarkDone() {
 	s.cancelPrecomputedGenerationLocked()
 	if !alreadyDone {
 		close(s.doneCh)
+		s.doneSequence = speechHandleDoneSequence.Add(1)
+	}
+	if s.interruptTimer != nil {
+		s.interruptTimer.Stop()
+		s.interruptTimer = nil
 	}
 	if len(s.generationChs) > 0 {
 		s.closeGenerationLocked(len(s.generationChs) - 1)
