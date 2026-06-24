@@ -610,7 +610,7 @@ func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampl
 	case "done":
 		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	case "error":
-		return nil, false, fmt.Errorf("respeecher tts stream error: %v", message.Error)
+		return nil, false, llm.NewAPIError(fmt.Sprintf("Respeecher returned error: %v", message.Error), nil, true)
 	default:
 		return nil, false, nil
 	}

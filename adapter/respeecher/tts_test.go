@@ -778,6 +778,14 @@ func TestRespeecherTTSAudioFromStreamMessage(t *testing.T) {
 
 	if _, _, err := respeecherTTSAudioFromStreamMessage([]byte(`{"context_id":"ctx-1","type":"error","error":"bad text"}`), "ctx-1", 24000); err == nil {
 		t.Fatal("error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Respeecher returned error: bad text" {
+			t.Fatalf("APIError message = %q, want reference message", apiErr.Message)
+		}
 	}
 }
 
