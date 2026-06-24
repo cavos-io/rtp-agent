@@ -473,13 +473,6 @@ func (s *rtzrStream) isClosed() bool {
 
 func (s *rtzrStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
-		}
 		return nil, io.EOF
 	}
 	select {
