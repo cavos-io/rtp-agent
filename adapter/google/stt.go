@@ -475,6 +475,11 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *googleSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	return nil
 }
 
