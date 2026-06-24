@@ -314,6 +314,7 @@ func (s *gradiumSTTStream) writeAudioFramesLocked(frames []*model.AudioFrame) er
 			continue
 		}
 		if err := writeGradiumSTTMessage(s.conn, buildGradiumSTTAudioMessage(frame.Data)); err != nil {
+			_ = s.closeLocked()
 			return err
 		}
 	}
@@ -341,6 +342,10 @@ func (s *gradiumSTTStream) writeVADFlushSilence() error {
 func (s *gradiumSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *gradiumSTTStream) closeLocked() error {
 	if s.closed {
 		return nil
 	}
