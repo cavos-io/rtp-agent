@@ -323,6 +323,25 @@ func TestChoiceDeltaJSONMatchesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestChoiceDeltaJSONOmitsTargetFlushField(t *testing.T) {
+	data, err := json.Marshal(ChoiceDelta{
+		Role:    ChatRoleAssistant,
+		Content: "hello",
+		Flush:   true,
+	})
+	if err != nil {
+		t.Fatalf("Marshal ChoiceDelta returned error: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("Unmarshal ChoiceDelta payload returned error: %v", err)
+	}
+	if _, ok := payload["flush"]; ok {
+		t.Fatalf("payload flush = %#v, want omitted to match reference ChoiceDelta: %s", payload["flush"], data)
+	}
+}
+
 func TestChatChunkJSONMatchesReferencePayload(t *testing.T) {
 	data, err := json.Marshal(ChatChunk{
 		ID: "chunk_123",

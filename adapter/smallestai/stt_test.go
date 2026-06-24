@@ -586,6 +586,58 @@ func TestSmallestAISTTFlushEmitsReferenceRecognitionUsage(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closed := make(chan struct{})
+	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read first audio: %v", err)
+			return
+		}
+		_ = conn.UnderlyingConn().Close()
+		close(closed)
+	})
+
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTBaseURL("ws://smallest.test/waves/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	smallestStream, ok := stream.(*smallestAISTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *smallestAISTTStream", stream)
+	}
+
+	frame := &model.AudioFrame{Data: bytes.Repeat([]byte{0x11}, 1600)}
+	for i := 0; i < 3; i++ {
+		if err = stream.PushFrame(frame); err != nil {
+			break
+		}
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("server did not close websocket")
+	}
+	if err == nil {
+		t.Fatal("PushFrame after server close error = nil, want write failure")
+	}
+	if !smallestStream.isClosed() {
+		t.Fatal("stream remains open after audio write failure")
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+}
+
 func TestSmallestAISTTPushFrameEmitsReferencePeriodicRecognitionUsage(t *testing.T) {
 	oldInterval := smallestAISTTUsageReportInterval
 	smallestAISTTUsageReportInterval = 10 * time.Millisecond

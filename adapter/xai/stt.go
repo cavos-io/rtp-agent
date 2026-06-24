@@ -558,19 +558,36 @@ func newXaiSTTAudioByteStream(s *xaiSTTStream, frame *model.AudioFrame) *audio.A
 func (s *xaiSTTStream) writeBinaryDataLocked(data []byte) error {
 	if s.writeBinary != nil {
 		if err := s.writeBinary(data); err != nil {
+			s.closeAfterWriteFailureLocked()
 			return err
 		}
 		s.recordUsageAudioLocked(len(data))
 		return nil
 	}
 	if s.conn == nil {
+		s.closeAfterWriteFailureLocked()
 		return io.ErrClosedPipe
 	}
 	if err := s.conn.WriteMessage(websocket.BinaryMessage, data); err != nil {
+		s.closeAfterWriteFailureLocked()
 		return err
 	}
 	s.recordUsageAudioLocked(len(data))
 	return nil
+}
+
+func (s *xaiSTTStream) closeAfterWriteFailureLocked() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.pendingAudio = nil
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 }
 
 func (s *xaiSTTStream) writeOrBufferBinaryDataLocked(data []byte) error {

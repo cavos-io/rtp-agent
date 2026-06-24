@@ -403,6 +403,7 @@ func (s *basetenSTTStream) writeBufferedAudioLocked(flush bool) error {
 			return err
 		}
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			_ = s.closeLocked()
 			return err
 		}
 	}
@@ -410,6 +411,7 @@ func (s *basetenSTTStream) writeBufferedAudioLocked(flush bool) error {
 		chunk := bytes.Clone(s.audio.Bytes())
 		s.audio.Reset()
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
+			_ = s.closeLocked()
 			return err
 		}
 	}
@@ -434,6 +436,10 @@ func (s *basetenSTTStream) Flush() error {
 func (s *basetenSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *basetenSTTStream) closeLocked() error {
 	if s.closed {
 		return nil
 	}
@@ -441,9 +447,12 @@ func (s *basetenSTTStream) Close() error {
 	owner := s.owner
 	s.owner = nil
 	s.cancel()
-	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"terminate_session":true}`))
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	err := s.conn.Close()
+	var err error
+	if s.conn != nil {
+		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"terminate_session":true}`))
+		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+		err = s.conn.Close()
+	}
 	if owner != nil {
 		owner.unregisterStream(s)
 	}

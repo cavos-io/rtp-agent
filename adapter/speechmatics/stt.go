@@ -651,6 +651,7 @@ func (s *speechmaticsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	for _, chunk := range s.audioBuf.Push(frame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
+			_ = s.closeLocked()
 			return err
 		}
 		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
@@ -686,6 +687,7 @@ func (s *speechmaticsSTTStream) Flush() error {
 	}
 	for _, chunk := range s.audioBuf.Flush() {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
+			_ = s.closeLocked()
 			return err
 		}
 		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
@@ -708,6 +710,10 @@ func newSpeechmaticsAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStr
 func (s *speechmaticsSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *speechmaticsSTTStream) closeLocked() error {
 	if s.closed {
 		return nil
 	}

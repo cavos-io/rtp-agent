@@ -247,6 +247,39 @@ func TestSpeechmaticsPushFrameChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	writeErr := errors.New("write failed")
+	stream := &speechmaticsSTTStream{
+		writeBinary: func([]byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 3200),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1600,
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, writeErr) {
+		t.Fatalf("PushFrame write failure error = %v, want %v", err, writeErr)
+	}
+	if !stream.isClosed() {
+		t.Fatal("stream remains open after audio write failure")
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+}
+
 func TestSpeechmaticsSTTCapabilitiesMatchReference(t *testing.T) {
 	provider := NewSpeechmaticsSTT("test-key")
 	capabilities := provider.Capabilities()

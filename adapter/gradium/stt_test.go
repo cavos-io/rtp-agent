@@ -361,6 +361,61 @@ func TestGradiumSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closeNow := make(chan struct{})
+	closed := make(chan struct{})
+	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read setup: %v", err)
+			return
+		}
+		<-closeNow
+		_ = conn.UnderlyingConn().Close()
+		close(closed)
+	})
+
+	provider := NewGradiumSTT("test-key",
+		WithGradiumSTTModelEndpoint("ws://gradium.test/asr"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	gradiumStream, ok := stream.(*gradiumSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *gradiumSTTStream", stream)
+	}
+	close(closeNow)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("server did not close websocket")
+	}
+
+	frame := &model.AudioFrame{Data: gradiumBytesOfLength(3840, 0x11)}
+	for i := 0; i < 3; i++ {
+		if err = stream.PushFrame(frame); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		t.Fatal("PushFrame after server close error = nil, want write failure")
+	}
+	if !gradiumStream.isClosed() {
+		t.Fatal("stream remains open after audio write failure")
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+}
+
 func newGradiumSTTTestWebsocketDialer(t *testing.T, handler func(*websocket.Conn, *http.Request)) GradiumSTTOption {
 	t.Helper()
 	upgrader := websocket.Upgrader{}
