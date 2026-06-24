@@ -1725,6 +1725,31 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamToolChoice(t *testing.
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestToolPolicyOverridesExtraParams(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ParallelToolCalls:    true,
+		ParallelToolCallsSet: true,
+		ToolChoice:           "required",
+		ExtraParams: map[string]any{
+			"parallel_tool_calls": false,
+			"tool_choice":         "none",
+			"metadata": map[string]any{
+				"trace": "abc",
+			},
+		},
+	})
+
+	if got, ok := req.ParallelToolCalls.(*bool); !ok || got == nil || !*got {
+		t.Fatalf("ParallelToolCalls = %#v, want pointer to true", req.ParallelToolCalls)
+	}
+	if req.ToolChoice != "required" {
+		t.Fatalf("ToolChoice = %#v, want required", req.ToolChoice)
+	}
+	if req.Metadata["trace"] != "abc" {
+		t.Fatalf("Metadata = %#v, want generic metadata preserved", req.Metadata)
+	}
+}
+
 func TestNewOpenAILLMWithBaseURLAndHTTPClientUsesConfiguredClient(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,
