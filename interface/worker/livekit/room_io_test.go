@@ -19,10 +19,12 @@ import (
 	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
+	lkagent "github.com/livekit/protocol/livekit/agent"
 	protoLogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 	"github.com/twitchtv/twirp"
+	"google.golang.org/protobuf/proto"
 )
 
 type fakeRoomIOTextResponder struct {
@@ -616,6 +618,34 @@ func TestRoomIOAttachRoomRegistersPreConnectAudioHandler(t *testing.T) {
 	if err == nil {
 		t.Fatal("RegisterByteStreamHandler after AttachRoom() error = nil, want existing pre-connect handler")
 	}
+}
+
+func TestRoomIOAttachRoomRegistersAgentSessionHandler(t *testing.T) {
+	rio := NewRoomIO(nil, &agent.AgentSession{}, RoomOptions{DisableTextInput: true})
+	room := lksdk.NewRoom(nil)
+
+	err := room.RegisterByteStreamHandler(roomIOAgentSessionTopic, func(*lksdk.ByteStreamReader, string) {})
+	if err != nil {
+		t.Fatalf("RegisterByteStreamHandler before AttachRoom() error = %v", err)
+	}
+	room.UnregisterByteStreamHandler(roomIOAgentSessionTopic)
+
+	rio.AttachRoom(room)
+	t.Cleanup(func() {
+		_ = rio.Close()
+	})
+
+	err = room.RegisterByteStreamHandler(roomIOAgentSessionTopic, func(*lksdk.ByteStreamReader, string) {})
+	if err == nil {
+		t.Fatal("RegisterByteStreamHandler(lk.agent.session) error = nil, want existing RoomIO session handler")
+	}
+	if err := rio.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := room.RegisterByteStreamHandler(roomIOAgentSessionTopic, func(*lksdk.ByteStreamReader, string) {}); err != nil {
+		t.Fatalf("session handler remains registered after Close(): %v", err)
+	}
+	room.UnregisterByteStreamHandler(roomIOAgentSessionTopic)
 }
 
 func TestRoomIOAttachRoomSkipsPreConnectAudioHandlerWhenDisabled(t *testing.T) {
@@ -5852,6 +5882,76 @@ func TestRoomIOOnListenerPanicDoesNotBlockOtherListeners(t *testing.T) {
 	case <-called:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("second listener was not called after first listener panic")
+	}
+}
+
+func TestRoomIOAgentSessionFrameworkInfoResponse(t *testing.T) {
+	requestPayload, err := proto.Marshal(&lkagent.AgentSessionMessage{
+		Message: &lkagent.AgentSessionMessage_Request{
+			Request: &lkagent.SessionRequest{
+				RequestId: "req-framework",
+				Request: &lkagent.SessionRequest_GetFrameworkInfo_{
+					GetFrameworkInfo: &lkagent.SessionRequest_GetFrameworkInfo{},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	responsePayload, ok, err := roomIOAgentSessionFrameworkInfoResponse(requestPayload, "python", "1.5.2")
+	if err != nil {
+		t.Fatalf("roomIOAgentSessionFrameworkInfoResponse error = %v", err)
+	}
+	if !ok {
+		t.Fatal("roomIOAgentSessionFrameworkInfoResponse ok = false, want true")
+	}
+
+	var response lkagent.AgentSessionMessage
+	if err := proto.Unmarshal(responsePayload, &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	sessionResponse := response.GetResponse()
+	if sessionResponse == nil {
+		t.Fatal("response.GetResponse() = nil, want framework info response")
+	}
+	if sessionResponse.GetRequestId() != "req-framework" {
+		t.Fatalf("response request_id = %q, want req-framework", sessionResponse.GetRequestId())
+	}
+	info := sessionResponse.GetGetFrameworkInfo()
+	if info == nil {
+		t.Fatal("response.get_framework_info = nil")
+	}
+	if info.GetSdk() != "python" {
+		t.Fatalf("response sdk = %q, want python", info.GetSdk())
+	}
+	if info.GetSdkVersion() != "1.5.2" {
+		t.Fatalf("response sdk_version = %q, want 1.5.2", info.GetSdkVersion())
+	}
+}
+
+func TestRoomIOAgentSessionFrameworkInfoResponseIgnoresOtherMessages(t *testing.T) {
+	requestPayload, err := proto.Marshal(&lkagent.AgentSessionMessage{
+		Message: &lkagent.AgentSessionMessage_Request{
+			Request: &lkagent.SessionRequest{
+				RequestId: "req-ping",
+				Request: &lkagent.SessionRequest_Ping_{
+					Ping: &lkagent.SessionRequest_Ping{},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	responsePayload, ok, err := roomIOAgentSessionFrameworkInfoResponse(requestPayload, "python", "1.5.2")
+	if err != nil {
+		t.Fatalf("roomIOAgentSessionFrameworkInfoResponse error = %v", err)
+	}
+	if ok {
+		t.Fatalf("roomIOAgentSessionFrameworkInfoResponse ok = true, want false with payload %v", responsePayload)
 	}
 }
 
