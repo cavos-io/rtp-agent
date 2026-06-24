@@ -5179,6 +5179,39 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 				{"name": "equal_identity", "same_identity_equal": left.Equal(right), "different_function_equal": left.Equal(other)},
 			},
 		}, nil
+	case "copy_identity_isolation":
+		lookup := newTool("lookup", "lookup")
+		provider := &scenarioLLMProviderTool{scenarioLLMTool: scenarioLLMTool{id: "provider", name: "provider"}}
+		original := lkllm.NewToolContext([]interface{}{lookup, provider})
+		copied := original.Copy()
+		beforeEqual := copied.Equal(original)
+		if err := copied.AddTool(newTool("weather", "weather")); err != nil {
+			return nil, err
+		}
+		originalFunctionNames := make([]string, 0)
+		for _, tool := range original.Flatten() {
+			if _, ok := tool.(lkllm.ProviderTool); !ok {
+				originalFunctionNames = append(originalFunctionNames, tool.ID())
+			}
+		}
+		copyFunctionNames := make([]string, 0)
+		for _, tool := range copied.Flatten() {
+			if _, ok := tool.(lkllm.ProviderTool); !ok {
+				copyFunctionNames = append(copyFunctionNames, tool.ID())
+			}
+		}
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				summary(copied, "copy_identity_isolation", map[string]any{
+					"before_equal":            beforeEqual,
+					"same_context":            copied == original,
+					"original_function_names": originalFunctionNames,
+					"copy_function_names":     copyFunctionNames,
+					"after_equal":             copied.Equal(original),
+				}),
+			},
+		}, nil
 	case "flatten_function_order":
 		ctx := lkllm.NewToolContext([]interface{}{
 			newTool("zeta", "zeta"),

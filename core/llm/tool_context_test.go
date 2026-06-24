@@ -399,6 +399,34 @@ func TestToolContextEqualUsesToolIdentity(t *testing.T) {
 	}
 }
 
+func TestToolContextCopyPreservesToolIdentitiesAndIsolatesMutations(t *testing.T) {
+	lookup := &testTool{id: "lookup", name: "lookup"}
+	provider := &testProviderTool{testTool: testTool{id: "provider", name: "provider"}}
+	original := NewToolContext([]interface{}{lookup, provider})
+
+	copied := original.Copy()
+	if copied == original {
+		t.Fatal("Copy() returned original context, want distinct ToolContext")
+	}
+	if !copied.Equal(original) {
+		t.Fatal("Copy() not equal to original, want same tool identities like reference copy")
+	}
+
+	weather := &testTool{id: "weather", name: "weather"}
+	if err := copied.AddTool(weather); err != nil {
+		t.Fatalf("copied.AddTool() error = %v", err)
+	}
+	if original.GetFunctionTool("weather") != nil {
+		t.Fatal("original ToolContext gained copied mutation, want isolated top-level tool list")
+	}
+	if copied.GetFunctionTool("weather") != weather {
+		t.Fatal("copied ToolContext missing added tool")
+	}
+	if copied.Equal(original) {
+		t.Fatal("mutated copy Equal(original) = true, want false after isolated mutation")
+	}
+}
+
 func TestToolContextEqualHandlesNilReceiverLikeReference(t *testing.T) {
 	var nilCtx *ToolContext
 	empty := EmptyToolContext()

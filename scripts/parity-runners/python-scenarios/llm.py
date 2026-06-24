@@ -3111,6 +3111,29 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
                 }
             ],
         }
+    if action == "copy_identity_isolation":
+        lookup = fn_tool("lookup")
+        provider = provider_tool("provider")
+        original = module.ToolContext([lookup, provider])
+        copied = original.copy()
+        before_equal = copied == original
+        copied.update_tools([*copied._tools, fn_tool("weather")])
+        return {
+            "contract": "llm-tool-context",
+            "events": [
+                summarize(
+                    copied,
+                    "copy_identity_isolation",
+                    {
+                        "before_equal": before_equal,
+                        "same_context": copied is original,
+                        "original_function_names": list(original.function_tools.keys()),
+                        "copy_function_names": list(copied.function_tools.keys()),
+                        "after_equal": copied == original,
+                    },
+                )
+            ],
+        }
     if action == "flatten_function_order":
         ctx = module.ToolContext([fn_tool("zeta"), fn_tool("alpha"), fn_tool("middle")])
         return {
