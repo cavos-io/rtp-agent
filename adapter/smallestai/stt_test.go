@@ -231,7 +231,7 @@ func TestSmallestAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 func TestSmallestAISTTClosedStreamNextReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &smallestAISTTStream{
-		events: make(chan *stt.SpeechEvent),
+		events: make(chan *stt.SpeechEvent, 1),
 		errCh:  make(chan error),
 		ctx:    ctx,
 		cancel: cancel,
@@ -242,6 +242,7 @@ func TestSmallestAISTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v, want nil", err)
 	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
 	_, err := stream.Next()
 
 	if !errors.Is(err, io.EOF) {
