@@ -247,7 +247,7 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("simplismart stt error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Simplismart STT request failed", resp.StatusCode, "", string(respBody))
 	}
 	var result simplismartSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
