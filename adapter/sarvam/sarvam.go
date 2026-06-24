@@ -1371,7 +1371,7 @@ func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("sarvam tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Sarvam TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &sarvamTTSChunkedStream{resp: resp, sampleRate: t.sampleRate, outputAudioCodec: t.outputAudioCodec}, nil
 }
