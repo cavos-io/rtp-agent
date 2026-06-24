@@ -574,6 +574,22 @@ func TestBasetenTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &basetenTTSSynthesizeStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestBasetenTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	called := false
 	client := basetenTTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
