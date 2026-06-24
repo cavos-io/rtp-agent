@@ -429,8 +429,34 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("final marker frame = %+v, want boundary-only marker", finished.Frame)
 	}
 
-	if _, _, _, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`)); err == nil {
-		t.Fatal("error message returned nil error, want stream error")
+	if audio, done, requestID, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text","request_id":7}`)); err != nil || audio != nil || done || requestID != 7 {
+		t.Fatalf("error message = audio=%+v done=%v requestID=%d err=%v, want ignored message with request id", audio, done, requestID, err)
+	}
+}
+
+func TestResembleTTSStreamLogMessageDoesNotAbortReferenceStream(t *testing.T) {
+	conn := newResembleProviderMessagesWebsocketConn(t,
+		map[string]any{"type": "error", "message": "provider diagnostic", "request_id": 1},
+		map[string]any{"type": "audio_end", "request_id": 1},
+	)
+	stream := &resembleTTSSynthesizeStream{
+		conn:   conn,
+		events: make(chan *coretts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		flushed: true,
+		lastID:  1,
+	}
+	go stream.readLoop()
+
+	select {
+	case event := <-stream.events:
+		if event == nil || !event.IsFinal {
+			t.Fatalf("event = %+v, want final marker after ignored provider log message", event)
+		}
+	case err := <-stream.errCh:
+		t.Fatalf("readLoop error = %v, want ignored provider log message", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for final marker")
 	}
 }
 
@@ -658,6 +684,57 @@ func newResembleProviderCloseWebsocketConn(t *testing.T, closeCode int) *websock
 			time.Now().Add(time.Second),
 		)
 		_ = conn.Close()
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://resemble.test/stream", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn
+}
+
+func newResembleProviderMessagesWebsocketConn(t *testing.T, messages ...map[string]any) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newResembleSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		for _, message := range messages {
+			if err := conn.WriteJSON(message); err != nil {
+				serverErr <- err
+				return
+			}
+		}
 	})}
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
