@@ -453,6 +453,22 @@ func TestResembleTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestResembleTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &resembleTTSSynthesizeStream{
+		ctx:    context.Background(),
+		events: make(chan *coretts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.events <- &coretts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestResembleTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	var httpCalls int
 	oldClient := http.DefaultClient
