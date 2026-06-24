@@ -613,6 +613,61 @@ func TestBasetenSTTStreamDialErrorReturnsFailure(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closeNow := make(chan struct{})
+	closed := make(chan struct{})
+	dialer := newBasetenSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read metadata: %v", err)
+			return
+		}
+		<-closeNow
+		_ = conn.UnderlyingConn().Close()
+		close(closed)
+	})
+
+	provider := mustNewBasetenSTT(t, "test-key", "",
+		WithBasetenSTTModelEndpoint("ws://baseten.test/websocket"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	basetenStream, ok := stream.(*basetenSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *basetenSTTStream", stream)
+	}
+	close(closeNow)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("server did not close websocket")
+	}
+
+	frame := &model.AudioFrame{Data: bytes.Repeat([]byte{0x11}, basetenSTTAudioChunkBytes)}
+	for i := 0; i < 3; i++ {
+		if err = stream.PushFrame(frame); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		t.Fatal("PushFrame after server close error = nil, want write failure")
+	}
+	if !basetenStream.isClosed() {
+		t.Fatal("stream remains open after audio write failure")
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+}
+
 func mustNewBasetenSTT(t *testing.T, apiKey string, model string, opts ...BasetenSTTOption) *BasetenSTT {
 	t.Helper()
 	provider, err := NewBasetenSTT(apiKey, model, opts...)
