@@ -312,6 +312,28 @@ func TestSonioxTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
+	providerErr := errors.New("provider failed after audio")
+	for i := range 200 {
+		want := &tts.SynthesizedAudio{RequestID: "req-audio"}
+		stream := &sonioxTTSSynthesizeStream{
+			ctx:    context.Background(),
+			events: make(chan *tts.SynthesizedAudio, 1),
+			errCh:  make(chan error, 1),
+		}
+		stream.events <- want
+		stream.errCh <- providerErr
+
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("trial %d Next error = %v, want queued audio before stream error", i, err)
+		}
+		if audio != want {
+			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
+		}
+	}
+}
+
 func TestSonioxTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	dialCalls := 0
