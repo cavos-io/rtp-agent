@@ -12,6 +12,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -115,7 +116,7 @@ func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("spitch tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Spitch TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &spitchTTSChunkedStream{
