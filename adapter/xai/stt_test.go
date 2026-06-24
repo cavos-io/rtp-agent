@@ -654,6 +654,71 @@ func TestXaiSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestXaiSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
+	closed := make(chan struct{})
+	handlerErr := make(chan error, 2)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if err := conn.WriteJSON(map[string]any{"type": "transcript.created"}); err != nil {
+			handlerErr <- err
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			handlerErr <- err
+			return
+		}
+		_ = conn.UnderlyingConn().Close()
+		close(closed)
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiSTT("test-key", WithXaiSTTWebsocketURL("ws://xai.test/v1/stt"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	xaiStream, ok := stream.(*xaiSTTStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *xaiSTTStream", stream)
+	}
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	select {
+	case <-closed:
+	case err := <-handlerErr:
+		t.Fatalf("websocket server: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("server did not close websocket")
+	}
+	for i := 0; i < 3; i++ {
+		if err = stream.PushFrame(frame); err != nil {
+			break
+		}
+	}
+	if err == nil {
+		t.Fatal("PushFrame after server close error = nil, want write failure")
+	}
+	if !xaiStream.isClosed() {
+		t.Fatal("stream remains open after audio write failure")
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after write failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after write failure error = %v", err)
+	}
+}
+
 func TestXaiSTTFlushEmitsReferenceRecognitionUsage(t *testing.T) {
 	var writes [][]byte
 	stream := &xaiSTTStream{
