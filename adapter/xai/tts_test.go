@@ -263,6 +263,40 @@ func TestXaiTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestXaiTTSClosedStreamNextIgnoresQueuedProviderAudio(t *testing.T) {
+	handlerErr := make(chan error, 1)
+	audioDelta := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0x03, 0x04})
+	dialer := newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if err := conn.WriteJSON(map[string]any{"type": "audio.delta", "delta": audioDelta}); err != nil {
+			handlerErr <- err
+			return
+		}
+		_, _, _ = conn.ReadMessage()
+	}, handlerErr)
+	conn, _, err := dialer.DialContext(context.Background(), "ws://xai.test/v1/tts", nil)
+	if err != nil {
+		t.Fatalf("DialContext() error = %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	stream := &xaiTTSSynthesizeStream{
+		conn:      conn,
+		ctx:       context.Background(),
+		closed:    true,
+		requestID: "request",
+		segmentID: "segment",
+	}
+
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() with queued provider audio after Close = (%#v, %v), want EOF", audio, err)
+	}
+	select {
+	case err := <-handlerErr:
+		t.Fatalf("handler error = %v", err)
+	default:
+	}
+}
+
 func TestXaiTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	handlerDone := make(chan struct{})
 	handlerErr := make(chan error, 1)

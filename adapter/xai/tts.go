@@ -463,6 +463,9 @@ func (s *xaiTTSSynthesizeStream) flushTextTokensLocked() []string {
 }
 
 func (s *xaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case <-s.ctx.Done():
 		if s.isClosed() {
