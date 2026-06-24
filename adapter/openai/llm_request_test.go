@@ -2525,6 +2525,39 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamResponseFormat(t *test
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestResponseFormatOverridesExtraParam(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ResponseFormat: map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "Answer",
+				"strict": true,
+			},
+		},
+		ExtraParams: map[string]any{
+			"response_format": map[string]any{
+				"type": "json_object",
+			},
+			"metadata": map[string]any{
+				"trace": "abc",
+			},
+		},
+	})
+
+	if req.ResponseFormat == nil {
+		t.Fatal("ResponseFormat = nil, want explicit response format")
+	}
+	if req.ResponseFormat.Type != openaisdk.ChatCompletionResponseFormatTypeJSONSchema {
+		t.Fatalf("ResponseFormat.Type = %q, want json_schema", req.ResponseFormat.Type)
+	}
+	if req.ResponseFormat.JSONSchema == nil || req.ResponseFormat.JSONSchema.Name != "Answer" || !req.ResponseFormat.JSONSchema.Strict {
+		t.Fatalf("ResponseFormat.JSONSchema = %#v, want strict Answer", req.ResponseFormat.JSONSchema)
+	}
+	if req.Metadata["trace"] != "abc" {
+		t.Fatalf("Metadata = %#v, want generic metadata preserved", req.Metadata)
+	}
+}
+
 func TestOpenAIChatAppliesExtraParamPromptCacheOptions(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,

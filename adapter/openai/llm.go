@@ -1491,10 +1491,11 @@ func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model str
 		Tools:    tools,
 		Stream:   true,
 	}
+	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
+
 	if options.ParallelToolCallsSet {
 		req.ParallelToolCalls = &options.ParallelToolCalls
 	}
-
 	if options.ToolChoice != nil {
 		if toolChoice := buildOpenAIToolChoice(options.ToolChoice); toolChoice != nil {
 			req.ToolChoice = toolChoice
@@ -1503,8 +1504,6 @@ func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model str
 	if responseFormat := buildOpenAIResponseFormat(options.ResponseFormat); responseFormat != nil {
 		req.ResponseFormat = responseFormat
 	}
-
-	applyOpenAIExtraParams(&req, dropUnsupportedOpenAIParams(model, options.ExtraParams, len(options.Tools) > 0))
 	if defaultReasoning && req.ReasoningEffort == "" {
 		req.ReasoningEffort = defaultOpenAIReasoningEffort(model, len(options.Tools) > 0)
 	}
