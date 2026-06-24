@@ -535,6 +535,30 @@ func TestNeuphonicTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &neuphonicTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error, 1),
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() after Close audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %v, want EOF", err)
+	}
+}
+
 func TestNeuphonicTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	var httpCalls int
 	originalClient := http.DefaultClient
