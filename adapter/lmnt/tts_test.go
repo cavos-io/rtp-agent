@@ -326,6 +326,36 @@ func TestLMNTTTSChunkedStreamEmitsReferenceFinalMarkerAfterRawAudio(t *testing.T
 	}
 }
 
+func TestLMNTTTSChunkedStreamKeepsRawAudioReturnedWithEOF(t *testing.T) {
+	stream := &lmntTTSChunkedStream{
+		resp:       &http.Response{Body: &lmntFinalReadBody{data: []byte{0x01, 0x02, 0x03, 0x04}}},
+		format:     "raw",
+		sampleRate: 16000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want raw audio frame", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("frame data = %v, want final EOF bytes", got)
+	}
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error before final marker: %v", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("second audio = %#v, want boundary-only final marker", audio)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final = %v, want io.EOF", err)
+	}
+}
+
 func TestLMNTTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &lmntCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &lmntTTSChunkedStream{resp: &http.Response{Body: body}, format: "raw", sampleRate: 24000}
@@ -373,6 +403,23 @@ func (b *lmntCloseCountBody) Close() error {
 	if b.closeCount > 1 {
 		return errors.New("closed twice")
 	}
+	return nil
+}
+
+type lmntFinalReadBody struct {
+	data []byte
+	read bool
+}
+
+func (b *lmntFinalReadBody) Read(p []byte) (int, error) {
+	if b.read {
+		return 0, errors.New("read after final EOF bytes")
+	}
+	b.read = true
+	return copy(p, b.data), io.EOF
+}
+
+func (b *lmntFinalReadBody) Close() error {
 	return nil
 }
 
