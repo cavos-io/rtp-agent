@@ -1257,6 +1257,36 @@ func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSAudioFromStreamMessageReturnsTypedErrors(t *testing.T) {
+	_, _, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"error","data":{"message":"bad voice","code":"invalid_voice"}}`), 22050, "mp3")
+	if err == nil {
+		t.Fatal("error message returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error message error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != 500 {
+		t.Fatalf("status code = %d, want 500", statusErr.StatusCode)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("body = %T, want decoded payload map", statusErr.Body)
+	}
+	if body["type"] != "error" {
+		t.Fatalf("body type = %#v, want error", body["type"])
+	}
+
+	_, _, err = sarvamTTSAudioFromStreamMessage([]byte(`{"type":"error","data":{"message":"rate_limit exceeded","code":"rate_limit"}}`), 22050, "mp3")
+	if err == nil {
+		t.Fatal("recoverable error message returned nil error, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("recoverable error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSarvamTTSAudioFromStreamMessageDecodesTelephonyCodecs(t *testing.T) {
 	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AP8=","request_id":"req-mulaw"}}`), 8000, "mulaw")
 	if err != nil {

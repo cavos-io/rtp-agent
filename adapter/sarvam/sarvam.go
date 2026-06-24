@@ -1876,10 +1876,33 @@ func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int, outputAudio
 		}
 		return nil, false, nil
 	case "error":
-		return nil, false, fmt.Errorf("sarvam tts stream error: %s", string(payload))
+		return nil, false, sarvamTTSErrorMessageError(payload, message.Data.Message)
 	default:
 		return nil, false, nil
 	}
+}
+
+func sarvamTTSErrorMessageError(payload []byte, message string) error {
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		body = map[string]any{"raw": string(payload)}
+	}
+	raw := sarvamCompactJSON(payload)
+	lowered := strings.ToLower(message)
+	for _, hint := range []string{"rate_limit", "temporary_unavailable", "timeout"} {
+		if strings.Contains(lowered, hint) {
+			return llm.NewAPIConnectionError("Recoverable TTS API error from Sarvam: " + raw)
+		}
+	}
+	return llm.NewAPIStatusError("TTS API error from Sarvam: "+raw, http.StatusInternalServerError, "", body)
+}
+
+func sarvamCompactJSON(payload []byte) string {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, payload); err != nil {
+		return string(payload)
+	}
+	return compact.String()
 }
 
 func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAudioCodec string) *tts.SynthesizedAudio {
