@@ -794,7 +794,7 @@ func cartesiaSTTError(data map[string]any, codeKey string) error {
 		message = "unknown error from cartesia"
 	}
 	if status >= 500 || status == 0 {
-		return fmt.Errorf("cartesia stt error %d: %s", status, message)
+		return llm.NewAPIConnectionError(message)
 	}
 	return nil
 }
