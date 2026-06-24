@@ -358,22 +358,45 @@ func buildSmallestAITTSStreamMessage(t *SmallestAITTS, text string) ([]byte, err
 }
 
 type smallestaiTTSChunkedStream struct {
-	owner      *SmallestAITTS
-	resp       *http.Response
-	sampleRate int
-	mu         sync.Mutex
-	finalSent  bool
+	owner        *SmallestAITTS
+	resp         *http.Response
+	sampleRate   int
+	mu           sync.Mutex
+	pendingFinal bool
+	finalSent    bool
 }
 
 func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
 	resp := s.resp
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		s.mu.Unlock()
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	finalSent := s.finalSent
 	s.mu.Unlock()
-	if resp == nil || resp.Body == nil {
+	if resp == nil || resp.Body == nil || finalSent {
 		return nil, io.EOF
 	}
 	buf := make([]byte, 4096)
 	n, err := resp.Body.Read(buf)
+	if n > 0 {
+		if err == io.EOF {
+			s.mu.Lock()
+			s.pendingFinal = true
+			s.mu.Unlock()
+		}
+		return &tts.SynthesizedAudio{
+			Frame: &model.AudioFrame{
+				Data:              buf[:n],
+				SampleRate:        uint32(s.sampleRate),
+				NumChannels:       1,
+				SamplesPerChannel: uint32(n / 2),
+			},
+		}, nil
+	}
 	if err != nil {
 		if err == io.EOF {
 			return s.emitFinal()

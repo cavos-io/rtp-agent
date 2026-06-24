@@ -461,6 +461,35 @@ func TestSmallestAITTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *t
 	}
 }
 
+func TestSmallestAITTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &smallestaiTTSChunkedStream{
+		resp:       &http.Response{Body: &smallestAIFinalEOFReader{data: []byte{0x01, 0x02}}},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want final audio bytes", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want non-final audio", audio)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final EOF bytes", audio.Frame.Data)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want boundary-only final marker", final)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next = (%+v, %v), want EOF", audio, err)
+	}
+}
+
 func TestSmallestAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	oldClient := http.DefaultClient
 	body := &smallestAICloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
@@ -661,6 +690,21 @@ type smallestAICloseCountBody struct {
 	closeCount int
 	closed     bool
 }
+
+type smallestAIFinalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (r *smallestAIFinalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, errors.New("read after final eof")
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *smallestAIFinalEOFReader) Close() error { return nil }
 
 func (b *smallestAICloseCountBody) Read(p []byte) (int, error) {
 	if b.closed {
