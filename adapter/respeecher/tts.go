@@ -279,19 +279,27 @@ func validateRespeecherAPIKey(apiKey string) error {
 }
 
 type respeecherTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	closed     bool
-	finalSent  bool
+	resp         *http.Response
+	sampleRate   int
+	pendingFinal bool
+	closed       bool
+	finalSent    bool
 }
 
 func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.closed {
+	if s.closed || s.finalSent {
 		return nil, io.EOF
+	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		return s.emitFinal()
 	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if n > 0 {
+		if err == io.EOF {
+			s.pendingFinal = true
+		}
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
 				Data:              buf[:n],
