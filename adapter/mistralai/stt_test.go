@@ -523,6 +523,34 @@ func TestMistralAISTTRealtimeErrorEventReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestMistralAISTTRealtimeUnexpectedEOFReturnsAPIConnectionError(t *testing.T) {
+	conn := &mistralAISTTFakeRealtimeConn{}
+	vadEvents := make(chan *vad.VADEvent)
+	close(vadEvents)
+	provider := NewMistralAISTT("test-key",
+		WithMistralAISTTModel("voxtral-realtime-latest"),
+		WithMistralAISTTVAD(&mistralAISTTFakeVAD{stream: &mistralAISTTFakeVADStream{events: vadEvents}}),
+	)
+	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+		return conn, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestMistralAISTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T) {
 	provider := NewMistralAISTT("test-key",
 		WithMistralAISTTBaseURL("https://mistral.example/v1"),

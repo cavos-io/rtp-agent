@@ -545,14 +545,16 @@ func (s *mistralAISTTRealtimeStream) currentStartTimeOffset() float64 {
 }
 
 func (s *mistralAISTTRealtimeStream) readLoop() {
+	receivedMessage := false
 	for {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
-			if err != io.EOF && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+			if !s.isClosed() && (err != io.EOF || !receivedMessage) && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				s.errCh <- llm.NewAPIConnectionError(err.Error())
 			}
 			return
 		}
+		receivedMessage = true
 		if msgType != websocket.TextMessage {
 			continue
 		}
