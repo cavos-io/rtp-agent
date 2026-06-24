@@ -19,11 +19,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/hraban/opus"
 	"github.com/livekit/protocol/livekit"
+	lkagent "github.com/livekit/protocol/livekit/agent"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/livekit/server-sdk-go/v2/pkg/samplebuilder"
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	roomIOAgentSessionTopic          = "lk.agent.session"
+	roomIOConsoleCompatibilitySDK    = "python"
+	roomIOConsoleCompatibilitySDKVer = "1.5.2"
 )
 
 type AudioDecoder interface {
@@ -496,6 +504,7 @@ func (rio *RoomIO) AttachRoom(room *lksdk.Room) {
 	if !rio.Options.DisableTextInput {
 		rio.registerTextInput()
 	}
+	rio.registerAgentSessionInput()
 	for _, participant := range room.GetRemoteParticipants() {
 		rio.onParticipantConnected(participant)
 	}
@@ -1244,6 +1253,18 @@ func (rio *RoomIO) registerTextInput() {
 	_ = rio.Room.RegisterTextStreamHandler(RoomIOChatTopic, rio.onChatTextStream)
 }
 
+func (rio *RoomIO) registerAgentSessionInput() {
+	if rio.Room == nil {
+		return
+	}
+	defer func() {
+		if recover() != nil {
+			logger.Logger.Warnw("failed to register agent session input handler", nil)
+		}
+	}()
+	_ = rio.Room.RegisterByteStreamHandler(roomIOAgentSessionTopic, rio.onAgentSessionByteStream)
+}
+
 func (rio *RoomIO) GetCallback() *lksdk.RoomCallback {
 	return rio.WithCallback(nil)
 }
@@ -1342,6 +1363,80 @@ func (rio *RoomIO) onDataPacket(data lksdk.DataPacket, params lksdk.DataReceiveP
 		Code:           dtmf.Code,
 		SenderIdentity: params.SenderIdentity,
 	})
+}
+
+func (rio *RoomIO) onAgentSessionByteStream(reader *lksdk.ByteStreamReader, participantIdentity string) {
+	if rio == nil || reader == nil {
+		return
+	}
+	payload := reader.ReadAll()
+	response, ok, err := roomIOAgentSessionFrameworkInfoResponse(
+		payload,
+		roomIOConsoleCompatibilitySDK,
+		roomIOConsoleCompatibilitySDKVer,
+	)
+	if err != nil {
+		logger.Logger.Warnw("failed to handle agent session message", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	rio.publishAgentSessionResponse(response, participantIdentity)
+}
+
+func roomIOAgentSessionFrameworkInfoResponse(payload []byte, sdk string, sdkVersion string) ([]byte, bool, error) {
+	var msg lkagent.AgentSessionMessage
+	if err := proto.Unmarshal(payload, &msg); err != nil {
+		return nil, false, err
+	}
+	req := msg.GetRequest()
+	if req == nil || req.GetGetFrameworkInfo() == nil {
+		return nil, false, nil
+	}
+	resp := &lkagent.AgentSessionMessage{
+		Message: &lkagent.AgentSessionMessage_Response{
+			Response: &lkagent.SessionResponse{
+				RequestId: req.GetRequestId(),
+				Response: &lkagent.SessionResponse_GetFrameworkInfo{
+					GetFrameworkInfo: &lkagent.SessionResponse_GetFrameworkInfoResponse{
+						Sdk:        sdk,
+						SdkVersion: sdkVersion,
+					},
+				},
+			},
+		},
+	}
+	encoded, err := proto.Marshal(resp)
+	if err != nil {
+		return nil, false, err
+	}
+	return encoded, true, nil
+}
+
+func (rio *RoomIO) publishAgentSessionResponse(payload []byte, participantIdentity string) {
+	if rio.Room == nil || rio.Room.LocalParticipant == nil {
+		return
+	}
+	defer func() {
+		if recover() != nil {
+			logger.Logger.Warnw("failed to publish agent session response", nil)
+		}
+	}()
+	destinations := []string(nil)
+	if participantIdentity != "" {
+		destinations = []string{participantIdentity}
+	}
+	writer := rio.Room.LocalParticipant.StreamBytes(lksdk.StreamBytesOptions{
+		Topic:                 roomIOAgentSessionTopic,
+		MimeType:              "application/x-protobuf",
+		DestinationIdentities: destinations,
+		TotalSize:             uint64(len(payload)),
+	})
+	onDone := func() {
+		writer.Close()
+	}
+	writer.Write(payload, &onDone)
 }
 
 func (rio *RoomIO) PublishDTMF(code int32, digit string) error {
@@ -2873,6 +2968,9 @@ func (rio *RoomIO) Close() error {
 	}
 	if rio.Room != nil && !rio.Options.DisableTextInput {
 		rio.Room.UnregisterTextStreamHandler(RoomIOChatTopic)
+	}
+	if rio.Room != nil {
+		rio.Room.UnregisterByteStreamHandler(roomIOAgentSessionTopic)
 	}
 	return nil
 }
