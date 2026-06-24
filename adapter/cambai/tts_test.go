@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type cambaiRoundTripperFunc func(*http.Request) (*http.Response, error)
@@ -227,6 +229,44 @@ func TestCambaiTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 48000 {
 		t.Fatalf("sample rate = %d, want mars-pro sample rate", audio.Frame.SampleRate)
+	}
+}
+
+func TestCambaiTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	provider, err := NewCambaiTTS("test-key", "")
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: cambaiRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			header := make(http.Header)
+			header.Set("x-request-id", "req_429")
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Header:     header,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.RequestID != "req_429" {
+		t.Fatalf("request id = %q, want req_429", statusErr.RequestID)
+	}
+	if body, ok := statusErr.Body.(string); !ok || !strings.Contains(body, "rate limited") {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
 	}
 }
 

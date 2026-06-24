@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -156,7 +157,7 @@ func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("cambai tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Camb.ai TTS failed", resp.StatusCode, resp.Header.Get("x-request-id"), string(respBody))
 	}
 
 	return &cambaiTTSChunkedStream{
