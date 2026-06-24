@@ -452,13 +452,6 @@ func (s *telnyxSTTStream) closeAfterWriteFailureLocked() {
 
 func (s *telnyxSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
-		}
 		return nil, io.EOF
 	}
 
