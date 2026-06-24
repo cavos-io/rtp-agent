@@ -289,9 +289,7 @@ func (s *SpeechHandle) MarkDone() {
 	}
 	s.mu.Unlock()
 
-	for _, callback := range callbacks {
-		callSpeechDoneCallback(callback, s)
-	}
+	go callSpeechDoneCallbacks(callbacks, s)
 }
 
 func (s *SpeechHandle) MarkScheduled() {
@@ -543,6 +541,12 @@ func callSpeechDoneCallback(callback func(*SpeechHandle), speech *SpeechHandle) 
 		}
 	}()
 	callback(speech)
+}
+
+func callSpeechDoneCallbacks(callbacks []func(*SpeechHandle), speech *SpeechHandle) {
+	for _, callback := range callbacks {
+		callSpeechDoneCallback(callback, speech)
+	}
 }
 
 func callSpeechItemAddedCallback(callback func(llm.ChatItem), item llm.ChatItem) {

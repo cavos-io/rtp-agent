@@ -174,44 +174,66 @@ func TestSpeechHandleGenerationIDsTrackSteps(t *testing.T) {
 
 func TestSpeechHandleDoneCallbackRunsWhenMarkedDone(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
-	called := 0
+	entered := make(chan *SpeechHandle, 2)
+	release := make(chan struct{})
+	markReturned := make(chan struct{})
 
 	speech.AddDoneCallback(func(doneSpeech *SpeechHandle) {
-		if doneSpeech != speech {
-			t.Fatalf("done callback speech = %p, want %p", doneSpeech, speech)
-		}
-		called++
+		entered <- doneSpeech
+		<-release
 	})
 
-	speech.MarkDone()
+	go func() {
+		speech.MarkDone()
+		close(markReturned)
+	}()
+
+	select {
+	case <-markReturned:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("MarkDone did not return while done callback was blocked")
+	}
+
 	speech.MarkDone()
 
-	if called != 1 {
-		t.Fatalf("done callback called %d times, want 1", called)
+	select {
+	case doneSpeech := <-entered:
+		if doneSpeech != speech {
+			close(release)
+			t.Fatalf("done callback speech = %p, want %p", doneSpeech, speech)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("done callback was not scheduled after MarkDone")
+	}
+	close(release)
+
+	select {
+	case doneSpeech := <-entered:
+		t.Fatalf("done callback called twice, second speech = %p", doneSpeech)
+	case <-time.After(10 * time.Millisecond):
 	}
 }
 
 func TestSpeechHandleDoneCallbackPanicDoesNotBlockOtherCallbacks(t *testing.T) {
 	speech := NewSpeechHandle(true, DefaultInputDetails())
-	called := false
+	called := make(chan struct{}, 1)
 
 	speech.AddDoneCallback(func(*SpeechHandle) {
 		panic("done callback failed")
 	})
 	speech.AddDoneCallback(func(*SpeechHandle) {
-		called = true
+		called <- struct{}{}
 	})
 
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			t.Fatalf("MarkDone panic = %v, want callback panic isolated", recovered)
-		}
-		if !called {
-			t.Fatal("second done callback was not called after first callback panic")
-		}
-	}()
-
 	speech.MarkDone()
+
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("second done callback was not called after first callback panic")
+	}
 }
 
 func TestSpeechHandleDoneCallbackAddedAfterDoneRunsSoonWithoutReentry(t *testing.T) {
