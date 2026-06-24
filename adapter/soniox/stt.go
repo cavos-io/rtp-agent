@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -488,7 +489,9 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, err
 	}
-	providerErr := sonioxProviderError(message)
+	var body map[string]any
+	_ = json.Unmarshal(payload, &body)
+	providerErr := sonioxProviderError(message, body)
 	if message.ErrorCode != nil || message.ErrorMessage != "" {
 		message.Finished = true
 	}
@@ -575,11 +578,32 @@ func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.Spe
 	return events, providerErr
 }
 
-func sonioxProviderError(message sonioxMessage) error {
+func sonioxProviderError(message sonioxMessage, body map[string]any) error {
 	if message.ErrorCode == nil && message.ErrorMessage == "" {
 		return nil
 	}
-	return fmt.Errorf("soniox stt error: %v - %s", message.ErrorCode, message.ErrorMessage)
+	return llm.NewAPIStatusError(
+		fmt.Sprintf("Soniox STT error: %v - %s", message.ErrorCode, message.ErrorMessage),
+		sonioxStatusCode(message.ErrorCode),
+		"",
+		body,
+	)
+}
+
+func sonioxStatusCode(code any) int {
+	switch v := code.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case string:
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed
+		}
+	}
+	return -1
 }
 
 func sonioxUsageEvents(state *sonioxMessageState, totalAudioProcMS float64) []*stt.SpeechEvent {

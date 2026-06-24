@@ -533,8 +533,18 @@ func TestSonioxProcessMessageReturnsStatusError(t *testing.T) {
 	if err == nil {
 		t.Fatal("process message returned nil error, want API error")
 	}
-	if !strings.Contains(err.Error(), "429") || !strings.Contains(err.Error(), "rate limited") {
-		t.Fatalf("error = %q, want code and message", err.Error())
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != 429 {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body == nil {
+		t.Fatal("body = nil, want provider response body")
+	}
+	if !strings.Contains(statusErr.Message, "429") || !strings.Contains(statusErr.Message, "rate limited") {
+		t.Fatalf("message = %q, want code and message", statusErr.Message)
 	}
 }
 
