@@ -126,6 +126,35 @@ func TestGnaniSTTRecognizeRequestUsesReferenceMultipart(t *testing.T) {
 	}
 }
 
+func TestGnaniSTTRecognizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSTT("test-key")
+
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APIStatusError", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
 func TestGnaniSTTWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTBaseURL("https://gnani.example/"), WithSTTLanguage("hi-IN"))
 
@@ -497,4 +526,10 @@ func readMultipartRequest(t *testing.T, req *http.Request) (map[string]string, m
 		fields[part.FormName()] = string(data)
 	}
 	return fields, files
+}
+
+type gnaniSTTRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f gnaniSTTRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

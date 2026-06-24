@@ -174,7 +174,7 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("gnani stt error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Gnani STT request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	var result gnaniSTTResponse
