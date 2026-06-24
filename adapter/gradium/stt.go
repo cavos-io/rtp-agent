@@ -393,6 +393,13 @@ func (s *gradiumSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, err
 	case <-s.ctx.Done():
 		if s.isClosed() {

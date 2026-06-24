@@ -390,6 +390,31 @@ func TestGradiumSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	}
 }
 
+func TestGradiumSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	for range 64 {
+		stream := &gradiumSTTStream{
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+			ctx:    context.Background(),
+		}
+		stream.events <- &stt.SpeechEvent{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{
+				Text: "hello",
+			}},
+		}
+		stream.errCh <- errors.New("provider closed after transcript")
+
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next error = %v, want queued transcript before stream error", err)
+		}
+		if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+			t.Fatalf("Next event = %#v, want queued final transcript", event)
+		}
+	}
+}
+
 func TestGradiumSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	closeNow := make(chan struct{})
 	closed := make(chan struct{})
