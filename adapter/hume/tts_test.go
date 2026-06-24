@@ -302,6 +302,27 @@ func TestHumeTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	}
 }
 
+func TestHumeTTSChunkedStreamProviderErrorReturnsAPIConnectionError(t *testing.T) {
+	stream := &humeTTSChunkedStream{
+		resp:        &http.Response{Body: io.NopCloser(strings.NewReader(`{"type":"error","message":"voice unavailable"}` + "\n"))},
+		audioFormat: "pcm",
+		sampleRate:  48000,
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("audio = %#v, want nil on provider error", audio)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connErr.Error(), "Hume TTS error") || !strings.Contains(connErr.Error(), "voice unavailable") {
+		t.Fatalf("Next error = %q, want Hume provider error context", connErr.Error())
+	}
+}
+
 func TestHumeTTSChunkedStreamEmitsReferencePCMFinalMarker(t *testing.T) {
 	stream := &humeTTSChunkedStream{
 		resp:        &http.Response{Body: io.NopCloser(bytes.NewReader([]byte("{\"audio\":\"AQI=\"}\n\n")))},
