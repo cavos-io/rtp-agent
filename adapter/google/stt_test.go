@@ -599,6 +599,34 @@ func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	for range 64 {
+		stream := &googleSTTStream{
+			stream: &fakeGoogleStreamingRecognizeClient{},
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+		}
+		stream.events <- &stt.SpeechEvent{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{
+				{Text: "hello"},
+			},
+		}
+		stream.errCh <- errors.New("stream failed")
+
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next error = %v, want queued transcript before stream error", err)
+		}
+		if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+			t.Fatalf("Next event = %#v, want queued final transcript", event)
+		}
+		if got := event.Alternatives[0].Text; got != "hello" {
+			t.Fatalf("transcript = %q, want hello", got)
+		}
+	}
+}
+
 func TestGoogleSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	stream := &googleSTTStream{
 		stream: &fakeGoogleStreamingRecognizeClient{},
