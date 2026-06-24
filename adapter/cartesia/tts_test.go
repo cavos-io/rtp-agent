@@ -546,6 +546,27 @@ func TestCartesiaTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
+	providerErr := errors.New("provider failed after audio")
+	for i := range 200 {
+		want := &tts.SynthesizedAudio{RequestID: "req-audio"}
+		stream := &cartesiaTTSStream{
+			audio: make(chan *tts.SynthesizedAudio, 1),
+			errCh: make(chan error, 1),
+		}
+		stream.audio <- want
+		stream.errCh <- providerErr
+
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("trial %d Next error = %v, want queued audio before stream error", i, err)
+		}
+		if audio != want {
+			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
+		}
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaBaseURL("https://cartesia.example"),
