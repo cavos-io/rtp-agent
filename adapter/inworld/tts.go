@@ -731,6 +731,19 @@ func (s *inworldTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	select {
 	case event, ok := <-s.events:
+		if ok {
+			return event, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	default:
+	}
+	select {
+	case event, ok := <-s.events:
 		if !ok {
 			select {
 			case err := <-s.errCh:
