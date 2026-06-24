@@ -116,5 +116,6 @@ func (s *falLLMStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *falLLMStream) Close() error {
+	s.done = true
 	return s.resp.Body.Close()
 }
