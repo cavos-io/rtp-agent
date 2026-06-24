@@ -532,6 +532,9 @@ func (s *smallestaiTTSSynthesizeStream) isClosed() bool {
 }
 
 func (s *smallestaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	if s.ctx != nil {
 		select {
 		case <-s.ctx.Done():
