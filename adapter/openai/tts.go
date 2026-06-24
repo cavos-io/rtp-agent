@@ -446,11 +446,16 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 				return nil, frameErr
 			}
 			if audio != nil {
+				s.audioSawAudio = true
 				return audio, nil
 			}
 		}
 		if err != nil {
 			if err == io.EOF {
+				if !s.audioFinalSent {
+					s.audioFinalSent = true
+					return &tts.SynthesizedAudio{IsFinal: true}, nil
+				}
 				return nil, io.EOF
 			}
 			return nil, llm.NewAPIConnectionError(err.Error())
