@@ -730,6 +730,10 @@ func (s *cartesiaTTSStream) Close() error {
 }
 
 func (s *cartesiaTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
+
 	select {
 	case audio, ok := <-s.audio:
 		if !ok {

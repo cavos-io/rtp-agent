@@ -23,6 +23,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type sarvamCloseErrorBody struct {
+	closed bool
+}
+
+func (b *sarvamCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *sarvamCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestSarvamSTTDefaultsMatchReference(t *testing.T) {
 	provider := NewSarvamSTT("test-key")
 
@@ -792,6 +808,21 @@ func TestSarvamTTSChunkedStreamEmitsAllReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &sarvamCloseErrorBody{}
+	stream := &sarvamTTSChunkedStream{resp: &http.Response{Body: body}}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestSarvamTTSUpdateOptionsAppliesToFuturePayloads(t *testing.T) {
 	provider := NewSarvamTTS("test-key", "",
 		WithSarvamTTSModel("bulbul:v3"),
@@ -971,6 +1002,22 @@ func TestSarvamTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestSarvamTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &sarvamTTSSynthesizeStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
 	}
 }
 

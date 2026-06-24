@@ -1095,6 +1095,20 @@ func runElevenLabsTTSWebsocketServer(messages chan<- map[string]any, conn net.Co
 	}
 }
 
+func TestElevenLabsTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &elevenLabsStream{
+		ctx:    context.Background(),
+		audio:  make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.audio <- &tts.SynthesizedAudio{}
+
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	closed := make(chan struct{})
 	serverErr := make(chan error, 1)

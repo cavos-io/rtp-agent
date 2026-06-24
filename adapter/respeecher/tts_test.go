@@ -34,6 +34,22 @@ func (r *respeecherFinalEOFReader) Read(p []byte) (int, error) {
 
 func (r *respeecherFinalEOFReader) Close() error { return nil }
 
+type respeecherCloseErrorBody struct {
+	closed bool
+}
+
+func (b *respeecherCloseErrorBody) Read(_ []byte) (int, error) {
+	if b.closed {
+		return 0, errors.New("read after close")
+	}
+	return 0, io.EOF
+}
+
+func (b *respeecherCloseErrorBody) Close() error {
+	b.closed = true
+	return nil
+}
+
 func TestRespeecherTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "")
 
@@ -316,6 +332,21 @@ func TestRespeecherTTSWebsocketMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestRespeecherTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
+	body := &respeecherCloseErrorBody{}
+	stream := &respeecherTTSChunkedStream{resp: &http.Response{Body: body}}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("Next after Close = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestRespeecherTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
 	var writes []map[string]any
 	stream := &respeecherTTSSynthesizeStream{
@@ -446,6 +477,22 @@ func TestRespeecherTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 
 	if err != io.EOF {
 		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
+func TestRespeecherTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &respeecherTTSSynthesizeStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
 	}
 }
 

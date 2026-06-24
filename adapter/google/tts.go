@@ -538,6 +538,10 @@ func (s *googleTTSSynthesizeStream) Close() error {
 func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
 		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
 		for len(s.streams) == 0 && !s.closed && !s.inputEnded {
 			s.cond.Wait()
 		}

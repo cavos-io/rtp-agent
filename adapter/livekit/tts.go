@@ -622,7 +622,16 @@ func (s *inferenceTTSStream) closeEventCh() {
 	})
 }
 
+func (s *inferenceTTSStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *inferenceTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	ev, ok := <-s.eventCh
 	if !ok {
 		s.mu.Lock()

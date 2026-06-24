@@ -527,6 +527,7 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *inworldTTSChunkedStream) Close() error {
+	s.pendingFinal = false
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}

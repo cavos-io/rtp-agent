@@ -281,11 +281,15 @@ func buildResembleTTSWebsocketMessage(t *ResembleTTS, text string, requestID int
 type resembleTTSChunkedStream struct {
 	resp       *http.Response
 	sampleRate int
+	closed     bool
 	done       bool
 	finalSent  bool
 }
 
 func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	if s.done {
 		if !s.finalSent {
 			s.finalSent = true
@@ -325,6 +329,7 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *resembleTTSChunkedStream) Close() error {
+	s.closed = true
 	return s.resp.Body.Close()
 }
 
@@ -482,6 +487,9 @@ func (s *resembleTTSSynthesizeStream) Close() error {
 }
 
 func (s *resembleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case audio, ok := <-s.events:
 		if !ok {

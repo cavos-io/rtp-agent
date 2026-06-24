@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -304,6 +305,74 @@ func TestGradiumTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	if err != io.EOF {
 		t.Fatalf("Next after Close error = %v, want EOF", err)
 	}
+}
+
+func TestGradiumTTSClosedStreamNextIgnoresProviderClose(t *testing.T) {
+	conn := newGradiumProviderCloseWebsocketConn(t, websocket.CloseNormalClosure)
+
+	stream := &gradiumTTSSynthesizeStream{
+		ctx:        context.Background(),
+		conn:       conn,
+		sampleRate: 48000,
+		closed:     true,
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
+func newGradiumProviderCloseWebsocketConn(t *testing.T, closeCode int) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newGradiumSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(closeCode, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+
+	conn, _, err := dialer.Dial("ws://gradium.test/api/speech/tts", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn
 }
 
 func assertGradiumSetup(t *testing.T, payload map[string]any, key string, want string) {

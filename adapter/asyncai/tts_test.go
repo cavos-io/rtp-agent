@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -629,6 +630,22 @@ func TestAsyncAITTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSClosedStreamNextIgnoresProviderClose(t *testing.T) {
+	conn := newAsyncAIProviderCloseWebsocketConn(t, websocket.CloseNormalClosure)
+	stream := &asyncAITTSStream{
+		ctx:        context.Background(),
+		conn:       conn,
+		sampleRate: 32000,
+		closed:     true,
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestAsyncAITTSStreamNextReturnsContextError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -640,3 +657,93 @@ func TestAsyncAITTSStreamNextReturnsContextError(t *testing.T) {
 		t.Fatalf("Next err = %v, want context canceled", err)
 	}
 }
+
+func newAsyncAIProviderCloseWebsocketConn(t *testing.T, closeCode int) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newAsyncAISingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(closeCode, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://asyncai.test/v1/stream_tts", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial websocket: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn
+}
+
+type asyncAISingleConnListener struct {
+	conn   net.Conn
+	once   sync.Once
+	closed chan struct{}
+}
+
+func newAsyncAISingleConnListener(conn net.Conn) *asyncAISingleConnListener {
+	return &asyncAISingleConnListener{conn: conn, closed: make(chan struct{})}
+}
+
+func (l *asyncAISingleConnListener) Accept() (net.Conn, error) {
+	var conn net.Conn
+	l.once.Do(func() {
+		conn = l.conn
+	})
+	if conn != nil {
+		return conn, nil
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *asyncAISingleConnListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *asyncAISingleConnListener) Addr() net.Addr {
+	return asyncAIDummyAddr("asyncai")
+}
+
+type asyncAIDummyAddr string
+
+func (a asyncAIDummyAddr) Network() string { return string(a) }
+func (a asyncAIDummyAddr) String() string  { return string(a) }

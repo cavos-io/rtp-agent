@@ -590,6 +590,30 @@ func TestSmallestAITTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSClosedStreamNextIgnoresProviderClose(t *testing.T) {
+	conn := newSmallestAITTSClosingWebsocketConn(t, func(ws *websocket.Conn) {
+		_ = ws.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+	})
+	defer conn.Close()
+
+	stream := &smallestaiTTSSynthesizeStream{
+		ctx:        context.Background(),
+		conn:       conn,
+		sampleRate: 24000,
+		closed:     true,
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestSmallestAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &smallestAICloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
 	stream := &smallestaiTTSChunkedStream{

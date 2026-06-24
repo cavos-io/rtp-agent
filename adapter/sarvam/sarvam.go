@@ -1589,6 +1589,7 @@ type sarvamTTSChunkedStream struct {
 	sampleRate       int
 	outputAudioCodec string
 	loaded           bool
+	closed           bool
 	requestID        string
 	audios           []string
 	nextAudio        int
@@ -1596,6 +1597,9 @@ type sarvamTTSChunkedStream struct {
 }
 
 func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
 	if !s.loaded {
 		var result struct {
 			RequestID string   `json:"request_id"`
@@ -1624,6 +1628,7 @@ func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *sarvamTTSChunkedStream) Close() error {
+	s.closed = true
 	return s.resp.Body.Close()
 }
 
@@ -1762,7 +1767,16 @@ func (s *sarvamTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 	}
 }
 
+func (s *sarvamTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *sarvamTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case audio, ok := <-s.events:
 		if !ok {
@@ -1777,6 +1791,9 @@ func (s *sarvamTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	case err := <-s.errCh:
 		return nil, err
 	case <-s.ctx.Done():
+		if s.isClosed() {
+			return nil, io.EOF
+		}
 		return nil, s.ctx.Err()
 	}
 }

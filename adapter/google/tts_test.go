@@ -466,6 +466,22 @@ func TestGoogleTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSClosedStreamNextIgnoresQueuedProviderStream(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{}
+	stream := &googleTTSSynthesizeStream{
+		ctx:     context.Background(),
+		streams: []texttospeech.TextToSpeech_StreamingSynthesizeClient{streamClient},
+		closed:  true,
+	}
+	stream.cond = sync.NewCond(&stream.mu)
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestGoogleTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	client := &fakeGoogleTTSClient{response: &texttospeech.SynthesizeSpeechResponse{}}
 	provider := newGoogleTTSWithClient(client)

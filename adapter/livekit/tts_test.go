@@ -414,6 +414,20 @@ func TestInferenceTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &inferenceTTSStream{
+		eventCh: make(chan *coretts.SynthesizedAudio, 1),
+		closed:  true,
+	}
+	stream.eventCh <- &coretts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestInferenceTTSStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewTTS("cartesia/sonic-3", "key", "secret")
 	dials := 0
