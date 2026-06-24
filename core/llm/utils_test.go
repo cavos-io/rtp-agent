@@ -28,6 +28,17 @@ func TestStripThinkingTokensTracksHiddenChunks(t *testing.T) {
 	if got, ok := StripThinkingTokens("</think>visible", &thinking); !ok || got != "visible" || thinking {
 		t.Fatalf("think end = (%q, %v, thinking=%v), want visible content and not thinking", got, ok, thinking)
 	}
+
+	thinking = false
+	if got, ok := StripThinkingTokens("<think>hidden</think>visible", &thinking); !ok || got != "hidden</think>visible" || !thinking {
+		t.Fatalf("same-chunk think tags = (%q, %v, thinking=%v), want reference single-pass content after start and thinking", got, ok, thinking)
+	}
+	if got, ok := StripThinkingTokens("tail", &thinking); ok || got != "" || !thinking {
+		t.Fatalf("post same-chunk hidden tail = (%q, %v, thinking=%v), want suppressed tail while still thinking", got, ok, thinking)
+	}
+	if got, ok := StripThinkingTokens("</think>done", &thinking); !ok || got != "done" || thinking {
+		t.Fatalf("post same-chunk close = (%q, %v, thinking=%v), want visible done and not thinking", got, ok, thinking)
+	}
 }
 
 func TestSerializeImageRejectsUnsupportedMIMETypeWithReferenceError(t *testing.T) {
