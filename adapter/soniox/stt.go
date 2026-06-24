@@ -353,10 +353,16 @@ func (s *sonioxStream) PushFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	return s.conn.WriteMessage(websocket.BinaryMessage, frame.Data)
 }
 
 func (s *sonioxStream) Flush() error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	return nil
 }
 
@@ -382,6 +388,9 @@ func (s *sonioxStream) isClosed() bool {
 }
 
 func (s *sonioxStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case event, ok := <-s.events:
 		if ok {
@@ -394,9 +403,6 @@ func (s *sonioxStream) Next() (*stt.SpeechEvent, error) {
 			return nil, io.EOF
 		}
 	default:
-	}
-	if s.isClosed() {
-		return nil, io.EOF
 	}
 	select {
 	case event, ok := <-s.events:

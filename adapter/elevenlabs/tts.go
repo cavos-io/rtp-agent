@@ -1079,12 +1079,17 @@ func (s *elevenLabsStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if s.autoMode && s.pendingText != "" {
-		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
-		s.pendingText = ""
-		if err := s.sendTextLocked(text, true); err != nil {
-			return err
-		}
+	return s.flushPendingTextLocked()
+}
+
+func (s *elevenLabsStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if err := s.flushPendingTextLocked(); err != nil {
+		return err
 	}
 	if err := s.sendInitLocked(); err != nil {
 		return err
@@ -1094,6 +1099,15 @@ func (s *elevenLabsStream) Flush() error {
 		return err
 	}
 	return nil
+}
+
+func (s *elevenLabsStream) flushPendingTextLocked() error {
+	if !s.autoMode || s.pendingText == "" {
+		return nil
+	}
+	text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+	s.pendingText = ""
+	return s.sendTextLocked(text, true)
 }
 
 func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{}, chunkLengthSchedule []int, dictionaries []ElevenLabsPronunciationDictionaryLocator) map[string]interface{} {

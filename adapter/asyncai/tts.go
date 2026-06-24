@@ -395,14 +395,26 @@ func (s *asyncAITTSStream) Flush() error {
 		s.pendingText.Reset()
 		return nil
 	}
-	text := s.pendingText.String()
-	s.pendingText.Reset()
-	if text != "" {
-		text = strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(text, ""), " ")
-		if err := s.sendTextLocked(text); err != nil {
-			s.closeAfterWriteFailureLocked()
-			return err
-		}
+	if err := s.flushPendingTextLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
+}
+
+func (s *asyncAITTSStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.conn == nil && s.writeMessage == nil {
+		s.pendingText.Reset()
+		return nil
+	}
+	if err := s.flushPendingTextLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
 	}
 	endPayload, err := buildAsyncAITTSEndMessage(s.contextID)
 	if err != nil {
@@ -413,6 +425,16 @@ func (s *asyncAITTSStream) Flush() error {
 		return err
 	}
 	return nil
+}
+
+func (s *asyncAITTSStream) flushPendingTextLocked() error {
+	text := s.pendingText.String()
+	s.pendingText.Reset()
+	if text == "" {
+		return nil
+	}
+	text = strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(text, ""), " ")
+	return s.sendTextLocked(text)
 }
 
 func (s *asyncAITTSStream) sendCompleteSentencesLocked() error {

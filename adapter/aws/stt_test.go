@@ -381,6 +381,9 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	if len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
 		t.Fatalf("alternatives = %#v, want hello transcript", event.Alternatives)
 	}
+	if event.Alternatives[0].StartTime != 0.0 || event.Alternatives[0].EndTime != 0.2 {
+		t.Fatalf("alternative timing = %v-%v, want 0-0.2", event.Alternatives[0].StartTime, event.Alternatives[0].EndTime)
+	}
 	if len(event.Alternatives[0].Words) != 1 || event.Alternatives[0].Words[0].Text != "hello" {
 		t.Fatalf("words = %#v, want hello word timing", event.Alternatives[0].Words)
 	}
@@ -399,7 +402,7 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 }
 
-func TestAWSSTTStreamIgnoresReferenceZeroEndResults(t *testing.T) {
+func TestAWSSTTStreamZeroEndFinalEmitsReferenceBoundaries(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
 		es.Reader = reader
@@ -430,9 +433,25 @@ func TestAWSSTTStreamIgnoresReferenceZeroEndResults(t *testing.T) {
 	}
 	close(reader.events)
 
-	_, err := providerStream.Next()
+	event, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want start-of-speech event", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event type = %q, want start_of_speech", event.Type)
+	}
+
+	event, err = providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want end-of-speech event", err)
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %q, want end_of_speech", event.Type)
+	}
+
+	_, err = providerStream.Next()
 	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF without zero-end transcript event", err)
+		t.Fatalf("Next error = %v, want EOF after zero-end boundary events", err)
 	}
 }
 
@@ -458,6 +477,12 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	if err := providerStream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v, want nil", err)
 	}
+	if len(writer.chunks) != 2 {
+		t.Fatalf("chunks after Flush = %d, want audio plus empty flush sentinel", len(writer.chunks))
+	}
+	if len(writer.chunks[1]) != 0 {
+		t.Fatalf("flush chunk = %q, want empty AWS Transcribe sentinel", string(writer.chunks[1]))
+	}
 	providerStream.errCh <- errors.New("stream failed")
 	if _, err := providerStream.Next(); err == nil || !strings.Contains(err.Error(), "stream failed") {
 		t.Fatalf("Next error = %v, want stream failed", err)
@@ -465,14 +490,26 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	if err := providerStream.Close(); err != nil {
 		t.Fatalf("Close error = %v, want nil", err)
 	}
+	if len(writer.chunks) != 3 {
+		t.Fatalf("chunks after Close = %d, want audio plus flush and close sentinels", len(writer.chunks))
+	}
+	if len(writer.chunks[2]) != 0 {
+		t.Fatalf("close chunk = %q, want empty AWS Transcribe sentinel", string(writer.chunks[2]))
+	}
 	if err := providerStream.Close(); err != nil {
 		t.Fatalf("second Close error = %v, want nil", err)
+	}
+	if len(writer.chunks) != 3 {
+		t.Fatalf("chunks after second Close = %d, want idempotent close", len(writer.chunks))
 	}
 	if !writer.closed || !reader.closed {
 		t.Fatalf("closed writer/reader = %v/%v, want true/true", writer.closed, reader.closed)
 	}
 	if err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("after-close")}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after close error = %v, want ErrClosedPipe", err)
+	}
+	if err := providerStream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after close error = %v, want ErrClosedPipe", err)
 	}
 }
 
@@ -544,6 +581,7 @@ func TestAWSSTTClosedStreamNextReturnsEOF(t *testing.T) {
 
 type fakeAWSSTTWriter struct {
 	lastChunk []byte
+	chunks    [][]byte
 	closed    bool
 	err       error
 }
@@ -557,6 +595,7 @@ func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) erro
 		return nil
 	}
 	w.lastChunk = append([]byte(nil), audioEvent.Value.AudioChunk...)
+	w.chunks = append(w.chunks, append([]byte(nil), audioEvent.Value.AudioChunk...))
 	return nil
 }
 

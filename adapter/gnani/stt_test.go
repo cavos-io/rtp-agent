@@ -374,6 +374,23 @@ func TestGnaniSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestGnaniSTTClosedStreamRejectsInput(t *testing.T) {
+	stream := &gnaniSTTStream{closed: true}
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+}
+
 func TestGnaniSTTStreamMessagesMapReferenceEvents(t *testing.T) {
 	transcript, err := gnaniSTTEventsFromStreamMessage([]byte(`{"type":"transcript","text":"hello","segment_id":"seg-1"}`), "en-IN")
 	if err != nil {

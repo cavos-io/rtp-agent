@@ -719,6 +719,11 @@ func (s *azureSTTStream) audioContentType() string {
 }
 
 func (s *azureSTTStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	return nil
 }
 

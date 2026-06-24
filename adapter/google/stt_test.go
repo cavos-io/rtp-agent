@@ -663,6 +663,21 @@ func TestGoogleSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTClosedStreamRejectsFlush(t *testing.T) {
+	stream := &googleSTTStream{
+		stream: &fakeGoogleStreamingRecognizeClient{},
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+}
+
 func TestGoogleSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{})

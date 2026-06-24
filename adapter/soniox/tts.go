@@ -299,9 +299,18 @@ func (s *sonioxTTSSynthesizeStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if !s.configSent {
-		s.closeLocalDoneLocked()
-		return nil
+	return nil
+}
+
+func (s *sonioxTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if err := s.ensureStartConfigLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
 	}
 	if err := s.writeMessageData(buildSonioxTTSTextMessage(s.streamID, "", true)); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -371,17 +380,6 @@ func (s *sonioxTTSSynthesizeStream) closeWebsocketConn() error {
 		return nil
 	}
 	return s.conn.Close()
-}
-
-func (s *sonioxTTSSynthesizeStream) closeLocalDoneLocked() {
-	if s.localDone == nil {
-		s.localDone = make(chan struct{})
-	}
-	select {
-	case <-s.localDone:
-	default:
-		close(s.localDone)
-	}
 }
 
 func (s *sonioxTTSSynthesizeStream) closeAfterWriteFailureLocked() {

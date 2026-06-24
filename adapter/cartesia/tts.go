@@ -684,13 +684,22 @@ func (s *cartesiaTTSStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if s.pendingText != "" {
-		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
-		s.pendingText = ""
-		if err := s.sendTranscriptLocked(text); err != nil {
-			s.closeAfterWriteFailureLocked()
-			return err
-		}
+	if err := s.flushPendingTextLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
+}
+
+func (s *cartesiaTTSStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if err := s.flushPendingTextLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
 	}
 	msg := map[string]interface{}{
 		"context_id": "default",
@@ -704,6 +713,15 @@ func (s *cartesiaTTSStream) Flush() error {
 		return err
 	}
 	return nil
+}
+
+func (s *cartesiaTTSStream) flushPendingTextLocked() error {
+	if s.pendingText == "" {
+		return nil
+	}
+	text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+	s.pendingText = ""
+	return s.sendTranscriptLocked(text)
 }
 
 func (s *cartesiaTTSStream) closeAfterWriteFailureLocked() {

@@ -652,6 +652,21 @@ func TestXaiSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after local Close = (%#v, %v), want EOF", event, err)
 	}
+
+	closed := &xaiSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	closed.events <- &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{Text: "stale transcript"},
+		},
+	}
+	if event, err := closed.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next with queued event after local Close = (%#v, %v), want EOF", event, err)
+	}
 }
 
 func TestXaiSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {

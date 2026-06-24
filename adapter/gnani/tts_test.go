@@ -449,6 +449,26 @@ func TestGnaniTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestGnaniTTSClosedStreamRejectsInput(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &gnaniTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	if err := stream.PushText("late text"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestGnaniTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	stream := &gnaniTTSSynthesizeStream{
 		ctx:    context.Background(),

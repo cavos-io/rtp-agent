@@ -332,6 +332,9 @@ func (s *gnaniTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if s.started {
 		return fmt.Errorf("gnani tts stream already flushed")
 	}
@@ -342,6 +345,9 @@ func (s *gnaniTTSSynthesizeStream) PushText(text string) error {
 func (s *gnaniTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	if s.started {
 		return nil
 	}

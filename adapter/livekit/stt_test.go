@@ -385,8 +385,8 @@ func TestInferenceSTTProviderCloseClosesActiveStreams(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 1,
-	}); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("PushFrame after provider Close error = %v, want closed stream error", err)
+	}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want %v", err, io.ErrClosedPipe)
 	}
 	provider.mu.Lock()
 	active := len(provider.streams)
@@ -421,6 +421,37 @@ func TestInferenceSTTStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %v, want io.EOF", err)
+	}
+}
+
+func TestInferenceSTTClosedStreamRejectsInput(t *testing.T) {
+	conn := &fakeInferenceWebsocketConn{}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &inferenceSTTStream{
+		conn:    conn,
+		ctx:     ctx,
+		cancel:  cancel,
+		audioCh: make(chan *model.AudioFrame, 1),
+		eventCh: make(chan *stt.SpeechEvent, 1),
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	frame := &model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.EndInput(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("EndInput after Close error = %v, want %v", err, io.ErrClosedPipe)
 	}
 }
 

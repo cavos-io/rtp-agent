@@ -389,6 +389,13 @@ func TestInferenceTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
 		t.Errorf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
 	}
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("EndInput after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
 }
 
 func TestInferenceTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
@@ -411,6 +418,31 @@ func TestInferenceTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+}
+
+func TestInferenceTTSClosedStreamRejectsInput(t *testing.T) {
+	conn := &recordingTTSConn{}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &inferenceTTSStream{
+		conn:      conn,
+		ctx:       ctx,
+		cancel:    cancel,
+		tokenizer: tokenize.NewBasicSentenceTokenizer().Stream(""),
+		eventCh:   make(chan *coretts.SynthesizedAudio, 1),
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if err := stream.PushText("hello"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.EndInput(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("EndInput after Close error = %v, want io.ErrClosedPipe", err)
 	}
 }
 

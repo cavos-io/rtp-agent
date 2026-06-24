@@ -268,6 +268,45 @@ func TestSonioxSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTClosedStreamNextIgnoresQueuedTranscript(t *testing.T) {
+	stream := &sonioxStream{
+		closed: true,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+	stream.events <- &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "stale transcript",
+		}},
+	}
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("closed stream with queued transcript Next event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("closed stream with queued transcript Next error = %v, want %v", err, io.EOF)
+	}
+}
+
+func TestSonioxSTTClosedStreamRejectsInput(t *testing.T) {
+	stream := &sonioxStream{closed: true}
+	frame := &model.AudioFrame{
+		Data:              []byte{0, 0},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+
+	if err := stream.PushFrame(frame); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+}
+
 func TestSonioxSTTOptionsBuildReferenceConfig(t *testing.T) {
 	provider := NewSonioxSTT("test-key",
 		WithSonioxBaseURL("ws://soniox.example/ws"),

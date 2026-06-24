@@ -281,6 +281,9 @@ func (s *gnaniSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	for _, chunk := range s.chunker.Push(frame.Data) {
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 			return err
@@ -292,6 +295,9 @@ func (s *gnaniSTTStream) PushFrame(frame *model.AudioFrame) error {
 func (s *gnaniSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	return s.writeBufferedChunksLocked()
 }
 

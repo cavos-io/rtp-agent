@@ -1248,6 +1248,14 @@ func TestAzureSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	receiveAzureTestSignal(t, serverClosed, "server close")
 }
 
+func TestAzureSTTClosedStreamRejectsFlush(t *testing.T) {
+	stream := &azureSTTStream{closed: true}
+
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+}
+
 func TestAzureSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	want := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,

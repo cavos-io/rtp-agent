@@ -351,6 +351,21 @@ func TestRtzrSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("Flush after Close error = %v, want io.ErrClosedPipe", err)
 	}
+
+	closed := &rtzrStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	closed.events <- &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{Text: "stale transcript"},
+		},
+	}
+	if event, err := closed.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next with queued event after Close = (%#v, %v), want EOF", event, err)
+	}
 }
 
 func TestRtzrSTTStreamNonNormalCloseReturnsEOF(t *testing.T) {

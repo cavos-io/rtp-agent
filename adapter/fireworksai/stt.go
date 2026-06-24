@@ -563,13 +563,6 @@ func (s *fireworksStream) closeLocked() error {
 
 func (s *fireworksStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
-		}
 		return nil, io.EOF
 	}
 
