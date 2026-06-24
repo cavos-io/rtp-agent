@@ -325,6 +325,36 @@ func TestBasetenTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	body := &basetenFinalEOFBody{data: []byte{0x01, 0x02}}
+	stream := &basetenTTSChunkedStream{
+		body:       body,
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame before final marker", audio)
+	}
+	if got := audio.Frame.Data; string(got) != string([]byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final read bytes", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
 func TestBasetenTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &basetenCloseErrorBody{reader: strings.NewReader("ab")}
 	stream := &basetenTTSChunkedStream{
@@ -900,6 +930,23 @@ func (r *recordingReadCloser) Close() error {
 type basetenCloseErrorBody struct {
 	reader     *strings.Reader
 	closeCount int
+}
+
+type basetenFinalEOFBody struct {
+	data []byte
+	read bool
+}
+
+func (b *basetenFinalEOFBody) Read(p []byte) (int, error) {
+	if b.read {
+		return 0, errors.New("read after final eof")
+	}
+	b.read = true
+	return copy(p, b.data), io.EOF
+}
+
+func (b *basetenFinalEOFBody) Close() error {
+	return nil
 }
 
 func (b *basetenCloseErrorBody) Read(p []byte) (int, error) {
