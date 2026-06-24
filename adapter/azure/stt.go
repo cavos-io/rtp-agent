@@ -749,18 +749,6 @@ func (s *azureSTTStream) isClosed() bool {
 
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
-		}
-		select {
-		case err := <-s.errCh:
-			return nil, err
-		default:
-		}
 		return nil, io.EOF
 	}
 	select {

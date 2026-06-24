@@ -1232,6 +1232,12 @@ func TestAzureSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
+	concrete, ok := stream.(*azureSTTStream)
+	if !ok {
+		t.Fatalf("Stream type = %T, want *azureSTTStream", stream)
+	}
+	concrete.events <- &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
+	concrete.errCh <- errors.New("provider failed after close")
 	event, err := stream.Next()
 	if event != nil {
 		t.Fatalf("Next event after Close = %#v, want nil", event)
