@@ -517,6 +517,9 @@ func (s *asyncAITTSStream) closeAfterWriteFailureLocked() {
 }
 
 func (s *asyncAITTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	if s.ctx != nil {
 		select {
 		case <-s.ctx.Done():
