@@ -15,6 +15,23 @@ type cavosTTSCloseErrorBody struct {
 	closed bool
 }
 
+type cavosTTSFinalEOFBody struct {
+	data []byte
+	read bool
+}
+
+func (b *cavosTTSFinalEOFBody) Read(p []byte) (int, error) {
+	if b.read {
+		return 0, errors.New("read after final eof")
+	}
+	b.read = true
+	return copy(p, b.data), io.EOF
+}
+
+func (b *cavosTTSFinalEOFBody) Close() error {
+	return nil
+}
+
 func (b *cavosTTSCloseErrorBody) Read(_ []byte) (int, error) {
 	if b.closed {
 		return 0, errors.New("read after close")
@@ -133,6 +150,35 @@ func TestCavosTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	audio, err = stream.Next()
 	if err != io.EOF || audio != nil {
 		t.Fatalf("Next after final marker = (%+v, %v), want EOF", audio, err)
+	}
+}
+
+func TestCavosTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &ttsStream{
+		resp:       &cavosTTSFinalEOFBody{data: []byte{0x01, 0x00}},
+		sampleRate: 44100,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame before final marker", audio)
+	}
+	if got := audio.Frame.Data; string(got) != "\x01\x00" {
+		t.Fatalf("audio data = %v, want final read bytes", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want boundary-only final marker", final)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next = (%+v, %v), want EOF", audio, err)
 	}
 }
 

@@ -356,19 +356,27 @@ func buildBasetenTTSEndMessage() ([]byte, error) {
 }
 
 type basetenTTSChunkedStream struct {
-	body       io.ReadCloser
-	sampleRate int
-	finalSent  bool
-	closed     bool
+	body         io.ReadCloser
+	sampleRate   int
+	pendingFinal bool
+	finalSent    bool
+	closed       bool
 }
 
 func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
 		return nil, io.EOF
 	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		return s.emitFinal()
+	}
 	buf := make([]byte, 4096)
 	n, err := s.body.Read(buf)
 	if n > 0 {
+		if err == io.EOF {
+			s.pendingFinal = true
+		}
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
 				Data:              buf[:n],

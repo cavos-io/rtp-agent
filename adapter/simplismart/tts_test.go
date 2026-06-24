@@ -21,7 +21,7 @@ type simplismartFinalEOFReader struct {
 
 func (r *simplismartFinalEOFReader) Read(p []byte) (int, error) {
 	if r.done {
-		return 0, io.EOF
+		return 0, errors.New("read after final eof")
 	}
 	r.done = true
 	return copy(p, r.data), io.EOF
@@ -312,6 +312,9 @@ func TestSimplismartTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 	if final == nil || !final.IsFinal || final.Frame != nil {
 		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next returned error = %v, want EOF", err)
 	}
 }
 

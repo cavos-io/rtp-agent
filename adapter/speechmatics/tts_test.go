@@ -273,6 +273,35 @@ func TestSpeechmaticsTTSChunkedStreamDiscardsPartialEOFRead(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	stream := &speechmaticsTTSChunkedStream{
+		stream:     io.NopCloser(&finalEOFReader{data: []byte{0x01, 0x02}}),
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want final audio bytes", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want non-final audio", audio)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final EOF bytes", audio.Frame.Data)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want boundary-only final marker", final)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("third Next = (%+v, %v), want EOF", audio, err)
+	}
+}
+
 func TestSpeechmaticsTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
 	stream := &speechmaticsTTSChunkedStream{
 		stream:     io.NopCloser(bytes.NewReader(nil)),
@@ -343,6 +372,20 @@ type partialEOFReader struct{}
 func (partialEOFReader) Read(p []byte) (int, error) {
 	p[0] = 0x01
 	return 1, io.EOF
+}
+
+type finalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (r *finalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, errors.New("read after final eof")
+	}
+	r.done = true
+	copy(p, r.data)
+	return len(r.data), io.EOF
 }
 
 type speechmaticsCloseCountBody struct {

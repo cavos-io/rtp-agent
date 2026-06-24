@@ -831,7 +831,7 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) && err != io.EOF {
+			if !s.isClosed() {
 				logger.Logger.Errorw("Deepgram WebSocket read error", err)
 				s.sendError(deepgramSTTUnexpectedCloseError(err))
 			}

@@ -226,6 +226,17 @@ func TestMurfTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	if audio.Frame.SamplesPerChannel != 2 {
 		t.Fatalf("samples per channel = %d, want 2", audio.Frame.SamplesPerChannel)
 	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next = %+v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
 }
 
 func TestMurfTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
@@ -923,7 +934,7 @@ type finalReadMurfReader struct {
 
 func (r *finalReadMurfReader) Read(p []byte) (int, error) {
 	if r.done {
-		return 0, io.EOF
+		return 0, errors.New("read after final eof")
 	}
 	copy(p, r.data)
 	r.done = true

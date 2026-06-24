@@ -14,12 +14,27 @@ type ultravoxTTSCloseErrorBody struct {
 	closed bool
 }
 
+type ultravoxTTSFinalEOFReader struct {
+	data []byte
+	done bool
+}
+
 func (b *ultravoxTTSCloseErrorBody) Read(_ []byte) (int, error) {
 	if b.closed {
 		return 0, errors.New("read after close")
 	}
 	return 0, io.EOF
 }
+
+func (r *ultravoxTTSFinalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, errors.New("read after final eof")
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *ultravoxTTSFinalEOFReader) Close() error { return nil }
 
 func (b *ultravoxTTSCloseErrorBody) Close() error {
 	b.closed = true
@@ -92,6 +107,31 @@ func TestUltravoxTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	audio, err = stream.Next()
 	if err != io.EOF || audio != nil {
 		t.Fatalf("Next after final marker = (%+v, %v), want EOF", audio, err)
+	}
+}
+
+func TestUltravoxTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
+	stream := &ultravoxTTSChunkedStream{
+		resp: &http.Response{Body: &ultravoxTTSFinalEOFReader{data: []byte{0x01, 0x02}}},
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want final audio bytes", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final EOF bytes", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %+v, want boundary-only final marker", final)
 	}
 }
 

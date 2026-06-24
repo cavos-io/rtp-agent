@@ -194,13 +194,14 @@ func (t *LMNTTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type lmntTTSChunkedStream struct {
-	resp       *http.Response
-	format     string
-	sampleRate int
-	decoder    codecs.AudioStreamDecoder
-	started    bool
-	hasAudio   bool
-	finalSent  bool
+	resp         *http.Response
+	format       string
+	sampleRate   int
+	decoder      codecs.AudioStreamDecoder
+	started      bool
+	hasAudio     bool
+	pendingFinal bool
+	finalSent    bool
 }
 
 func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -213,11 +214,19 @@ func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
 	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
 
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.resp.Body.Read(buf)
 		if n > 0 {
+			if err == io.EOF {
+				s.pendingFinal = true
+			}
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              buf[:n],

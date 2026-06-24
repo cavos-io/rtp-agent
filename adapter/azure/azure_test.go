@@ -1875,6 +1875,9 @@ func TestAzureTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	if final == nil || !final.IsFinal {
 		t.Fatalf("second Next = %+v, want final marker", final)
 	}
+	if final.Frame != nil {
+		t.Fatalf("final marker frame = %+v, want boundary-only final marker", final.Frame)
+	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("third Next error = %v, want io.EOF", err)
 	}
@@ -2140,7 +2143,7 @@ type finalReadBytesCloser struct {
 
 func (r *finalReadBytesCloser) Read(p []byte) (int, error) {
 	if r.done {
-		return 0, io.EOF
+		return 0, errors.New("read after final eof")
 	}
 	r.done = true
 	return copy(p, r.data), io.EOF

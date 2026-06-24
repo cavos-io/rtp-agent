@@ -1,6 +1,7 @@
 package upliftai
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,6 +9,21 @@ import (
 	"strings"
 	"testing"
 )
+
+type upliftAIFinalEOFReader struct {
+	data []byte
+	done bool
+}
+
+func (r *upliftAIFinalEOFReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, errors.New("read after final eof")
+	}
+	r.done = true
+	return copy(p, r.data), io.EOF
+}
+
+func (r *upliftAIFinalEOFReader) Close() error { return nil }
 
 func TestUpliftAIPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.upliftai" {
@@ -224,6 +240,34 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *tes
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after final marker error = %v, want EOF", err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
+	body := &upliftAIFinalEOFReader{data: []byte{0x01, 0x02}}
+	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v, want final audio bytes", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final audio", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want final EOF bytes", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second audio = %#v, want boundary-only final marker", final)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("third Next() = (%#v, %v), want EOF", audio, err)
 	}
 }
 
