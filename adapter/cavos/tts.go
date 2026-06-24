@@ -166,18 +166,27 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type ttsStream struct {
-	resp       io.ReadCloser
-	sampleRate int
-	finalSent  bool
-	closed     bool
+	resp         io.ReadCloser
+	sampleRate   int
+	pendingFinal bool
+	finalSent    bool
+	closed       bool
 }
 
 func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.finalSent || s.closed {
 		return nil, io.EOF
 	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Read(buf)
+	if n > 0 && err == io.EOF {
+		s.pendingFinal = true
+	}
 	if err != nil && n == 0 {
 		if err == io.EOF {
 			s.finalSent = true
