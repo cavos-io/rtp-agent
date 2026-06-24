@@ -448,6 +448,7 @@ type azureTTSChunkedStream struct {
 	sampleRate int
 	carry      byte
 	hasCarry   bool
+	pendingEOF bool
 	finalSent  bool
 	provider   *AzureTTS
 }
@@ -455,6 +456,10 @@ type azureTTSChunkedStream struct {
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.body == nil {
 		return nil, io.EOF
+	}
+	if s.pendingEOF {
+		s.pendingEOF = false
+		return s.emitFinal()
 	}
 	buf := make([]byte, 4096)
 	var start int
@@ -488,6 +493,9 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 
 		if total > 0 {
+			if err == io.EOF {
+				s.pendingEOF = true
+			}
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              buf[:total],
