@@ -476,6 +476,33 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	for range 64 {
+		providerStream := &awsSTTStream{
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+		}
+		providerStream.events <- &stt.SpeechEvent{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{
+				{Text: "hello"},
+			},
+		}
+		providerStream.errCh <- errors.New("stream failed")
+
+		event, err := providerStream.Next()
+		if err != nil {
+			t.Fatalf("Next error = %v, want queued transcript before stream error", err)
+		}
+		if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+			t.Fatalf("Next event = %#v, want queued final transcript", event)
+		}
+		if got := event.Alternatives[0].Text; got != "hello" {
+			t.Fatalf("transcript = %q, want hello", got)
+		}
+	}
+}
+
 func TestAWSSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}
