@@ -1576,6 +1576,35 @@ func TestOpenAIRealtimeSTTClosedStreamNextDrainsQueuedEvent(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTPendingNextReturnsEOFAfterClose(t *testing.T) {
+	ctx := newOpenAIControlledCancelContext()
+	stream := &openAIRealtimeSTTStream{
+		ctx:    ctx,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error),
+	}
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		resultCh <- err
+	}()
+	<-ctx.doneObserved
+
+	stream.mu.Lock()
+	stream.closed = true
+	stream.mu.Unlock()
+	ctx.cancel()
+
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("pending Next after Close error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for pending Next after Close")
+	}
+}
+
 func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              data,
@@ -1583,6 +1612,42 @@ func openAIRealtimeSTTTestFrame(data []byte) *model.AudioFrame {
 		NumChannels:       openAIRealtimeSTTNumChannels,
 		SamplesPerChannel: uint32(len(data) / 2),
 	}
+}
+
+type openAIControlledCancelContext struct {
+	context.Context
+	done         chan struct{}
+	doneObserved chan struct{}
+}
+
+func newOpenAIControlledCancelContext() *openAIControlledCancelContext {
+	return &openAIControlledCancelContext{
+		Context:      context.Background(),
+		done:         make(chan struct{}),
+		doneObserved: make(chan struct{}),
+	}
+}
+
+func (c *openAIControlledCancelContext) Done() <-chan struct{} {
+	select {
+	case <-c.doneObserved:
+	default:
+		close(c.doneObserved)
+	}
+	return c.done
+}
+
+func (c *openAIControlledCancelContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+func (c *openAIControlledCancelContext) cancel() {
+	close(c.done)
 }
 
 func assertOpenAIRealtimeSTTAudioAppend(t *testing.T, raw string) []byte {
