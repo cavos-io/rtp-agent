@@ -403,6 +403,9 @@ func (s *sonioxTTSSynthesizeStream) isClosed() bool {
 }
 
 func (s *sonioxTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	localDone := s.localDone
 	select {
 	case audio, ok := <-s.events:
