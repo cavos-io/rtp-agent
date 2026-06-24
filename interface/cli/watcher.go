@@ -465,6 +465,9 @@ func startArgsForDevReload(args CliArgs) []string {
 	if args.DevMode {
 		startArgs = append(startArgs, "--dev")
 	}
+	if args.Simulation {
+		startArgs = append(startArgs, "--simulation")
+	}
 	if args.LogLevel != "" {
 		startArgs = append(startArgs, "--log-level", args.LogLevel)
 	}

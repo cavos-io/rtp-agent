@@ -967,6 +967,15 @@ func TestStartArgsForDevReloadForwardsReferenceDevFlag(t *testing.T) {
 	}
 }
 
+func TestStartArgsForDevReloadForwardsReferenceSimulationFlag(t *testing.T) {
+	got := startArgsForDevReload(CliArgs{DevMode: true, Simulation: true})
+	want := []string{"--dev", "--simulation"}
+
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("startArgsForDevReload() = %#v, want %#v", got, want)
+	}
+}
+
 func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
 	args := &CliArgs{}
 	calls := 0
