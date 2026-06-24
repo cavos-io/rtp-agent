@@ -416,6 +416,17 @@ func TestGnaniTTSAudioFromWebsocketMessageStripsWAVAndDetectsComplete(t *testing
 
 	if _, _, err := gnaniTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text"}`), 16000, 1); err == nil {
 		t.Fatal("error message returned nil error, want stream error")
+	} else {
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("error message error = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != http.StatusInternalServerError {
+			t.Fatalf("status code = %d, want 500", statusErr.StatusCode)
+		}
+		if statusErr.Body != "bad text" {
+			t.Fatalf("body = %#v, want bad text", statusErr.Body)
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -195,6 +197,41 @@ func TestClovaSTTRecognizeDownmixesStereoToReferenceMonoWAV(t *testing.T) {
 	}
 }
 
+func TestClovaSTTRecognizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: clovaRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+
+	provider := NewClovaSTT("secret", "https://clova.example")
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 160*2),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{frame}, "")
+
+	if event != nil {
+		t.Fatalf("event = %+v, want nil on provider status error", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider body", statusErr.Body)
+	}
+}
+
 func TestClovaSTTSpeechEventAndThreshold(t *testing.T) {
 	provider := NewClovaSTT("secret", "https://clova.example",
 		WithClovaSTTLanguage("ko-KR"),
@@ -255,4 +292,10 @@ func readClovaMultipartFields(t *testing.T, req *http.Request) map[string]string
 		fields[part.FormName()] = string(data)
 	}
 	return fields
+}
+
+type clovaRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f clovaRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

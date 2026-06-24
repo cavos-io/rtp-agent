@@ -202,7 +202,7 @@ func (t *RespeecherTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("respeecher tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Respeecher TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &respeecherTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
 }
@@ -610,7 +610,7 @@ func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampl
 	case "done":
 		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	case "error":
-		return nil, false, fmt.Errorf("respeecher tts stream error: %v", message.Error)
+		return nil, false, llm.NewAPIError(fmt.Sprintf("Respeecher returned error: %v", message.Error), nil, true)
 	default:
 		return nil, false, nil
 	}

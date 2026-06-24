@@ -919,6 +919,21 @@ func TestFishAudioTTSAudioFromStreamMessage(t *testing.T) {
 	if finished.Frame != nil {
 		t.Fatalf("final marker frame = %+v, want no audio frame", finished.Frame)
 	}
+
+	finished, done, err = fishAudioTTSAudioFromStreamMessage(mustFishMessage(t, map[string]any{
+		"event":  "finish",
+		"reason": "error",
+	}), 24000, "wav")
+	if finished != nil || done {
+		t.Fatalf("error finish = finished=%+v done=%v, want no final marker", finished, done)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error finish err = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != -1 {
+		t.Fatalf("status code = %d, want -1", statusErr.StatusCode)
+	}
 }
 
 func TestFishAudioTTSImplementsStreamingInterface(t *testing.T) {

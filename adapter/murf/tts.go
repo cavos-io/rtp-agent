@@ -222,7 +222,7 @@ func (t *MurfTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("murf tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Murf TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &murfTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
 }

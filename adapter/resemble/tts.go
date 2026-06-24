@@ -588,10 +588,7 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 	case "audio_end":
 		return &tts.SynthesizedAudio{IsFinal: true}, true, message.RequestID, nil
 	case "error":
-		if message.Message == "" {
-			message.Message = string(payload)
-		}
-		return nil, false, message.RequestID, fmt.Errorf("resemble tts stream error: %s", message.Message)
+		return nil, false, message.RequestID, nil
 	default:
 		return nil, false, message.RequestID, nil
 	}

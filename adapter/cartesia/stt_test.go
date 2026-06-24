@@ -751,6 +751,13 @@ func TestCartesiaSTTErrorEventReportsServerErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("error = nil, want server error")
 	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+	}
+	if connErr.Message != "server failed" {
+		t.Fatalf("APIConnectionError message = %q, want server failed", connErr.Message)
+	}
 }
 
 func TestCartesiaSTTStreamAfterCloseIsRejected(t *testing.T) {

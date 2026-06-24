@@ -159,6 +159,32 @@ func TestRespeecherTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestRespeecherTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: respeecherRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewRespeecherTTS("test-key", "", WithRespeecherTTSBaseURL("https://respeecher.example/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+}
+
 func TestRespeecherTTSOptionsMatchReference(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "",
 		WithRespeecherTTSBaseURL("https://respeecher.example/v1/"),
@@ -752,6 +778,14 @@ func TestRespeecherTTSAudioFromStreamMessage(t *testing.T) {
 
 	if _, _, err := respeecherTTSAudioFromStreamMessage([]byte(`{"context_id":"ctx-1","type":"error","error":"bad text"}`), "ctx-1", 24000); err == nil {
 		t.Fatal("error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Respeecher returned error: bad text" {
+			t.Fatalf("APIError message = %q, want reference message", apiErr.Message)
+		}
 	}
 }
 

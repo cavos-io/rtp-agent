@@ -702,7 +702,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		if message.Message == "" {
 			message.Message = string(payload)
 		}
-		return nil, false, "", fmt.Errorf("rime tts stream error: %s", message.Message)
+		return nil, false, "", llm.NewAPIError("Rime ws error: "+message.Message, nil, true)
 	default:
 		return nil, false, "", nil
 	}

@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	corestt "github.com/cavos-io/rtp-agent/core/stt"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 )
@@ -246,6 +247,32 @@ func TestSpitchTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	assertSpitchPayload(t, payload, "voice", "lina")
 	assertSpitchPayload(t, payload, "language", "en")
 	assertSpitchPayload(t, payload, "format", "mp3")
+}
+
+func TestSpitchTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: spitchRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSpitchTTS("test-key", "", WithSpitchTTSBaseURL("https://spitch.example"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
 }
 
 func TestSpitchTTSOptionsMatchReference(t *testing.T) {

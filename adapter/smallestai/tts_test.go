@@ -321,6 +321,18 @@ func TestSmallestAITTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSAudioFromWebsocketMessageReturnsAPIConnectionError(t *testing.T) {
+	_, _, err := smallestAITTSAudioFromWebsocketMessage([]byte(`{"status":"error","message":"voice unavailable"}`), 24000, "seg-1")
+
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("websocket error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connErr.Error(), "SmallestAI TTS error: voice unavailable") {
+		t.Fatalf("websocket error = %q, want provider error message", connErr.Error())
+	}
+}
+
 func TestSmallestAITTSCompleteReturnsReferenceFinalMarker(t *testing.T) {
 	conn := newSmallestAITTSClosingWebsocketConn(t, func(ws *websocket.Conn) {
 		if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"status":"complete"}`)); err != nil {

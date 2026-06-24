@@ -1018,8 +1018,12 @@ func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterDone(t *testing.T) {
 	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
 }
 
-func TestOpenAITTSChunkedStreamReturnsDataBeforeEOF(t *testing.T) {
-	stream := &openaiTTSChunkedStream{resp: &eofWithDataReader{data: []byte{1, 2, 3, 4}}}
+func TestOpenAITTSRawAudioStreamEmitsReferenceFinalMarker(t *testing.T) {
+	stream := &openaiTTSChunkedStream{
+		resp:           &eofWithDataReader{data: []byte{1, 2, 3, 4}},
+		responseFormat: goopenai.SpeechResponseFormatPcm,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
 
 	audio, err := stream.Next()
 	if err != nil {
@@ -1029,9 +1033,16 @@ func TestOpenAITTSChunkedStreamReturnsDataBeforeEOF(t *testing.T) {
 		t.Fatalf("audio bytes = %v, want EOF data", audio.Frame.Data)
 	}
 
-	_, err = stream.Next()
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("second Next error = %v, want EOF", err)
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("second Next = %#v, want boundary-only final marker", final)
+	}
+
+	if audio, err = stream.Next(); !errors.Is(err, io.EOF) || audio != nil {
+		t.Fatalf("Next after final = (%#v, %v), want EOF", audio, err)
 	}
 }
 

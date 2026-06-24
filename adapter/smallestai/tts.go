@@ -636,7 +636,7 @@ func smallestAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int, segm
 		if message.Message == "" {
 			message.Message = "unknown error"
 		}
-		return nil, false, fmt.Errorf("smallestai tts error: %s", message.Message)
+		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("SmallestAI TTS error: %s", message.Message))
 	default:
 		return nil, false, nil
 	}

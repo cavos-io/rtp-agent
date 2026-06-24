@@ -458,7 +458,7 @@ func (s *minimaxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		audio, err := minimaxAudioFromSSELine(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		audio, err := minimaxAudioFromSSELine(strings.TrimSpace(strings.TrimPrefix(line, "data:")), s.requestID)
 		if err != nil {
 			return nil, err
 		}
@@ -526,7 +526,7 @@ func (s *minimaxTTSChunkedStream) collectSSEAudio() ([]byte, error) {
 		if line == "" || !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		chunk, err := minimaxAudioFromSSELine(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		chunk, err := minimaxAudioFromSSELine(strings.TrimSpace(strings.TrimPrefix(line, "data:")), s.requestID)
 		if err != nil {
 			return nil, err
 		}
@@ -555,12 +555,14 @@ func (s *minimaxTTSChunkedStream) Close() error {
 	return body.Close()
 }
 
-func minimaxAudioFromSSELine(line string) ([]byte, error) {
+func minimaxAudioFromSSELine(line string, fallbackTraceID string) ([]byte, error) {
 	var data struct {
-		Data struct {
+		TraceID string `json:"trace_id"`
+		Data    struct {
 			Audio string `json:"audio"`
 		} `json:"data"`
 		BaseResp struct {
+			TraceID    string `json:"trace_id"`
 			StatusCode int    `json:"status_code"`
 			StatusMsg  string `json:"status_msg"`
 		} `json:"base_resp"`
@@ -569,10 +571,15 @@ func minimaxAudioFromSSELine(line string) ([]byte, error) {
 		return nil, err
 	}
 	if data.BaseResp.StatusCode != 0 {
-		if data.BaseResp.StatusMsg == "" {
-			data.BaseResp.StatusMsg = "unknown error"
-		}
-		return nil, fmt.Errorf("minimax error [%d]: %s", data.BaseResp.StatusCode, data.BaseResp.StatusMsg)
+		return nil, minimaxStatusPayloadError(
+			"MiniMax",
+			data.BaseResp.StatusCode,
+			data.BaseResp.StatusMsg,
+			data.TraceID,
+			data.BaseResp.TraceID,
+			fallbackTraceID,
+			[]byte(line),
+		)
 	}
 	if data.Data.Audio == "" {
 		return nil, nil
@@ -853,11 +860,15 @@ func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sa
 		traceID = fallbackTraceID
 	}
 	if data.BaseResp.StatusCode != 0 {
-		statusMsg := data.BaseResp.StatusMsg
-		if statusMsg == "" {
-			statusMsg = "unknown error"
-		}
-		return nil, false, traceID, fmt.Errorf("minimax websocket error [%d]: %s", data.BaseResp.StatusCode, statusMsg)
+		return nil, false, traceID, minimaxStatusPayloadError(
+			"MiniMax",
+			data.BaseResp.StatusCode,
+			data.BaseResp.StatusMsg,
+			data.TraceID,
+			data.BaseResp.TraceID,
+			fallbackTraceID,
+			payload,
+		)
 	}
 	switch data.Event {
 	case "connected_success", "task_started":
@@ -881,6 +892,29 @@ func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sa
 	default:
 		return nil, false, traceID, nil
 	}
+}
+
+func minimaxStatusPayloadError(provider string, statusCode int, statusMsg, rootTraceID, baseTraceID, fallbackTraceID string, payload []byte) *llm.APIStatusError {
+	if statusMsg == "" {
+		statusMsg = "Unknown error"
+	}
+	traceID := rootTraceID
+	if traceID == "" {
+		traceID = baseTraceID
+	}
+	if traceID == "" {
+		traceID = fallbackTraceID
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		body = map[string]any{"raw": string(payload)}
+	}
+	return llm.NewAPIStatusError(
+		fmt.Sprintf("%s error [%d]: %s (trace_id: %s)", provider, statusCode, statusMsg, traceID),
+		statusCode,
+		traceID,
+		body,
+	)
 }
 
 func minimaxTTSAudioFrame(audio []byte, sampleRate int, requestID string) *tts.SynthesizedAudio {

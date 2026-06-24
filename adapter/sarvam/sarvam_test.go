@@ -424,6 +424,20 @@ func TestSarvamSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "bad request") {
 		t.Fatalf("error = %v, want provider error", err)
 	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != 400 {
+		t.Fatalf("status code = %d, want 400", statusErr.StatusCode)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("body = %T, want decoded payload map", statusErr.Body)
+	}
+	if body["type"] != "error" {
+		t.Fatalf("body type = %#v, want error", body["type"])
+	}
 }
 
 func TestSarvamSTTStreamSequencerAddsReferenceEndOfSpeechMetadata(t *testing.T) {
@@ -705,6 +719,32 @@ func TestBuildSarvamTTSRequestMatchesReferencePayload(t *testing.T) {
 	assertSarvamJSONField(t, payload, "temperature", float64(0.7))
 	if _, ok := payload["pitch"]; ok {
 		t.Fatalf("pitch included for v3 payload: %+v", payload)
+	}
+}
+
+func TestSarvamTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamTTS("test-key", "", WithSarvamTTSBaseURL("https://sarvam.example/tts"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
 }
 
@@ -1228,6 +1268,36 @@ func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	}
 	if finished.RequestID != "req-2" {
 		t.Fatalf("final marker request id = %q, want req-2", finished.RequestID)
+	}
+}
+
+func TestSarvamTTSAudioFromStreamMessageReturnsTypedErrors(t *testing.T) {
+	_, _, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"error","data":{"message":"bad voice","code":"invalid_voice"}}`), 22050, "mp3")
+	if err == nil {
+		t.Fatal("error message returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error message error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != 500 {
+		t.Fatalf("status code = %d, want 500", statusErr.StatusCode)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("body = %T, want decoded payload map", statusErr.Body)
+	}
+	if body["type"] != "error" {
+		t.Fatalf("body type = %#v, want error", body["type"])
+	}
+
+	_, _, err = sarvamTTSAudioFromStreamMessage([]byte(`{"type":"error","data":{"message":"rate_limit exceeded","code":"rate_limit"}}`), 22050, "mp3")
+	if err == nil {
+		t.Fatal("recoverable error message returned nil error, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("recoverable error = %T %v, want APIConnectionError", err, err)
 	}
 }
 

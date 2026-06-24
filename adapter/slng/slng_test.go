@@ -437,6 +437,22 @@ func TestSLNGTTSReceivedEventParsesReferenceShapes(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSProviderErrorFramesReturnAPIStatusError(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"Error","message":"bad voice"}`,
+		`{"error":"rate limited"}`,
+	} {
+		audio, done, err := ttsAudioFromMessage([]byte(payload), 24000)
+		if audio != nil || done {
+			t.Fatalf("ttsAudioFromMessage(%s) = (%#v, %v, %v), want nil false error", payload, audio, done, err)
+		}
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("ttsAudioFromMessage(%s) error = %T %v, want APIStatusError", payload, err, err)
+		}
+	}
+}
+
 func TestSLNGTTSReceivedEventParsesReferenceTopLevelCompletionTypes(t *testing.T) {
 	for _, payload := range []string{
 		`{"type":"complete"}`,

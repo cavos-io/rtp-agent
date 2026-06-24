@@ -1071,7 +1071,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 	case "Flushed", "audio_end", "end", "flushed", "complete", "completed", "done", "final":
 		return slngTTSFinalMarker(), true, nil
 	case "Error", "error":
-		return nil, false, fmt.Errorf("slng tts error: %s", extractSLNGError(message))
+		return nil, false, llm.NewAPIStatusError("SLNG TTS error: "+extractSLNGError(message), -1, "", message)
 	case "":
 		if encoded := slngString(message["audio"]); encoded != "" {
 			data, err := base64.StdEncoding.DecodeString(encoded)
@@ -1095,7 +1095,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 			return slngTTSFinalMarker(), true, nil
 		}
 		if message["error"] != nil {
-			return nil, false, fmt.Errorf("slng tts error: %s", extractSLNGError(message))
+			return nil, false, llm.NewAPIStatusError("SLNG TTS error: "+extractSLNGError(message), -1, "", message)
 		}
 	}
 	return nil, false, nil

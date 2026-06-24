@@ -620,7 +620,8 @@ func neuphonicAudioFromStreamMessage(payload []byte, contextID string, sampleRat
 		return nil, false, err
 	}
 	if message.Type == "error" {
-		return nil, false, fmt.Errorf("neuphonic tts stream error: %s", string(payload))
+		body := string(payload)
+		return nil, false, llm.NewAPIError(fmt.Sprintf("NeuPhonic returned error: %s", body), body, true)
 	}
 	if message.Data.ContextID != "" && message.Data.ContextID != contextID {
 		return nil, false, nil

@@ -189,6 +189,64 @@ func TestSpeechmaticsSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T)
 	}
 }
 
+func TestSpeechmaticsSTTLogMessagesDoNotAbortReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read start message: %v", err)
+			return
+		}
+		messages := []map[string]interface{}{
+			{"message": "Error", "type": "telemetry", "reason": "provider diagnostic"},
+			{
+				"message": "AddTranscript",
+				"results": []map[string]interface{}{
+					{
+						"type":       "word",
+						"start_time": 0.0,
+						"end_time":   0.2,
+						"alternatives": []map[string]interface{}{
+							{"content": "hello", "confidence": 0.9},
+						},
+					},
+				},
+			},
+			{"message": "EndOfTranscript"},
+		}
+		for _, message := range messages {
+			if err := conn.WriteJSON(message); err != nil {
+				t.Errorf("write message: %v", err)
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	provider := NewSpeechmaticsSTT("test-key", WithSpeechmaticsSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript after provider log message", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next event = %#v, want final transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "hello" {
+		t.Fatalf("transcript = %q, want hello", got)
+	}
+}
+
 func TestSpeechmaticsPushFrameTracksReferenceSpeechDuration(t *testing.T) {
 	stream := &speechmaticsSTTStream{
 		writeBinary: func([]byte) error {

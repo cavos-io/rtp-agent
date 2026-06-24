@@ -477,7 +477,7 @@ func gnaniSTTEventsFromStreamMessage(payload []byte, defaultLanguage string) ([]
 		if message.Message == "" {
 			message.Message = string(payload)
 		}
-		return nil, fmt.Errorf("gnani stt stream error: %s", message.Message)
+		return nil, llm.NewAPIStatusError("Gnani STT stream error: "+message.Message, http.StatusInternalServerError, "", message.Message)
 	default:
 		return nil, nil
 	}

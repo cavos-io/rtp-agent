@@ -500,7 +500,7 @@ func humeAudioFromJSONLine(line string) ([]byte, error) {
 		return nil, err
 	}
 	if data.Type == "error" {
-		return nil, fmt.Errorf("hume tts error: %s", line)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Hume TTS error: %s", line))
 	}
 	if data.Audio == "" {
 		return nil, nil

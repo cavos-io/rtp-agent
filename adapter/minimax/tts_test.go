@@ -381,6 +381,39 @@ func TestMinimaxTTSChunkedStreamDecodesReferenceSSEAudio(t *testing.T) {
 	}
 }
 
+func TestMinimaxTTSChunkedStreamStatusPayloadReturnsAPIStatusError(t *testing.T) {
+	stream := &minimaxTTSChunkedStream{
+		resp: &http.Response{
+			Body:   io.NopCloser(bytes.NewReader([]byte("data: {\"trace_id\":\"trace-body\",\"base_resp\":{\"status_code\":1001,\"status_msg\":\"bad text\"}}\n\n"))),
+			Header: http.Header{"Trace-Id": []string{"trace-header"}},
+		},
+		sampleRate: 16000,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next returned nil error, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != 1001 {
+		t.Fatalf("status code = %d, want 1001", statusErr.StatusCode)
+	}
+	if statusErr.RequestID != "trace-body" {
+		t.Fatalf("request id = %q, want body trace id", statusErr.RequestID)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("body = %T, want decoded payload map", statusErr.Body)
+	}
+	if body["trace_id"] != "trace-body" {
+		t.Fatalf("body trace_id = %#v, want trace-body", body["trace_id"])
+	}
+}
+
 func TestMinimaxTTSChunkedStreamEmitsReferenceFinalMarkerAfterSSEAudio(t *testing.T) {
 	stream := &minimaxTTSChunkedStream{
 		resp: &http.Response{
@@ -1055,8 +1088,19 @@ func TestMinimaxTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("final marker request id = %q, want fallback", finished.RequestID)
 	}
 
-	if _, _, _, err := minimaxAudioFromWebsocketMessage([]byte(`{"base_resp":{"status_code":1001,"status_msg":"bad text"}}`), "fallback", 24000); err == nil {
+	if _, _, _, err := minimaxAudioFromWebsocketMessage([]byte(`{"trace_id":"trace-error","base_resp":{"status_code":1001,"status_msg":"bad text"}}`), "fallback", 24000); err == nil {
 		t.Fatal("error response returned nil error, want stream error")
+	} else {
+		var statusErr *llm.APIStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("error response = %T %v, want APIStatusError", err, err)
+		}
+		if statusErr.StatusCode != 1001 {
+			t.Fatalf("status code = %d, want 1001", statusErr.StatusCode)
+		}
+		if statusErr.RequestID != "trace-error" {
+			t.Fatalf("request id = %q, want trace-error", statusErr.RequestID)
+		}
 	}
 	if _, _, _, err := minimaxAudioFromWebsocketMessage([]byte(`{"event":"task_failed","trace_id":"trace-3"}`), "fallback", 24000); err == nil {
 		t.Fatal("task_failed returned nil error, want stream error")

@@ -1104,17 +1104,15 @@ func sarvamStreamMessageHasError(message map[string]any) bool {
 
 func sarvamSTTStreamError(message map[string]any) error {
 	data := sarvamMap(message["data"])
-	errorText := sarvamString(message["error"])
-	if errorText == "" {
-		errorText = sarvamString(data["error"])
+	code := sarvamStatusCode(message["code"])
+	if code == -1 {
+		code = sarvamStatusCode(data["code"])
 	}
-	if errorText == "" {
-		errorText = sarvamString(data["message"])
+	payload, err := json.Marshal(message)
+	if err != nil {
+		payload = []byte(fmt.Sprint(message))
 	}
-	if errorText == "" {
-		errorText = "unknown sarvam stt stream error"
-	}
-	return fmt.Errorf("sarvam stt stream error: %s", errorText)
+	return llm.NewAPIStatusError("Sarvam streaming API error: "+sarvamCompactJSON(payload), code, "", message)
 }
 
 func sarvamMap(value any) map[string]any {
@@ -1129,6 +1127,21 @@ func sarvamString(value any) string {
 		return text
 	}
 	return ""
+}
+
+func sarvamStatusCode(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case float64:
+		return int(typed)
+	case string:
+		code, err := strconv.Atoi(typed)
+		if err == nil {
+			return code
+		}
+	}
+	return -1
 }
 
 func sarvamSTTStreamLanguage(data map[string]any, defaultLanguage string) string {
@@ -1371,7 +1384,7 @@ func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("sarvam tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Sarvam TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &sarvamTTSChunkedStream{resp: resp, sampleRate: t.sampleRate, outputAudioCodec: t.outputAudioCodec}, nil
 }
@@ -1876,10 +1889,33 @@ func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int, outputAudio
 		}
 		return nil, false, nil
 	case "error":
-		return nil, false, fmt.Errorf("sarvam tts stream error: %s", string(payload))
+		return nil, false, sarvamTTSErrorMessageError(payload, message.Data.Message)
 	default:
 		return nil, false, nil
 	}
+}
+
+func sarvamTTSErrorMessageError(payload []byte, message string) error {
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		body = map[string]any{"raw": string(payload)}
+	}
+	raw := sarvamCompactJSON(payload)
+	lowered := strings.ToLower(message)
+	for _, hint := range []string{"rate_limit", "temporary_unavailable", "timeout"} {
+		if strings.Contains(lowered, hint) {
+			return llm.NewAPIConnectionError("Recoverable TTS API error from Sarvam: " + raw)
+		}
+	}
+	return llm.NewAPIStatusError("TTS API error from Sarvam: "+raw, http.StatusInternalServerError, "", body)
+}
+
+func sarvamCompactJSON(payload []byte) string {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, payload); err != nil {
+		return string(payload)
+	}
+	return compact.String()
 }
 
 func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAudioCodec string) *tts.SynthesizedAudio {
