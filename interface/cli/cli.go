@@ -254,7 +254,13 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			if i >= len(argv) {
 				return CliArgs{}, nil, fmt.Errorf("missing value for --log-format")
 			}
-			args.LogFormat = strings.ToLower(argv[i])
+			logFormat := strings.ToLower(argv[i])
+			switch logFormat {
+			case "json", "colored":
+				args.LogFormat = logFormat
+			default:
+				return CliArgs{}, nil, fmt.Errorf("unknown log format %q", argv[i])
+			}
 		case "--url":
 			i++
 			if i >= len(argv) {

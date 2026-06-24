@@ -589,6 +589,19 @@ func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
 	}
 }
 
+func TestParseWorkerArgsRejectsUnknownReferenceLogFormat(t *testing.T) {
+	_, _, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--log-format", "plain",
+	}, false)
+	if err == nil {
+		t.Fatal("parseWorkerArgs() error = nil, want unknown log format error")
+	}
+	if got, want := err.Error(), "unknown log format \"plain\""; got != want {
+		t.Fatalf("parseWorkerArgs() error = %q, want %q", got, want)
+	}
+}
+
 func TestParseWorkerArgsSupportsReferenceSimulationOption(t *testing.T) {
 	args, drainTimeout, err := parseWorkerArgs([]string{
 		"worker", "start",
