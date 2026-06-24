@@ -118,6 +118,27 @@ func TestAgentSessionUpdateAgentStateUpdatesAvatarProvider(t *testing.T) {
 	}
 }
 
+func TestAgentSessionDuplicateAgentStateUpdateIsNoopLikeReference(t *testing.T) {
+	baseAgent := NewAgent("test")
+	avatar := &recordingAvatarProvider{}
+	baseAgent.Avatar = avatar
+
+	session := NewAgentSession(baseAgent, nil, AgentSessionOptions{})
+	session.UpdateAgentState(AgentStateSpeaking)
+	receiveAgentStateChangedEvent(t, session)
+
+	session.UpdateAgentState(AgentStateSpeaking)
+
+	if got, want := avatar.states, []AvatarState{AvatarStateSpeaking}; !equalAvatarStates(got, want) {
+		t.Fatalf("avatar states = %#v, want %#v", got, want)
+	}
+	select {
+	case ev := <-session.AgentStateChangedCh:
+		t.Fatalf("duplicate state emitted event = %q -> %q, want no event", ev.OldState, ev.NewState)
+	default:
+	}
+}
+
 func TestAgentSessionStartUnsubscribesAvatarMetricsOnStartError(t *testing.T) {
 	errAvatar := errors.New("avatar start failed")
 	baseAgent := NewAgent("test")
@@ -214,6 +235,18 @@ func (r *recordingAvatarProvider) emitMetrics(metrics *telemetry.AvatarMetrics) 
 	if r.metrics != nil {
 		r.metrics(metrics)
 	}
+}
+
+func equalAvatarStates(a, b []AvatarState) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type failingStartAssistant struct {
