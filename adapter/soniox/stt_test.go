@@ -153,6 +153,35 @@ func TestSonioxSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	providerErr := llm.NewAPIStatusError("Soniox STT error: 500 - server failed", 500, "", nil)
+	for i := range 200 {
+		ctx, cancel := context.WithCancel(context.Background())
+		stream := &sonioxStream{
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+			ctx:    ctx,
+			cancel: cancel,
+		}
+		stream.events <- &stt.SpeechEvent{
+			Type: stt.SpeechEventFinalTranscript,
+			Alternatives: []stt.SpeechData{{
+				Text: "hello",
+			}},
+		}
+		stream.errCh <- providerErr
+
+		event, err := stream.Next()
+		cancel()
+		if err != nil {
+			t.Fatalf("trial %d Next error = %v, want queued transcript before stream error", i, err)
+		}
+		if event == nil || event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+			t.Fatalf("trial %d Next event = %#v, want final transcript hello", i, event)
+		}
+	}
+}
+
 func TestSonioxSTTKeepAliveSendsReferenceImmediateMessage(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	keepaliveCh := make(chan string, 1)

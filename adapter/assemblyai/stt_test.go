@@ -703,7 +703,7 @@ func TestAssemblyAISTTStreamCloseSendsReferenceTerminate(t *testing.T) {
 
 func TestAssemblyAISTTClosedStreamNextReturnsEOF(t *testing.T) {
 	stream := &assemblyAISTTStream{
-		events: make(chan *stt.SpeechEvent),
+		events: make(chan *stt.SpeechEvent, 1),
 		errCh:  make(chan error),
 		writeJSON: func(any) error {
 			return nil
@@ -715,6 +715,7 @@ func TestAssemblyAISTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
 
 	type nextResult struct {
 		event *stt.SpeechEvent

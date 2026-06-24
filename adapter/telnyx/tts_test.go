@@ -239,6 +239,28 @@ func TestTelnyxTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
+	providerErr := errors.New("provider failed after audio")
+	for i := range 200 {
+		want := &tts.SynthesizedAudio{RequestID: "req-audio"}
+		stream := &telnyxTTSStream{
+			ctx:    context.Background(),
+			events: make(chan *tts.SynthesizedAudio, 1),
+			errCh:  make(chan error, 1),
+		}
+		stream.events <- want
+		stream.errCh <- providerErr
+
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("trial %d Next error = %v, want queued audio before stream error", i, err)
+		}
+		if audio != want {
+			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
+		}
+	}
+}
+
 func TestTelnyxTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	cancelled := false
 	closeCalls := 0

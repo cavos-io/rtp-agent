@@ -704,13 +704,6 @@ func (s *elevenLabsSTTStream) emitRecognitionUsageLocked() {
 
 func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
-		}
 		return nil, io.EOF
 	}
 	select {

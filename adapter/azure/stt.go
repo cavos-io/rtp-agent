@@ -749,6 +749,10 @@ func (s *azureSTTStream) isClosed() bool {
 
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
+		return nil, io.EOF
+	}
+	select {
+	case err := <-s.errCh:
 		select {
 		case event, ok := <-s.events:
 			if ok {
@@ -756,15 +760,6 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 			}
 		default:
 		}
-		select {
-		case err := <-s.errCh:
-			return nil, err
-		default:
-		}
-		return nil, io.EOF
-	}
-	select {
-	case err := <-s.errCh:
 		return nil, s.finalizeSessionStopError(err)
 	default:
 	}
@@ -792,6 +787,13 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, s.finalizeSessionStopError(err)
 	case <-s.ctx.Done():
 		if s.isClosed() {

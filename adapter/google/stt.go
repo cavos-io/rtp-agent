@@ -498,13 +498,6 @@ func (s *googleSTTStream) isClosed() bool {
 
 func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
-		}
 		return nil, io.EOF
 	}
 	select {

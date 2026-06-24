@@ -381,14 +381,20 @@ func (s *inworldSTTStream) Close() error {
 }
 
 func (s *inworldSTTStream) Next() (*stt.SpeechEvent, error) {
-	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, nil
 		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	default:
+	}
+	if s.isClosed() {
 		return nil, io.EOF
 	}
 	select {

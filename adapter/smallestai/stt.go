@@ -789,13 +789,6 @@ func (s *smallestAISTTStream) closeLocked() error {
 
 func (s *smallestAISTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
-		}
 		return nil, io.EOF
 	}
 	select {

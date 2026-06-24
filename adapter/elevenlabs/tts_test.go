@@ -1109,6 +1109,28 @@ func TestElevenLabsTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
+	providerErr := errors.New("provider failed after audio")
+	for i := range 200 {
+		want := &tts.SynthesizedAudio{RequestID: "req-audio"}
+		stream := &elevenLabsStream{
+			ctx:   context.Background(),
+			audio: make(chan *tts.SynthesizedAudio, 1),
+			errCh: make(chan error, 1),
+		}
+		stream.audio <- want
+		stream.errCh <- providerErr
+
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("trial %d Next error = %v, want queued audio before stream error", i, err)
+		}
+		if audio != want {
+			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
+		}
+	}
+}
+
 func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	closed := make(chan struct{})
 	serverErr := make(chan error, 1)

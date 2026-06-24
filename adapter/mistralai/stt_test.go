@@ -394,9 +394,15 @@ func TestMistralAISTTRealtimeClosedStreamNextReturnsEOF(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
+	stream.events <- &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{Text: "stale transcript"},
+		},
+	}
 	event, err := stream.Next()
 	if event != nil {
-		t.Fatalf("Next event after Close = %#v, want nil", event)
+		t.Fatalf("Next queued event after Close = %#v, want nil", event)
 	}
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error after Close = %v, want %v", err, io.EOF)

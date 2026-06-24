@@ -261,6 +261,7 @@ func TestGladiaSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
 	event, err := stream.Next()
 	if event != nil {
 		t.Fatalf("Next event after Close = %#v, want nil", event)
