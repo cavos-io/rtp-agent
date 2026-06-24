@@ -339,11 +339,11 @@ func (s *sonioxStream) keepAliveLoop() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
+		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(sonioxKeepaliveMessage))
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			_ = s.conn.WriteMessage(websocket.TextMessage, []byte(sonioxKeepaliveMessage))
 		}
 	}
 }

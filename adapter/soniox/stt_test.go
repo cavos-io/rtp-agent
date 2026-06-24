@@ -153,6 +153,50 @@ func TestSonioxSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	}
 }
 
+func TestSonioxSTTKeepAliveSendsReferenceImmediateMessage(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	keepaliveCh := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read config: %v", err)
+			return
+		}
+		msgType, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read keepalive: %v", err)
+			return
+		}
+		if msgType != websocket.TextMessage {
+			t.Errorf("keepalive message type = %d, want text", msgType)
+			return
+		}
+		keepaliveCh <- string(msg)
+	}))
+	defer server.Close()
+
+	provider := NewSonioxSTT("test-key", WithSonioxBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case got := <-keepaliveCh:
+		if got != sonioxKeepaliveMessage {
+			t.Fatalf("keepalive = %q, want %q", got, sonioxKeepaliveMessage)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for immediate reference keepalive")
+	}
+}
+
 func TestSonioxSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	serverClosed := make(chan struct{})
