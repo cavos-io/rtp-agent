@@ -474,6 +474,9 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	if err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("after-close")}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after close error = %v, want ErrClosedPipe", err)
 	}
+	if err := providerStream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after close error = %v, want ErrClosedPipe", err)
+	}
 }
 
 func TestAWSSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {

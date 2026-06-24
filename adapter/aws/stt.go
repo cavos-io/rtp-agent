@@ -395,6 +395,9 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *awsSTTStream) Flush() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	return nil
 }
 
