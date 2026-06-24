@@ -2804,10 +2804,7 @@ func (s *AgentSession) UpdateAgent(agent AgentInterface) {
 	}
 	if oldActivity != nil {
 		oldActivity.Stop()
-		if err := closeSessionToolsets(oldTools); err != nil {
-			logger.Logger.Errorw("failed to close previous agent toolsets", err)
-			s.EmitError(ErrorEvent{Error: err, Source: oldAgent})
-		}
+		_ = closeSessionToolsets(oldTools)
 	}
 	handoff := newAgentHandoff(oldAgent, baseAgent)
 	if runState != nil {

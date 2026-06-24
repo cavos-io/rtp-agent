@@ -5745,6 +5745,33 @@ func TestAgentSessionUpdateAgentClosesPreviousAgentToolsets(t *testing.T) {
 	}
 }
 
+func TestAgentSessionUpdateAgentIgnoresPreviousToolsetCloseError(t *testing.T) {
+	initial := &trackingAgent{Agent: NewAgent("initial")}
+	initialToolset := &closeableSessionToolset{
+		fakeGenerationTool: fakeGenerationTool{name: "initial_tools"},
+		tools:              []llm.Tool{&fakeGenerationTool{name: "initial_lookup"}},
+		closeErr:           errors.New("previous toolset cleanup failed"),
+	}
+	initial.Tools = []llm.Tool{initialToolset}
+	next := &trackingAgent{Agent: NewAgent("next")}
+	next.Tools = []llm.Tool{&fakeGenerationTool{name: "next_lookup"}}
+	session := NewAgentSession(initial, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(initial, session)
+	session.started = true
+	errorEvents := session.ErrorEvents()
+
+	session.UpdateAgent(next)
+
+	if initialToolset.closeCalls != 1 {
+		t.Fatalf("initial toolset Close calls = %d, want 1", initialToolset.closeCalls)
+	}
+	select {
+	case ev := <-errorEvents:
+		t.Fatalf("ErrorEvents received %#v, want previous toolset close error ignored like reference return_exceptions", ev)
+	default:
+	}
+}
+
 func TestAgentSessionUpdateAgentBeforeStartUsesNextRealtimeModel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
