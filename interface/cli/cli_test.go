@@ -934,6 +934,15 @@ func TestStartArgsForDevReloadForwardsReferenceConnectionOptions(t *testing.T) {
 	}
 }
 
+func TestStartArgsForDevReloadForwardsReferenceDevFlag(t *testing.T) {
+	got := startArgsForDevReload(CliArgs{DevMode: true})
+	want := []string{"--dev"}
+
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("startArgsForDevReload() = %#v, want %#v", got, want)
+	}
+}
+
 func TestWatcherTriggerReloadKeepsReloadingUntilReloaded(t *testing.T) {
 	args := &CliArgs{}
 	calls := 0

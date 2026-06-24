@@ -462,6 +462,9 @@ func newDevModeWatcher(cliArgs *CliArgs, onChange func()) *Watcher {
 
 func startArgsForDevReload(args CliArgs) []string {
 	startArgs := make([]string, 0, 8)
+	if args.DevMode {
+		startArgs = append(startArgs, "--dev")
+	}
 	if args.LogLevel != "" {
 		startArgs = append(startArgs, "--log-level", args.LogLevel)
 	}
