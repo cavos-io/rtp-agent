@@ -223,6 +223,22 @@ func TestTelnyxTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
+	stream := &telnyxTTSStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error),
+		closed: true,
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "stale"}
+
+	audio, err := stream.Next()
+
+	if audio != nil || err != io.EOF {
+		t.Fatalf("closed stream Next = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestTelnyxTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	cancelled := false
 	closeCalls := 0
