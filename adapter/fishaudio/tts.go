@@ -593,6 +593,9 @@ func (s *fishAudioTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 }
 
 func (s *fishAudioTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case audio, ok := <-s.events:
 		if !ok {
