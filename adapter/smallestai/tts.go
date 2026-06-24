@@ -525,10 +525,19 @@ func (s *smallestaiTTSSynthesizeStream) Close() error {
 	return closeSmallestAIWebsocket(s.conn)
 }
 
+func (s *smallestaiTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *smallestaiTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.ctx != nil {
 		select {
 		case <-s.ctx.Done():
+			if s.isClosed() {
+				return nil, io.EOF
+			}
 			return nil, s.ctx.Err()
 		default:
 		}
