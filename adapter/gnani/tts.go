@@ -501,7 +501,7 @@ func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChanne
 		if message.Message == "" {
 			message.Message = string(payload)
 		}
-		return nil, false, fmt.Errorf("gnani tts stream error: %s", message.Message)
+		return nil, false, llm.NewAPIStatusError("Gnani TTS stream error: "+message.Message, http.StatusInternalServerError, "", message.Message)
 	default:
 		return nil, false, nil
 	}
