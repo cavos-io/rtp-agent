@@ -343,6 +343,9 @@ func (s *gradiumTTSSynthesizeStream) isClosed() bool {
 }
 
 func (s *gradiumTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
 	select {
 	case <-s.ctx.Done():
 		if s.isClosed() {
