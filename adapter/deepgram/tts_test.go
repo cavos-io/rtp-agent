@@ -369,6 +369,17 @@ func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	if got := audio.Frame.SamplesPerChannel; got != 2 {
 		t.Fatalf("samples per channel = %d, want 2", got)
 	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next() error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final Next() = %+v, want boundary-only final marker", final)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("third Next() error = %v, want EOF", err)
+	}
 }
 
 func TestDeepgramTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
@@ -970,7 +981,7 @@ type deepgramTTSFinalReadCloser struct {
 
 func (r *deepgramTTSFinalReadCloser) Read(p []byte) (int, error) {
 	if r.read {
-		return 0, io.EOF
+		return 0, errors.New("read after final eof")
 	}
 	r.read = true
 	return copy(p, r.data), io.EOF
