@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -98,7 +99,7 @@ func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.Chun
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("speechmatics tts error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError("Speechmatics TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 
 	return &speechmaticsTTSChunkedStream{
