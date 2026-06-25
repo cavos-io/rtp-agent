@@ -275,6 +275,9 @@ func (s *gradiumTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	s.pending += text
 	tokens := tokenize.SplitWords(s.pending, false, false, false)
 	if len(tokens) <= 1 {
@@ -291,6 +294,10 @@ func (s *gradiumTTSSynthesizeStream) PushText(text string) error {
 
 func (s *gradiumTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
 	s.finalDone = false
 	s.mu.Unlock()
 	tokens := tokenize.SplitWords(s.pending, false, false, false)
@@ -315,6 +322,9 @@ func (s *gradiumTTSSynthesizeStream) consumePendingToken(token string) {
 }
 
 func (s *gradiumTTSSynthesizeStream) writeMessageData(message map[string]any) error {
+	if s.isClosed() {
+		return io.ErrClosedPipe
+	}
 	if s.writeMessage != nil {
 		return s.writeMessage(message)
 	}

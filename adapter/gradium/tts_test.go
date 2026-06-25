@@ -193,6 +193,27 @@ func TestGradiumTTSStreamTokenizesWordsAndFlushesTailLikeReference(t *testing.T)
 	assertGradiumSetup(t, writes[2], "type", "end_of_stream")
 }
 
+func TestGradiumTTSClosedStreamRejectsTextAndFlush(t *testing.T) {
+	var writes []map[string]any
+	stream := &gradiumTTSSynthesizeStream{
+		closed: true,
+		writeMessage: func(payload map[string]any) error {
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello world"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after Close = %d, want none", len(writes))
+	}
+}
+
 func TestGradiumTTSWebsocketMessageMapsAudioAndEnd(t *testing.T) {
 	audio, done, err := gradiumTTSAudioFromMessage([]byte(`{"type":"audio","audio":"`+base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})+`"}`), 48000)
 	if err != nil {
