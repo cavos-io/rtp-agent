@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"testing"
@@ -369,6 +370,70 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("second Next error = %v, want EOF after one combined event", err)
+	}
+}
+
+func TestGoogleSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal: true,
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "hello",
+					Confidence: 0.9,
+					Words: []*speechpb.WordInfo{{
+						Word:       "hello",
+						StartTime:  durationpb.New(100 * 1000 * 1000),
+						EndTime:    durationpb.New(400 * 1000 * 1000),
+						Confidence: 0.9,
+					}},
+				}},
+			}},
+		}},
+	}
+	stream := &googleSTTStream{
+		stream:        streamClient,
+		minConfidence: 0.65,
+		events:        make(chan *stt.SpeechEvent, 10),
+		errCh:         make(chan error, 1),
+	}
+	timing, ok := interface{}(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("google STT stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+	timing.SetStartTime(123.5)
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing = offset %v start %v, want reference values", timing.StartTimeOffset(), timing.StartTime())
+	}
+
+	go stream.readLoop()
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want final transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if math.Abs(alt.StartTime-2.6) > 0.000001 || math.Abs(alt.EndTime-2.9) > 0.000001 {
+		t.Fatalf("transcript timing = %v-%v, want reference start_time_offset applied", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || math.Abs(alt.Words[0].StartTime-2.6) > 0.000001 || math.Abs(alt.Words[0].EndTime-2.9) > 0.000001 || alt.Words[0].StartTimeOffset != 2.5 {
+		t.Fatalf("word timing = %+v, want reference start_time_offset applied", alt.Words)
+	}
+
+	assertGooglePanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-0.01)
+	})
+	if got := timing.StartTimeOffset(); got != 2.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 2.5", got)
+	}
+	assertGooglePanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-0.01)
+	})
+	if got := timing.StartTime(); got != 123.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 123.5", got)
 	}
 }
 
@@ -800,3 +865,17 @@ func (c *fakeGoogleStreamingRecognizeClient) Trailer() metadata.MD         { ret
 func (c *fakeGoogleStreamingRecognizeClient) Context() context.Context     { return context.Background() }
 func (c *fakeGoogleStreamingRecognizeClient) SendMsg(m any) error          { return nil }
 func (c *fakeGoogleStreamingRecognizeClient) RecvMsg(m any) error          { return nil }
+
+func assertGooglePanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := fmt.Sprint(recovered); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
+}

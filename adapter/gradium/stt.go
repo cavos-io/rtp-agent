@@ -232,11 +232,13 @@ func writeGradiumSTTMessage(conn *websocket.Conn, message map[string]any) error 
 }
 
 type gradiumSTTStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn            *websocket.Conn
+	events          chan *stt.SpeechEvent
+	errCh           chan error
+	mu              sync.Mutex
+	closed          bool
+	startTimeOffset float64
+	startTime       float64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -262,7 +264,7 @@ func (s *gradiumSTTStream) readLoop() {
 		if msgType != websocket.TextMessage {
 			continue
 		}
-		events, err := processGradiumSTTMessage(s.state, message, 0)
+		events, err := processGradiumSTTMessage(s.state, message, s.currentStartTimeOffset())
 		if err != nil {
 			s.errCh <- err
 			return
@@ -363,6 +365,42 @@ func (s *gradiumSTTStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *gradiumSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *gradiumSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTimeOffset = offset
+}
+
+func (s *gradiumSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+
+func (s *gradiumSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTime = startTime
+}
+
+func (s *gradiumSTTStream) currentStartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
 }
 
 func gradiumSTTAudioByteStream() *audio.AudioByteStream {

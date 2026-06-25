@@ -323,11 +323,13 @@ func buildRtzrStreamURL(s *RtzrSTT, config map[string]string) string {
 }
 
 type rtzrStream struct {
-	conn   *websocket.Conn
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	mu     sync.Mutex
-	closed bool
+	conn            *websocket.Conn
+	events          chan *stt.SpeechEvent
+	errCh           chan error
+	mu              sync.Mutex
+	closed          bool
+	startTimeOffset float64
+	startTime       float64
 
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -355,7 +357,7 @@ func (s *rtzrStream) readLoop(conn *websocket.Conn) {
 		if err := json.Unmarshal(message, &payload); err != nil {
 			continue
 		}
-		events, err := processRtzrTranscriptEvent(s.state, payload, 0)
+		events, err := processRtzrTranscriptEvent(s.state, payload, s.currentStartTimeOffset())
 		if err != nil {
 			s.errCh <- err
 			return
@@ -435,6 +437,42 @@ func (s *rtzrStream) ensureConnectedLocked() error {
 	s.conn = conn
 	go s.readLoop(conn)
 	return nil
+}
+
+func (s *rtzrStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *rtzrStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTimeOffset = offset
+}
+
+func (s *rtzrStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+
+func (s *rtzrStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTime = startTime
+}
+
+func (s *rtzrStream) currentStartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
 }
 
 func newRtzrAudioByteStream(sampleRate int) *audio.AudioByteStream {
@@ -571,9 +609,10 @@ func rtzrTimedStrings(words []rtzrWord, startTimeOffset float64) []stt.TimedStri
 	timed := make([]stt.TimedString, 0, len(words))
 	for _, word := range words {
 		timed = append(timed, stt.TimedString{
-			Text:      word.Text,
-			StartTime: word.StartAt/1000 + startTimeOffset,
-			EndTime:   (word.StartAt+word.Duration)/1000 + startTimeOffset,
+			Text:            word.Text,
+			StartTime:       word.StartAt/1000 + startTimeOffset,
+			EndTime:         (word.StartAt+word.Duration)/1000 + startTimeOffset,
+			StartTimeOffset: startTimeOffset,
 		})
 	}
 	return timed

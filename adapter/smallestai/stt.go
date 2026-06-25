@@ -512,6 +512,8 @@ type smallestAISTTStream struct {
 	usageAudioDuration float64
 	usageLastFlush     time.Time
 	reconnectRequested bool
+	startTimeOffset    float64
+	startTime          float64
 }
 
 func (s *smallestAISTTStream) readLoop() {
@@ -541,7 +543,7 @@ func (s *smallestAISTTStream) readLoop() {
 		if err := json.Unmarshal(message, &resp); err != nil {
 			continue
 		}
-		for _, event := range processSmallestAISTTStreamEvent(s.state, resp, 0) {
+		for _, event := range processSmallestAISTTStreamEvent(s.state, resp, s.currentStartTimeOffset()) {
 			s.events <- event
 		}
 		if resp.IsLast {
@@ -623,6 +625,42 @@ func (s *smallestAISTTStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *smallestAISTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *smallestAISTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTimeOffset = offset
+}
+
+func (s *smallestAISTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+
+func (s *smallestAISTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTime = startTime
+}
+
+func (s *smallestAISTTStream) currentStartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
 }
 
 func smallestAISTTUnexpectedCloseError(err error) error {

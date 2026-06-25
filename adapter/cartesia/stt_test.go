@@ -433,6 +433,41 @@ func TestCartesiaSTTLegacyEventsMapTranscriptLifecycle(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTLegacyStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	stream := &cartesiaSTTStream{state: &cartesiaSTTStreamState{language: "es", mode: "legacy"}}
+	timing, ok := interface{}(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("cartesia STT stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+
+	events, err := processCartesiaSTTEvent(stream.state, map[string]any{
+		"type":     "transcript",
+		"text":     "hola",
+		"is_final": true,
+		"duration": 0.4,
+		"words": []any{
+			map[string]any{"word": "hola", "start": 0.1, "end": 0.3},
+		},
+	})
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+
+	assertCartesiaEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	final := events[1]
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("final event type = %s, want final transcript", final.Type)
+	}
+	alt := final.Alternatives[0]
+	if alt.StartTime < 2.499 || alt.StartTime > 2.501 || alt.EndTime < 2.899 || alt.EndTime > 2.901 {
+		t.Fatalf("transcript timing = %v-%v, want reference offset plus duration", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].StartTime < 2.599 || alt.Words[0].StartTime > 2.601 || alt.Words[0].EndTime < 2.799 || alt.Words[0].EndTime > 2.801 || alt.Words[0].StartTimeOffset != 2.5 {
+		t.Fatalf("word timing = %+v, want reference start_time_offset applied", alt.Words)
+	}
+}
+
 func TestCartesiaSTTUnexpectedCloseFinalizesPartialAutoTranscript(t *testing.T) {
 	state := &cartesiaSTTStreamState{
 		language:          "en",

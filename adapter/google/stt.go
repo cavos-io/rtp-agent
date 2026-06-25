@@ -291,15 +291,21 @@ func googleEnableWordTimeOffsets(s *GoogleSTT) bool {
 }
 
 func googleSpeechDataFromAlternative(alt *speechpb.SpeechRecognitionAlternative) stt.SpeechData {
+	return googleSpeechDataFromAlternativeOffset(alt, 0)
+}
+
+func googleSpeechDataFromAlternativeOffset(alt *speechpb.SpeechRecognitionAlternative, startTimeOffset float64) stt.SpeechData {
 	if alt == nil {
 		return stt.SpeechData{}
 	}
 
-	return stt.SpeechData{
+	data := stt.SpeechData{
 		Text:       alt.GetTranscript(),
 		Confidence: float64(alt.GetConfidence()),
-		Words:      googleTimedStrings(alt.GetWords()),
+		Words:      googleTimedStringsOffset(alt.GetWords(), startTimeOffset),
 	}
+	googleApplySpeechDataTiming(&data, alt.GetWords(), startTimeOffset)
+	return data
 }
 
 func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionResult) []stt.SpeechData {
@@ -333,6 +339,10 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 }
 
 func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {
+	return googleTimedStringsOffset(words, 0)
+}
+
+func googleTimedStringsOffset(words []*speechpb.WordInfo, startTimeOffset float64) []stt.TimedString {
 	if len(words) == 0 {
 		return nil
 	}
@@ -340,11 +350,12 @@ func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {
 	timed := make([]stt.TimedString, 0, len(words))
 	for _, word := range words {
 		timed = append(timed, stt.TimedString{
-			Text:       word.GetWord(),
-			StartTime:  word.GetStartTime().AsDuration().Seconds(),
-			EndTime:    word.GetEndTime().AsDuration().Seconds(),
-			Confidence: float64(word.GetConfidence()),
-			SpeakerID:  googleSpeakerID(word),
+			Text:            word.GetWord(),
+			StartTime:       word.GetStartTime().AsDuration().Seconds() + startTimeOffset,
+			EndTime:         word.GetEndTime().AsDuration().Seconds() + startTimeOffset,
+			StartTimeOffset: startTimeOffset,
+			Confidence:      float64(word.GetConfidence()),
+			SpeakerID:       googleSpeakerID(word),
 		})
 	}
 	return timed
@@ -355,13 +366,16 @@ func googleSpeakerID(word *speechpb.WordInfo) string {
 }
 
 type googleSTTStream struct {
-	mu            sync.Mutex
-	owner         *GoogleSTT
-	stream        speechpb.Speech_StreamingRecognizeClient
-	minConfidence float64
-	events        chan *stt.SpeechEvent
-	errCh         chan error
-	closed        bool
+	mu              sync.Mutex
+	owner           *GoogleSTT
+	stream          speechpb.Speech_StreamingRecognizeClient
+	minConfidence   float64
+	events          chan *stt.SpeechEvent
+	errCh           chan error
+	closed          bool
+	timingMu        sync.Mutex
+	startTimeOffset float64
+	startTime       float64
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -384,7 +398,7 @@ func (s *googleSTTStream) readLoop() {
 		}
 
 		if resp.GetSpeechEventType() == speechpb.StreamingRecognizeResponse_SPEECH_EVENT_UNSPECIFIED {
-			if data, eventType, ok := googleSpeechDataFromStreamingResults(resp.Results, s.minConfidence); ok {
+			if data, eventType, ok := googleSpeechDataFromStreamingResultsOffset(resp.Results, s.minConfidence, s.currentStartTimeOffset()); ok {
 				s.events <- &stt.SpeechEvent{
 					Type:         eventType,
 					Alternatives: []stt.SpeechData{data},
@@ -418,7 +432,7 @@ func googleStreamingAudioDuration(resp *speechpb.StreamingRecognizeResponse, las
 	return total - lastUsageEventTime
 }
 
-func googleSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, minConfidence float64) (stt.SpeechData, stt.SpeechEventType, bool) {
+func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRecognitionResult, minConfidence float64, startTimeOffset float64) (stt.SpeechData, stt.SpeechEventType, bool) {
 	if len(results) == 0 {
 		return stt.SpeechData{}, "", false
 	}
@@ -432,7 +446,7 @@ func googleSpeechDataFromStreamingResults(results []*speechpb.StreamingRecogniti
 		}
 		alt := result.GetAlternatives()[0]
 		if result.GetIsFinal() {
-			return googleSpeechDataFromAlternative(alt), stt.SpeechEventFinalTranscript, true
+			return googleSpeechDataFromAlternativeOffset(alt, startTimeOffset), stt.SpeechEventFinalTranscript, true
 		}
 		if firstAlt == nil {
 			firstAlt = alt
@@ -448,11 +462,64 @@ func googleSpeechDataFromStreamingResults(results []*speechpb.StreamingRecogniti
 	if confidence < minConfidence {
 		return stt.SpeechData{}, "", false
 	}
-	return stt.SpeechData{
+	data := stt.SpeechData{
 		Text:       text,
 		Confidence: confidence,
-		Words:      googleTimedStrings(firstAlt.GetWords()),
-	}, stt.SpeechEventInterimTranscript, true
+		Words:      googleTimedStringsOffset(firstAlt.GetWords(), startTimeOffset),
+	}
+	googleApplySpeechDataTiming(&data, firstAlt.GetWords(), startTimeOffset)
+	return data, stt.SpeechEventInterimTranscript, true
+}
+
+func googleApplySpeechDataTiming(data *stt.SpeechData, words []*speechpb.WordInfo, startTimeOffset float64) {
+	if data == nil {
+		return
+	}
+	if len(words) == 0 {
+		if data.Text != "" {
+			data.StartTime = startTimeOffset
+			data.EndTime = startTimeOffset
+		}
+		return
+	}
+	data.StartTime = words[0].GetStartTime().AsDuration().Seconds() + startTimeOffset
+	data.EndTime = words[len(words)-1].GetEndTime().AsDuration().Seconds() + startTimeOffset
+}
+
+func (s *googleSTTStream) StartTimeOffset() float64 {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *googleSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	s.startTimeOffset = offset
+}
+
+func (s *googleSTTStream) StartTime() float64 {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	return s.startTime
+}
+
+func (s *googleSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	s.startTime = startTime
+}
+
+func (s *googleSTTStream) currentStartTimeOffset() float64 {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	return s.startTimeOffset
 }
 
 func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
