@@ -58,7 +58,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | runway |  |  |  |  | yes |  |
 | sarvam | yes | yes | yes |  |  |  |
 | silero |  |  |  |  |  | yes |
-| simli | yes |  |  |  | yes |  |
+| simli |  |  |  |  | yes |  |
 | simplismart |  | yes | yes |  |  |  |
 | smallestai |  | yes | yes |  |  |  |
 | soniox |  | yes | yes |  |  |  |

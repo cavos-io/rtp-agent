@@ -3154,19 +3154,25 @@ func TestDefaultConfigFromEnvSelectsMinimalLLM(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsSimliLLM(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsSimliLLMProvider(t *testing.T) {
 	t.Setenv("SIMLI_API_KEY", "test-simli-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "simli")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "simli"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Simli LLM provider", err)
 	}
-	if app.Session == nil || app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
-	if got := llm.Label(app.Session.LLM); got != "simli.SimliLLM" {
-		t.Fatalf("LLM label = %q, want simli.SimliLLM", got)
+}
+
+func TestDefaultConfigFromEnvRejectsSimliLLMFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("SIMLI_API_KEY", "test-simli-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "simli")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "simli"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Simli LLM fallback provider", err)
 	}
 }
 
@@ -5978,7 +5984,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
-		{name: "simli", provider: "simli", envKey: "SIMLI_API_KEY", envValue: "test-simli-key"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
 		{name: "trugen", provider: "trugen", envKey: "TRUGEN_API_KEY", envValue: "test-trugen-key"},
 		{name: "upliftai", provider: "upliftai", envKey: "UPLIFTAI_API_KEY", envValue: "test-upliftai-key"},

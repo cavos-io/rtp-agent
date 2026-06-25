@@ -2392,8 +2392,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
 		return provider, nil
-	case providerSimli:
-		return simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel), nil
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerTrugen:
@@ -4419,8 +4417,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
 		a.LLM = provider
-	case providerSimli:
-		a.LLM = simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel)
 	case providerTelnyx:
 		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
 	case providerTrugen:
