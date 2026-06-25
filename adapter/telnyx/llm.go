@@ -2,44 +2,34 @@ package telnyx
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 const (
-	defaultTelnyxLLMModel = "meta-llama/Meta-Llama-3.1-70B-Instruct"
-	defaultTelnyxLLMURL   = "https://api.telnyx.com/v2/ai"
+	defaultTelnyxLLMURL = "https://api.telnyx.com/v2/ai"
 )
 
 type TelnyxLLM struct {
 	inner   *openai.OpenAILLM
-	apiKey  string
+	err     error
 	baseURL string
 }
 
 func NewTelnyxLLM(apiKey string, model string) *TelnyxLLM {
-	if model == "" {
-		model = defaultTelnyxLLMModel
-	}
-	resolvedAPIKey := resolveTelnyxLLMAPIKey(apiKey)
+	inner, err := openai.NewTelnyxOpenAILLM(model, apiKey)
 	return &TelnyxLLM{
-		inner:   openai.NewOpenAILLMWithBaseURL(resolvedAPIKey, model, defaultTelnyxLLMURL),
-		apiKey:  resolvedAPIKey,
+		inner:   inner,
+		err:     err,
 		baseURL: defaultTelnyxLLMURL,
 	}
 }
 
-func resolveTelnyxLLMAPIKey(apiKey string) string {
-	if apiKey != "" {
-		return apiKey
-	}
-	return os.Getenv("TELNYX_API_KEY")
-}
-
 func (l *TelnyxLLM) Model() string {
+	if l.inner == nil {
+		return ""
+	}
 	return l.inner.Model()
 }
 
@@ -48,8 +38,8 @@ func (l *TelnyxLLM) BaseURL() string {
 }
 
 func (l *TelnyxLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
-	if l.apiKey == "" {
-		return nil, fmt.Errorf("telnyx AI API key is required, either as argument or set TELNYX_API_KEY environmental variable")
+	if l.err != nil {
+		return nil, l.err
 	}
 	return l.inner.Chat(ctx, chatCtx, opts...)
 }
