@@ -148,10 +148,7 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 			delete(p.executors, id)
 			p.mu.Unlock()
 
-			closeCtx, cancel := p.closeContext()
-			_ = executor.Close(closeCtx)
-			cancel()
-			p.emit(ProcPoolEventProcessClosed, executor)
+			p.closeFailedExecutor(executor)
 			lastErr = err
 			continue
 		}
@@ -172,6 +169,15 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 	}
 
 	return lastErr
+}
+
+func (p *ProcPool) closeFailedExecutor(executor JobExecutor) {
+	closeCtx, cancel := p.closeContext()
+	go func() {
+		defer cancel()
+		_ = executor.Close(closeCtx)
+		p.emit(ProcPoolEventProcessClosed, executor)
+	}()
 }
 
 func (p *ProcPool) warmIdleExecutorsLocked() ([]JobExecutor, error) {
