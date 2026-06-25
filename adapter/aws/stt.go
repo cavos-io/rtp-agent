@@ -398,7 +398,11 @@ func (s *awsSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return nil
+	return s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+		Value: types.AudioEvent{
+			AudioChunk: nil,
+		},
+	})
 }
 
 func (s *awsSTTStream) Close() error {
