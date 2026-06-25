@@ -277,7 +277,6 @@ const (
 	providerLetta        = "letta"
 	providerLiveAvatar   = "liveavatar"
 	providerLMNT         = "lmnt"
-	providerMinimal      = "minimal"
 	providerMinimax      = "minimax"
 	providerMistralAI    = "mistralai"
 	providerMurf         = "murf"
@@ -565,7 +564,6 @@ type AppConfig struct {
 	LettaAPIKey                 string
 	LiveAvatarAPIKey            string
 	LMNTAPIKey                  string
-	MinimalAPIKey               string
 	MinimaxAPIKey               string
 	MistralAPIKey               string
 	MurfAPIKey                  string
@@ -948,7 +946,6 @@ func DefaultConfigFromEnv() AppConfig {
 		LettaAPIKey:                             os.Getenv("LETTA_API_KEY"),
 		LiveAvatarAPIKey:                        os.Getenv("LIVEAVATAR_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
-		MinimalAPIKey:                           os.Getenv("MINIMAL_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
@@ -2334,8 +2331,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
 	case providerAWS:
 		return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
-	case providerMinimal:
-		return minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel), nil
 	case providerCerebras:
 		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
 	case providerFireworks:
@@ -2350,16 +2345,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
 	case providerBaseten:
 		return baseten.NewBasetenLLM("", cfg.LLMModel)
-	case providerHedra:
-		return hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel), nil
-	case providerHume:
-		return hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel), nil
 	case providerLangChain:
 		return langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel), nil
-	case providerLemonSlice:
-		return lemonslice.NewLemonSliceLLM(cfg.LemonSliceAPIKey, cfg.LLMModel), nil
-	case providerMinimax:
-		return minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
 	case providerOpenAI:
@@ -2400,14 +2387,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
 		return provider, nil
-	case providerSimli:
-		return simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel), nil
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
-	case providerTrugen:
-		return trugen.NewTrugenLLM(cfg.TrugenAPIKey, cfg.LLMModel), nil
-	case providerUpliftAI:
-		return upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel), nil
 	case providerGroq:
 		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
 	case providerXAI:
@@ -4405,18 +4386,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
-	case providerHedra:
-		a.LLM = hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel)
-	case providerHume:
-		a.LLM = hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
-	case providerLemonSlice:
-		a.LLM = lemonslice.NewLemonSliceLLM(cfg.LemonSliceAPIKey, cfg.LLMModel)
-	case providerMinimal:
-		a.LLM = minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel)
-	case providerMinimax:
-		a.LLM = minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel)
 	case providerMistralAI:
 		a.LLM = mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel)
 	case providerSarvam:
@@ -4435,14 +4406,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, fmt.Errorf("invalid sarvam LLM configuration")
 		}
 		a.LLM = provider
-	case providerSimli:
-		a.LLM = simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel)
 	case providerTelnyx:
 		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
-	case providerTrugen:
-		a.LLM = trugen.NewTrugenLLM(cfg.TrugenAPIKey, cfg.LLMModel)
-	case providerUpliftAI:
-		a.LLM = upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel)
 	case providerXAI:
 		a.LLM = xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
