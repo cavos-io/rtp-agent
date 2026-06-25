@@ -4725,8 +4725,6 @@ func TestDefaultConfigFromEnvRejectsSimplismartLLMFallbackProvider(t *testing.T)
 
 func TestDefaultConfigFromEnvSelectsSmallestAISpeechProviders(t *testing.T) {
 	t.Setenv("SMALLESTAI_API_KEY", "test-smallestai-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "smallestai")
-	t.Setenv("RTP_AGENT_LLM_MODEL", "smallestai-chat")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "smallestai")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://smallest.example/waves/v1")
 	t.Setenv("RTP_AGENT_STT_MODEL", "pulse")
@@ -4753,9 +4751,6 @@ func TestDefaultConfigFromEnvSelectsSmallestAISpeechProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
 	if got := app.Session.STT.Label(); got != "smallestai.STT" {
 		t.Fatalf("STT label = %q, want smallestai.STT", got)
 	}
@@ -4770,6 +4765,30 @@ func TestDefaultConfigFromEnvSelectsSmallestAISpeechProviders(t *testing.T) {
 	}
 	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsSmallestAILLMProvider(t *testing.T) {
+	t.Setenv("SMALLESTAI_API_KEY", "test-smallestai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "smallestai")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "smallestai"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported SmallestAI LLM provider", err)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsSmallestAILLMFallbackProvider(t *testing.T) {
+	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("SMALLESTAI_API_KEY", "test-smallestai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "smallestai")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "smallestai"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported SmallestAI LLM fallback provider", err)
 	}
 }
 
@@ -5916,7 +5935,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
 		{name: "simli", provider: "simli", envKey: "SIMLI_API_KEY", envValue: "test-simli-key"},
-		{name: "smallestai", provider: "smallestai", envKey: "SMALLESTAI_API_KEY", envValue: "test-smallestai-key"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
 		{name: "trugen", provider: "trugen", envKey: "TRUGEN_API_KEY", envValue: "test-trugen-key"},
 		{name: "upliftai", provider: "upliftai", envKey: "UPLIFTAI_API_KEY", envValue: "test-upliftai-key"},
