@@ -3220,19 +3220,25 @@ func TestDefaultConfigFromEnvRejectsLemonSliceLLMFallbackProvider(t *testing.T) 
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsTrugenLLM(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsTrugenLLMProvider(t *testing.T) {
 	t.Setenv("TRUGEN_API_KEY", "test-trugen-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "trugen")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "trugen"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Trugen LLM provider", err)
 	}
-	if app.Session == nil || app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
-	if got := llm.Label(app.Session.LLM); got != "trugen.TrugenLLM" {
-		t.Fatalf("LLM label = %q, want trugen.TrugenLLM", got)
+}
+
+func TestDefaultConfigFromEnvRejectsTrugenLLMFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("TRUGEN_API_KEY", "test-trugen-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "trugen")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "trugen"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Trugen LLM fallback provider", err)
 	}
 }
 
@@ -5985,7 +5991,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
-		{name: "trugen", provider: "trugen", envKey: "TRUGEN_API_KEY", envValue: "test-trugen-key"},
 		{name: "upliftai", provider: "upliftai", envKey: "UPLIFTAI_API_KEY", envValue: "test-upliftai-key"},
 	}
 
