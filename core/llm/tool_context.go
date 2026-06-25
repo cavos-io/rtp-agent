@@ -188,15 +188,26 @@ func toolExcluded(tool Tool, exclude []Tool) bool {
 }
 
 func sameTool(a, b Tool) bool {
+	return sameObjectIdentity(a, b)
+}
+
+func sameToolset(a, b Toolset) bool {
+	return sameObjectIdentity(a, b)
+}
+
+func sameObjectIdentity(a, b interface{}) bool {
 	aValue := reflect.ValueOf(a)
 	bValue := reflect.ValueOf(b)
 	if !aValue.IsValid() || !bValue.IsValid() {
 		return !aValue.IsValid() && !bValue.IsValid()
 	}
-	if aValue.Type() != bValue.Type() || !aValue.Type().Comparable() {
+	if aValue.Type() != bValue.Type() {
 		return false
 	}
-	return a == b
+	if aValue.Kind() != reflect.Ptr && aValue.Kind() != reflect.UnsafePointer {
+		return false
+	}
+	return aValue.Pointer() == bValue.Pointer()
 }
 
 func (c *ToolContext) SyncFlattened(tools []Tool) error {
@@ -272,7 +283,7 @@ func (c *ToolContext) Equal(other *ToolContext) bool {
 		return false
 	}
 	for name, tool := range c.functionTools {
-		if other.functionTools[name] != tool {
+		if !sameTool(other.functionTools[name], tool) {
 			return false
 		}
 	}
@@ -297,7 +308,7 @@ func (c *ToolContext) Equal(other *ToolContext) bool {
 	for _, toolset := range c.toolsets {
 		found := false
 		for _, otherToolset := range other.toolsets {
-			if otherToolset == toolset {
+			if sameToolset(otherToolset, toolset) {
 				found = true
 				break
 			}

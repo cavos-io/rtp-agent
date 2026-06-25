@@ -86,6 +86,21 @@ func (t nonComparableTool) Parameters() map[string]any { return nil }
 
 func (t nonComparableTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type comparableTool struct {
+	id   string
+	name string
+}
+
+func (t comparableTool) ID() string { return t.id }
+
+func (t comparableTool) Name() string { return t.name }
+
+func (t comparableTool) Description() string { return "" }
+
+func (t comparableTool) Parameters() map[string]any { return nil }
+
+func (t comparableTool) Execute(context.Context, string) (string, error) { return "", nil }
+
 func requireToolContextErrorString(t *testing.T, op string, err error, want string) {
 	t.Helper()
 	if op == "" {
@@ -143,14 +158,27 @@ func TestToolContextUpdateToolsAllowsSameToolInstanceDuplicate(t *testing.T) {
 }
 
 func TestToolContextUpdateToolsRejectsDifferentToolsWithSameName(t *testing.T) {
-	ctx := EmptyToolContext()
+	t.Run("pointers", func(t *testing.T) {
+		ctx := EmptyToolContext()
 
-	err := ctx.UpdateTools([]interface{}{
-		&testTool{id: "lookup-a", name: "lookup"},
-		&testTool{id: "lookup-b", name: "lookup"},
+		err := ctx.UpdateTools([]interface{}{
+			&testTool{id: "lookup-a", name: "lookup"},
+			&testTool{id: "lookup-b", name: "lookup"},
+		})
+
+		requireToolContextErrorString(t, "UpdateTools()", err, "duplicate function name: lookup")
 	})
 
-	requireToolContextErrorString(t, "UpdateTools()", err, "duplicate function name: lookup")
+	t.Run("equal values", func(t *testing.T) {
+		ctx := EmptyToolContext()
+
+		err := ctx.UpdateTools([]interface{}{
+			comparableTool{id: "lookup", name: "lookup"},
+			comparableTool{id: "lookup", name: "lookup"},
+		})
+
+		requireToolContextErrorString(t, "UpdateTools()", err, "duplicate function name: lookup")
+	})
 }
 
 func TestToolContextAddToolUpdatesFlattenedTools(t *testing.T) {
@@ -435,6 +463,12 @@ func TestToolContextEqualUsesToolIdentity(t *testing.T) {
 	other := NewToolContext([]interface{}{otherLookup, provider})
 	if left.Equal(other) {
 		t.Fatal("Equal() = true, want false for same function name backed by a different tool")
+	}
+
+	valueLeft := NewToolContext([]interface{}{comparableTool{id: "value", name: "value"}})
+	valueRight := NewToolContext([]interface{}{comparableTool{id: "value", name: "value"}})
+	if valueLeft.Equal(valueRight) {
+		t.Fatal("Equal() = true for equal value tools, want false for distinct tool identities")
 	}
 }
 
