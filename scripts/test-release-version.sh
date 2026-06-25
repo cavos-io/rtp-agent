@@ -2,13 +2,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MAKEFILE="$ROOT/Makefile"
 SCRIPT="$ROOT/scripts/release-version.sh"
 TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="$(mktemp -d "$TMPDIR/release-version-test.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-OLD_VERSION="v.1.2.3"
-NEW_VERSION="v.9.8.7"
+OLD_VERSION="v1.2.3"
+NEW_VERSION="v9.8.7"
+INVALID_DOTTED_VERSION="v.9.8.7"
 
 bash -n "$SCRIPT"
 
@@ -62,7 +64,7 @@ GO
 git add .
 git commit -q -m "seed release fixture"
 
-VERSION="$NEW_VERSION" "$SCRIPT" >"$WORKDIR/release.out" 2>"$WORKDIR/release.err"
+make -f "$MAKEFILE" release VERSION="$NEW_VERSION" RELEASE_SCRIPT="$SCRIPT" >"$WORKDIR/release.out" 2>"$WORKDIR/release.err"
 
 grep -q "PluginVersion = \"$NEW_VERSION\"" adapter/example/plugin.go
 grep -q "want reference version $NEW_VERSION" adapter/example/example_test.go
@@ -99,8 +101,14 @@ if [ "$(git cat-file -t "$NEW_VERSION")" != "tag" ]; then
 	exit 1
 fi
 
-if VERSION="$NEW_VERSION" "$SCRIPT" >"$WORKDIR/release-existing-tag.out" 2>"$WORKDIR/release-existing-tag.err"; then
+if make -f "$MAKEFILE" release VERSION="$NEW_VERSION" RELEASE_SCRIPT="$SCRIPT" >"$WORKDIR/release-existing-tag.out" 2>"$WORKDIR/release-existing-tag.err"; then
 	echo "release script unexpectedly overwrote an existing tag" >&2
 	exit 1
 fi
 grep -q "tag already exists: $NEW_VERSION" "$WORKDIR/release-existing-tag.err"
+
+if make -f "$MAKEFILE" release VERSION="$INVALID_DOTTED_VERSION" RELEASE_SCRIPT="$SCRIPT" >"$WORKDIR/release-invalid-dotted.out" 2>"$WORKDIR/release-invalid-dotted.err"; then
+	echo "release script unexpectedly accepted a dotted v-prefixed version" >&2
+	exit 1
+fi
+grep -q "VERSION must use the project release format vX.Y.Z, got: $INVALID_DOTTED_VERSION" "$WORKDIR/release-invalid-dotted.err"
