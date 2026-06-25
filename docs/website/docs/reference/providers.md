@@ -37,7 +37,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | groq | yes | yes | yes |  |  |  |
 | hedra | yes |  |  |  | yes |  |
 | hume | yes |  | yes |  |  |  |
-| inworld | yes | yes | yes |  |  |  |
+| inworld | yes |  | yes |  |  |  |
 | langchain | yes |  |  |  |  |  |
 | lemonslice | yes |  |  |  | yes |  |
 | livekit | yes | yes | yes |  |  |  |

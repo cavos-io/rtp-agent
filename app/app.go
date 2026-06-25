@@ -2354,8 +2354,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel), nil
 	case providerHume:
 		return hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel), nil
-	case providerInworld:
-		return inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel), nil
 	case providerLangChain:
 		return langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel), nil
 	case providerLemonSlice:
@@ -4417,8 +4415,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel)
 	case providerHume:
 		a.LLM = hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel)
-	case providerInworld:
-		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
 	case providerLemonSlice:
