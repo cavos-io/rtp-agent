@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -841,6 +842,82 @@ func TestSmallestAISTTStreamEventsMapStartInterimFinalEndAndSpeakers(t *testing.
 	}
 }
 
+func TestSmallestAISTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	writeTranscript := make(chan struct{})
+	errCh := make(chan error, 1)
+	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		select {
+		case <-writeTranscript:
+		case <-time.After(time.Second):
+			errCh <- errors.New("timed out waiting to write transcript")
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"session_id":"session-1","transcript":"hello","is_final":true,"language":"en","words":[{"word":"hello","start":0.1,"end":0.4,"confidence":0.9}]}`)); err != nil {
+			errCh <- err
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	provider := NewSmallestAISTT("test-key",
+		WithSmallestAISTTBaseURL("ws://smallest.test/waves/v1"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatal("smallestai STT stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+	timing.SetStartTime(123.5)
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing = offset %v start %v, want reference values", timing.StartTimeOffset(), timing.StartTime())
+	}
+	close(writeTranscript)
+
+	event := readSmallestAIStreamEvent(t, stream)
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %v, want start_of_speech", event.Type)
+	}
+	event = readSmallestAIStreamEvent(t, stream)
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("second event = %#v, want final transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 2.6 || alt.EndTime != 2.9 {
+		t.Fatalf("transcript timing = %v-%v, want reference start_time_offset applied", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].StartTime != 2.6 || alt.Words[0].EndTime != 2.9 || alt.Words[0].StartTimeOffset != 0 {
+		t.Fatalf("word timing = %+v, want reference start/end offset with default start_time_offset metadata", alt.Words)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("websocket server: %v", err)
+	default:
+	}
+
+	assertSmallestAIPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-0.01)
+	})
+	if got := timing.StartTimeOffset(); got != 2.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 2.5", got)
+	}
+	assertSmallestAIPanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-0.01)
+	})
+	if got := timing.StartTime(); got != 123.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 123.5", got)
+	}
+}
+
 func assertSmallestAIQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()
 	if got := query.Get(key); got != want {
@@ -865,6 +942,20 @@ func assertSmallestAIEvent(t *testing.T, events []*stt.SpeechEvent, index int, e
 	if events[index].Alternatives[0].Text != text {
 		t.Fatalf("event %d text = %q, want %q", index, events[index].Alternatives[0].Text, text)
 	}
+}
+
+func assertSmallestAIPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := fmt.Sprint(recovered); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
 
 func intPtr(v int) *int {
