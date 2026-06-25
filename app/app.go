@@ -2807,6 +2807,9 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 			sttOpts = append(sttOpts, mistralai.WithMistralAISTTContextBias(cfg.STTKeytermsPrompt))
 		}
 		return mistralai.NewMistralAISTT(cfg.MistralAPIKey, sttOpts...), nil
+	case providerNvidia:
+		sttOpts := nvidiaSTTOptionsFromConfig(cfg)
+		return nvidia.NewNvidiaSTT(cfg.NvidiaAPIKey, cfg.STTModel, sttOpts...)
 	case providerGradium:
 		sttOpts := []gradium.GradiumSTTOption{}
 		if cfg.STTBaseURL != "" {
@@ -4947,6 +4950,13 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			sttOpts = append(sttOpts, mistralai.WithMistralAISTTContextBias(cfg.STTKeytermsPrompt))
 		}
 		a.STT = mistralai.NewMistralAISTT(cfg.MistralAPIKey, sttOpts...)
+	case providerNvidia:
+		sttOpts := nvidiaSTTOptionsFromConfig(cfg)
+		provider, err := nvidia.NewNvidiaSTT(cfg.NvidiaAPIKey, cfg.STTModel, sttOpts...)
+		if err != nil {
+			return nil, err
+		}
+		a.STT = provider
 	case providerSLNG:
 		sttOpts := []slng.STTOption{}
 		if cfg.STTModel != "" {
@@ -6312,6 +6322,26 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}
+}
+
+func nvidiaSTTOptionsFromConfig(cfg AppConfig) []nvidia.NvidiaSTTOption {
+	sttOpts := []nvidia.NvidiaSTTOption{}
+	if cfg.STTBaseURL != "" {
+		sttOpts = append(sttOpts, nvidia.WithNvidiaSTTServer(cfg.STTBaseURL))
+	}
+	if cfg.STTLanguage != "" {
+		sttOpts = append(sttOpts, nvidia.WithNvidiaSTTLanguage(cfg.STTLanguage))
+	}
+	if cfg.STTSampleRate != nil {
+		sttOpts = append(sttOpts, nvidia.WithNvidiaSTTSampleRate(*cfg.STTSampleRate))
+	}
+	if functionID := modelOptionString(cfg.STTModelOptions, "function_id"); functionID != "" {
+		sttOpts = append(sttOpts, nvidia.WithNvidiaSTTFunctionID(functionID))
+	}
+	if useSSL := modelOptionBool(cfg.STTModelOptions, "use_ssl"); useSSL != nil {
+		sttOpts = append(sttOpts, nvidia.WithNvidiaSTTUseSSL(*useSSL))
+	}
+	return sttOpts
 }
 
 func normalizedEnv(name string) string {

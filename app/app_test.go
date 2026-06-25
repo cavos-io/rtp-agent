@@ -3743,6 +3743,69 @@ func TestDefaultConfigFromEnvSelectsCartesiaSpeechProviders(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsNvidiaSTT(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "nvidia")
+	t.Setenv("RTP_AGENT_STT_MODEL", "parakeet-rnnt-1.1b")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "localhost:50051")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "24000")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "function_id=local-function,use_ssl=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	provider, ok := app.Session.STT.(*nvidia.NvidiaSTT)
+	if !ok {
+		t.Fatalf("STT provider type = %T, want *nvidia.NvidiaSTT", app.Session.STT)
+	}
+	if got, want := provider.Label(), "nvidia.STT"; got != want {
+		t.Fatalf("STT label = %q, want %q", got, want)
+	}
+	if got, want := provider.InputSampleRate(), uint32(24000); got != want {
+		t.Fatalf("InputSampleRate() = %d, want %d", got, want)
+	}
+	state := reflect.ValueOf(provider).Elem()
+	if got, want := state.FieldByName("server").String(), "localhost:50051"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("functionID").String(), "local-function"; got != want {
+		t.Fatalf("functionID = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("language").String(), "id-ID"; got != want {
+		t.Fatalf("language = %q, want %q", got, want)
+	}
+	if state.FieldByName("useSSL").Bool() {
+		t.Fatal("useSSL = true, want false")
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsNvidiaSTTLocalRivaWithoutAPIKey(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "nvidia")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "use_ssl=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v, want local Riva config without key", err)
+	}
+	provider, ok := app.Session.STT.(*nvidia.NvidiaSTT)
+	if !ok {
+		t.Fatalf("STT provider type = %T, want *nvidia.NvidiaSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(provider).Elem()
+	if state.FieldByName("useSSL").Bool() {
+		t.Fatal("useSSL = true, want false")
+	}
+	if got := state.FieldByName("apiKey").String(); got != "" {
+		t.Fatalf("apiKey = %q, want empty local key", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsClovaSpeechProviders(t *testing.T) {
 	t.Setenv("CLOVA_STT_SECRET", "test-clova-stt-secret")
 	t.Setenv("CLOVA_STT_INVOKE_URL", "https://clova.example/stt")
