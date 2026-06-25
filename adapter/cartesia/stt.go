@@ -599,6 +599,7 @@ type cartesiaSTTStreamState struct {
 	speechDuration    float64
 	lastSpeechEndTime float64
 	startTimeOffset   float64
+	startTime         float64
 }
 
 func buildCartesiaSTTStreamURL(s *CartesiaSTT) string {
@@ -818,6 +819,48 @@ func cartesiaWordsFromAny(raw any, startTimeOffset float64) []stt.TimedString {
 		})
 	}
 	return words
+}
+
+func (s *cartesiaSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return 0
+	}
+	return s.state.startTimeOffset
+}
+
+func (s *cartesiaSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = &cartesiaSTTStreamState{}
+	}
+	s.state.startTimeOffset = offset
+}
+
+func (s *cartesiaSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return 0
+	}
+	return s.state.startTime
+}
+
+func (s *cartesiaSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = &cartesiaSTTStreamState{}
+	}
+	s.state.startTime = startTime
 }
 
 func cartesiaSTTBaseURLToWSBaseURL(baseURL string) string {
