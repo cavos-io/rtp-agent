@@ -183,7 +183,8 @@ func TestInworldTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	if got := req.Header.Get("Authorization"); got != "Basic test-key" {
 		t.Fatalf("Authorization = %q, want Basic token", got)
 	}
-	if got := req.Header.Get("X-User-Agent"); got != "livekit-agents-py/1.5.15" {
+	wantUserAgent := inworldUserAgent
+	if got := req.Header.Get("X-User-Agent"); got != wantUserAgent {
 		t.Fatalf("X-User-Agent = %q, want reference user agent", got)
 	}
 
@@ -261,7 +262,8 @@ func TestInworldTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	if got := headers.Get("Authorization"); got != "Basic test-key" {
 		t.Fatalf("Authorization = %q, want Basic token", got)
 	}
-	if got := headers.Get("X-User-Agent"); got != "livekit-agents-py/1.5.15" {
+	wantUserAgent := inworldUserAgent
+	if got := headers.Get("X-User-Agent"); got != wantUserAgent {
 		t.Fatalf("X-User-Agent = %q, want reference user agent", got)
 	}
 }

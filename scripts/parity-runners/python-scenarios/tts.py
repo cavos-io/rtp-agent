@@ -200,6 +200,65 @@ def tts_stream_adapter(input_data: Any) -> dict[str, Any]:
                 {"name": "error_unsubscribe_local", "labels": labels}
             ],
         }
+    if action == "ignore_input_after_close":
+        async def cancel_and_wait(task: Any) -> None:
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+
+        module.utils.aio.cancel_and_wait = cancel_and_wait
+
+        class FakeSentenceStream:
+            def __aiter__(self) -> Any:
+                return self
+
+            async def __anext__(self) -> Any:
+                await asyncio.sleep(3600)
+                raise StopAsyncIteration
+
+            def push_text(self, text: str) -> None:
+                pass
+
+            def flush(self) -> None:
+                pass
+
+            def end_input(self) -> None:
+                pass
+
+            async def aclose(self) -> None:
+                pass
+
+        class FakeTokenizer:
+            def stream(self) -> FakeSentenceStream:
+                return FakeSentenceStream()
+
+        adapter = module.StreamAdapter(tts=provider, sentence_tokenizer=FakeTokenizer())
+
+        async def run_closed_input() -> list[str]:
+            stream = adapter.stream()
+            await stream.aclose()
+            errors: list[str] = []
+            for op_name, op in [
+                ("push_text", lambda: stream.push_text("late")),
+                ("flush", stream.flush),
+                ("end_input", stream.end_input),
+                ("push_text_again", lambda: stream.push_text("later")),
+            ]:
+                try:
+                    op()
+                except Exception as exc:  # noqa: BLE001 - normalized into parity event
+                    errors.append(f"{op_name}:{type(exc).__name__}")
+            return errors
+
+        errors = asyncio.run(run_closed_input())
+        return {
+            "contract": "tts-stream-adapter-ignore-input-after-close",
+            "events": [
+                {"name": "ignore_input_after_close", "errors": errors}
+            ],
+        }
     raise ValueError(f"unsupported TTS stream adapter action {action!r}")
 
 

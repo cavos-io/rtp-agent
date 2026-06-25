@@ -1,15 +1,29 @@
 package ultravox
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
-func TestUltravoxPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
-	if PluginTitle != "rtp-agent.plugins.ultravox" {
-		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.ultravox", PluginTitle)
+func TestUltravoxAdapterHasNoProductionSurfaceWithoutRealtimeModel(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir adapter/ultravox: %v", err)
 	}
-	if PluginVersion != "1.5.15" {
-		t.Fatalf("PluginVersion = %q, want reference version 1.5.15", PluginVersion)
+
+	var productionFiles []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if filepath.Ext(name) == ".go" && !strings.HasSuffix(name, "_test.go") {
+			productionFiles = append(productionFiles, name)
+		}
 	}
-	if PluginPackage != "rtp-agent.plugins.ultravox" {
-		t.Fatalf("PluginPackage = %q, want rtp-agent.plugins.ultravox", PluginPackage)
+	if len(productionFiles) != 0 {
+		t.Fatalf("Ultravox production files = %v, want none until a real realtime adapter exists", productionFiles)
 	}
 }

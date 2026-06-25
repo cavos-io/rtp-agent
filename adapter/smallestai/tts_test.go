@@ -114,8 +114,9 @@ func TestSmallestAITTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	if got := req.Header.Get("X-Source"); got != "livekit" {
 		t.Fatalf("X-Source = %q, want livekit", got)
 	}
-	if got := req.Header.Get("X-LiveKit-Version"); got != smallestAIPluginVersion {
-		t.Fatalf("X-LiveKit-Version = %q, want %q", got, smallestAIPluginVersion)
+	wantPluginVersion := smallestAIPluginVersion
+	if got := req.Header.Get("X-LiveKit-Version"); got != wantPluginVersion {
+		t.Fatalf("X-LiveKit-Version = %q, want %q", got, wantPluginVersion)
 	}
 
 	var payload map[string]any
@@ -291,7 +292,8 @@ func TestSmallestAITTSWebsocketHeadersMatchReference(t *testing.T) {
 	if got := headers.Get("X-Source"); got != "livekit" {
 		t.Fatalf("X-Source = %q, want livekit", got)
 	}
-	if got := headers.Get("X-LiveKit-Version"); got != "1.5.15" {
+	wantPluginVersion := smallestAIPluginVersion
+	if got := headers.Get("X-LiveKit-Version"); got != wantPluginVersion {
 		t.Fatalf("X-LiveKit-Version = %q, want plugin version", got)
 	}
 }

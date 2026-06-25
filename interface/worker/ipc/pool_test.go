@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,14 +11,17 @@ import (
 )
 
 type fakeJobExecutor struct {
-	id         string
-	job        Job
-	runningJob *RunningJobInfo
-	status     JobStatus
-	launchErr  error
-	closeCtx   context.Context
-	closeCalls int
-	launches   int
+	id          string
+	job         Job
+	runningJob  *RunningJobInfo
+	status      JobStatus
+	launchErr   error
+	launchStart chan struct{}
+	closeCtx    context.Context
+	closeStart  chan struct{}
+	closeBlock  chan struct{}
+	closeCalls  int
+	launches    int
 }
 
 func (e *fakeJobExecutor) ID() string { return e.id }
@@ -41,6 +45,9 @@ func (e *fakeJobExecutor) LaunchJob(ctx context.Context, job Job) error {
 
 func (e *fakeJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobInfo) error {
 	e.launches++
+	if e.launchStart != nil {
+		close(e.launchStart)
+	}
 	if e.launchErr != nil {
 		return e.launchErr
 	}
@@ -52,6 +59,12 @@ func (e *fakeJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobI
 func (e *fakeJobExecutor) Close(ctx context.Context) error {
 	e.closeCtx = ctx
 	e.closeCalls++
+	if e.closeStart != nil {
+		close(e.closeStart)
+	}
+	if e.closeBlock != nil {
+		<-e.closeBlock
+	}
 	return nil
 }
 
@@ -265,6 +278,51 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	remaining := time.Until(deadline)
 	if remaining <= 0 || remaining > 25*time.Millisecond {
 		t.Fatalf("Close deadline remaining = %v, want within configured timeout", remaining)
+	}
+}
+
+func TestProcPoolCloseStartsExecutorClosesConcurrently(t *testing.T) {
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	first := &fakeJobExecutor{id: "exec-a", closeStart: firstStarted, closeBlock: releaseFirst}
+	second := &fakeJobExecutor{id: "exec-b", closeStart: secondStarted}
+	pool := &ProcPool{
+		started:      true,
+		executors:    map[string]JobExecutor{first.id: first, second.id: second},
+		closeTimeout: time.Second,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pool.Close()
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first executor close did not start")
+	}
+
+	secondStartedBeforeFirstReleased := false
+	select {
+	case <-secondStarted:
+		secondStartedBeforeFirstReleased = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pool close did not finish")
+	}
+
+	if !secondStartedBeforeFirstReleased {
+		t.Fatal("second executor close waited for first executor close, want concurrent process cleanup")
 	}
 }
 
@@ -751,9 +809,7 @@ func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	if first.launches != 1 {
 		t.Fatalf("first launches = %d, want 1", first.launches)
 	}
-	if first.closeCalls != 1 {
-		t.Fatalf("first closeCalls = %d, want 1", first.closeCalls)
-	}
+	waitForFakeExecutorCloseCalls(t, first, 1)
 	if second.launches != 1 {
 		t.Fatalf("second launches = %d, want 1", second.launches)
 	}
@@ -767,6 +823,60 @@ func TestProcPoolLaunchJobRetriesWithFreshExecutor(t *testing.T) {
 	}
 	if gotExecutors[0].ID() != "exec-b" {
 		t.Fatalf("remaining executor ID = %q, want exec-b", gotExecutors[0].ID())
+	}
+}
+
+func TestProcPoolLaunchRetryDoesNotWaitForFailedExecutorClose(t *testing.T) {
+	firstCloseStarted := make(chan struct{})
+	releaseFirstClose := make(chan struct{})
+	secondLaunchStarted := make(chan struct{})
+	first := &fakeJobExecutor{
+		id:         "exec-a",
+		launchErr:  errors.New("launch failed"),
+		closeStart: firstCloseStarted,
+		closeBlock: releaseFirstClose,
+	}
+	second := &fakeJobExecutor{id: "exec-b", launchStart: secondLaunchStarted}
+	executors := []*fakeJobExecutor{first, second}
+	var created int
+
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor {
+		executor := executors[created]
+		created++
+		return executor
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"})
+	}()
+
+	select {
+	case <-firstCloseStarted:
+	case <-time.After(time.Second):
+		t.Fatal("failed executor close did not start")
+	}
+
+	secondLaunchedBeforeFirstCloseReleased := false
+	select {
+	case <-secondLaunchStarted:
+		secondLaunchedBeforeFirstCloseReleased = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirstClose)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("LaunchJob error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("LaunchJob did not finish")
+	}
+
+	if !secondLaunchedBeforeFirstCloseReleased {
+		t.Fatal("launch retry waited for failed executor close, want background close before retry")
 	}
 }
 
@@ -994,8 +1104,11 @@ func TestProcPoolEmitsProcessClosedEventForFailedLaunch(t *testing.T) {
 		return &fakeJobExecutor{id: id, launchErr: errors.New("launch failed")}
 	}
 
+	var closedMu sync.Mutex
 	var closed []string
 	pool.On(ProcPoolEventProcessClosed, func(executor JobExecutor) {
+		closedMu.Lock()
+		defer closedMu.Unlock()
 		closed = append(closed, executor.ID())
 	})
 
@@ -1007,12 +1120,55 @@ func TestProcPoolEmitsProcessClosedEventForFailedLaunch(t *testing.T) {
 	if created != maxLaunchAttempts {
 		t.Fatalf("created executors = %d, want %d", created, maxLaunchAttempts)
 	}
-	if len(closed) != maxLaunchAttempts {
-		t.Fatalf("closed events = %d, want %d", len(closed), maxLaunchAttempts)
-	}
+	waitForProcPoolClosedEvents(t, func() int {
+		closedMu.Lock()
+		defer closedMu.Unlock()
+		return len(closed)
+	}, maxLaunchAttempts)
+	closedMu.Lock()
+	defer closedMu.Unlock()
 	for i, executorID := range closed {
 		if executorID == "" {
 			t.Fatalf("closed[%d] executor ID is empty", i)
+		}
+	}
+}
+
+func waitForFakeExecutorCloseCalls(t *testing.T, executor *fakeJobExecutor, want int) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if executor.closeCalls == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("%s closeCalls = %d, want %d", executor.ID(), executor.closeCalls, want)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForProcPoolClosedEvents(t *testing.T, count func() int, want int) {
+	t.Helper()
+
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		got := count()
+		if got == want {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("closed events = %d, want %d", got, want)
+		case <-ticker.C:
 		}
 	}
 }

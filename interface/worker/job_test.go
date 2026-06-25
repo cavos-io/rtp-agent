@@ -123,24 +123,73 @@ func TestRunWithJobContextRestoresPreviousContextAfterPanic(t *testing.T) {
 
 func TestJobContextShutdownRunsCallbacks(t *testing.T) {
 	ctx := NewJobContext(&livekit.Job{Id: "job_shutdown"}, "", "", "")
-	var calls []string
+	calls := make(chan string, 2)
 
 	if err := ctx.AddShutdownCallback(func(reason string) {
-		calls = append(calls, "reason:"+reason)
+		calls <- "reason:" + reason
 	}); err != nil {
 		t.Fatalf("AddShutdownCallback(reason) error = %v", err)
 	}
 	if err := ctx.AddShutdownCallback(func() {
-		calls = append(calls, "no-reason")
+		calls <- "no-reason"
 	}); err != nil {
 		t.Fatalf("AddShutdownCallback() error = %v", err)
 	}
 
 	ctx.Shutdown("user_initiated")
 
-	want := []string{"reason:user_initiated", "no-reason"}
-	if !reflect.DeepEqual(calls, want) {
-		t.Fatalf("shutdown callbacks = %#v, want %#v", calls, want)
+	got := map[string]bool{
+		<-calls: true,
+		<-calls: true,
+	}
+	want := map[string]bool{"reason:user_initiated": true, "no-reason": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("shutdown callbacks = %#v, want %#v", got, want)
+	}
+}
+
+func TestJobContextShutdownRunsCallbacksConcurrently(t *testing.T) {
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	done := make(chan struct{})
+	callbacks := []func(string){
+		func(string) {
+			close(firstStarted)
+			<-releaseFirst
+		},
+		func(string) {
+			close(secondStarted)
+		},
+	}
+
+	go func() {
+		livekitJobContextRunShutdown("job done", callbacks, nil, "job_shutdown_concurrent")
+		close(done)
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first shutdown callback did not start")
+	}
+
+	secondRanBeforeFirstReleased := false
+	select {
+	case <-secondStarted:
+		secondRanBeforeFirstReleased = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown callbacks did not finish")
+	}
+
+	if !secondRanBeforeFirstReleased {
+		t.Fatal("second shutdown callback waited for first callback, want concurrent callback execution")
 	}
 }
 

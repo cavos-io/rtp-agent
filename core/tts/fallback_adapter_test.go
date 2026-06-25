@@ -4009,17 +4009,16 @@ func TestFallbackSynthesizeStreamReportsAllFailedWhenFinalStreamFailsBeforeAudio
 
 func TestFallbackSynthesizeStreamStartReportsAllFailedWhenProviderCannotStart(t *testing.T) {
 	providerErr := errors.New("provider unavailable")
-	adapter := NewFallbackAdapterWithOptions([]TTS{
-		&metadataTTS{
-			label:       "primary",
-			sampleRate:  24000,
-			numChannels: 1,
-			capabilities: TTSCapabilities{
-				Streaming: true,
-			},
-			streamErr: providerErr,
+	primary := &metadataTTS{
+		label:       "primary",
+		sampleRate:  24000,
+		numChannels: 1,
+		capabilities: TTSCapabilities{
+			Streaming: true,
 		},
-	}, FallbackAdapterOptions{DisableRetries: true})
+		streamErr: providerErr,
+	}
+	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{DisableRetries: true})
 
 	stream, err := adapter.Stream(context.Background())
 	if err != nil {
@@ -4052,6 +4051,9 @@ func TestFallbackSynthesizeStreamStartReportsAllFailedWhenProviderCannotStart(t 
 	}
 	if errors.Is(err, providerErr) {
 		t.Fatalf("Next error wraps raw provider error %v, want reference all-failed connection error", providerErr)
+	}
+	if primary.streamCalls != 1 {
+		t.Fatalf("provider stream calls = %d, want one failed start with no background recovery retry", primary.streamCalls)
 	}
 }
 

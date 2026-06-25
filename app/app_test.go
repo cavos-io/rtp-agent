@@ -80,6 +80,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/adapter/simli"
 	"github.com/cavos-io/rtp-agent/adapter/simplismart"
+	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/adapter/smallestai"
 	"github.com/cavos-io/rtp-agent/adapter/soniox"
 	"github.com/cavos-io/rtp-agent/adapter/speechify"
@@ -89,7 +90,6 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/ten"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
-	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -411,7 +411,6 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		ten.PluginPackage:            {title: ten.PluginTitle, version: ten.PluginVersion},
 		trugen.PluginPackage:         {title: trugen.PluginTitle, version: trugen.PluginVersion},
 		adapterlivekit.PluginPackage: {title: adapterlivekit.PluginTitle, version: adapterlivekit.PluginVersion},
-		ultravox.PluginPackage:       {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
 		upliftai.PluginPackage:       {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
 		xai.PluginPackage:            {title: xai.PluginTitle, version: xai.PluginVersion},
 	}
@@ -509,12 +508,20 @@ func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
 		if registered.Title() != "rtp-agent.plugins.slng" {
 			t.Fatalf("plugin title = %q, want rtp-agent.plugins.slng", registered.Title())
 		}
-		if registered.Version() != "1.5.15" {
-			t.Fatalf("plugin version = %q, want reference version", registered.Version())
+		if registered.Version() != slng.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), slng.PluginVersion)
 		}
 		return
 	}
 	t.Fatal("SLNG plugin metadata was not registered")
+}
+
+func TestAppDoesNotRegisterUltravoxMetadataWithoutRealtimeAdapter(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() == "rtp-agent.plugins.ultravox" {
+			t.Fatalf("Ultravox plugin metadata was registered without a realtime adapter")
+		}
+	}
 }
 
 func TestAppRegistersSileroPluginDownloader(t *testing.T) {
@@ -3913,8 +3920,12 @@ func TestDefaultConfigFromEnvWrapsClovaSTTWithVAD(t *testing.T) {
 	if app.Session.VAD == nil {
 		t.Fatal("Session VAD is nil")
 	}
-	if got := app.Session.STT.Label(); got != "stt.StreamAdapter" {
-		t.Fatalf("STT label = %q, want stt.StreamAdapter", got)
+	sttLabel := app.Session.STT.Label()
+	if sttLabel != "stt.StreamAdapter" {
+		t.Fatalf("STT label = %q, want stt.StreamAdapter", sttLabel)
+	}
+	if strings.Contains(sttLabel, "cavos.STT") {
+		t.Fatalf("STT label = %q, want generic adapter label with Cavos identity in provider metadata", sttLabel)
 	}
 	if got := stt.Provider(app.Session.STT); got != "Clova" {
 		t.Fatalf("STT provider = %q, want Clova through StreamAdapter", got)
@@ -3945,6 +3956,12 @@ func TestDefaultConfigFromEnvSelectsClovaTTSProductExtension(t *testing.T) {
 	}
 	if got := app.Session.TTS.SampleRate(); got != 24000 {
 		t.Fatalf("TTS sample rate = %d, want 24000", got)
+	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+	if got := reflect.ValueOf(app.Session.TTS).Elem().FieldByName("voice").String(); got != "nara" {
+		t.Fatalf("TTS voice = %q, want nara", got)
 	}
 }
 
@@ -12848,8 +12865,8 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	if app.Session.STT == nil {
 		t.Fatal("Session STT is nil")
 	}
-	if got := app.Session.STT.Label(); got != "StreamAdapter(cavos.STT)" {
-		t.Fatalf("STT label = %q, want StreamAdapter(cavos.STT)", got)
+	if got := app.Session.STT.Label(); got != "stt.StreamAdapter" {
+		t.Fatalf("STT label = %q, want stt.StreamAdapter", got)
 	}
 	if got := stt.Provider(app.Session.STT); got != "cavos" {
 		t.Fatalf("STT provider = %q, want StreamAdapter to forward cavos provider metadata", got)
@@ -12863,8 +12880,12 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	if app.Session.TTS == nil {
 		t.Fatal("Session TTS is nil")
 	}
-	if got := app.Session.TTS.Label(); got != "StreamAdapter(cavos.TTS)" {
-		t.Fatalf("TTS label = %q, want StreamAdapter(cavos.TTS)", got)
+	ttsLabel := app.Session.TTS.Label()
+	if ttsLabel != "tts.StreamAdapter" {
+		t.Fatalf("TTS label = %q, want tts.StreamAdapter", ttsLabel)
+	}
+	if strings.Contains(ttsLabel, "cavos.TTS") {
+		t.Fatalf("TTS label = %q, want generic adapter label with Cavos identity in provider metadata", ttsLabel)
 	}
 	if got := tts.Provider(app.Session.TTS); got != "cavos" {
 		t.Fatalf("TTS provider = %q, want StreamAdapter to forward cavos provider metadata", got)
@@ -13420,6 +13441,17 @@ func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
 	}
 	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
 		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsUltravoxRealtimeProvider(t *testing.T) {
+	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "ultravox")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_REALTIME_PROVIDER "ultravox"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Ultravox realtime provider", err)
 	}
 }
 

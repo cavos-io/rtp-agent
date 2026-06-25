@@ -7,8 +7,9 @@ OPEN ?= 1
 FORCE ?= 0
 CLEAN_LEFTOVERS ?= 0
 DELETE_BRANCH ?= 0
+RELEASE_SCRIPT ?= scripts/release-version.sh
 
-.PHONY: wt-new wt-close wt-list wt-help
+.PHONY: wt-new wt-close wt-list wt-help release release-test
 
 wt-help:
 	@echo "Worktree helpers"
@@ -24,6 +25,10 @@ wt-help:
 	@echo "  FORCE=1             Force remove dirty worktree on close"
 	@echo "  CLEAN_LEFTOVERS=1   rm -rf leftover worktree directory after git worktree remove"
 	@echo "  DELETE_BRANCH=1     Delete source branch after successful merge"
+	@echo ""
+	@echo "Release:"
+	@echo "  make release VERSION=v0.1.0"
+	@echo "  make release-test"
 
 wt-list:
 	git worktree list
@@ -98,3 +103,9 @@ wt-close:
 		git branch -d "$$branch"; \
 	fi; \
 	echo "==> Done"
+
+release:
+	@VERSION="$(VERSION)" bash "$(RELEASE_SCRIPT)"
+
+release-test:
+	bash scripts/test-release-version.sh

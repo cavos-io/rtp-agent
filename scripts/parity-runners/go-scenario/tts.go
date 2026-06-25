@@ -1415,6 +1415,33 @@ func runTTSStreamAdapter(input json.RawMessage) (any, error) {
 				{"name": "error_unsubscribe_local", "labels": labels},
 			},
 		}, nil
+	case "ignore_input_after_close":
+		stream, err := adapter.Stream(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		if err := stream.Close(); err != nil {
+			return nil, err
+		}
+		errors := make([]string, 0)
+		if err := stream.PushText("late"); err != nil {
+			errors = append(errors, "push_text:"+errorTypeName(err))
+		}
+		if err := stream.Flush(); err != nil {
+			errors = append(errors, "flush:"+errorTypeName(err))
+		}
+		if err := lktts.EndSynthesizeStreamInput(stream); err != nil {
+			errors = append(errors, "end_input:"+errorTypeName(err))
+		}
+		if err := stream.PushText("later"); err != nil {
+			errors = append(errors, "push_text_again:"+errorTypeName(err))
+		}
+		return map[string]any{
+			"contract": "tts-stream-adapter-ignore-input-after-close",
+			"events": []map[string]any{
+				{"name": "ignore_input_after_close", "errors": errors},
+			},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported TTS stream adapter action %q", payload.Action)
 	}
@@ -1686,4 +1713,11 @@ func drainScenarioTTSAvailability(availabilityCh <-chan lktts.AvailabilityChange
 			return events
 		}
 	}
+}
+
+func errorTypeName(err error) string {
+	if err == nil {
+		return ""
+	}
+	return fmt.Sprintf("%T", err)
 }
