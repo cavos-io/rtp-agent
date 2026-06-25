@@ -4661,10 +4661,8 @@ func TestDefaultConfigFromEnvSelectsRtzrSTT(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsSimplismartProviders(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsSimplismartSpeechProviders(t *testing.T) {
 	t.Setenv("SIMPLISMART_API_KEY", "test-simplismart-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "simplismart")
-	t.Setenv("RTP_AGENT_LLM_MODEL", "simplismart-chat")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "simplismart")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://simplismart.example/predict")
 	t.Setenv("RTP_AGENT_STT_MODEL", "openai/whisper-large-v3-turbo")
@@ -4684,9 +4682,6 @@ func TestDefaultConfigFromEnvSelectsSimplismartProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
 	if got := app.Session.STT.Label(); got != "simplismart.STT" {
 		t.Fatalf("STT label = %q, want simplismart.STT", got)
 	}
@@ -4701,6 +4696,30 @@ func TestDefaultConfigFromEnvSelectsSimplismartProviders(t *testing.T) {
 	}
 	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsSimplismartLLMProvider(t *testing.T) {
+	t.Setenv("SIMPLISMART_API_KEY", "test-simplismart-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "simplismart")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "simplismart"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Simplismart LLM provider", err)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsSimplismartLLMFallbackProvider(t *testing.T) {
+	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("SIMPLISMART_API_KEY", "test-simplismart-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "simplismart")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "simplismart"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Simplismart LLM fallback provider", err)
 	}
 }
 
@@ -5897,7 +5916,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
 		{name: "simli", provider: "simli", envKey: "SIMLI_API_KEY", envValue: "test-simli-key"},
-		{name: "simplismart", provider: "simplismart", envKey: "SIMPLISMART_API_KEY", envValue: "test-simplismart-key"},
 		{name: "smallestai", provider: "smallestai", envKey: "SMALLESTAI_API_KEY", envValue: "test-smallestai-key"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
 		{name: "trugen", provider: "trugen", envKey: "TRUGEN_API_KEY", envValue: "test-trugen-key"},

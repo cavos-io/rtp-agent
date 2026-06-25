@@ -59,7 +59,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | sarvam | yes | yes | yes |  |  |  |
 | silero |  |  |  |  |  | yes |
 | simli | yes |  |  |  | yes |  |
-| simplismart | yes | yes | yes |  |  |  |
+| simplismart | yes |  | yes |  |  |  |
 | smallestai | yes | yes | yes |  |  |  |
 | soniox |  | yes | yes |  |  |  |
 | speechify |  |  | yes |  |  |  |

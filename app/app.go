@@ -2402,8 +2402,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return provider, nil
 	case providerSimli:
 		return simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel), nil
-	case providerSimplismart:
-		return simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel), nil
 	case providerSmallestAI:
 		return smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel), nil
 	case providerTelnyx:
@@ -4441,8 +4439,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerSimli:
 		a.LLM = simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel)
-	case providerSimplismart:
-		a.LLM = simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel)
 	case providerSmallestAI:
 		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
 	case providerTelnyx:
