@@ -2,6 +2,6 @@ package krisp
 
 const (
 	PluginTitle   = "rtp-agent.plugins.krisp"
-	PluginVersion = "0.1.13"
+	PluginVersion = "v0.1.0"
 	PluginPackage = "rtp-agent.plugins.krisp"
 )
