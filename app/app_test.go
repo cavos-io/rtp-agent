@@ -61,7 +61,6 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
 	adapterlivekit "github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
-	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
@@ -382,7 +381,6 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		lemonslice.PluginPackage: {title: lemonslice.PluginTitle, version: lemonslice.PluginVersion},
 		liveavatar.PluginPackage: {title: liveavatar.PluginTitle, version: liveavatar.PluginVersion},
 		lmnt.PluginPackage:       {title: lmnt.PluginTitle, version: lmnt.PluginVersion},
-		minimal.PluginPackage:    {title: minimal.PluginTitle, version: minimal.PluginVersion},
 		minimax.PluginPackage:    {title: minimax.PluginTitle, version: minimax.PluginVersion},
 		mistralai.PluginPackage:  {title: mistralai.PluginTitle, version: mistralai.PluginVersion},
 		murf.PluginPackage:       {title: murf.PluginTitle, version: murf.PluginVersion},
@@ -3370,26 +3368,14 @@ func TestDefaultConfigFromEnvSelectsNvidiaTTSLocalRivaWithoutAPIKey(t *testing.T
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsUltravoxTTS(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsUltravoxTTSProvider(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "ultravox")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "alloy")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
-	}
-	if app.Session == nil || app.Session.TTS == nil {
-		t.Fatal("Session TTS is nil")
-	}
-	if got := app.Session.TTS.Label(); got != "ultravox.TTS" {
-		t.Fatalf("TTS label = %q, want ultravox.TTS", got)
-	}
-	if got := app.Session.TTS.SampleRate(); got != 24000 {
-		t.Fatalf("TTS sample rate = %d, want 24000", got)
-	}
-	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
-		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_TTS_PROVIDER "ultravox"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Ultravox TTS provider", err)
 	}
 }
 
@@ -3442,6 +3428,34 @@ func TestDefaultConfigFromEnvSelectsTenVAD(t *testing.T) {
 	}
 	if caps := app.Session.VAD.Capabilities(); caps.UpdateInterval != 0.016 {
 		t.Fatalf("VAD capabilities = %+v, want update interval 0.016", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsTenVADModelPathWhenDownloaded(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	modelPath := filepath.Join(dir, "resources", "models", "ten-vad.onnx")
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(modelPath, []byte("model"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "ten")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.VAD.Label(); got != "ten.VAD" {
+		t.Fatalf("VAD label = %q, want ten.VAD", got)
+	}
+	options := reflect.ValueOf(app.Session.VAD).Elem().FieldByName("options")
+	if got := options.FieldByName("ModelPath").String(); got != modelPath {
+		t.Fatalf("TEN VAD model path = %q, want %q", got, modelPath)
 	}
 }
 
@@ -12174,19 +12188,16 @@ func TestSimplismartTTSFallbackPassesQwenReferenceOptions(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvAcceptsUltravoxTTSFallbackProvider(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsUltravoxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "ultravox")
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "Mark")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
-	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_TTS_FALLBACK_PROVIDERS entry "ultravox"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Ultravox TTS fallback provider", err)
 	}
 }
 

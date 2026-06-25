@@ -97,6 +97,29 @@ func TestVADUsesProbabilityEstimatorPerStream(t *testing.T) {
 	}
 }
 
+func TestVADExplicitModelPathRequiresNativeUnlessFallbackAllowed(t *testing.T) {
+	originalFactory := newProbabilityEstimatorFactory
+	defer func() { newProbabilityEstimatorFactory = originalFactory }()
+
+	newProbabilityEstimatorFactory = func(VADOptions) (vad.ProbabilityEstimatorFactory, error) {
+		return nil, assertErr("native unavailable")
+	}
+
+	if _, err := NewVADWithOptions(WithModelPath("ten-vad.onnx")); err == nil {
+		t.Fatal("NewVADWithOptions() error = nil, want native setup error")
+	} else if !strings.Contains(err.Error(), "native unavailable") {
+		t.Fatalf("NewVADWithOptions() error = %q, want native unavailable", err.Error())
+	}
+
+	detector, err := NewVADWithOptions(WithModelPath("ten-vad.onnx"), WithNativeFallback())
+	if err != nil {
+		t.Fatalf("NewVADWithOptions() fallback error = %v", err)
+	}
+	if detector.options.ModelPath != "ten-vad.onnx" {
+		t.Fatalf("ModelPath = %q, want ten-vad.onnx", detector.options.ModelPath)
+	}
+}
+
 func TestVADMetadataAndMetrics(t *testing.T) {
 	detector := NewVAD(
 		WithMinSpeechDuration(0.016),
@@ -418,4 +441,10 @@ func testAudioFrame(sampleRate uint32, samples int, value int16) *model.AudioFra
 		NumChannels:       1,
 		SamplesPerChannel: uint32(samples),
 	}
+}
+
+type assertErr string
+
+func (e assertErr) Error() string {
+	return string(e)
 }

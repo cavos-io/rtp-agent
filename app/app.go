@@ -55,7 +55,6 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
 	adapterlivekit "github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
-	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
@@ -193,7 +192,6 @@ func init() {
 	plugin.RegisterPluginMetadata(lemonslice.PluginTitle, lemonslice.PluginVersion, lemonslice.PluginPackage)
 	plugin.RegisterPluginMetadata(liveavatar.PluginTitle, liveavatar.PluginVersion, liveavatar.PluginPackage)
 	plugin.RegisterPluginMetadata(lmnt.PluginTitle, lmnt.PluginVersion, lmnt.PluginPackage)
-	plugin.RegisterPluginMetadata(minimal.PluginTitle, minimal.PluginVersion, minimal.PluginPackage)
 	plugin.RegisterPluginMetadata(minimax.PluginTitle, minimax.PluginVersion, minimax.PluginPackage)
 	plugin.RegisterPluginMetadata(mistralai.PluginTitle, mistralai.PluginVersion, mistralai.PluginPackage)
 	plugin.RegisterPluginMetadata(murf.PluginTitle, murf.PluginVersion, murf.PluginPackage)
@@ -2215,6 +2213,9 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 		return nil
 	case providerTen:
 		vadOpts := []ten.VADOption{}
+		if modelPath, ok := existingTenModelPath(); ok {
+			vadOpts = append(vadOpts, ten.WithModelPath(modelPath), ten.WithNativeFallback())
+		}
 		if cfg.VADMinSpeechDuration != nil {
 			vadOpts = append(vadOpts, ten.WithMinSpeechDuration(*cfg.VADMinSpeechDuration))
 		}
@@ -2255,6 +2256,18 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_VAD_PROVIDER %q", cfg.VADProvider)
 	}
+}
+
+func existingTenModelPath() (string, bool) {
+	modelPath, err := ten.ModelPath()
+	if err != nil {
+		return "", false
+	}
+	info, err := os.Stat(modelPath)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return modelPath, true
 }
 
 func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
@@ -4302,8 +4315,6 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 			ttsOpts = append(ttsOpts, spitch.WithSpitchTTSSampleRate(*cfg.TTSSampleRate))
 		}
 		return spitch.NewSpitchTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...), nil
-	case providerUltravox:
-		return ultravox.NewUltravoxTTS(cfg.UltravoxAPIKey, cfg.TTSVoice), nil
 	case providerUpliftAI:
 		return upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice), nil
 	case providerXAI:
@@ -6112,8 +6123,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			ttsOpts = append(ttsOpts, telnyx.WithTelnyxTTSBaseURL(cfg.TTSBaseURL))
 		}
 		a.TTS = telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
-	case providerUltravox:
-		a.TTS = ultravox.NewUltravoxTTS(cfg.UltravoxAPIKey, cfg.TTSVoice)
 	case providerUpliftAI:
 		a.TTS = upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice)
 	case providerXAI:
