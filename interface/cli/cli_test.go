@@ -590,15 +590,36 @@ func TestParseWorkerArgsSupportsReferenceStartOptions(t *testing.T) {
 }
 
 func TestParseWorkerArgsRejectsUnknownReferenceLogFormat(t *testing.T) {
-	_, _, err := parseWorkerArgs([]string{
-		"worker", "start",
-		"--log-format", "plain",
-	}, false)
-	if err == nil {
-		t.Fatal("parseWorkerArgs() error = nil, want unknown log format error")
+	tests := []struct {
+		name    string
+		format  string
+		wantErr string
+	}{
+		{
+			name:    "outside choices",
+			format:  "plain",
+			wantErr: "unknown log format \"plain\"",
+		},
+		{
+			name:    "uppercase choice",
+			format:  "JSON",
+			wantErr: "unknown log format \"JSON\"",
+		},
 	}
-	if got, want := err.Error(), "unknown log format \"plain\""; got != want {
-		t.Fatalf("parseWorkerArgs() error = %q, want %q", got, want)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := parseWorkerArgs([]string{
+				"worker", "start",
+				"--log-format", tt.format,
+			}, false)
+			if err == nil {
+				t.Fatal("parseWorkerArgs() error = nil, want unknown log format error")
+			}
+			if got := err.Error(); got != tt.wantErr {
+				t.Fatalf("parseWorkerArgs() error = %q, want %q", got, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -640,6 +661,20 @@ func TestParseWorkerArgsSupportsReferenceStartDevFlag(t *testing.T) {
 	}
 	if drainTimeout != nil {
 		t.Fatalf("drainTimeout = %v, want nil", drainTimeout)
+	}
+}
+
+func TestParseWorkerArgsRejectsDrainTimeoutWithReferenceStartDevFlag(t *testing.T) {
+	_, _, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--drain-timeout", "42",
+		"--dev",
+	}, false)
+	if err == nil {
+		t.Fatal("parseWorkerArgs() error = nil, want drain timeout dev-mode error")
+	}
+	if got, want := err.Error(), "--drain-timeout is only supported by non-dev start"; got != want {
+		t.Fatalf("parseWorkerArgs() error = %q, want %q", got, want)
 	}
 }
 

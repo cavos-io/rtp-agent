@@ -365,6 +365,14 @@ func TestNewToolContextPanicsOnUnknownToolType(t *testing.T) {
 	NewToolContext([]interface{}{"not-a-tool"})
 }
 
+func TestToolContextUpdateToolsRejectsCallableToolWithReferenceMessage(t *testing.T) {
+	ctx := EmptyToolContext()
+
+	err := ctx.UpdateTools([]interface{}{func() {}})
+
+	requireToolContextErrorString(t, "UpdateTools()", err, "Expected an instance of FunctionTool or RawFunctionTool, got a callable object. If it's a wrapped tool, please consider wrapping the original function before converting to a function tool.")
+}
+
 func TestToolContextUpdateToolsRejectsNonComparableDuplicateName(t *testing.T) {
 	ctx := EmptyToolContext()
 

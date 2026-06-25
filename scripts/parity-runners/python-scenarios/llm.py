@@ -2405,6 +2405,17 @@ def llm_tool_context(input_data: Any) -> dict[str, Any]:
                     {"name": "unknown_tool_type", "error": True, "error_contains_unknown": "unknown tool type" in str(exc)}
                 ],
             }
+    if action == "callable_tool_type":
+        ctx = module.ToolContext.empty()
+        try:
+            ctx.update_tools([lambda: None])
+        except Exception as exc:
+            return {
+                "contract": "llm-tool-context",
+                "events": [
+                    {"name": "callable_tool_type", "error": True, "error_message": str(exc)}
+                ],
+            }
     if action == "update_same_instance":
         tool = fn_tool("lookup")
         toolset = module.Toolset(id="tools", tools=[tool])

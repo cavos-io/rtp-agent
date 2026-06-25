@@ -4033,6 +4033,19 @@ func runLLMToolContext(input json.RawMessage) (any, error) {
 				{"name": "unknown_tool_type", "error": errMsg != "", "error_contains_unknown": strings.Contains(errMsg, "unknown tool type")},
 			},
 		}, nil
+	case "callable_tool_type":
+		ctx := lkllm.EmptyToolContext()
+		err := ctx.UpdateTools([]interface{}{func() {}})
+		message := ""
+		if err != nil {
+			message = err.Error()
+		}
+		return map[string]any{
+			"contract": "llm-tool-context",
+			"events": []map[string]any{
+				{"name": "callable_tool_type", "error": err != nil, "error_message": message},
+			},
+		}, nil
 	case "update_same_instance":
 		tool := newTool("lookup", "lookup")
 		toolset := &scenarioLLMToolset{id: "tools", tools: []lkllm.Tool{tool}}

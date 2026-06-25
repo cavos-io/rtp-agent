@@ -272,7 +272,7 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 			if i >= len(argv) {
 				return CliArgs{}, nil, fmt.Errorf("missing value for --log-format")
 			}
-			logFormat := strings.ToLower(argv[i])
+			logFormat := argv[i]
 			switch logFormat {
 			case "json", "colored":
 				args.LogFormat = logFormat
@@ -339,6 +339,9 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 	}
 	if args.ReloadAddr != "" && !args.DevMode {
 		return CliArgs{}, nil, fmt.Errorf("--reload-addr requires --dev")
+	}
+	if drainTimeout != nil && args.DevMode {
+		return CliArgs{}, nil, fmt.Errorf("--drain-timeout is only supported by non-dev start")
 	}
 	return args, drainTimeout, nil
 }

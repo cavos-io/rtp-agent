@@ -2,6 +2,7 @@ package liveavatar
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -38,6 +39,12 @@ func NewLiveAvatar(apiKey string) *LiveAvatar {
 }
 
 func (a *LiveAvatar) Start(ctx context.Context) error {
+	if a.apiKey == "" {
+		return errors.New("LIVEAVATAR_API_KEY must be set")
+	}
+	if a.avatarID == "" {
+		return errors.New("LIVEAVATAR_AVATAR_ID must be set")
+	}
 	fmt.Println("LiveAvatar started.")
 	return nil
 }

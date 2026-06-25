@@ -6,6 +6,8 @@ import (
 	"reflect"
 )
 
+const callableToolError = "Expected an instance of FunctionTool or RawFunctionTool, got a callable object. If it's a wrapped tool, please consider wrapping the original function before converting to a function tool."
+
 type ToolContext struct {
 	tools             []interface{} // Tool | Toolset
 	functionTools     map[string]Tool
@@ -141,6 +143,10 @@ func (c *ToolContext) addToolValue(tool interface{}, topLevel bool, exclude []To
 			c.tools = append(c.tools, tool)
 		}
 		return nil
+	}
+
+	if typ := reflect.TypeOf(tool); typ != nil && typ.Kind() == reflect.Func {
+		return errors.New(callableToolError)
 	}
 
 	return fmt.Errorf("unknown tool type: %v", reflect.TypeOf(tool))
