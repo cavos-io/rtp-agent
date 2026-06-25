@@ -471,8 +471,17 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	if err := providerStream.Close(); err != nil {
 		t.Fatalf("Close error = %v, want nil", err)
 	}
+	if len(writer.chunks) != 3 {
+		t.Fatalf("chunks after Close = %d, want audio plus flush and close sentinels", len(writer.chunks))
+	}
+	if len(writer.chunks[2]) != 0 {
+		t.Fatalf("close chunk = %q, want empty AWS Transcribe sentinel", string(writer.chunks[2]))
+	}
 	if err := providerStream.Close(); err != nil {
 		t.Fatalf("second Close error = %v, want nil", err)
+	}
+	if len(writer.chunks) != 3 {
+		t.Fatalf("chunks after second Close = %d, want idempotent close", len(writer.chunks))
 	}
 	if !writer.closed || !reader.closed {
 		t.Fatalf("closed writer/reader = %v/%v, want true/true", writer.closed, reader.closed)

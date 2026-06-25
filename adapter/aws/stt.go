@@ -410,6 +410,11 @@ func (s *awsSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	_ = s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+		Value: types.AudioEvent{
+			AudioChunk: nil,
+		},
+	})
 	return s.stream.Close()
 }
 
