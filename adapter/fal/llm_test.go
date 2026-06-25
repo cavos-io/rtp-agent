@@ -1,66 +1,89 @@
 package fal
 
-import (
-	"errors"
-	"io"
-	"net/http"
-	"testing"
-)
+import "testing"
 
-type falCloseErrorBody struct {
-	closed bool
-}
-
-func (b *falCloseErrorBody) Read(_ []byte) (int, error) {
-	if b.closed {
-		return 0, errors.New("read after close")
+func TestFalSharedAPIKeyResolutionScenarios(t *testing.T) {
+	tests := []struct {
+		name        string
+		explicit    string
+		primaryEnv  string
+		fallbackEnv string
+		want        string
+	}{
+		{
+			name:        "explicit key wins",
+			explicit:    "explicit-key",
+			primaryEnv:  "env-key",
+			fallbackEnv: "fallback-env-key",
+			want:        "explicit-key",
+		},
+		{
+			name:        "primary environment wins",
+			primaryEnv:  "env-key",
+			fallbackEnv: "fallback-env-key",
+			want:        "env-key",
+		},
+		{
+			name:        "fallback environment used",
+			fallbackEnv: "fallback-env-key",
+			want:        "fallback-env-key",
+		},
+		{
+			name: "empty configuration remains empty",
+			want: "",
+		},
 	}
-	return 0, io.EOF
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("FAL_KEY", tt.primaryEnv)
+			t.Setenv("FAL_API_KEY", tt.fallbackEnv)
+
+			if got := resolveFalAPIKey(tt.explicit); got != tt.want {
+				t.Fatalf("api key = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
-func (b *falCloseErrorBody) Close() error {
-	b.closed = true
-	return nil
-}
-
-func TestNewFalLLMUsesEnvironmentAPIKey(t *testing.T) {
+func TestFalSharedAPIKeyResolutionPrefersPrimaryEnvironment(t *testing.T) {
 	t.Setenv("FAL_KEY", "env-key")
 	t.Setenv("FAL_API_KEY", "fallback-env-key")
 
-	provider := NewFalLLM("", "fal-model")
-
-	if provider.apiKey != "env-key" {
-		t.Fatalf("api key = %q, want primary env key", provider.apiKey)
+	if got := resolveFalAPIKey(""); got != "env-key" {
+		t.Fatalf("api key = %q, want primary env key", got)
 	}
-
-	explicit := NewFalLLM("explicit-key", "fal-model")
-	if explicit.apiKey != "explicit-key" {
-		t.Fatalf("api key = %q, want explicit key", explicit.apiKey)
+	if got := resolveFalAPIKey("explicit-key"); got != "explicit-key" {
+		t.Fatalf("api key = %q, want explicit key", got)
 	}
 }
 
-func TestNewFalLLMUsesFallbackEnvironmentAPIKey(t *testing.T) {
+func TestFalSharedAPIKeyResolutionUsesFallbackEnvironment(t *testing.T) {
 	t.Setenv("FAL_KEY", "")
 	t.Setenv("FAL_API_KEY", "fallback-env-key")
 
-	provider := NewFalLLM("", "fal-model")
-
-	if provider.apiKey != "fallback-env-key" {
-		t.Fatalf("api key = %q, want fallback env key", provider.apiKey)
+	if got := resolveFalAPIKey(""); got != "fallback-env-key" {
+		t.Fatalf("api key = %q, want fallback env key", got)
 	}
 }
 
-func TestFalLLMStreamNextAfterCloseReturnsEOF(t *testing.T) {
-	body := &falCloseErrorBody{}
-	stream := &falLLMStream{resp: &http.Response{Body: body}}
+func TestFalSharedAPIKeyResolutionAllowsEmptyConfiguration(t *testing.T) {
+	t.Setenv("FAL_KEY", "")
+	t.Setenv("FAL_API_KEY", "")
 
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if got := resolveFalAPIKey(""); got != "" {
+		t.Fatalf("api key = %q, want empty key for provider-specific validation", got)
 	}
+}
 
-	_, err := stream.Next()
+func TestFalSharedAPIKeyResolutionPreservesConfiguredValue(t *testing.T) {
+	t.Setenv("FAL_KEY", " env-key ")
+	t.Setenv("FAL_API_KEY", " fallback-env-key ")
 
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next() error = %v, want io.EOF", err)
+	if got := resolveFalAPIKey(""); got != " env-key " {
+		t.Fatalf("api key = %q, want configured primary value unchanged", got)
+	}
+	if got := resolveFalAPIKey(" explicit-key "); got != " explicit-key " {
+		t.Fatalf("api key = %q, want configured explicit value unchanged", got)
 	}
 }

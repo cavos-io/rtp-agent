@@ -3743,16 +3743,75 @@ func TestDefaultConfigFromEnvSelectsCartesiaSpeechProviders(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsClovaSpeechProviders(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsNvidiaSTT(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "nvidia")
+	t.Setenv("RTP_AGENT_STT_MODEL", "parakeet-rnnt-1.1b")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "localhost:50051")
+	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "24000")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "function_id=local-function,use_ssl=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	provider, ok := app.Session.STT.(*nvidia.NvidiaSTT)
+	if !ok {
+		t.Fatalf("STT provider type = %T, want *nvidia.NvidiaSTT", app.Session.STT)
+	}
+	if got, want := provider.Label(), "nvidia.STT"; got != want {
+		t.Fatalf("STT label = %q, want %q", got, want)
+	}
+	if got, want := provider.InputSampleRate(), uint32(24000); got != want {
+		t.Fatalf("InputSampleRate() = %d, want %d", got, want)
+	}
+	state := reflect.ValueOf(provider).Elem()
+	if got, want := state.FieldByName("server").String(), "localhost:50051"; got != want {
+		t.Fatalf("server = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("functionID").String(), "local-function"; got != want {
+		t.Fatalf("functionID = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("language").String(), "id-ID"; got != want {
+		t.Fatalf("language = %q, want %q", got, want)
+	}
+	if state.FieldByName("useSSL").Bool() {
+		t.Fatal("useSSL = true, want false")
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsNvidiaSTTLocalRivaWithoutAPIKey(t *testing.T) {
+	t.Setenv("NVIDIA_API_KEY", "")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "nvidia")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "use_ssl=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v, want local Riva config without key", err)
+	}
+	provider, ok := app.Session.STT.(*nvidia.NvidiaSTT)
+	if !ok {
+		t.Fatalf("STT provider type = %T, want *nvidia.NvidiaSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(provider).Elem()
+	if state.FieldByName("useSSL").Bool() {
+		t.Fatal("useSSL = true, want false")
+	}
+	if got := state.FieldByName("apiKey").String(); got != "" {
+		t.Fatalf("apiKey = %q, want empty local key", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsClovaSTT(t *testing.T) {
 	t.Setenv("CLOVA_STT_SECRET", "test-clova-stt-secret")
 	t.Setenv("CLOVA_STT_INVOKE_URL", "https://clova.example/stt")
-	t.Setenv("CLOVA_CLIENT_ID", "test-clova-client-id")
-	t.Setenv("CLOVA_CLIENT_SECRET", "test-clova-client-secret")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "clova")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "ko")
 	t.Setenv("RTP_AGENT_STT_VAD_THRESHOLD", "0.6")
-	t.Setenv("RTP_AGENT_TTS_PROVIDER", "clova")
-	t.Setenv("RTP_AGENT_TTS_VOICE", "nara")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -3766,6 +3825,52 @@ func TestDefaultConfigFromEnvSelectsClovaSpeechProviders(t *testing.T) {
 	}
 	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
 		t.Fatalf("STT capabilities = %+v, want offline recognize only", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvWrapsClovaSTTWithVAD(t *testing.T) {
+	t.Setenv("CLOVA_STT_SECRET", "test-clova-stt-secret")
+	t.Setenv("CLOVA_STT_INVOKE_URL", "https://clova.example/stt")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "clova")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "ko")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.STT.Label(); got != "stt.StreamAdapter" {
+		t.Fatalf("STT label = %q, want stt.StreamAdapter", got)
+	}
+	if got := stt.Provider(app.Session.STT); got != "Clova" {
+		t.Fatalf("STT provider = %q, want Clova through StreamAdapter", got)
+	}
+	if got := stt.Model(app.Session.STT); got != "unknown" {
+		t.Fatalf("STT model = %q, want unknown through StreamAdapter", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want VAD-backed stream adapter capabilities", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsClovaTTSProductExtension(t *testing.T) {
+	t.Setenv("CLOVA_CLIENT_ID", "test-clova-client-id")
+	t.Setenv("CLOVA_CLIENT_SECRET", "test-clova-client-secret")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "clova")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "nara")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
 	}
 	if got := app.Session.TTS.Label(); got != "clova.TTS" {
 		t.Fatalf("TTS label = %q, want clova.TTS", got)
@@ -3862,10 +3967,8 @@ func TestDefaultConfigFromEnvSelectsFishAudioTTS(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsFalProviders(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsFalSTT(t *testing.T) {
 	t.Setenv("FAL_KEY", "test-fal-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "fal")
-	t.Setenv("RTP_AGENT_LLM_MODEL", "fal-ai/llm-test")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "fal")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en")
 	t.Setenv("RTP_AGENT_STT_TASK", "translate")
@@ -3879,17 +3982,35 @@ func TestDefaultConfigFromEnvSelectsFalProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if got := llm.Provider(app.Session.LLM); got != "fal" {
-		t.Fatalf("LLM provider = %q, want fal", got)
-	}
-	if got := llm.Model(app.Session.LLM); got != "fal-ai/llm-test" {
-		t.Fatalf("LLM model = %q, want fal-ai/llm-test", got)
-	}
 	if got := app.Session.STT.Label(); got != "fal.STT" {
 		t.Fatalf("STT label = %q, want fal.STT", got)
 	}
 	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
 		t.Fatalf("STT capabilities = %+v, want offline recognize only", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsFalLLMProvider(t *testing.T) {
+	t.Setenv("FAL_KEY", "test-fal-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "fal")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "fal"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Fal LLM provider", err)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsFalLLMFallbackProvider(t *testing.T) {
+	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("FAL_KEY", "test-fal-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "fal")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "fal"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Fal LLM fallback provider", err)
 	}
 }
 
@@ -5721,7 +5842,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "anthropic", provider: "anthropic", envKey: "ANTHROPIC_API_KEY", envValue: "test-anthropic-key"},
 		{name: "google", provider: "google", envKey: "GOOGLE_API_KEY", envValue: "test-google-key"},
 		{name: "baseten", provider: "baseten", envKey: "BASETEN_API_KEY", envValue: "test-baseten-key"},
-		{name: "fal", provider: "fal", envKey: "FAL_KEY", envValue: "test-fal-key"},
 		{name: "gradium", provider: "gradium", envKey: "GRADIUM_API_KEY", envValue: "test-gradium-key"},
 		{name: "hedra", provider: "hedra", envKey: "HEDRA_API_KEY", envValue: "test-hedra-key"},
 		{name: "hume", provider: "hume", envKey: "HUME_API_KEY", envValue: "test-hume-key"},
