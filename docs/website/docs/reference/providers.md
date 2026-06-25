@@ -68,7 +68,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | telnyx | yes | yes | yes |  |  |  |
 | ten |  |  |  |  |  | yes |
 | trugen |  |  |  |  | yes |  |
-| ultravox |  |  |  | yes |  |  |
+| ultravox |  |  |  |  |  |  |
 | upliftai |  |  | yes |  |  |  |
 | xai | yes | yes | yes |  |  |  |
 

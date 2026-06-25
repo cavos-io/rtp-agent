@@ -13437,6 +13437,17 @@ func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvRejectsUltravoxRealtimeProvider(t *testing.T) {
+	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "ultravox")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_REALTIME_PROVIDER "ultravox"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Ultravox realtime provider", err)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsXAIRealtimeModel(t *testing.T) {
 	t.Setenv("XAI_API_KEY", "test-xai-key")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "xai")
