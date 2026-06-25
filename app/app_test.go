@@ -3913,8 +3913,12 @@ func TestDefaultConfigFromEnvWrapsClovaSTTWithVAD(t *testing.T) {
 	if app.Session.VAD == nil {
 		t.Fatal("Session VAD is nil")
 	}
-	if got := app.Session.STT.Label(); got != "stt.StreamAdapter" {
-		t.Fatalf("STT label = %q, want stt.StreamAdapter", got)
+	sttLabel := app.Session.STT.Label()
+	if sttLabel != "stt.StreamAdapter" {
+		t.Fatalf("STT label = %q, want stt.StreamAdapter", sttLabel)
+	}
+	if strings.Contains(sttLabel, "cavos.STT") {
+		t.Fatalf("STT label = %q, want generic adapter label with Cavos identity in provider metadata", sttLabel)
 	}
 	if got := stt.Provider(app.Session.STT); got != "Clova" {
 		t.Fatalf("STT provider = %q, want Clova through StreamAdapter", got)
@@ -12854,8 +12858,8 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	if app.Session.STT == nil {
 		t.Fatal("Session STT is nil")
 	}
-	if got := app.Session.STT.Label(); got != "StreamAdapter(cavos.STT)" {
-		t.Fatalf("STT label = %q, want StreamAdapter(cavos.STT)", got)
+	if got := app.Session.STT.Label(); got != "stt.StreamAdapter" {
+		t.Fatalf("STT label = %q, want stt.StreamAdapter", got)
 	}
 	if got := stt.Provider(app.Session.STT); got != "cavos" {
 		t.Fatalf("STT provider = %q, want StreamAdapter to forward cavos provider metadata", got)
@@ -12869,8 +12873,12 @@ func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	if app.Session.TTS == nil {
 		t.Fatal("Session TTS is nil")
 	}
-	if got := app.Session.TTS.Label(); got != "StreamAdapter(cavos.TTS)" {
-		t.Fatalf("TTS label = %q, want StreamAdapter(cavos.TTS)", got)
+	ttsLabel := app.Session.TTS.Label()
+	if ttsLabel != "tts.StreamAdapter" {
+		t.Fatalf("TTS label = %q, want tts.StreamAdapter", ttsLabel)
+	}
+	if strings.Contains(ttsLabel, "cavos.TTS") {
+		t.Fatalf("TTS label = %q, want generic adapter label with Cavos identity in provider metadata", ttsLabel)
 	}
 	if got := tts.Provider(app.Session.TTS); got != "cavos" {
 		t.Fatalf("TTS provider = %q, want StreamAdapter to forward cavos provider metadata", got)
