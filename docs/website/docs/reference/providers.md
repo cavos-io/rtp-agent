@@ -56,7 +56,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | rime |  |  | yes |  |  |  |
 | rtzr |  | yes |  |  |  |  |
 | runway |  |  |  |  | yes |  |
-| sarvam | yes |  | yes |  |  |  |
+| sarvam | yes | yes | yes |  |  |  |
 | silero |  |  |  |  |  | yes |
 | simli | yes |  |  |  | yes |  |
 | simplismart | yes | yes | yes |  |  |  |
