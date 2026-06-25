@@ -3946,6 +3946,12 @@ func TestDefaultConfigFromEnvSelectsClovaTTSProductExtension(t *testing.T) {
 	if got := app.Session.TTS.SampleRate(); got != 24000 {
 		t.Fatalf("TTS sample rate = %d, want 24000", got)
 	}
+	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
+		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+	if got := reflect.ValueOf(app.Session.TTS).Elem().FieldByName("voice").String(); got != "nara" {
+		t.Fatalf("TTS voice = %q, want nara", got)
+	}
 }
 
 func TestDefaultConfigFromEnvSelectsDeepgramSpeechProviders(t *testing.T) {
