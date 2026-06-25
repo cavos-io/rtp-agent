@@ -381,6 +381,7 @@ func TestRespeecherTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing
 	stream := &respeecherTTSSynthesizeStream{
 		provider:  NewRespeecherTTS("test-key", ""),
 		contextID: "ctx-1",
+		cancel:    func() {},
 		writeMessage: func(payload []byte) error {
 			var msg map[string]any
 			if err := json.Unmarshal(payload, &msg); err != nil {
@@ -404,14 +405,58 @@ func TestRespeecherTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	if len(writes) != 3 {
-		t.Fatalf("writes after Flush = %d, want tail text and end packet", len(writes))
+	if len(writes) != 2 {
+		t.Fatalf("writes after Flush = %d, want tail text only", len(writes))
 	}
 	if writes[1]["transcript"] != "Tail" || writes[1]["continue"] != true {
 		t.Fatalf("tail message = %#v, want flushed tail with continue=true", writes[1])
 	}
-	if writes[2]["transcript"] != " " || writes[2]["continue"] != false {
-		t.Fatalf("end message = %#v, want reference end packet", writes[2])
+}
+
+func TestRespeecherTTSStreamEndInputSendsReferenceEndOnce(t *testing.T) {
+	var writes []map[string]any
+	stream := &respeecherTTSSynthesizeStream{
+		provider:  NewRespeecherTTS("test-key", ""),
+		contextID: "ctx-1",
+		cancel:    func() {},
+		writeMessage: func(payload []byte) error {
+			var msg map[string]any
+			if err := json.Unmarshal(payload, &msg); err != nil {
+				t.Fatalf("decode websocket payload: %v", err)
+			}
+			writes = append(writes, msg)
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+
+	if err := stream.PushText("Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	if len(writes) != 2 {
+		t.Fatalf("writes = %d, want tail text and end packet", len(writes))
+	}
+	if writes[0]["transcript"] != "Tail" || writes[0]["continue"] != true {
+		t.Fatalf("tail message = %#v, want flushed tail with continue=true", writes[0])
+	}
+	if writes[1]["transcript"] != " " || writes[1]["continue"] != false {
+		t.Fatalf("end message = %#v, want reference end packet", writes[1])
 	}
 }
 

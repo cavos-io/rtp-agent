@@ -391,6 +391,7 @@ type respeecherTTSSynthesizeStream struct {
 	errCh       chan error
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 	pendingText string
 
 	writeMessage func([]byte) error
@@ -403,7 +404,7 @@ func (s *respeecherTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	s.pendingText += text
@@ -413,15 +414,38 @@ func (s *respeecherTTSSynthesizeStream) PushText(text string) error {
 func (s *respeecherTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || s.inputEnded {
+		return io.ErrClosedPipe
+	}
+	return s.flushPendingTextLocked()
+}
+
+func (s *respeecherTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	return s.endInputLocked()
+}
+
+func (s *respeecherTTSSynthesizeStream) flushPendingTextLocked() error {
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
 		if err := s.sendTextLocked(text); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *respeecherTTSSynthesizeStream) endInputLocked() error {
+	if s.inputEnded {
+		return nil
+	}
+	if err := s.flushPendingTextLocked(); err != nil {
+		return err
 	}
 	message, err := buildRespeecherTTSEndMessage(s.provider, s.contextID)
 	if err != nil {
@@ -431,6 +455,7 @@ func (s *respeecherTTSSynthesizeStream) Flush() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	s.inputEnded = true
 	return nil
 }
 
