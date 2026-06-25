@@ -2362,8 +2362,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
-	case providerNvidia:
-		return nvidia.NewNvidiaLLM(cfg.NvidiaAPIKey, cfg.LLMModel), nil
 	case providerOpenAI:
 		return openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
 	case providerDeepSeek:
@@ -4531,8 +4529,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
-	case providerNvidia:
-		a.LLM = nvidia.NewNvidiaLLM(cfg.NvidiaAPIKey, cfg.LLMModel)
 	case providerPerplexity:
 		a.LLM = perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel)
 	case providerLiveKit:

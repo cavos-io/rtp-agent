@@ -3098,19 +3098,27 @@ func TestDefaultConfigFromEnvSelectsTogetherOpenAILLM(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsNvidiaLLM(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsNvidiaLLMProvider(t *testing.T) {
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "nvidia")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "nvidia"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported NVIDIA LLM provider", err)
 	}
-	if app.Session == nil || app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
-	if got := llm.Label(app.Session.LLM); got != "nvidia.NvidiaLLM" {
-		t.Fatalf("LLM label = %q, want nvidia.NvidiaLLM", got)
+}
+
+func TestDefaultConfigFromEnvRejectsNvidiaLLMFallbackProvider(t *testing.T) {
+	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "nvidia")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "nvidia"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported NVIDIA LLM fallback provider", err)
 	}
 }
 
@@ -5886,7 +5894,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "lemonslice", provider: "lemonslice", envKey: "LEMONSLICE_API_KEY", envValue: "test-lemonslice-key"},
 		{name: "minimax", provider: "minimax", envKey: "MINIMAX_API_KEY", envValue: "test-minimax-key"},
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
-		{name: "nvidia", provider: "nvidia", envKey: "NVIDIA_API_KEY", envValue: "test-nvidia-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
 		{name: "simli", provider: "simli", envKey: "SIMLI_API_KEY", envValue: "test-simli-key"},
