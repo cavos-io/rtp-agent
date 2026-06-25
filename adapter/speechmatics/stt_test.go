@@ -121,6 +121,37 @@ func TestSpeechmaticsSegmentEventsMatchReference(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsApplyReferenceStartTimeOffset(t *testing.T) {
+	stream := &speechmaticsSTTStream{}
+	timing, ok := interface{}(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("speechmatics stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(4.5)
+
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"aligned",
+			"language":"en",
+			"speaker_id":"S1",
+			"metadata":{"start_time":0.2,"end_time":0.6}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, stream.state)
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want one final transcript", len(events))
+	}
+	alt := events[0].Alternatives[0]
+	if alt.StartTime < 4.699 || alt.StartTime > 4.701 || alt.EndTime < 5.099 || alt.EndTime > 5.101 {
+		t.Fatalf("segment timing = %v-%v, want start_time_offset applied", alt.StartTime, alt.EndTime)
+	}
+}
+
 func TestSpeechmaticsTurnBoundaryEventsMatchReference(t *testing.T) {
 	state := &speechmaticsStreamState{speechDuration: 1.25}
 

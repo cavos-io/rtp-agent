@@ -427,7 +427,9 @@ type speechmaticsSTTStream struct {
 }
 
 type speechmaticsStreamState struct {
-	speechDuration float64
+	speechDuration  float64
+	startTimeOffset float64
+	startTime       float64
 }
 
 type smResponse struct {
@@ -502,7 +504,7 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 			return []*stt.SpeechEvent{event}
 		}
 	case "AddPartialSegment", "AddSegment":
-		return speechmaticsSegmentEvents(resp)
+		return speechmaticsSegmentEvents(resp, state)
 	case "StartOfTurn":
 		return []*stt.SpeechEvent{{Type: stt.SpeechEventStartOfSpeech}}
 	case "EndOfTurn":
@@ -515,7 +517,7 @@ func speechmaticsEvents(resp smResponse, state *speechmaticsStreamState) []*stt.
 	return nil
 }
 
-func speechmaticsSegmentEvents(resp smResponse) []*stt.SpeechEvent {
+func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) []*stt.SpeechEvent {
 	if len(resp.Segments) == 0 {
 		return nil
 	}
@@ -523,6 +525,7 @@ func speechmaticsSegmentEvents(resp smResponse) []*stt.SpeechEvent {
 	if resp.Message == "AddSegment" {
 		eventType = stt.SpeechEventFinalTranscript
 	}
+	startTimeOffset := speechmaticsStartTimeOffset(state)
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for _, segment := range resp.Segments {
@@ -533,13 +536,20 @@ func speechmaticsSegmentEvents(resp smResponse) []*stt.SpeechEvent {
 					Text:      segment.Text,
 					Language:  segment.Language,
 					SpeakerID: segment.SpeakerID,
-					StartTime: segment.Metadata.StartTime,
-					EndTime:   segment.Metadata.EndTime,
+					StartTime: segment.Metadata.StartTime + startTimeOffset,
+					EndTime:   segment.Metadata.EndTime + startTimeOffset,
 				},
 			},
 		})
 	}
 	return events
+}
+
+func speechmaticsStartTimeOffset(state *speechmaticsStreamState) float64 {
+	if state == nil {
+		return 0
+	}
+	return state.startTimeOffset
 }
 
 func speechmaticsRecognitionUsageEvent(state *speechmaticsStreamState) *stt.SpeechEvent {
@@ -689,6 +699,48 @@ func (s *speechmaticsSTTStream) Flush() error {
 		s.state.speechDuration += audio.CalculateFrameDuration(chunk)
 	}
 	return nil
+}
+
+func (s *speechmaticsSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return 0
+	}
+	return s.state.startTimeOffset
+}
+
+func (s *speechmaticsSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.startTimeOffset = offset
+}
+
+func (s *speechmaticsSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return 0
+	}
+	return s.state.startTime
+}
+
+func (s *speechmaticsSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = &speechmaticsStreamState{}
+	}
+	s.state.startTime = startTime
 }
 
 func newSpeechmaticsAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
