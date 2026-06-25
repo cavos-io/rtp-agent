@@ -3431,6 +3431,34 @@ func TestDefaultConfigFromEnvSelectsTenVAD(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsTenVADModelPathWhenDownloaded(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	modelPath := filepath.Join(dir, "resources", "models", "ten-vad.onnx")
+	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(modelPath, []byte("model"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "ten")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.VAD.Label(); got != "ten.VAD" {
+		t.Fatalf("VAD label = %q, want ten.VAD", got)
+	}
+	options := reflect.ValueOf(app.Session.VAD).Elem().FieldByName("options")
+	if got := options.FieldByName("ModelPath").String(); got != modelPath {
+		t.Fatalf("TEN VAD model path = %q, want %q", got, modelPath)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAssemblyAISTT(t *testing.T) {
 	t.Setenv("ASSEMBLYAI_API_KEY", "test-assemblyai-key")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "assemblyai")

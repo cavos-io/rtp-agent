@@ -2213,6 +2213,9 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 		return nil
 	case providerTen:
 		vadOpts := []ten.VADOption{}
+		if modelPath, ok := existingTenModelPath(); ok {
+			vadOpts = append(vadOpts, ten.WithModelPath(modelPath), ten.WithNativeFallback())
+		}
 		if cfg.VADMinSpeechDuration != nil {
 			vadOpts = append(vadOpts, ten.WithMinSpeechDuration(*cfg.VADMinSpeechDuration))
 		}
@@ -2253,6 +2256,18 @@ func configureVAD(cfg AppConfig, a *agent.Agent) error {
 	default:
 		return fmt.Errorf("unsupported RTP_AGENT_VAD_PROVIDER %q", cfg.VADProvider)
 	}
+}
+
+func existingTenModelPath() (string, bool) {
+	modelPath, err := ten.ModelPath()
+	if err != nil {
+		return "", false
+	}
+	info, err := os.Stat(modelPath)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	return modelPath, true
 }
 
 func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {

@@ -42,6 +42,7 @@ type VADOptions struct {
 	updateIntervalSet        bool
 	sampleRateSet            bool
 	hopSizeSet               bool
+	allowNativeFallback      bool
 }
 
 func DefaultVADOptions() VADOptions {
@@ -153,6 +154,12 @@ func WithModelPath(path string) VADOption {
 	}
 }
 
+func WithNativeFallback() VADOption {
+	return func(o *VADOptions) {
+		o.allowNativeFallback = true
+	}
+}
+
 type probabilityEstimatorFactory func(VADOptions) (vad.ProbabilityEstimatorFactory, error)
 
 var newProbabilityEstimatorFactory probabilityEstimatorFactory = newNativeProbabilityEstimatorFactory
@@ -171,7 +178,8 @@ func NewVADWithOptions(opts ...VADOption) (*VAD, error) {
 	if err := validateVADOptions(options); err != nil {
 		return nil, err
 	}
-	return newVADWithResolvedOptions(options, options.LibraryPath != "" || options.ModelPath != "")
+	requireNative := (options.LibraryPath != "" || options.ModelPath != "") && !options.allowNativeFallback
+	return newVADWithResolvedOptions(options, requireNative)
 }
 
 func buildVADOptions(opts ...VADOption) VADOptions {
