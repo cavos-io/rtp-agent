@@ -3368,26 +3368,14 @@ func TestDefaultConfigFromEnvSelectsNvidiaTTSLocalRivaWithoutAPIKey(t *testing.T
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsUltravoxTTS(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsUltravoxTTSProvider(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "ultravox")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "alloy")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
-	}
-	if app.Session == nil || app.Session.TTS == nil {
-		t.Fatal("Session TTS is nil")
-	}
-	if got := app.Session.TTS.Label(); got != "ultravox.TTS" {
-		t.Fatalf("TTS label = %q, want ultravox.TTS", got)
-	}
-	if got := app.Session.TTS.SampleRate(); got != 24000 {
-		t.Fatalf("TTS sample rate = %d, want 24000", got)
-	}
-	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
-		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_TTS_PROVIDER "ultravox"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Ultravox TTS provider", err)
 	}
 }
 
@@ -12172,19 +12160,16 @@ func TestSimplismartTTSFallbackPassesQwenReferenceOptions(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvAcceptsUltravoxTTSFallbackProvider(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsUltravoxTTSFallbackProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_TTS_FALLBACK_PROVIDERS", "ultravox")
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "Mark")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
-	}
-	if got := app.Session.TTS.Label(); got != "FallbackAdapter(openai.TTS)" {
-		t.Fatalf("TTS label = %q, want fallback adapter around primary openai TTS", got)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_TTS_FALLBACK_PROVIDERS entry "ultravox"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Ultravox TTS fallback provider", err)
 	}
 }
 
