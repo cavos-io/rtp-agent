@@ -467,6 +467,51 @@ func TestNeuphonicTTSFlushStartsNextReferenceSegment(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSStreamEndInputFlushesTailAndClosesInput(t *testing.T) {
+	var writes []map[string]any
+	stream := &neuphonicTTSSynthesizeStream{
+		segmentID: "segment-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+
+	if err := stream.PushText("Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	if len(writes) != 1 {
+		t.Fatalf("writes = %d, want one tail message", len(writes))
+	}
+	if writes[0]["text"] != "Tail<STOP>" {
+		t.Fatalf("tail text = %#v, want flushed tail", writes[0]["text"])
+	}
+	if writes[0]["context_id"] != "segment-1" {
+		t.Fatalf("tail context_id = %#v, want existing segment", writes[0]["context_id"])
+	}
+}
+
 func TestNeuphonicTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false

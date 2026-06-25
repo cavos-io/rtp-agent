@@ -409,6 +409,7 @@ type neuphonicTTSSynthesizeStream struct {
 	errCh       chan error
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 	pendingText string
 
 	writeMessage func(int, []byte) error
@@ -421,7 +422,7 @@ func (s *neuphonicTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	s.pendingText += text
@@ -435,9 +436,30 @@ func (s *neuphonicTTSSynthesizeStream) PushText(text string) error {
 func (s *neuphonicTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || s.inputEnded {
+		return io.ErrClosedPipe
+	}
+	return s.flushPendingTextLocked(true)
+}
+
+func (s *neuphonicTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return nil
+	}
+	if err := s.flushPendingTextLocked(false); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	s.inputEnded = true
+	return nil
+}
+
+func (s *neuphonicTTSSynthesizeStream) flushPendingTextLocked(advanceSegment bool) error {
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
@@ -446,7 +468,9 @@ func (s *neuphonicTTSSynthesizeStream) Flush() error {
 			return err
 		}
 	}
-	s.segmentID = neuphonicTTSSegmentID()
+	if advanceSegment {
+		s.segmentID = neuphonicTTSSegmentID()
+	}
 	return nil
 }
 
