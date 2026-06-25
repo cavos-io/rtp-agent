@@ -1012,6 +1012,50 @@ func TestElevenLabsTTSStreamAutoModeSendsSentencesAndFlushesTailLikeReference(t 
 	if tail["text"] != "Tail " || tail["context_id"] != contextID || tail["flush"] != true {
 		t.Fatalf("tail text packet = %#v, want flushed tail with flush=true", tail)
 	}
+
+	select {
+	case extra := <-messages:
+		t.Fatalf("unexpected provider end packet after Flush: %#v", extra)
+	default:
+	}
+}
+
+func TestElevenLabsTTSStreamEndInputSendsReferenceFlushPacket(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5", WithElevenLabsBaseURL("ws://eleven.test/v1"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := endElevenLabsTestInput(stream); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+
+	init := readElevenLabsTTSStreamMessage(t, messages)
+	contextID, _ := init["context_id"].(string)
+	if init["text"] != " " || contextID == "" {
+		t.Fatalf("init packet = %#v, want warmup packet with context_id", init)
+	}
 	end := readElevenLabsTTSStreamMessage(t, messages)
 	if end["text"] != "" || end["context_id"] != contextID || end["flush"] != true {
 		t.Fatalf("end packet = %#v, want empty flush packet", end)
@@ -1561,6 +1605,14 @@ func readElevenLabsTTSStreamMessage(t *testing.T, messages <-chan map[string]any
 		t.Fatal("timed out waiting for ElevenLabs TTS websocket message")
 	}
 	return nil
+}
+
+func endElevenLabsTestInput(stream tts.SynthesizeStream) error {
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		return errors.New("elevenlabs stream does not implement EndInput")
+	}
+	return ending.EndInput()
 }
 
 func equalIntSlices(a []int, b []int) bool {
