@@ -1083,6 +1083,25 @@ func TestAzureSTTStreamSessionStopReturnsAPIConnectionError(t *testing.T) {
 	}
 	receiveAzureTestValue(t, audioMessages, "audio")
 	receiveAzureTestSignal(t, serverClosed, "server close")
+	providerStream, ok := stream.(*azureSTTStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *azureSTTStream", stream)
+	}
+	deadline := time.After(time.Second)
+	for {
+		providerStream.mu.Lock()
+		closed := providerStream.closed
+		providerStream.mu.Unlock()
+		if closed {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("stream did not close after provider session stop")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
 
 	_, err = stream.Next()
 	if err == nil {

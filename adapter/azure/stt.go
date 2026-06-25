@@ -645,6 +645,7 @@ type azureSTTStream struct {
 	errCh           chan error
 	mu              sync.Mutex
 	closed          bool
+	closedWithError bool
 	audioWritten    bool
 	sessionStarted  bool
 	pendingAudio    []azureSTTPendingAudio
@@ -752,8 +753,28 @@ func (s *azureSTTStream) isClosed() bool {
 	return s.closed
 }
 
+func (s *azureSTTStream) hasClosedWithError() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed && s.closedWithError
+}
+
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
+		if s.hasClosedWithError() {
+			select {
+			case err := <-s.errCh:
+				select {
+				case event, ok := <-s.events:
+					if ok {
+						return event, nil
+					}
+				default:
+				}
+				return nil, s.finalizeSessionStopError(err)
+			default:
+			}
+		}
 		return nil, io.EOF
 	}
 	select {
@@ -873,6 +894,7 @@ func (s *azureSTTStream) finishWithErrorLocked(err error) {
 		return
 	}
 	s.closed = true
+	s.closedWithError = true
 	select {
 	case s.errCh <- err:
 	default:
