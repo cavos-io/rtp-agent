@@ -315,27 +315,22 @@ func (s *awsSTTStream) readLoop() {
 		switch v := event.(type) {
 		case *types.TranscriptResultStreamMemberTranscriptEvent:
 			for _, result := range v.Value.Transcript.Results {
-				if result.StartTime == 0 && result.EndTime > 0 {
+				if result.StartTime == 0 {
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 				}
-				if result.EndTime <= 0 {
-					continue
-				}
-				if len(result.Alternatives) == 0 {
-					continue
-				}
 
-				alt := result.Alternatives[0]
-				eventType := stt.SpeechEventInterimTranscript
-				if !result.IsPartial {
-					eventType = stt.SpeechEventFinalTranscript
-				}
+				if result.EndTime > 0 {
+					eventType := stt.SpeechEventInterimTranscript
+					if !result.IsPartial {
+						eventType = stt.SpeechEventFinalTranscript
+					}
 
-				s.events <- &stt.SpeechEvent{
-					Type: eventType,
-					Alternatives: []stt.SpeechData{
-						awsSpeechDataFromAlternative(alt),
-					},
+					s.events <- &stt.SpeechEvent{
+						Type: eventType,
+						Alternatives: []stt.SpeechData{
+							awsSpeechDataFromResult(result),
+						},
+					}
 				}
 				if !result.IsPartial {
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
@@ -343,6 +338,19 @@ func (s *awsSTTStream) readLoop() {
 			}
 		}
 	}
+}
+
+func awsSpeechDataFromResult(result types.Result) stt.SpeechData {
+	if len(result.Alternatives) == 0 {
+		return stt.SpeechData{
+			StartTime: result.StartTime,
+			EndTime:   result.EndTime,
+		}
+	}
+	data := awsSpeechDataFromAlternative(result.Alternatives[0])
+	data.StartTime = result.StartTime
+	data.EndTime = result.EndTime
+	return data
 }
 
 func awsSpeechDataFromAlternative(alt types.Alternative) stt.SpeechData {

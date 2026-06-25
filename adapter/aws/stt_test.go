@@ -381,6 +381,9 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	if len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
 		t.Fatalf("alternatives = %#v, want hello transcript", event.Alternatives)
 	}
+	if event.Alternatives[0].StartTime != 0.0 || event.Alternatives[0].EndTime != 0.2 {
+		t.Fatalf("alternative timing = %v-%v, want 0-0.2", event.Alternatives[0].StartTime, event.Alternatives[0].EndTime)
+	}
 	if len(event.Alternatives[0].Words) != 1 || event.Alternatives[0].Words[0].Text != "hello" {
 		t.Fatalf("words = %#v, want hello word timing", event.Alternatives[0].Words)
 	}
@@ -399,7 +402,7 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 }
 
-func TestAWSSTTStreamIgnoresReferenceZeroEndResults(t *testing.T) {
+func TestAWSSTTStreamZeroEndFinalEmitsReferenceBoundaries(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
 		es.Reader = reader
@@ -430,9 +433,25 @@ func TestAWSSTTStreamIgnoresReferenceZeroEndResults(t *testing.T) {
 	}
 	close(reader.events)
 
-	_, err := providerStream.Next()
+	event, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want start-of-speech event", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event type = %q, want start_of_speech", event.Type)
+	}
+
+	event, err = providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want end-of-speech event", err)
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %q, want end_of_speech", event.Type)
+	}
+
+	_, err = providerStream.Next()
 	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF without zero-end transcript event", err)
+		t.Fatalf("Next error = %v, want EOF after zero-end boundary events", err)
 	}
 }
 
