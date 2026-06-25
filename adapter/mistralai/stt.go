@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -410,6 +411,7 @@ type mistralAISTTRealtimeStream struct {
 	cancel          context.CancelFunc
 	state           *mistralAISTTRealtimeState
 	vadStream       vad.VADStream
+	audioBStream    *audio.AudioByteStream
 }
 
 type mistralAISTTRealtimeState struct {
@@ -425,13 +427,11 @@ func (s *mistralAISTTRealtimeStream) PushFrame(frame *model.AudioFrame) error {
 	if s.isClosed() {
 		return io.ErrClosedPipe
 	}
-	for offset := 0; offset < len(frame.Data); offset += mistralAISTTRealtimeChunkSize {
-		end := min(offset+mistralAISTTRealtimeChunkSize, len(frame.Data))
-		msg := map[string]any{
-			"type":  "input_audio.append",
-			"audio": base64.StdEncoding.EncodeToString(frame.Data[offset:end]),
-		}
-		if err := s.writeJSON(msg); err != nil {
+	if s.audioBStream == nil {
+		s.audioBStream = newMistralAISTTRealtimeAudioByteStream()
+	}
+	for _, chunk := range s.audioBStream.Write(frame.Data) {
+		if err := s.writeAudioChunk(chunk.Data); err != nil {
 			return err
 		}
 	}
@@ -447,7 +447,22 @@ func (s *mistralAISTTRealtimeStream) Flush() error {
 	if s.isClosed() {
 		return io.ErrClosedPipe
 	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeAudioChunk(chunk.Data); err != nil {
+				return err
+			}
+		}
+	}
 	return s.writeJSON(map[string]any{"type": "input_audio.flush"})
+}
+
+func (s *mistralAISTTRealtimeStream) writeAudioChunk(data []byte) error {
+	msg := map[string]any{
+		"type":  "input_audio.append",
+		"audio": base64.StdEncoding.EncodeToString(data),
+	}
+	return s.writeJSON(msg)
 }
 
 func (s *mistralAISTTRealtimeStream) updateTargetStreamingDelay(delayMS int) error {
@@ -623,6 +638,14 @@ func (s *mistralAISTTRealtimeStream) writeJSON(msg map[string]any) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func newMistralAISTTRealtimeAudioByteStream() *audio.AudioByteStream {
+	return audio.NewAudioByteStream(
+		defaultMistralAISTTSampleRate,
+		1,
+		defaultMistralAISTTSampleRate/20,
+	)
 }
 
 func processMistralAISTTRealtimeMessage(state *mistralAISTTRealtimeState, message []byte, startTimeOffset float64) ([]*stt.SpeechEvent, error) {
