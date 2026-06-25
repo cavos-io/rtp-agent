@@ -4131,10 +4131,8 @@ func TestDefaultConfigFromEnvSelectsGnaniSpeechProviders(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsGradiumProviders(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsGradiumSpeechProviders(t *testing.T) {
 	t.Setenv("GRADIUM_API_KEY", "test-gradium-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "gradium")
-	t.Setenv("RTP_AGENT_LLM_MODEL", "gradium-llm-test")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "gradium")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://gradium.example/asr")
 	t.Setenv("RTP_AGENT_STT_MODEL", "asr-test")
@@ -4158,9 +4156,6 @@ func TestDefaultConfigFromEnvSelectsGradiumProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
 	if got := app.Session.STT.Label(); got != "gradium.STT" {
 		t.Fatalf("STT label = %q, want gradium.STT", got)
 	}
@@ -4172,6 +4167,30 @@ func TestDefaultConfigFromEnvSelectsGradiumProviders(t *testing.T) {
 	}
 	if got := app.Session.TTS.SampleRate(); got != 48000 {
 		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsGradiumLLMProvider(t *testing.T) {
+	t.Setenv("GRADIUM_API_KEY", "test-gradium-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "gradium")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "gradium"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Gradium LLM provider", err)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsGradiumLLMFallbackProvider(t *testing.T) {
+	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("GRADIUM_API_KEY", "test-gradium-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "gradium")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "gradium"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Gradium LLM fallback provider", err)
 	}
 }
 
@@ -5842,7 +5861,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "anthropic", provider: "anthropic", envKey: "ANTHROPIC_API_KEY", envValue: "test-anthropic-key"},
 		{name: "google", provider: "google", envKey: "GOOGLE_API_KEY", envValue: "test-google-key"},
 		{name: "baseten", provider: "baseten", envKey: "BASETEN_API_KEY", envValue: "test-baseten-key"},
-		{name: "gradium", provider: "gradium", envKey: "GRADIUM_API_KEY", envValue: "test-gradium-key"},
 		{name: "hedra", provider: "hedra", envKey: "HEDRA_API_KEY", envValue: "test-hedra-key"},
 		{name: "hume", provider: "hume", envKey: "HUME_API_KEY", envValue: "test-hume-key"},
 		{name: "inworld", provider: "inworld", envKey: "INWORLD_API_KEY", envValue: "test-inworld-key"},

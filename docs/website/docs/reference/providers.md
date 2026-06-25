@@ -33,7 +33,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | gladia |  | yes |  |  |  |  |
 | gnani |  | yes | yes |  |  |  |
 | google | yes | yes | yes |  |  |  |
-| gradium | yes | yes | yes |  |  |  |
+| gradium |  | yes | yes |  |  |  |
 | groq | yes | yes | yes |  |  |  |
 | hedra | yes |  |  |  | yes |  |
 | hume | yes |  | yes |  |  |  |

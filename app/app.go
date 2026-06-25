@@ -2350,8 +2350,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
 	case providerBaseten:
 		return baseten.NewBasetenLLM("", cfg.LLMModel)
-	case providerGradium:
-		return gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel), nil
 	case providerHedra:
 		return hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel), nil
 	case providerHume:
@@ -4413,8 +4411,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
-	case providerGradium:
-		a.LLM = gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel)
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
 	case providerHedra:
