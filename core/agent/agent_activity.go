@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	ErrSpeechSchedulingPaused = errors.New("speech scheduling is paused")
+	ErrSpeechSchedulingPaused = errors.New("cannot schedule new speech, the speech scheduling is draining/pausing, the speech will be cancelled")
 	errAgentActivityClosed    = errors.New("agent activity closed")
 )
 
