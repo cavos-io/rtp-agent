@@ -80,6 +80,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/adapter/simli"
 	"github.com/cavos-io/rtp-agent/adapter/simplismart"
+	"github.com/cavos-io/rtp-agent/adapter/slng"
 	"github.com/cavos-io/rtp-agent/adapter/smallestai"
 	"github.com/cavos-io/rtp-agent/adapter/soniox"
 	"github.com/cavos-io/rtp-agent/adapter/speechify"
@@ -507,8 +508,8 @@ func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
 		if registered.Title() != "rtp-agent.plugins.slng" {
 			t.Fatalf("plugin title = %q, want rtp-agent.plugins.slng", registered.Title())
 		}
-		if registered.Version() != "1.5.15" {
-			t.Fatalf("plugin version = %q, want reference version", registered.Version())
+		if registered.Version() != slng.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), slng.PluginVersion)
 		}
 		return
 	}
