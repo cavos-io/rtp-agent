@@ -246,6 +246,14 @@ func asyncAITTSTestTranscript(t *testing.T, payload []byte) string {
 	return transcript
 }
 
+func endAsyncAITestInput(stream tts.SynthesizeStream) error {
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		return errors.New("asyncai stream does not implement EndInput")
+	}
+	return ending.EndInput()
+}
+
 func TestAsyncAITTSAudioFromWebsocketMessage(t *testing.T) {
 	encoded := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})
 	audio, done, err := asyncAITTSAudioFromWebsocketMessage([]byte(`{"context_id":"ctx-1","audio":"`+encoded+`"}`), 32000)
@@ -517,13 +525,31 @@ func TestAsyncAITTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T)
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	if len(sent) != 3 {
-		t.Fatalf("sent after flush = %d, want tail text and end message", len(sent))
+	if len(sent) != 2 {
+		t.Fatalf("sent after flush = %d, want tail text only", len(sent))
 	}
 	if got := asyncAITTSTestTranscript(t, sent[1]); got != "Tail " {
 		t.Fatalf("tail transcript = %q, want Tail with reference spacing", got)
 	}
-	if got := asyncAITTSTestTranscript(t, sent[2]); got != "" {
+}
+
+func TestAsyncAITTSStreamEndInputSendsReferenceEndPacket(t *testing.T) {
+	var sent [][]byte
+	stream := &asyncAITTSStream{
+		contextID: "ctx-1",
+		writeMessage: func(payload []byte) error {
+			sent = append(sent, bytes.Clone(payload))
+			return nil
+		},
+	}
+
+	if err := endAsyncAITestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if len(sent) != 1 {
+		t.Fatalf("sent after EndInput = %d, want end message", len(sent))
+	}
+	if got := asyncAITTSTestTranscript(t, sent[0]); got != "" {
 		t.Fatalf("end transcript = %q, want empty end packet", got)
 	}
 }
