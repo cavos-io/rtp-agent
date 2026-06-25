@@ -36,8 +36,8 @@ Use this table to decide whether a provider can be documented for a capability. 
 | gradium |  | yes | yes |  |  |  |
 | groq | yes | yes | yes |  |  |  |
 | hedra | yes |  |  |  | yes |  |
-| hume | yes |  | yes |  |  |  |
-| inworld | yes |  | yes |  |  |  |
+| hume |  |  | yes |  |  |  |
+| inworld |  | yes | yes |  |  |  |
 | langchain | yes |  |  |  |  |  |
 | lemonslice | yes |  |  |  | yes |  |
 | livekit | yes | yes | yes |  |  |  |
@@ -47,7 +47,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | mistralai | yes | yes | yes |  |  |  |
 | murf |  |  | yes |  |  |  |
 | neuphonic |  |  | yes |  |  |  |
-| nvidia | yes |  | yes |  |  |  |
+| nvidia |  | yes | yes |  |  |  |
 | openai | yes | yes | yes | yes |  |  |
 | perplexity | yes |  |  |  |  |  |
 | phonic |  |  |  | yes |  |  |
@@ -59,8 +59,8 @@ Use this table to decide whether a provider can be documented for a capability. 
 | sarvam | yes | yes | yes |  |  |  |
 | silero |  |  |  |  |  | yes |
 | simli | yes |  |  |  | yes |  |
-| simplismart | yes |  | yes |  |  |  |
-| smallestai | yes |  | yes |  |  |  |
+| simplismart |  | yes | yes |  |  |  |
+| smallestai |  | yes | yes |  |  |  |
 | soniox |  | yes | yes |  |  |  |
 | speechify |  |  | yes |  |  |  |
 | speechmatics |  | yes | yes |  |  |  |

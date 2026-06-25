@@ -4281,10 +4281,8 @@ func TestDefaultConfigFromEnvRejectsInworldLLMFallbackProvider(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsHumeProviders(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsHumeTTSProvider(t *testing.T) {
 	t.Setenv("HUME_API_KEY", "test-hume-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "hume")
-	t.Setenv("RTP_AGENT_LLM_MODEL", "hume-evi-test")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "hume")
 	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://hume.example")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "2")
@@ -4305,9 +4303,6 @@ func TestDefaultConfigFromEnvSelectsHumeProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
 	if got := app.Session.TTS.Label(); got != "hume.TTS" {
 		t.Fatalf("TTS label = %q, want hume.TTS", got)
 	}
@@ -4316,6 +4311,30 @@ func TestDefaultConfigFromEnvSelectsHumeProviders(t *testing.T) {
 	}
 	if caps := app.Session.TTS.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("TTS capabilities = %+v, want non-streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsHumeLLMProvider(t *testing.T) {
+	t.Setenv("HUME_API_KEY", "test-hume-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "hume")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "hume"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Hume LLM provider", err)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsHumeLLMFallbackProvider(t *testing.T) {
+	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("HUME_API_KEY", "test-hume-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "hume")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "hume"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Hume LLM fallback provider", err)
 	}
 }
 
@@ -5927,7 +5946,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "google", provider: "google", envKey: "GOOGLE_API_KEY", envValue: "test-google-key"},
 		{name: "baseten", provider: "baseten", envKey: "BASETEN_API_KEY", envValue: "test-baseten-key"},
 		{name: "hedra", provider: "hedra", envKey: "HEDRA_API_KEY", envValue: "test-hedra-key"},
-		{name: "hume", provider: "hume", envKey: "HUME_API_KEY", envValue: "test-hume-key"},
 		{name: "langchain", provider: "langchain", envKey: "LANGCHAIN_API_KEY", envValue: "test-langchain-key"},
 		{name: "lemonslice", provider: "lemonslice", envKey: "LEMONSLICE_API_KEY", envValue: "test-lemonslice-key"},
 		{name: "minimax", provider: "minimax", envKey: "MINIMAX_API_KEY", envValue: "test-minimax-key"},
