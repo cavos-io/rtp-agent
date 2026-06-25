@@ -70,7 +70,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | ten |  |  |  |  |  | yes |
 | trugen |  |  |  |  | yes |  |
 | ultravox |  |  | yes |  |  |  |
-| upliftai | yes |  | yes |  |  |  |
+| upliftai |  |  | yes |  |  |  |
 | xai | yes | yes | yes |  |  |  |
 
 ## Constructor examples

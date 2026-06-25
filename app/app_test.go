@@ -3242,9 +3242,8 @@ func TestDefaultConfigFromEnvRejectsTrugenLLMFallbackProvider(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsUpliftAITTSProvider(t *testing.T) {
 	t.Setenv("UPLIFTAI_API_KEY", "test-upliftai-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "upliftai")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "upliftai")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "bright")
 
@@ -3254,9 +3253,6 @@ func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	}
 	if app.Session == nil {
 		t.Fatal("Session is nil")
-	}
-	if got := llm.Label(app.Session.LLM); got != "upliftai.UpliftAILLM" {
-		t.Fatalf("LLM label = %q, want upliftai.UpliftAILLM", got)
 	}
 	if got := app.Session.TTS.Label(); got != "upliftai.TTS" {
 		t.Fatalf("TTS label = %q, want upliftai.TTS", got)
@@ -3269,6 +3265,28 @@ func TestDefaultConfigFromEnvSelectsUpliftAIProviders(t *testing.T) {
 	}
 	if _, err := app.Session.TTS.Stream(context.Background()); err == nil || !strings.Contains(err.Error(), "streaming tts not natively supported") {
 		t.Fatalf("TTS Stream() error = %v, want explicit unsupported streaming error", err)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsUpliftAILLMProvider(t *testing.T) {
+	t.Setenv("UPLIFTAI_API_KEY", "test-upliftai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "upliftai")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "upliftai"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported UpliftAI LLM provider", err)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsUpliftAILLMFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("UPLIFTAI_API_KEY", "test-upliftai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "upliftai")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "upliftai"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported UpliftAI LLM fallback provider", err)
 	}
 }
 
@@ -5991,7 +6009,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},
 		{name: "telnyx", provider: "telnyx", envKey: "TELNYX_API_KEY", envValue: "test-telnyx-key"},
-		{name: "upliftai", provider: "upliftai", envKey: "UPLIFTAI_API_KEY", envValue: "test-upliftai-key"},
 	}
 
 	for _, tt := range tests {

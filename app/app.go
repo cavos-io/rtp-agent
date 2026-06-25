@@ -2394,8 +2394,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return provider, nil
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
-	case providerUpliftAI:
-		return upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel), nil
 	case providerGroq:
 		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
 	case providerXAI:
@@ -4417,8 +4415,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerTelnyx:
 		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
-	case providerUpliftAI:
-		a.LLM = upliftai.NewUpliftAILLM(cfg.UpliftAIAPIKey, cfg.LLMModel)
 	case providerXAI:
 		a.LLM = xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
