@@ -403,6 +403,35 @@ func TestProcessJobExecutorCloseWaitsForProcessExit(t *testing.T) {
 	}
 }
 
+func TestProcessJobExecutorCloseAfterProcessDoneDoesNotKillAgain(t *testing.T) {
+	oldKill := processKill
+	defer func() { processKill = oldKill }()
+
+	killCalls := 0
+	processKill = func(*os.Process) error {
+		killCalls++
+		return nil
+	}
+
+	done := make(chan struct{})
+	close(done)
+	executor := NewProcessJobExecutor("exec-process-close-done")
+	executor.mu.Lock()
+	executor.started = true
+	executor.closed = true
+	executor.status = JobStatusFailed
+	executor.done = done
+	executor.cmd = &exec.Cmd{Process: &os.Process{Pid: 12345}}
+	executor.mu.Unlock()
+
+	if err := executor.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if killCalls != 0 {
+		t.Fatalf("process kill calls = %d, want 0 after process already done", killCalls)
+	}
+}
+
 func TestProcessJobExecutorCloseSendsShutdownRequestBeforeKill(t *testing.T) {
 	oldKill := processKill
 	oldGraceTimeout := processShutdownGraceTimeout
