@@ -4350,10 +4350,8 @@ func TestDefaultConfigFromEnvRejectsHumeLLMFallbackProvider(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsMinimaxProviders(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsMinimaxTTSProvider(t *testing.T) {
 	t.Setenv("MINIMAX_API_KEY", "test-minimax-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimax")
-	t.Setenv("RTP_AGENT_LLM_MODEL", "abab-test")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "minimax")
 	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://minimax.example")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "speech-test")
@@ -4374,9 +4372,6 @@ func TestDefaultConfigFromEnvSelectsMinimaxProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
 	if got := app.Session.TTS.Label(); got != "minimax.TTS" {
 		t.Fatalf("TTS label = %q, want minimax.TTS", got)
 	}
@@ -4385,6 +4380,28 @@ func TestDefaultConfigFromEnvSelectsMinimaxProviders(t *testing.T) {
 	}
 	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("TTS capabilities = %+v, want streaming without aligned transcript", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsMinimaxLLMProvider(t *testing.T) {
+	t.Setenv("MINIMAX_API_KEY", "test-minimax-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimax")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "minimax"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Minimax LLM provider", err)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsMinimaxLLMFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("MINIMAX_API_KEY", "test-minimax-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "minimax")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "minimax"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Minimax LLM fallback provider", err)
 	}
 }
 
@@ -5958,7 +5975,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "google", provider: "google", envKey: "GOOGLE_API_KEY", envValue: "test-google-key"},
 		{name: "baseten", provider: "baseten", envKey: "BASETEN_API_KEY", envValue: "test-baseten-key"},
 		{name: "langchain", provider: "langchain", envKey: "LANGCHAIN_API_KEY", envValue: "test-langchain-key"},
-		{name: "minimax", provider: "minimax", envKey: "MINIMAX_API_KEY", envValue: "test-minimax-key"},
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},
 		{name: "sarvam", provider: "sarvam", envKey: "SARVAM_API_KEY", envValue: "test-sarvam-key", model: "sarvam-m"},

@@ -43,7 +43,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | livekit | yes | yes | yes |  |  |  |
 | lmnt |  |  | yes |  |  |  |
 | minimal | yes |  |  |  |  |  |
-| minimax | yes |  | yes |  |  |  |
+| minimax |  |  | yes |  |  |  |
 | mistralai | yes | yes | yes |  |  |  |
 | murf |  |  | yes |  |  |  |
 | neuphonic |  |  | yes |  |  |  |
