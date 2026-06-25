@@ -16,6 +16,8 @@ type fakeJobExecutor struct {
 	status     JobStatus
 	launchErr  error
 	closeCtx   context.Context
+	closeStart chan struct{}
+	closeBlock chan struct{}
 	closeCalls int
 	launches   int
 }
@@ -52,6 +54,12 @@ func (e *fakeJobExecutor) LaunchRunningJob(ctx context.Context, info RunningJobI
 func (e *fakeJobExecutor) Close(ctx context.Context) error {
 	e.closeCtx = ctx
 	e.closeCalls++
+	if e.closeStart != nil {
+		close(e.closeStart)
+	}
+	if e.closeBlock != nil {
+		<-e.closeBlock
+	}
 	return nil
 }
 
@@ -265,6 +273,51 @@ func TestProcPoolCloseUsesConfiguredTimeout(t *testing.T) {
 	remaining := time.Until(deadline)
 	if remaining <= 0 || remaining > 25*time.Millisecond {
 		t.Fatalf("Close deadline remaining = %v, want within configured timeout", remaining)
+	}
+}
+
+func TestProcPoolCloseStartsExecutorClosesConcurrently(t *testing.T) {
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	first := &fakeJobExecutor{id: "exec-a", closeStart: firstStarted, closeBlock: releaseFirst}
+	second := &fakeJobExecutor{id: "exec-b", closeStart: secondStarted}
+	pool := &ProcPool{
+		started:      true,
+		executors:    map[string]JobExecutor{first.id: first, second.id: second},
+		closeTimeout: time.Second,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pool.Close()
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first executor close did not start")
+	}
+
+	secondStartedBeforeFirstReleased := false
+	select {
+	case <-secondStarted:
+		secondStartedBeforeFirstReleased = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pool close did not finish")
+	}
+
+	if !secondStartedBeforeFirstReleased {
+		t.Fatal("second executor close waited for first executor close, want concurrent process cleanup")
 	}
 }
 

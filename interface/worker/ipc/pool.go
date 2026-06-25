@@ -372,10 +372,16 @@ func (p *ProcPool) Close() error {
 
 	ctx, cancel := closeContext(closeTimeout)
 	defer cancel()
+	var wg sync.WaitGroup
 	for _, e := range executors {
-		_ = e.Close(ctx)
-		p.emit(ProcPoolEventProcessClosed, e)
+		wg.Add(1)
+		go func(e JobExecutor) {
+			defer wg.Done()
+			_ = e.Close(ctx)
+		}(e)
 	}
+	wg.Wait()
+	p.emitMany(ProcPoolEventProcessClosed, executors)
 	return nil
 }
 
