@@ -607,6 +607,49 @@ func (s *basetenSTTStream) readLoop(conn *websocket.Conn) {
 type basetenSTTStreamState struct {
 	language        string
 	startTimeOffset float64
+	startTime       float64
+}
+
+func (s *basetenSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return 0
+	}
+	return s.state.startTimeOffset
+}
+
+func (s *basetenSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = &basetenSTTStreamState{}
+	}
+	s.state.startTimeOffset = offset
+}
+
+func (s *basetenSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		return 0
+	}
+	return s.state.startTime
+}
+
+func (s *basetenSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == nil {
+		s.state = &basetenSTTStreamState{}
+	}
+	s.state.startTime = startTime
 }
 
 func processBasetenSTTMessage(state *basetenSTTStreamState, payload []byte) ([]*stt.SpeechEvent, error) {

@@ -197,6 +197,37 @@ func TestBasetenSTTTranscriptEventsMapReferenceMessages(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	stream := &basetenSTTStream{state: &basetenSTTStreamState{language: "en"}}
+	timing, ok := interface{}(stream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("baseten STT stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.25)
+
+	events, err := processBasetenSTTMessage(stream.state, []byte(`{
+		"type":"transcription",
+		"is_final":true,
+		"segments":[{
+			"text":"hello",
+			"start_time":0.1,
+			"end_time":0.4,
+			"word_timestamps":[{"word":"hello","start_time":0.1,"end_time":0.4}]
+		}]
+	}`))
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+	assertBasetenSTTEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hello")
+	alt := events[0].Alternatives[0]
+	if alt.StartTime < 2.349 || alt.StartTime > 2.351 || alt.EndTime < 2.649 || alt.EndTime > 2.651 {
+		t.Fatalf("transcript timing = %v-%v, want reference start_time_offset applied", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].StartTime < 2.349 || alt.Words[0].StartTime > 2.351 || alt.Words[0].EndTime < 2.649 || alt.Words[0].EndTime > 2.651 || alt.Words[0].StartTimeOffset != 2.25 {
+		t.Fatalf("word timing = %+v, want reference start_time_offset applied", alt.Words)
+	}
+}
+
 func TestBasetenSTTRecognizeIsUnsupportedLikeReference(t *testing.T) {
 	provider := mustNewBasetenSTT(t, "test-key", "model-id")
 
