@@ -39,7 +39,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | hume |  |  | yes |  |  |  |
 | inworld |  | yes | yes |  |  |  |
 | langchain | yes |  |  |  |  |  |
-| lemonslice | yes |  |  |  | yes |  |
+| lemonslice |  |  |  |  | yes |  |
 | livekit | yes | yes | yes |  |  |  |
 | lmnt |  |  | yes |  |  |  |
 | minimal | yes |  |  |  |  |  |

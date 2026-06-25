@@ -3192,19 +3192,25 @@ func TestDefaultConfigFromEnvRejectsHedraLLMFallbackProvider(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsLemonSliceLLM(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsLemonSliceLLMProvider(t *testing.T) {
 	t.Setenv("LEMONSLICE_API_KEY", "test-lemonslice-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "lemonslice")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "lemonslice"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported LemonSlice LLM provider", err)
 	}
-	if app.Session == nil || app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
-	if got := llm.Label(app.Session.LLM); got != "lemonslice.LemonSliceLLM" {
-		t.Fatalf("LLM label = %q, want lemonslice.LemonSliceLLM", got)
+}
+
+func TestDefaultConfigFromEnvRejectsLemonSliceLLMFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("LEMONSLICE_API_KEY", "test-lemonslice-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "lemonslice")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "lemonslice"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported LemonSlice LLM fallback provider", err)
 	}
 }
 
@@ -5952,7 +5958,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "google", provider: "google", envKey: "GOOGLE_API_KEY", envValue: "test-google-key"},
 		{name: "baseten", provider: "baseten", envKey: "BASETEN_API_KEY", envValue: "test-baseten-key"},
 		{name: "langchain", provider: "langchain", envKey: "LANGCHAIN_API_KEY", envValue: "test-langchain-key"},
-		{name: "lemonslice", provider: "lemonslice", envKey: "LEMONSLICE_API_KEY", envValue: "test-lemonslice-key"},
 		{name: "minimax", provider: "minimax", envKey: "MINIMAX_API_KEY", envValue: "test-minimax-key"},
 		{name: "mistralai", provider: "mistralai", envKey: "MISTRAL_API_KEY", envValue: "test-mistral-key"},
 		{name: "perplexity", provider: "perplexity", envKey: "PERPLEXITY_API_KEY", envValue: "test-perplexity-key"},

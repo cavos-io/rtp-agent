@@ -2352,8 +2352,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return baseten.NewBasetenLLM("", cfg.LLMModel)
 	case providerLangChain:
 		return langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel), nil
-	case providerLemonSlice:
-		return lemonslice.NewLemonSliceLLM(cfg.LemonSliceAPIKey, cfg.LLMModel), nil
 	case providerMinimax:
 		return minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
@@ -4403,8 +4401,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
-	case providerLemonSlice:
-		a.LLM = lemonslice.NewLemonSliceLLM(cfg.LemonSliceAPIKey, cfg.LLMModel)
 	case providerMinimal:
 		a.LLM = minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel)
 	case providerMinimax:
