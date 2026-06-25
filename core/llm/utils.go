@@ -1853,6 +1853,10 @@ func ComputeChatCtxDiff(oldCtx, newCtx *ChatContext) *DiffOps {
 	for _, id := range lcs {
 		lcsSet[id] = struct{}{}
 	}
+	oldCtxByID := make(map[string]ChatItem, len(oldCtx.Items))
+	for _, item := range oldCtx.Items {
+		oldCtxByID[item.GetID()] = item
+	}
 
 	diff := &DiffOps{}
 	for _, id := range oldIDs {
@@ -1867,15 +1871,8 @@ func ComputeChatCtxDiff(oldCtx, newCtx *ChatContext) *DiffOps {
 		if _, ok := lcsSet[id]; !ok {
 			diff.ToCreate = append(diff.ToCreate, [2]*string{prevID, &id})
 		} else {
-			// Deep comparison for updates
-			var oldItem, newItem ChatItem
-			for _, o := range oldCtx.Items {
-				if o.GetID() == id {
-					oldItem = o
-					break
-				}
-			}
-			newItem = item
+			oldItem := oldCtxByID[id]
+			newItem := item
 			if oldItem != nil && newItem != nil {
 				if oMsg, ok := oldItem.(*ChatMessage); ok {
 					if nMsg, ok := newItem.(*ChatMessage); ok {

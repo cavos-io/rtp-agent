@@ -880,6 +880,64 @@ func TestProcPoolLaunchRetryDoesNotWaitForFailedExecutorClose(t *testing.T) {
 	}
 }
 
+func TestProcPoolCloseWaitsForFailedLaunchCleanup(t *testing.T) {
+	firstCloseStarted := make(chan struct{})
+	releaseFirstClose := make(chan struct{})
+	first := &fakeJobExecutor{
+		id:         "exec-a",
+		launchErr:  errors.New("launch failed"),
+		closeStart: firstCloseStarted,
+		closeBlock: releaseFirstClose,
+	}
+	second := &fakeJobExecutor{id: "exec-b"}
+	executors := []*fakeJobExecutor{first, second}
+	var created int
+
+	pool := NewProcPool(1, ExecutorTypeThread, nil)
+	pool.executorFactory = func(id string) JobExecutor {
+		executor := executors[created]
+		created++
+		return executor
+	}
+
+	if err := pool.LaunchJob(context.Background(), &livekit.Job{Id: "job-a"}); err != nil {
+		t.Fatalf("LaunchJob error = %v", err)
+	}
+	select {
+	case <-firstCloseStarted:
+	case <-time.After(time.Second):
+		t.Fatal("failed executor close did not start")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- pool.Close()
+	}()
+
+	closeReturnedBeforeFailedCleanupFinished := false
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+		closeReturnedBeforeFailedCleanupFinished = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseFirstClose)
+	if closeReturnedBeforeFailedCleanupFinished {
+		t.Fatal("Close returned before failed-launch cleanup finished, want pool shutdown to wait")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not finish after failed cleanup was released")
+	}
+}
+
 func TestProcPoolLaunchJobSpawnsBeyondIdleCapacityForConcurrentJobs(t *testing.T) {
 	first := &fakeJobExecutor{id: "exec-a"}
 	second := &fakeJobExecutor{id: "exec-b"}

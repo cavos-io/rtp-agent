@@ -418,6 +418,11 @@ func (e *ProcessJobExecutor) Close(ctx context.Context) error {
 	if !started || done == nil {
 		return nil
 	}
+	select {
+	case <-done:
+		return nil
+	default:
+	}
 
 	if cmd != nil && cmd.Process != nil {
 		shutdownSent := false

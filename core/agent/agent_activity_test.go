@@ -214,6 +214,9 @@ func TestAgentActivityScheduleSpeechRejectsNonForcedSpeechWhilePaused(t *testing
 	if !errors.Is(err, ErrSpeechSchedulingPaused) {
 		t.Fatalf("ScheduleSpeech error = %v, want ErrSpeechSchedulingPaused", err)
 	}
+	if got, want := err.Error(), "cannot schedule new speech, the speech scheduling is draining/pausing, the speech will be cancelled"; got != want {
+		t.Fatalf("ScheduleSpeech error = %q, want reference message %q", got, want)
+	}
 	if !speech.IsInterrupted() {
 		t.Fatal("speech was not interrupted after rejected schedule")
 	}

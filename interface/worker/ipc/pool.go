@@ -42,6 +42,7 @@ type ProcPool struct {
 	closed          bool
 	started         bool
 	targetIdle      int
+	closeTasks      sync.WaitGroup
 	handlers        map[ProcPoolEvent][]func(JobExecutor)
 	executorFactory func(id string) JobExecutor
 }
@@ -173,7 +174,9 @@ func (p *ProcPool) LaunchRunningJob(ctx context.Context, info RunningJobInfo) er
 
 func (p *ProcPool) closeFailedExecutor(executor JobExecutor) {
 	closeCtx, cancel := p.closeContext()
+	p.closeTasks.Add(1)
 	go func() {
+		defer p.closeTasks.Done()
 		defer cancel()
 		_ = executor.Close(closeCtx)
 		p.emit(ProcPoolEventProcessClosed, executor)
@@ -387,6 +390,7 @@ func (p *ProcPool) Close() error {
 		}(e)
 	}
 	wg.Wait()
+	p.closeTasks.Wait()
 	p.emitMany(ProcPoolEventProcessClosed, executors)
 	return nil
 }

@@ -4016,7 +4016,12 @@ func TestFallbackSynthesizeStreamStartReportsAllFailedWhenProviderCannotStart(t 
 		capabilities: TTSCapabilities{
 			Streaming: true,
 		},
-		streamErr: providerErr,
+		streamErrs: []error{providerErr},
+		streams: []SynthesizeStream{
+			&metadataSynthesizeStream{events: []*SynthesizedAudio{{
+				Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+			}}},
+		},
 	}
 	adapter := NewFallbackAdapterWithOptions([]TTS{primary}, FallbackAdapterOptions{DisableRetries: true})
 
@@ -4052,9 +4057,8 @@ func TestFallbackSynthesizeStreamStartReportsAllFailedWhenProviderCannotStart(t 
 	if errors.Is(err, providerErr) {
 		t.Fatalf("Next error wraps raw provider error %v, want reference all-failed connection error", providerErr)
 	}
-	if primary.streamCalls != 1 {
-		t.Fatalf("provider stream calls = %d, want one failed start with no background recovery retry", primary.streamCalls)
-	}
+	waitForTTSSynthesizeStreamCalls(t, primary, 2)
+	waitForTTSRecoveryState(t, adapter, 0, true, false)
 }
 
 func TestFallbackSynthesizeStreamReportsDoneAfterEOF(t *testing.T) {
@@ -4119,6 +4123,38 @@ func receiveTerminalTTSError(t *testing.T, errs <-chan TTSError) TTSError {
 	}
 }
 
+func waitForTTSSynthesizeStreamCalls(t *testing.T, provider *metadataTTS, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if provider.streamCalls >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("provider stream calls = %d, want at least %d", provider.streamCalls, want)
+}
+
+func waitForTTSRecoveryState(t *testing.T, adapter *FallbackAdapter, index int, available, recovering bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		adapter.mu.Lock()
+		gotAvailable := adapter.status[index].available
+		gotRecovering := adapter.status[index].recovering
+		adapter.mu.Unlock()
+		if gotAvailable == available && gotRecovering == recovering {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	adapter.mu.Lock()
+	gotAvailable := adapter.status[index].available
+	gotRecovering := adapter.status[index].recovering
+	adapter.mu.Unlock()
+	t.Fatalf("provider recovery state = available:%v recovering:%v, want available:%v recovering:%v", gotAvailable, gotRecovering, available, recovering)
+}
+
 func receiveSignal(t *testing.T, signals <-chan struct{}, name string) {
 	t.Helper()
 	select {
@@ -4170,6 +4206,7 @@ type metadataTTS struct {
 	stream          SynthesizeStream
 	streams         []SynthesizeStream
 	synthesizeErr   error
+	streamErrs      []error
 	streamErr       error
 	prewarmCalls    int
 	synthesizeCalls int
@@ -4379,6 +4416,13 @@ func (m *metadataTTS) Synthesize(context.Context, string) (ChunkedStream, error)
 
 func (m *metadataTTS) Stream(context.Context) (SynthesizeStream, error) {
 	m.streamCalls++
+	if len(m.streamErrs) > 0 {
+		err := m.streamErrs[0]
+		m.streamErrs = m.streamErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if m.streamErr != nil {
 		return nil, m.streamErr
 	}

@@ -1048,6 +1048,7 @@ func (s *fallbackSynthesizeStream) tryStartStreamWithActivation(index int, activ
 					continue
 				}
 				s.adapter.markUnavailable(i)
+				s.adapter.tryRecoverStream(i, s.inputBuffer)
 				break
 			}
 

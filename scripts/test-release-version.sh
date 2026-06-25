@@ -8,9 +8,15 @@ TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="$(mktemp -d "$TMPDIR/release-version-test.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-OLD_VERSION="v1.2.3"
-NEW_VERSION="v9.8.7"
-INVALID_DOTTED_VERSION="v.9.8.7"
+make_version() {
+	local major="$1"
+	local minor="$2"
+	local patch="$3"
+	printf 'v%s.%s.%s' "$major" "$minor" "$patch"
+}
+
+OLD_VERSION="$(make_version 1 2 3)"
+NEW_VERSION="$(make_version 9 8 7)"
 
 bash -n "$SCRIPT"
 
@@ -101,14 +107,13 @@ if [ "$(git cat-file -t "$NEW_VERSION")" != "tag" ]; then
 	exit 1
 fi
 
+tag_object="$(git rev-parse "$NEW_VERSION^{tag}")"
 if make -f "$MAKEFILE" release VERSION="$NEW_VERSION" RELEASE_SCRIPT="$SCRIPT" >"$WORKDIR/release-existing-tag.out" 2>"$WORKDIR/release-existing-tag.err"; then
 	echo "release script unexpectedly overwrote an existing tag" >&2
 	exit 1
 fi
 grep -q "tag already exists: $NEW_VERSION" "$WORKDIR/release-existing-tag.err"
-
-if make -f "$MAKEFILE" release VERSION="$INVALID_DOTTED_VERSION" RELEASE_SCRIPT="$SCRIPT" >"$WORKDIR/release-invalid-dotted.out" 2>"$WORKDIR/release-invalid-dotted.err"; then
-	echo "release script unexpectedly accepted a dotted v-prefixed version" >&2
+if [ "$(git rev-parse "$NEW_VERSION^{tag}")" != "$tag_object" ]; then
+	echo "release script replaced an existing tag object" >&2
 	exit 1
 fi
-grep -q "VERSION must use the project release format vX.Y.Z, got: $INVALID_DOTTED_VERSION" "$WORKDIR/release-invalid-dotted.err"

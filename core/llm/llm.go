@@ -2030,6 +2030,9 @@ func (s *fallbackLLMStream) tryStart(index int) error {
 		}
 	}
 	if lastErr != nil {
+		for _, recoverIndex := range recoverAfterStart {
+			s.tryRecovery(recoverIndex)
+		}
 		labels := s.adapter.labels()
 		duration := time.Since(start)
 		return &FallbackAllFailedError{
