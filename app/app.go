@@ -84,7 +84,6 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/ten"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
-	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -222,7 +221,6 @@ func init() {
 	plugin.RegisterPluginDownloader(ten.PluginTitle, ten.PluginVersion, ten.PluginPackage, ten.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(trugen.PluginTitle, trugen.PluginVersion, trugen.PluginPackage)
 	plugin.RegisterPluginDownloader(adapterlivekit.PluginTitle, adapterlivekit.PluginVersion, adapterlivekit.PluginPackage, adapterlivekit.Plugin{}.DownloadFiles)
-	plugin.RegisterPluginMetadata(ultravox.PluginTitle, ultravox.PluginVersion, ultravox.PluginPackage)
 	plugin.RegisterPluginMetadata(upliftai.PluginTitle, upliftai.PluginVersion, upliftai.PluginPackage)
 	plugin.RegisterPluginMetadata(xai.PluginTitle, xai.PluginVersion, xai.PluginPackage)
 }

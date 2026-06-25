@@ -89,7 +89,6 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/ten"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
-	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -411,7 +410,6 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		ten.PluginPackage:            {title: ten.PluginTitle, version: ten.PluginVersion},
 		trugen.PluginPackage:         {title: trugen.PluginTitle, version: trugen.PluginVersion},
 		adapterlivekit.PluginPackage: {title: adapterlivekit.PluginTitle, version: adapterlivekit.PluginVersion},
-		ultravox.PluginPackage:       {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
 		upliftai.PluginPackage:       {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
 		xai.PluginPackage:            {title: xai.PluginTitle, version: xai.PluginVersion},
 	}
@@ -515,6 +513,14 @@ func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
 		return
 	}
 	t.Fatal("SLNG plugin metadata was not registered")
+}
+
+func TestAppDoesNotRegisterUltravoxMetadataWithoutRealtimeAdapter(t *testing.T) {
+	for _, registered := range plugin.RegisteredPlugins() {
+		if registered.Package() == "rtp-agent.plugins.ultravox" {
+			t.Fatalf("Ultravox plugin metadata was registered without a realtime adapter")
+		}
+	}
 }
 
 func TestAppRegistersSileroPluginDownloader(t *testing.T) {
