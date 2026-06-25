@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -402,6 +403,89 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+	timing, ok := interface{}(providerStream).(stt.StreamTiming)
+	if !ok {
+		t.Fatal("aws STT stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+	timing.SetStartTime(123.5)
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing = offset %v start %v, want reference values", timing.StartTimeOffset(), timing.StartTime())
+	}
+
+	go providerStream.readLoop()
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{
+					{
+						IsPartial: false,
+						StartTime: 0.1,
+						EndTime:   0.4,
+						Alternatives: []types.Alternative{
+							{
+								Transcript: awsconfig.String("hello"),
+								Items: []types.Item{
+									{
+										Type:       types.ItemTypePronunciation,
+										Content:    awsconfig.String("hello"),
+										StartTime:  0.1,
+										EndTime:    0.4,
+										Confidence: awsconfig.Float64(0.9),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	close(reader.events)
+
+	event, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript event", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %q, want final transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 2.6 || alt.EndTime != 2.9 {
+		t.Fatalf("transcript timing = %v-%v, want reference start_time_offset applied", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].StartTime != 2.6 || alt.Words[0].EndTime != 2.9 || alt.Words[0].StartTimeOffset != 2.5 {
+		t.Fatalf("word timing = %+v, want reference start_time_offset applied", alt.Words)
+	}
+
+	assertAWSPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-0.01)
+	})
+	if got := timing.StartTimeOffset(); got != 2.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 2.5", got)
+	}
+	assertAWSPanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-0.01)
+	})
+	if got := timing.StartTime(); got != 123.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 123.5", got)
+	}
+}
+
 func TestAWSSTTStreamZeroEndFinalEmitsReferenceBoundaries(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
@@ -643,4 +727,18 @@ func (c *fakeAWSSTTClient) StartStreamTranscription(_ context.Context, input *tr
 		return nil, c.err
 	}
 	return c.stream, nil
+}
+
+func assertAWSPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := fmt.Sprint(recovered); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }

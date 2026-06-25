@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -293,10 +294,13 @@ func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 }
 
 type awsSTTStream struct {
-	stream awsSTTEventStream
-	events chan *stt.SpeechEvent
-	errCh  chan error
-	closed bool
+	stream          awsSTTEventStream
+	events          chan *stt.SpeechEvent
+	errCh           chan error
+	closed          bool
+	timingMu        sync.Mutex
+	startTimeOffset float64
+	startTime       float64
 }
 
 func (s *awsSTTStream) readLoop() {
@@ -328,7 +332,7 @@ func (s *awsSTTStream) readLoop() {
 					s.events <- &stt.SpeechEvent{
 						Type: eventType,
 						Alternatives: []stt.SpeechData{
-							awsSpeechDataFromResult(result),
+							awsSpeechDataFromResultOffset(result, s.currentStartTimeOffset()),
 						},
 					}
 				}
@@ -340,24 +344,28 @@ func (s *awsSTTStream) readLoop() {
 	}
 }
 
-func awsSpeechDataFromResult(result types.Result) stt.SpeechData {
+func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64) stt.SpeechData {
 	if len(result.Alternatives) == 0 {
 		return stt.SpeechData{
-			StartTime: result.StartTime,
-			EndTime:   result.EndTime,
+			StartTime: result.StartTime + startTimeOffset,
+			EndTime:   result.EndTime + startTimeOffset,
 		}
 	}
-	data := awsSpeechDataFromAlternative(result.Alternatives[0])
-	data.StartTime = result.StartTime
-	data.EndTime = result.EndTime
+	data := awsSpeechDataFromAlternativeOffset(result.Alternatives[0], startTimeOffset)
+	data.StartTime = result.StartTime + startTimeOffset
+	data.EndTime = result.EndTime + startTimeOffset
 	return data
 }
 
 func awsSpeechDataFromAlternative(alt types.Alternative) stt.SpeechData {
+	return awsSpeechDataFromAlternativeOffset(alt, 0)
+}
+
+func awsSpeechDataFromAlternativeOffset(alt types.Alternative, startTimeOffset float64) stt.SpeechData {
 	return stt.SpeechData{
 		Text:       aws.ToString(alt.Transcript),
 		Confidence: awsAlternativeConfidence(alt.Items),
-		Words:      awsTimedStrings(alt.Items),
+		Words:      awsTimedStringsOffset(alt.Items, startTimeOffset),
 	}
 }
 
@@ -370,7 +378,7 @@ func awsAlternativeConfidence(items []types.Item) float64 {
 	return 0
 }
 
-func awsTimedStrings(items []types.Item) []stt.TimedString {
+func awsTimedStringsOffset(items []types.Item, startTimeOffset float64) []stt.TimedString {
 	if len(items) == 0 {
 		return nil
 	}
@@ -381,14 +389,51 @@ func awsTimedStrings(items []types.Item) []stt.TimedString {
 			continue
 		}
 		words = append(words, stt.TimedString{
-			Text:       aws.ToString(item.Content),
-			StartTime:  item.StartTime,
-			EndTime:    item.EndTime,
-			Confidence: aws.ToFloat64(item.Confidence),
-			SpeakerID:  aws.ToString(item.Speaker),
+			Text:            aws.ToString(item.Content),
+			StartTime:       item.StartTime + startTimeOffset,
+			EndTime:         item.EndTime + startTimeOffset,
+			StartTimeOffset: startTimeOffset,
+			Confidence:      aws.ToFloat64(item.Confidence),
+			SpeakerID:       aws.ToString(item.Speaker),
 		})
 	}
 	return words
+}
+
+func (s *awsSTTStream) StartTimeOffset() float64 {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *awsSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	s.startTimeOffset = offset
+}
+
+func (s *awsSTTStream) StartTime() float64 {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	return s.startTime
+}
+
+func (s *awsSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	s.startTime = startTime
+}
+
+func (s *awsSTTStream) currentStartTimeOffset() float64 {
+	s.timingMu.Lock()
+	defer s.timingMu.Unlock()
+	return s.startTimeOffset
 }
 
 func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
