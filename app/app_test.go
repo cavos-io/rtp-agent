@@ -3806,16 +3806,12 @@ func TestDefaultConfigFromEnvSelectsNvidiaSTTLocalRivaWithoutAPIKey(t *testing.T
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsClovaSpeechProviders(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsClovaSTT(t *testing.T) {
 	t.Setenv("CLOVA_STT_SECRET", "test-clova-stt-secret")
 	t.Setenv("CLOVA_STT_INVOKE_URL", "https://clova.example/stt")
-	t.Setenv("CLOVA_CLIENT_ID", "test-clova-client-id")
-	t.Setenv("CLOVA_CLIENT_SECRET", "test-clova-client-secret")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "clova")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "ko")
 	t.Setenv("RTP_AGENT_STT_VAD_THRESHOLD", "0.6")
-	t.Setenv("RTP_AGENT_TTS_PROVIDER", "clova")
-	t.Setenv("RTP_AGENT_TTS_VOICE", "nara")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -3829,6 +3825,21 @@ func TestDefaultConfigFromEnvSelectsClovaSpeechProviders(t *testing.T) {
 	}
 	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
 		t.Fatalf("STT capabilities = %+v, want offline recognize only", caps)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsClovaTTSProductExtension(t *testing.T) {
+	t.Setenv("CLOVA_CLIENT_ID", "test-clova-client-id")
+	t.Setenv("CLOVA_CLIENT_SECRET", "test-clova-client-secret")
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "clova")
+	t.Setenv("RTP_AGENT_TTS_VOICE", "nara")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
 	}
 	if got := app.Session.TTS.Label(); got != "clova.TTS" {
 		t.Fatalf("TTS label = %q, want clova.TTS", got)
