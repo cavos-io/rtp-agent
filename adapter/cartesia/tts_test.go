@@ -644,7 +644,7 @@ func (b *cartesiaCloseCountBody) Close() error {
 	return nil
 }
 
-func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {
+func TestCartesiaTTSStreamFlushOnlyReleasesBufferedText(t *testing.T) {
 	var writes []map[string]any
 	stream := &cartesiaTTSStream{
 		writeJSON: func(msg any) error {
@@ -659,6 +659,50 @@ func TestCartesiaTTSStreamFlushUsesReferenceEndPacket(t *testing.T) {
 
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
+	}
+
+	if len(writes) != 0 {
+		t.Fatalf("writes = %d, want no provider end packet for empty flush", len(writes))
+	}
+
+	if err := stream.PushText("tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after incomplete push = %d, want buffered text held", len(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush tail error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after tail flush = %d, want flushed text only", len(writes))
+	}
+	if writes[0]["context_id"] != "default" {
+		t.Fatalf("context_id = %#v, want default", writes[0]["context_id"])
+	}
+	if writes[0]["transcript"] != "tail " {
+		t.Fatalf("transcript = %#v, want buffered text with reference trailing space", writes[0]["transcript"])
+	}
+	if writes[0]["continue"] != true {
+		t.Fatalf("continue = %#v, want true", writes[0]["continue"])
+	}
+}
+
+func TestCartesiaTTSStreamEndInputUsesReferenceEndPacket(t *testing.T) {
+	var writes []map[string]any
+	stream := &cartesiaTTSStream{
+		writeJSON: func(msg any) error {
+			payload, ok := msg.(map[string]interface{})
+			if !ok {
+				t.Fatalf("message = %T, want map[string]interface{}", msg)
+			}
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
 	}
 
 	if len(writes) != 1 {
@@ -732,14 +776,11 @@ func TestCartesiaTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	if len(writes) != 3 {
-		t.Fatalf("writes after Flush = %d, want tail text and end packet", len(writes))
+	if len(writes) != 2 {
+		t.Fatalf("writes after Flush = %d, want tail text only", len(writes))
 	}
 	if writes[1]["transcript"] != "Tail " || writes[1]["continue"] != true {
 		t.Fatalf("tail message = %#v, want flushed tail with continue=true", writes[1])
-	}
-	if writes[2]["transcript"] != " " || writes[2]["continue"] != false {
-		t.Fatalf("end message = %#v, want reference end packet", writes[2])
 	}
 }
 
@@ -956,10 +997,10 @@ func TestCartesiaTTSStreamProviderErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
-func TestCartesiaTTSStreamDoneAfterFlushReturnsEOF(t *testing.T) {
+func TestCartesiaTTSStreamDoneAfterEndInputReturnsEOF(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
-	go runCartesiaReadFlushThenDoneWebsocketServer(serverConn, serverErr)
+	go runCartesiaReadEndInputThenDoneWebsocketServer(serverConn, serverErr)
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -979,8 +1020,8 @@ func TestCartesiaTTSStreamDoneAfterFlushReturnsEOF(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush error = %v", err)
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
 	}
 
 	nextDone := make(chan error, 1)
@@ -1008,10 +1049,10 @@ func TestCartesiaTTSStreamDoneAfterFlushReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestCartesiaTTSStreamAudioDoneAfterFlushEmitsFinalMarker(t *testing.T) {
+func TestCartesiaTTSStreamAudioDoneAfterEndInputEmitsFinalMarker(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
-	go runCartesiaReadFlushThenAudioDoneWebsocketServer(serverConn, serverErr)
+	go runCartesiaReadEndInputThenAudioDoneWebsocketServer(serverConn, serverErr)
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -1031,8 +1072,8 @@ func TestCartesiaTTSStreamAudioDoneAfterFlushEmitsFinalMarker(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush error = %v", err)
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
 	}
 
 	audio, err := stream.Next()
@@ -1072,7 +1113,7 @@ func TestCartesiaTTSStreamAudioDoneAfterFlushEmitsFinalMarker(t *testing.T) {
 func TestCartesiaTTSStreamEmitsWordTimestamps(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
-	go runCartesiaReadFlushThenWordTimestampsServer(serverConn, serverErr)
+	go runCartesiaReadEndInputThenWordTimestampsServer(serverConn, serverErr)
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -1092,8 +1133,8 @@ func TestCartesiaTTSStreamEmitsWordTimestamps(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush error = %v", err)
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
 	}
 
 	audio, err := stream.Next()
@@ -1131,7 +1172,7 @@ func TestCartesiaTTSStreamEmitsWordTimestamps(t *testing.T) {
 func TestCartesiaTTSStreamAlignsWordTimestampSpacing(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
-	go runCartesiaReadTextFlushThenWordTimestampsServer(serverConn, serverErr)
+	go runCartesiaReadTextEndInputThenWordTimestampsServer(serverConn, serverErr)
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -1154,8 +1195,8 @@ func TestCartesiaTTSStreamAlignsWordTimestampSpacing(t *testing.T) {
 	if err := stream.PushText("hello world"); err != nil {
 		t.Fatalf("PushText error = %v", err)
 	}
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush error = %v", err)
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
 	}
 
 	audio, err := stream.Next()
@@ -1171,6 +1212,14 @@ func TestCartesiaTTSStreamAlignsWordTimestampSpacing(t *testing.T) {
 	if got := audio.TimedTranscript[1]; got.Text != " world" {
 		t.Fatalf("TimedTranscript[1].Text = %q, want leading-space world", got.Text)
 	}
+}
+
+func endCartesiaTestInput(stream tts.SynthesizeStream) error {
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		return errors.New("cartesia stream does not implement EndInput")
+	}
+	return ending.EndInput()
 }
 
 func runCartesiaReadThenNormalCloseWebsocketServer(conn net.Conn, closeAfterRead <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
@@ -1228,7 +1277,7 @@ func runCartesiaHoldOpenWebsocketServer(conn net.Conn, closed chan<- struct{}, e
 	}
 }
 
-func runCartesiaReadFlushThenDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
+func runCartesiaReadEndInputThenDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
 	upgrader := websocket.Upgrader{}
 	listener := &singleCartesiaConnListener{conn: conn}
 	server := &http.Server{
@@ -1255,7 +1304,7 @@ func runCartesiaReadFlushThenDoneWebsocketServer(conn net.Conn, errCh chan<- err
 	}
 }
 
-func runCartesiaReadFlushThenAudioDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
+func runCartesiaReadEndInputThenAudioDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
 	listener := &singleCartesiaConnListener{conn: conn}
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
@@ -1281,14 +1330,14 @@ func runCartesiaReadFlushThenAudioDoneWebsocketServer(conn net.Conn, errCh chan<
 				return
 			}
 		}
-		errCh <- errors.New("flush packet not received")
+		errCh <- errors.New("end-input packet not received")
 	})}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 		errCh <- err
 	}
 }
 
-func runCartesiaReadFlushThenWordTimestampsServer(conn net.Conn, errCh chan<- error) {
+func runCartesiaReadEndInputThenWordTimestampsServer(conn net.Conn, errCh chan<- error) {
 	upgrader := websocket.Upgrader{}
 	listener := &singleCartesiaConnListener{conn: conn}
 	server := &http.Server{
@@ -1319,7 +1368,7 @@ func runCartesiaReadFlushThenWordTimestampsServer(conn net.Conn, errCh chan<- er
 	}
 }
 
-func runCartesiaReadTextFlushThenWordTimestampsServer(conn net.Conn, errCh chan<- error) {
+func runCartesiaReadTextEndInputThenWordTimestampsServer(conn net.Conn, errCh chan<- error) {
 	upgrader := websocket.Upgrader{}
 	listener := &singleCartesiaConnListener{conn: conn}
 	server := &http.Server{
