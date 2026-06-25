@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -301,6 +302,79 @@ func TestRtzrSTTStreamLanguageArgumentDoesNotMutateReferenceLanguage(t *testing.
 	}
 }
 
+func TestRtzrSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"start_at":100,"duration":300,"final":true,"alternatives":[{"text":"hello"}],"words":[{"text":"hello","start_at":100,"duration":300}]}`)); err != nil {
+			t.Errorf("write transcript event: %v", err)
+		}
+		_, _, _ = conn.ReadMessage()
+	})
+
+	provider := NewRtzrSTT("client-id",
+		WithRtzrAccessToken("access-token"),
+		WithRtzrWSBase("ws://rtzr.test"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatalf("stream type = %T, want stt.StreamTiming", stream)
+	}
+	timing.SetStartTimeOffset(2.5)
+	timing.SetStartTime(123.5)
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing = offset %v start %v, want reference values", timing.StartTimeOffset(), timing.StartTime())
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800*2),
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %v, want start of speech", event.Type)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("second event = %#v, want final transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 2.6 || alt.EndTime != 2.9 {
+		t.Fatalf("transcript timing = %v-%v, want reference start_time_offset applied", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 1 || alt.Words[0].StartTime != 2.6 || alt.Words[0].EndTime != 2.9 || alt.Words[0].StartTimeOffset != 2.5 {
+		t.Fatalf("word timing = %+v, want reference start_time_offset applied", alt.Words)
+	}
+
+	assertRtzrPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-0.01)
+	})
+	if got := timing.StartTimeOffset(); got != 2.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 2.5", got)
+	}
+	assertRtzrPanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-0.01)
+	})
+	if got := timing.StartTime(); got != 123.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 123.5", got)
+	}
+}
+
 func TestRtzrSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	serverClosed := make(chan struct{})
 	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
@@ -587,7 +661,7 @@ func TestRtzrProcessTranscriptEventMapsInterimFinalAndWords(t *testing.T) {
 	if alt.StartTime != 1.6 || alt.EndTime != 1.9 {
 		t.Fatalf("time range = %v-%v, want 1.6-1.9", alt.StartTime, alt.EndTime)
 	}
-	if len(alt.Words) != 1 || alt.Words[0].StartTime != 1.6 || alt.Words[0].EndTime != 1.9 {
+	if len(alt.Words) != 1 || alt.Words[0].StartTime != 1.6 || alt.Words[0].EndTime != 1.9 || alt.Words[0].StartTimeOffset != 1.5 {
 		t.Fatalf("words = %+v, want adjusted word timing", alt.Words)
 	}
 
@@ -685,6 +759,20 @@ func assertRtzrEvent(t *testing.T, events []*stt.SpeechEvent, index int, eventTy
 	if events[index].Alternatives[0].Text != text {
 		t.Fatalf("event %d text = %q, want %q", index, events[index].Alternatives[0].Text, text)
 	}
+}
+
+func assertRtzrPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := fmt.Sprint(recovered); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
 
 func readRequestBody(t *testing.T, req *http.Request) string {
