@@ -2350,14 +2350,10 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
 	case providerBaseten:
 		return baseten.NewBasetenLLM("", cfg.LLMModel)
-	case providerGradium:
-		return gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel), nil
 	case providerHedra:
 		return hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel), nil
 	case providerHume:
 		return hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel), nil
-	case providerInworld:
-		return inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel), nil
 	case providerLangChain:
 		return langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel), nil
 	case providerLemonSlice:
@@ -2366,8 +2362,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return minimax.NewMinimaxLLM(cfg.MinimaxAPIKey, cfg.LLMModel), nil
 	case providerMistralAI:
 		return mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel), nil
-	case providerNvidia:
-		return nvidia.NewNvidiaLLM(cfg.NvidiaAPIKey, cfg.LLMModel), nil
 	case providerOpenAI:
 		return openai.NewOpenAILLM(cfg.OpenAIAPIKey, cfg.LLMModel)
 	case providerDeepSeek:
@@ -2408,10 +2402,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return provider, nil
 	case providerSimli:
 		return simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel), nil
-	case providerSimplismart:
-		return simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel), nil
-	case providerSmallestAI:
-		return smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel), nil
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerTrugen:
@@ -4413,16 +4403,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
-	case providerGradium:
-		a.LLM = gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel)
 	case providerGroq:
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
 	case providerHedra:
 		a.LLM = hedra.NewHedraLLM(cfg.HedraAPIKey, cfg.LLMModel)
 	case providerHume:
 		a.LLM = hume.NewHumeLLM(cfg.HumeAPIKey, cfg.LLMModel)
-	case providerInworld:
-		a.LLM = inworld.NewInworldLLM(cfg.InworldAPIKey, cfg.LLMModel)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
 	case providerLemonSlice:
@@ -4451,10 +4437,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = provider
 	case providerSimli:
 		a.LLM = simli.NewSimliLLM(cfg.SimliAPIKey, cfg.LLMModel)
-	case providerSimplismart:
-		a.LLM = simplismart.NewSimplismartLLM(cfg.SimplismartAPIKey, cfg.LLMModel)
-	case providerSmallestAI:
-		a.LLM = smallestai.NewSmallestAILLM(cfg.SmallestAIAPIKey, cfg.LLMModel)
 	case providerTelnyx:
 		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
 	case providerTrugen:
@@ -4539,8 +4521,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 			return nil, err
 		}
 		a.LLM = provider
-	case providerNvidia:
-		a.LLM = nvidia.NewNvidiaLLM(cfg.NvidiaAPIKey, cfg.LLMModel)
 	case providerPerplexity:
 		a.LLM = perplexity.NewPerplexityLLM(cfg.PerplexityAPIKey, cfg.LLMModel)
 	case providerLiveKit:

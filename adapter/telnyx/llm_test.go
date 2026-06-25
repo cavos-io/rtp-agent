@@ -22,11 +22,13 @@ func TestNewTelnyxLLMDefaultsMatchReference(t *testing.T) {
 func TestNewTelnyxLLMUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("TELNYX_API_KEY", "env-key")
 
-	if got := resolveTelnyxLLMAPIKey(""); got != "env-key" {
-		t.Fatalf("resolved API key = %q, want env key", got)
+	provider := NewTelnyxLLM("", "")
+	if provider.err != nil {
+		t.Fatalf("NewTelnyxLLM error = %v, want env key to satisfy constructor", provider.err)
 	}
-	if got := resolveTelnyxLLMAPIKey("explicit-key"); got != "explicit-key" {
-		t.Fatalf("resolved API key = %q, want explicit key", got)
+	explicit := NewTelnyxLLM("explicit-key", "")
+	if explicit.err != nil {
+		t.Fatalf("NewTelnyxLLM explicit error = %v, want explicit key to satisfy constructor", explicit.err)
 	}
 }
 

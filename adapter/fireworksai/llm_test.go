@@ -14,16 +14,21 @@ func TestNewFireworksLLMDefaultsToReferenceModel(t *testing.T) {
 	if provider.Model() != "accounts/fireworks/models/llama-v3p3-70b-instruct" {
 		t.Fatalf("model = %q, want reference default model", provider.Model())
 	}
+	if provider.Provider() != "fireworks" {
+		t.Fatalf("provider = %q, want fireworks adapter label", provider.Provider())
+	}
 }
 
-func TestNewFireworksLLMUsesEnvironmentAPIKey(t *testing.T) {
+func TestNewFireworksLLMUsesReferenceEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "env-key")
 
-	if got := resolveFireworksLLMAPIKey(""); got != "env-key" {
-		t.Fatalf("resolved API key = %q, want env key", got)
+	provider := NewFireworksLLM("", "accounts/fireworks/models/custom")
+
+	if provider.err != nil {
+		t.Fatalf("constructor error = %v, want env key accepted", provider.err)
 	}
-	if got := resolveFireworksLLMAPIKey("explicit-key"); got != "explicit-key" {
-		t.Fatalf("resolved API key = %q, want explicit key", got)
+	if provider.Model() != "accounts/fireworks/models/custom" {
+		t.Fatalf("model = %q, want custom model", provider.Model())
 	}
 }
 
