@@ -42,7 +42,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | lemonslice |  |  |  |  | yes |  |
 | livekit | yes | yes | yes |  |  |  |
 | lmnt |  |  | yes |  |  |  |
-| minimal | yes |  |  |  |  |  |
+| minimal |  |  |  |  |  |  |
 | minimax |  |  | yes |  |  |  |
 | mistralai | yes | yes | yes |  |  |  |
 | murf |  |  | yes |  |  |  |

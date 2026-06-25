@@ -3110,9 +3110,9 @@ func TestDefaultConfigFromEnvRejectsNvidiaLLMProvider(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvRejectsNvidiaLLMFallbackProvider(t *testing.T) {
-	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("NVIDIA_API_KEY", "test-nvidia-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "nvidia")
 
 	_, err := NewApp(DefaultConfigFromEnv())
@@ -3138,19 +3138,23 @@ func TestDefaultConfigFromEnvSelectsLangChainLLM(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsMinimalLLM(t *testing.T) {
-	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+func TestDefaultConfigFromEnvRejectsMinimalLLMProvider(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "minimal"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Minimal LLM provider", err)
 	}
-	if app.Session == nil || app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
-	if got := llm.Label(app.Session.LLM); got != "minimal.MinimalLLM" {
-		t.Fatalf("LLM label = %q, want minimal.MinimalLLM", got)
+}
+
+func TestDefaultConfigFromEnvRejectsMinimalLLMFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "minimal")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "minimal"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Minimal LLM fallback provider", err)
 	}
 }
 
@@ -4052,9 +4056,9 @@ func TestDefaultConfigFromEnvRejectsFalLLMProvider(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvRejectsFalLLMFallbackProvider(t *testing.T) {
-	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("FAL_KEY", "test-fal-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "fal")
 
 	_, err := NewApp(DefaultConfigFromEnv())
@@ -4232,9 +4236,9 @@ func TestDefaultConfigFromEnvRejectsGradiumLLMProvider(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvRejectsGradiumLLMFallbackProvider(t *testing.T) {
-	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("GRADIUM_API_KEY", "test-gradium-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "gradium")
 
 	_, err := NewApp(DefaultConfigFromEnv())
@@ -4311,9 +4315,9 @@ func TestDefaultConfigFromEnvRejectsInworldLLMProvider(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvRejectsInworldLLMFallbackProvider(t *testing.T) {
-	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("INWORLD_API_KEY", "test-inworld-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "inworld")
 
 	_, err := NewApp(DefaultConfigFromEnv())
@@ -4368,9 +4372,9 @@ func TestDefaultConfigFromEnvRejectsHumeLLMProvider(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvRejectsHumeLLMFallbackProvider(t *testing.T) {
-	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("HUME_API_KEY", "test-hume-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "hume")
 
 	_, err := NewApp(DefaultConfigFromEnv())
@@ -4789,9 +4793,9 @@ func TestDefaultConfigFromEnvRejectsSimplismartLLMProvider(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvRejectsSimplismartLLMFallbackProvider(t *testing.T) {
-	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("SIMPLISMART_API_KEY", "test-simplismart-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "simplismart")
 
 	_, err := NewApp(DefaultConfigFromEnv())
@@ -4858,9 +4862,9 @@ func TestDefaultConfigFromEnvRejectsSmallestAILLMProvider(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvRejectsSmallestAILLMFallbackProvider(t *testing.T) {
-	t.Setenv("MINIMAL_API_KEY", "test-minimal-key")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("SMALLESTAI_API_KEY", "test-smallestai-key")
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "smallestai")
 
 	_, err := NewApp(DefaultConfigFromEnv())
@@ -5920,7 +5924,7 @@ func TestDefaultConfigFromEnvConfiguresEvaluationJudges(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvWrapsLLMFallbackProviders(t *testing.T) {
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "openai")
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 
@@ -5928,14 +5932,15 @@ func TestDefaultConfigFromEnvWrapsLLMFallbackProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
-		t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+	if got := llm.Label(app.Agent.LLM); got != "llm.FallbackAdapter" {
+		t.Fatalf("LLM label = %q, want fallback adapter around primary OpenAI LLM", got)
 	}
 }
 
 func TestDefaultConfigFromEnvAcceptsTogetherLLMFallbackProvider(t *testing.T) {
-	t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "together")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("TOGETHER_API_KEY", "test-together-key")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "custom-together-model")
 
@@ -5943,8 +5948,8 @@ func TestDefaultConfigFromEnvAcceptsTogetherLLMFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
-		t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+	if got := llm.Label(app.Agent.LLM); got != "llm.FallbackAdapter" {
+		t.Fatalf("LLM label = %q, want fallback adapter around primary OpenAI LLM", got)
 	}
 }
 
@@ -5969,9 +5974,10 @@ func TestDefaultConfigFromEnvAcceptsOpenAICompatibleLLMFallbackProviders(t *test
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+			t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 			t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", tt.provider)
 			t.Setenv("RTP_AGENT_LLM_MODEL", "custom-fallback-model")
+			t.Setenv("OPENAI_API_KEY", "test-openai-key")
 			if tt.envKey != "" {
 				t.Setenv(tt.envKey, tt.envValue)
 			}
@@ -5983,8 +5989,8 @@ func TestDefaultConfigFromEnvAcceptsOpenAICompatibleLLMFallbackProviders(t *test
 			if err != nil {
 				t.Fatalf("NewApp() error = %v", err)
 			}
-			if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
-				t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+			if got := llm.Label(app.Agent.LLM); got != "llm.FallbackAdapter" {
+				t.Fatalf("LLM label = %q, want fallback adapter around primary OpenAI LLM", got)
 			}
 		})
 	}
@@ -6013,8 +6019,9 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("RTP_AGENT_LLM_PROVIDER", "minimal")
+			t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
 			t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", tt.provider)
+			t.Setenv("OPENAI_API_KEY", "test-openai-key")
 			model := tt.model
 			if model == "" {
 				model = "custom-fallback-model"
@@ -6026,8 +6033,8 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 			if err != nil {
 				t.Fatalf("NewApp() error = %v", err)
 			}
-			if got := llm.Label(app.Agent.LLM); got != "FallbackAdapter(minimal.MinimalLLM)" {
-				t.Fatalf("LLM label = %q, want fallback adapter around primary minimal LLM", got)
+			if got := llm.Label(app.Agent.LLM); got != "llm.FallbackAdapter" {
+				t.Fatalf("LLM label = %q, want fallback adapter around primary OpenAI LLM", got)
 			}
 		})
 	}

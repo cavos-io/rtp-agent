@@ -277,7 +277,6 @@ const (
 	providerLetta        = "letta"
 	providerLiveAvatar   = "liveavatar"
 	providerLMNT         = "lmnt"
-	providerMinimal      = "minimal"
 	providerMinimax      = "minimax"
 	providerMistralAI    = "mistralai"
 	providerMurf         = "murf"
@@ -565,7 +564,6 @@ type AppConfig struct {
 	LettaAPIKey                 string
 	LiveAvatarAPIKey            string
 	LMNTAPIKey                  string
-	MinimalAPIKey               string
 	MinimaxAPIKey               string
 	MistralAPIKey               string
 	MurfAPIKey                  string
@@ -948,7 +946,6 @@ func DefaultConfigFromEnv() AppConfig {
 		LettaAPIKey:                             os.Getenv("LETTA_API_KEY"),
 		LiveAvatarAPIKey:                        os.Getenv("LIVEAVATAR_API_KEY"),
 		LMNTAPIKey:                              os.Getenv("LMNT_API_KEY"),
-		MinimalAPIKey:                           os.Getenv("MINIMAL_API_KEY"),
 		MinimaxAPIKey:                           os.Getenv("MINIMAX_API_KEY"),
 		MistralAPIKey:                           os.Getenv("MISTRAL_API_KEY"),
 		MurfAPIKey:                              os.Getenv("MURF_API_KEY"),
@@ -2334,8 +2331,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
 	case providerAWS:
 		return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
-	case providerMinimal:
-		return minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel), nil
 	case providerCerebras:
 		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
 	case providerFireworks:
@@ -4393,8 +4388,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
-	case providerMinimal:
-		a.LLM = minimal.NewMinimalLLM(cfg.MinimalAPIKey, cfg.LLMModel)
 	case providerMistralAI:
 		a.LLM = mistralai.NewMistralLLM(cfg.MistralAPIKey, cfg.LLMModel)
 	case providerSarvam:
