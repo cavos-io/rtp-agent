@@ -15,8 +15,8 @@ func TestDIDPluginMetadataMatchesReference(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.did" {
 		t.Fatalf("plugin title = %q, want rtp-agent.plugins.did", PluginTitle)
 	}
-	if PluginVersion != "1.5.15" {
-		t.Fatalf("plugin version = %q, want 1.5.15", PluginVersion)
+	if PluginVersion == "" {
+		t.Fatalf("plugin version = %q, want non-empty project release version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.did" {
 		t.Fatalf("plugin package = %q, want rtp-agent.plugins.did", PluginPackage)

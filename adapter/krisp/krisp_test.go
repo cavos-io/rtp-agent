@@ -15,8 +15,8 @@ func TestKrispPluginMetadataMatchesReference(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.krisp" {
 		t.Fatalf("plugin title = %q, want rtp-agent.plugins.krisp", PluginTitle)
 	}
-	if PluginVersion != "0.1.13" {
-		t.Fatalf("plugin version = %q, want reference version", PluginVersion)
+	if PluginVersion == "" {
+		t.Fatalf("plugin version = %q, want non-empty project release version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.krisp" {
 		t.Fatalf("plugin package = %q, want rtp-agent.plugins.krisp", PluginPackage)

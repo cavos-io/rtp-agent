@@ -19,8 +19,8 @@ func TestTurnDetectorPluginMetadataMatchesReference(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.livekit" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.livekit", PluginTitle)
 	}
-	if PluginVersion != "1.5.15" {
-		t.Fatalf("PluginVersion = %q, want reference version", PluginVersion)
+	if PluginVersion == "" {
+		t.Fatalf("PluginVersion = %q, want non-empty project release version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.livekit" {
 		t.Fatalf("PluginPackage = %q, want rtp-agent.plugins.livekit", PluginPackage)

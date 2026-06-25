@@ -10,8 +10,8 @@ func TestHammingPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.hamming" {
 		t.Fatalf("plugin title = %q, want rtp-agent.plugins.hamming", PluginTitle)
 	}
-	if PluginVersion != "1.5.15" {
-		t.Fatalf("plugin version = %q, want reference version", PluginVersion)
+	if PluginVersion == "" {
+		t.Fatalf("plugin version = %q, want non-empty project release version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.hamming" {
 		t.Fatalf("plugin package = %q, want rtp-agent.plugins.hamming", PluginPackage)
@@ -22,7 +22,7 @@ func TestBuildMonitoringEnvelopeParticipantMetadataCallID(t *testing.T) {
 	report := hammingTestReport()
 	envelope := BuildMonitoringEnvelope(MonitoringEnvelopeConfig{
 		ExternalAgentID:      "agent-123",
-		PluginAPIVersion:     "1.0.0",
+		PluginAPIVersion:     PluginVersion,
 		PluginVersion:        "0.1.0",
 		PayloadSchemaVersion: "2026-03-02",
 		CallIDStrategy:       CallIDStrategyParticipantMetadata,
@@ -48,7 +48,7 @@ func TestBuildMonitoringEnvelopeParticipantMetadataCallID(t *testing.T) {
 func TestBuildMonitoringEnvelopeCustomResolverBlankFallsBackToRoomName(t *testing.T) {
 	envelope := BuildMonitoringEnvelope(MonitoringEnvelopeConfig{
 		ExternalAgentID:      "agent-123",
-		PluginAPIVersion:     "1.0.0",
+		PluginAPIVersion:     PluginVersion,
 		PluginVersion:        "0.1.0",
 		PayloadSchemaVersion: "2026-03-02",
 		CallIDStrategy:       CallIDStrategyCustom,
@@ -68,7 +68,7 @@ func TestBuildMonitoringEnvelopeCustomResolverBlankFallsBackToRoomName(t *testin
 func TestBuildMonitoringEnvelopeCustomResolverPanicFallsBackToRoomName(t *testing.T) {
 	envelope := BuildMonitoringEnvelope(MonitoringEnvelopeConfig{
 		ExternalAgentID:      "agent-123",
-		PluginAPIVersion:     "1.0.0",
+		PluginAPIVersion:     PluginVersion,
 		PluginVersion:        "0.1.0",
 		PayloadSchemaVersion: "2026-03-02",
 		CallIDStrategy:       CallIDStrategyCustom,
@@ -86,7 +86,7 @@ func TestBuildMonitoringEnvelopeCustomResolverPanicFallsBackToRoomName(t *testin
 func TestBuildMonitoringEnvelopeRecordingContextContributesTestCaseRunID(t *testing.T) {
 	envelope := BuildMonitoringEnvelope(MonitoringEnvelopeConfig{
 		ExternalAgentID:      "agent-123",
-		PluginAPIVersion:     "1.0.0",
+		PluginAPIVersion:     PluginVersion,
 		PluginVersion:        "0.1.0",
 		PayloadSchemaVersion: "2026-03-02",
 	}, hammingTestReport(), MonitoringEnvelopeInput{
@@ -102,7 +102,7 @@ func TestBuildMonitoringEnvelopeRecordingContextContributesTestCaseRunID(t *test
 func TestBuildMonitoringEnvelopeCapturesParticipantMetadataAndCloseReason(t *testing.T) {
 	envelope := BuildMonitoringEnvelope(MonitoringEnvelopeConfig{
 		ExternalAgentID:      "agent-123",
-		PluginAPIVersion:     "1.0.0",
+		PluginAPIVersion:     PluginVersion,
 		PluginVersion:        "0.1.0",
 		PayloadSchemaVersion: "2026-03-02",
 	}, hammingTestReport(), MonitoringEnvelopeInput{

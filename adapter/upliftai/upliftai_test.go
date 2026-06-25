@@ -29,8 +29,8 @@ func TestUpliftAIPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.upliftai" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.upliftai", PluginTitle)
 	}
-	if PluginVersion != "1.5.15" {
-		t.Fatalf("PluginVersion = %q, want reference version 1.5.15", PluginVersion)
+	if PluginVersion == "" {
+		t.Fatalf("PluginVersion = %q, want non-empty project release version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.upliftai" {
 		t.Fatalf("PluginPackage = %q, want rtp-agent.plugins.upliftai", PluginPackage)

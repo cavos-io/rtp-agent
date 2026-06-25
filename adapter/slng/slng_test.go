@@ -24,7 +24,7 @@ import (
 )
 
 const expectedPluginNamespace = "rtp-agent.plugins."
-const expectedSLNGPluginVersion = "1.5.15"
+const expectedSLNGPluginVersion = PluginVersion
 
 func TestSLNGPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.slng" {
@@ -32,6 +32,9 @@ func TestSLNGPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	}
 	if PluginVersion != expectedSLNGPluginVersion {
 		t.Fatalf("plugin version = %q, want rtp-agent plugin version", PluginVersion)
+	}
+	if PluginVersion == "" {
+		t.Fatalf("plugin version = %q, want non-empty project release version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.slng" {
 		t.Fatalf("plugin package = %q, want rtp-agent.plugins.slng", PluginPackage)

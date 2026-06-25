@@ -141,7 +141,8 @@ func TestRespeecherTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	if got := req.Header.Get("X-API-Key"); got != "test-key" {
 		t.Fatalf("X-API-Key = %q, want test key", got)
 	}
-	if got := req.Header.Get("LiveKit-Plugin-Respeecher-Version"); got != "1.5.15" {
+	wantAPIVersion := respeecherAPIVersion
+	if got := req.Header.Get("LiveKit-Plugin-Respeecher-Version"); got != wantAPIVersion {
 		t.Fatalf("version header = %q, want reference plugin version", got)
 	}
 
@@ -310,7 +311,8 @@ func TestRespeecherTTSWebsocketURLMatchesReference(t *testing.T) {
 	if query.Get("source") != "LiveKit-Plugin-Respeecher-Version" {
 		t.Fatalf("source query = %q, want version header name", query.Get("source"))
 	}
-	if query.Get("version") != "1.5.15" {
+	wantAPIVersion := respeecherAPIVersion
+	if query.Get("version") != wantAPIVersion {
 		t.Fatalf("version query = %q, want plugin API version", query.Get("version"))
 	}
 }

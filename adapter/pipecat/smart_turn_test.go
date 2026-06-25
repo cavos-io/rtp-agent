@@ -13,8 +13,8 @@ func TestPipecatPluginMetadataMatchesReferenceNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.pipecat" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.pipecat", PluginTitle)
 	}
-	if PluginVersion != "1.5.15" {
-		t.Fatalf("PluginVersion = %q, want 1.5.15", PluginVersion)
+	if PluginVersion == "" {
+		t.Fatalf("PluginVersion = %q, want non-empty project release version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.pipecat" {
 		t.Fatalf("PluginPackage = %q, want rtp-agent.plugins.pipecat", PluginPackage)

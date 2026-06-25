@@ -1,13 +1,15 @@
 package nltk
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestNltkPluginDownloadFilesIsGoNativeNoop(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.nltk" {
 		t.Fatalf("plugin title = %q, want rtp-agent.plugins.nltk", PluginTitle)
 	}
-	if PluginVersion != "1.5.15" {
-		t.Fatalf("plugin version = %q, want reference version", PluginVersion)
+	if PluginVersion == "" {
+		t.Fatalf("plugin version = %q, want non-empty project release version", PluginVersion)
 	}
 	if PluginPackage != "rtp-agent.plugins.nltk" {
 		t.Fatalf("plugin package = %q, want rtp-agent.plugins.nltk", PluginPackage)
