@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -308,6 +309,89 @@ func TestGradiumSTTStreamSendsSetupAudioAndCloseMessages(t *testing.T) {
 	}
 	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("Flush after Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestGradiumSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
+	writeTranscript := make(chan struct{})
+	errCh := make(chan error, 1)
+	dialer := newGradiumSTTTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			errCh <- err
+			return
+		}
+		select {
+		case <-writeTranscript:
+		case <-time.After(time.Second):
+			errCh <- errors.New("timed out waiting to write transcript")
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"text","text":"hello","start_s":0.25}`)); err != nil {
+			errCh <- err
+			return
+		}
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+
+	provider := NewGradiumSTT("test-key",
+		WithGradiumSTTModelEndpoint("ws://gradium.test/asr"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatal("gradium STT stream does not implement stt.StreamTiming")
+	}
+	timing.SetStartTimeOffset(2.5)
+	timing.SetStartTime(123.5)
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing = offset %v start %v, want reference values", timing.StartTimeOffset(), timing.StartTime())
+	}
+	close(writeTranscript)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %v, want start of speech", event.Type)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("second event = %#v, want interim transcript", event)
+	}
+	alt := event.Alternatives[0]
+	if alt.StartTime != 2.75 {
+		t.Fatalf("transcript start time = %v, want reference start_time_offset applied", alt.StartTime)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("websocket server: %v", err)
+	default:
+	}
+
+	assertGradiumPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-0.01)
+	})
+	if got := timing.StartTimeOffset(); got != 2.5 {
+		t.Fatalf("StartTimeOffset after rejected update = %v, want 2.5", got)
+	}
+	assertGradiumPanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-0.01)
+	})
+	if got := timing.StartTime(); got != 123.5 {
+		t.Fatalf("StartTime after rejected update = %v, want 123.5", got)
 	}
 }
 
@@ -828,4 +912,18 @@ func assertGradiumSTTEvent(t *testing.T, events []*stt.SpeechEvent, index int, e
 	if events[index].Alternatives[0].Text != text {
 		t.Fatalf("event %d text = %q, want %q", index, events[index].Alternatives[0].Text, text)
 	}
+}
+
+func assertGradiumPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		recovered := recover()
+		if recovered == nil {
+			t.Fatalf("function did not panic, want %q", want)
+		}
+		if got := fmt.Sprint(recovered); got != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
