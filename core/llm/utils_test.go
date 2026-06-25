@@ -6,9 +6,48 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
+
+func TestComputeChatCtxDiffMatchesReferenceOperations(t *testing.T) {
+	oldCtx := NewChatContext()
+	oldCtx.AddMessage(ChatMessageArgs{ID: "root", Role: ChatRoleUser, Text: "root"})
+	oldCtx.AddMessage(ChatMessageArgs{ID: "changed", Role: ChatRoleAssistant, Text: "old"})
+	oldCtx.AddMessage(ChatMessageArgs{ID: "removed", Role: ChatRoleUser, Text: "remove"})
+
+	newCtx := NewChatContext()
+	newCtx.AddMessage(ChatMessageArgs{ID: "root", Role: ChatRoleUser, Text: "root"})
+	newCtx.AddMessage(ChatMessageArgs{ID: "changed", Role: ChatRoleAssistant, Text: "new"})
+	newCtx.AddMessage(ChatMessageArgs{ID: "created", Role: ChatRoleUser, Text: "create"})
+
+	diff := ComputeChatCtxDiff(oldCtx, newCtx)
+	if !slices.Equal(diff.ToRemove, []string{"removed"}) {
+		t.Fatalf("ToRemove = %#v, want removed", diff.ToRemove)
+	}
+	if got := diffPairIDs(diff.ToCreate); !slices.Equal(got, [][2]string{{"changed", "created"}}) {
+		t.Fatalf("ToCreate = %#v, want created after changed", got)
+	}
+	if got := diffPairIDs(diff.ToUpdate); !slices.Equal(got, [][2]string{{"root", "changed"}}) {
+		t.Fatalf("ToUpdate = %#v, want changed after root", got)
+	}
+}
+
+func diffPairIDs(pairs [][2]*string) [][2]string {
+	out := make([][2]string, 0, len(pairs))
+	for _, pair := range pairs {
+		var previous, id string
+		if pair[0] != nil {
+			previous = *pair[0]
+		}
+		if pair[1] != nil {
+			id = *pair[1]
+		}
+		out = append(out, [2]string{previous, id})
+	}
+	return out
+}
 
 func TestStripThinkingTokensTracksHiddenChunks(t *testing.T) {
 	thinking := false
