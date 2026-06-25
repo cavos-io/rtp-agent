@@ -4685,7 +4685,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.STTVADThreshold != nil {
 			sttOpts = append(sttOpts, clova.WithClovaSTTThreshold(*cfg.STTVADThreshold))
 		}
-		a.STT = clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...)
+		a.STT = ensureSTTStreaming(clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...), a.VAD)
 	case providerDeepgram:
 		sttOpts := []deepgram.DeepgramSTTOption{}
 		if cfg.STTBaseURL != "" {

@@ -3828,6 +3828,37 @@ func TestDefaultConfigFromEnvSelectsClovaSTT(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvWrapsClovaSTTWithVAD(t *testing.T) {
+	t.Setenv("CLOVA_STT_SECRET", "test-clova-stt-secret")
+	t.Setenv("CLOVA_STT_INVOKE_URL", "https://clova.example/stt")
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "clova")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "ko")
+	t.Setenv("RTP_AGENT_VAD_PROVIDER", "silero")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil {
+		t.Fatal("Session is nil")
+	}
+	if app.Session.VAD == nil {
+		t.Fatal("Session VAD is nil")
+	}
+	if got := app.Session.STT.Label(); got != "stt.StreamAdapter" {
+		t.Fatalf("STT label = %q, want stt.StreamAdapter", got)
+	}
+	if got := stt.Provider(app.Session.STT); got != "Clova" {
+		t.Fatalf("STT provider = %q, want Clova through StreamAdapter", got)
+	}
+	if got := stt.Model(app.Session.STT); got != "unknown" {
+		t.Fatalf("STT model = %q, want unknown through StreamAdapter", got)
+	}
+	if caps := app.Session.STT.Capabilities(); !caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("STT capabilities = %+v, want VAD-backed stream adapter capabilities", caps)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsClovaTTSProductExtension(t *testing.T) {
 	t.Setenv("CLOVA_CLIENT_ID", "test-clova-client-id")
 	t.Setenv("CLOVA_CLIENT_SECRET", "test-clova-client-secret")
