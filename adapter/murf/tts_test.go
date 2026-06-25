@@ -423,9 +423,56 @@ func TestMurfTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
 	if tail["text"] != "Tail " || tail["context_id"] != "context-1" {
 		t.Fatalf("tail text packet = %#v, want flushed tail", tail)
 	}
+	select {
+	case extra := <-messages:
+		t.Fatalf("unexpected provider end packet after Flush: %#v", extra)
+	default:
+	}
+}
+
+func TestMurfTTSStreamEndInputSendsReferenceEndOnce(t *testing.T) {
+	conn, messages := newMurfRecordingWebsocketConn(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &murfTTSSynthesizeStream{
+		conn:       conn,
+		ctx:        ctx,
+		cancel:     cancel,
+		provider:   NewMurfTTS("test-key", ""),
+		contextID:  "context-1",
+		sampleRate: 24000,
+		events:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:      make(chan error, 1),
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+
+	tail := readMurfTTSStreamMessage(t, messages)
+	if tail["text"] != "Tail " || tail["context_id"] != "context-1" {
+		t.Fatalf("tail text packet = %#v, want flushed tail", tail)
+	}
 	end := readMurfTTSStreamMessage(t, messages)
 	if end["end"] != true || end["context_id"] != "context-1" {
 		t.Fatalf("end packet = %#v, want reference end packet", end)
+	}
+	select {
+	case extra := <-messages:
+		t.Fatalf("unexpected duplicate packet after EndInput: %#v", extra)
+	default:
 	}
 }
 
