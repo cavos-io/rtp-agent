@@ -27,7 +27,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | deepgram |  | yes | yes |  |  |  |
 | did |  |  |  |  | yes |  |
 | elevenlabs |  | yes | yes |  |  |  |
-| fal | yes | yes |  |  |  |  |
+| fal |  | yes |  |  |  |  |
 | fireworksai | yes | yes |  |  |  |  |
 | fishaudio |  |  | yes |  |  |  |
 | gladia |  | yes |  |  |  |  |

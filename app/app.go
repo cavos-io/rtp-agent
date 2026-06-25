@@ -2350,8 +2350,6 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		return adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
 	case providerBaseten:
 		return baseten.NewBasetenLLM("", cfg.LLMModel)
-	case providerFal:
-		return fal.NewFalLLM(cfg.FalAPIKey, cfg.LLMModel), nil
 	case providerGradium:
 		return gradium.NewGradiumLLM(cfg.GradiumAPIKey, cfg.LLMModel), nil
 	case providerHedra:
@@ -4467,8 +4465,6 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.LLM = xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
 		a.LLM = cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel)
-	case providerFal:
-		a.LLM = fal.NewFalLLM(cfg.FalAPIKey, cfg.LLMModel)
 	case providerFireworks:
 		a.LLM = fireworksai.NewFireworksLLM(cfg.FireworksAPIKey, cfg.LLMModel)
 	case providerAnthropic:
