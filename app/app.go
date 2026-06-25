@@ -55,7 +55,6 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/liveavatar"
 	adapterlivekit "github.com/cavos-io/rtp-agent/adapter/livekit"
 	"github.com/cavos-io/rtp-agent/adapter/lmnt"
-	"github.com/cavos-io/rtp-agent/adapter/minimal"
 	"github.com/cavos-io/rtp-agent/adapter/minimax"
 	"github.com/cavos-io/rtp-agent/adapter/mistralai"
 	"github.com/cavos-io/rtp-agent/adapter/murf"
@@ -193,7 +192,6 @@ func init() {
 	plugin.RegisterPluginMetadata(lemonslice.PluginTitle, lemonslice.PluginVersion, lemonslice.PluginPackage)
 	plugin.RegisterPluginMetadata(liveavatar.PluginTitle, liveavatar.PluginVersion, liveavatar.PluginPackage)
 	plugin.RegisterPluginMetadata(lmnt.PluginTitle, lmnt.PluginVersion, lmnt.PluginPackage)
-	plugin.RegisterPluginMetadata(minimal.PluginTitle, minimal.PluginVersion, minimal.PluginPackage)
 	plugin.RegisterPluginMetadata(minimax.PluginTitle, minimax.PluginVersion, minimax.PluginPackage)
 	plugin.RegisterPluginMetadata(mistralai.PluginTitle, mistralai.PluginVersion, mistralai.PluginPackage)
 	plugin.RegisterPluginMetadata(murf.PluginTitle, murf.PluginVersion, murf.PluginPackage)
