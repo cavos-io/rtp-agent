@@ -846,6 +846,47 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	}
 }
 
+func TestFallbackAdapterStartsRecoveryWhenAllProvidersFailBeforeChunk(t *testing.T) {
+	primary := &fakeFallbackLLM{
+		label: "primary.LLM",
+		errs:  []error{errors.New("primary start failed")},
+		streams: []LLMStream{
+			&fakeFallbackStream{events: []fakeFallbackEvent{
+				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "primary recovery probe"}}},
+			}},
+		},
+	}
+	fallback := &fakeFallbackLLM{
+		label: "fallback.LLM",
+		errs:  []error{errors.New("fallback start failed")},
+		streams: []LLMStream{
+			&fakeFallbackStream{events: []fakeFallbackEvent{
+				{chunk: &ChatChunk{Delta: &ChoiceDelta{Content: "fallback recovery probe"}}},
+			}},
+		},
+	}
+	adapter := NewFallbackAdapter([]LLM{primary, fallback})
+
+	stream, err := adapter.Chat(context.Background(), NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error = %v, want stream creation to succeed like reference", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want all LLMs failed error")
+	}
+	if !strings.Contains(err.Error(), "all LLMs failed") {
+		t.Fatalf("Next error = %q, want all LLMs failed message", err)
+	}
+
+	waitForFallbackCalls(t, primary, 2)
+	waitForFallbackCalls(t, fallback, 2)
+	waitForFallbackRecoveryState(t, adapter, 0, true, false)
+	waitForFallbackRecoveryState(t, adapter, 1, true, false)
+}
+
 func TestFallbackAdapterFallsBackOnNonRetryableAPIErrorBeforeChunk(t *testing.T) {
 	primaryErr := NewAPIStatusError("bad request", 400, "req_123", nil)
 	fallback := &fakeFallbackLLM{stream: &fakeFallbackStream{events: []fakeFallbackEvent{
@@ -1398,6 +1439,7 @@ type fakeFallbackLLM struct {
 
 	streams []LLMStream
 	stream  LLMStream
+	errs    []error
 	err     error
 	label   string
 	calls   int
@@ -1416,6 +1458,13 @@ func (f *fakeFallbackLLM) Chat(ctx context.Context, _ *ChatContext, opts ...Chat
 	f.options = append(f.options, options)
 	if f.onChat != nil {
 		f.onChat(ctx)
+	}
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		if err != nil {
+			return nil, err
+		}
 	}
 	if f.err != nil {
 		return nil, f.err
