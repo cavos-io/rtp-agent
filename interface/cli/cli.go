@@ -340,6 +340,9 @@ func parseWorkerArgs(argv []string, devMode bool) (CliArgs, *int, error) {
 	if args.ReloadAddr != "" && !args.DevMode {
 		return CliArgs{}, nil, fmt.Errorf("--reload-addr requires --dev")
 	}
+	if drainTimeout != nil && args.DevMode {
+		return CliArgs{}, nil, fmt.Errorf("--drain-timeout is only supported by non-dev start")
+	}
 	return args, drainTimeout, nil
 }
 

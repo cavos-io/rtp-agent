@@ -664,6 +664,20 @@ func TestParseWorkerArgsSupportsReferenceStartDevFlag(t *testing.T) {
 	}
 }
 
+func TestParseWorkerArgsRejectsDrainTimeoutWithReferenceStartDevFlag(t *testing.T) {
+	_, _, err := parseWorkerArgs([]string{
+		"worker", "start",
+		"--drain-timeout", "42",
+		"--dev",
+	}, false)
+	if err == nil {
+		t.Fatal("parseWorkerArgs() error = nil, want drain timeout dev-mode error")
+	}
+	if got, want := err.Error(), "--drain-timeout is only supported by non-dev start"; got != want {
+		t.Fatalf("parseWorkerArgs() error = %q, want %q", got, want)
+	}
+}
+
 func TestWorkerStartActionUsesReferenceDevReloadWhenReloadAddrPresent(t *testing.T) {
 	args := CliArgs{DevMode: true, ReloadAddr: "127.0.0.1:9999"}
 
