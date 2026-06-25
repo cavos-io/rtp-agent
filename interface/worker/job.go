@@ -667,8 +667,11 @@ func livekitJobContextRunShutdown(reason string, callbacks []func(string), disco
 	if disconnect != nil {
 		disconnect()
 	}
+	var wg sync.WaitGroup
 	for _, callback := range callbacks {
-		func(callback func(string)) {
+		wg.Add(1)
+		go func(callback func(string)) {
+			defer wg.Done()
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					logger.Logger.Errorw("Shutdown callback panicked", fmt.Errorf("%v", recovered), "job_id", jobID)
@@ -677,6 +680,7 @@ func livekitJobContextRunShutdown(reason string, callbacks []func(string), disco
 			callback(reason)
 		}(callback)
 	}
+	wg.Wait()
 }
 
 func (c *JobContext) ShutdownDone() <-chan struct{} {
