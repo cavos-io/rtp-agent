@@ -546,6 +546,50 @@ func TestFishAudioTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.
 	}
 }
 
+func TestFishAudioTTSStreamEndInputFlushesTailAndStopsOnce(t *testing.T) {
+	var writes []string
+	stream := &fishAudioTTSSynthesizeStream{
+		writeMessage: func(_ int, payload []byte) error {
+			var msg map[string]any
+			if err := msgpack.Unmarshal(payload, &msg); err != nil {
+				t.Fatalf("decode stream write: %v", err)
+			}
+			event, _ := msg["event"].(string)
+			if event == "text" {
+				text, _ := msg["text"].(string)
+				writes = append(writes, "text:"+text)
+				return nil
+			}
+			writes = append(writes, event)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	want := []string{"text:Tail ", "flush", "stop"}
+	if strings.Join(writes, "|") != strings.Join(want, "|") {
+		t.Fatalf("writes = %#v, want %#v", writes, want)
+	}
+}
+
 func TestFishAudioTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false

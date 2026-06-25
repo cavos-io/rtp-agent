@@ -186,9 +186,41 @@ func TestGradiumTTSStreamTokenizesWordsAndFlushesTailLikeReference(t *testing.T)
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	if len(writes) != 3 {
-		t.Fatalf("writes after Flush = %d, want tail word and end", len(writes))
+	if len(writes) != 2 {
+		t.Fatalf("writes after Flush = %d, want tail word only", len(writes))
 	}
+	assertGradiumSetup(t, writes[1], "text", "world ")
+}
+
+func TestGradiumTTSStreamEndInputSendsReferenceEndOnce(t *testing.T) {
+	var writes []map[string]any
+	stream := &gradiumTTSSynthesizeStream{
+		writeMessage: func(payload map[string]any) error {
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+
+	if len(writes) != 3 {
+		t.Fatalf("writes = %d, want completed word, tail word, and end", len(writes))
+	}
+	assertGradiumSetup(t, writes[0], "text", "hello ")
 	assertGradiumSetup(t, writes[1], "text", "world ")
 	assertGradiumSetup(t, writes[2], "type", "end_of_stream")
 }

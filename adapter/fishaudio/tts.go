@@ -460,6 +460,7 @@ type fishAudioTTSSynthesizeStream struct {
 	errCh       chan error
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 	pendingText string
 
 	writeMessage func(int, []byte) error
@@ -472,7 +473,7 @@ func (s *fishAudioTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	s.pendingText += text
@@ -486,9 +487,22 @@ func (s *fishAudioTTSSynthesizeStream) PushText(text string) error {
 func (s *fishAudioTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || s.inputEnded {
+		return io.ErrClosedPipe
+	}
+	return s.flushPendingTextLocked()
+}
+
+func (s *fishAudioTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	return s.endInputLocked()
+}
+
+func (s *fishAudioTTSSynthesizeStream) flushPendingTextLocked() error {
 	if s.pendingText == "" {
 		return nil
 	}
@@ -550,9 +564,7 @@ func (s *fishAudioTTSSynthesizeStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if stopMessage, err := buildFishAudioTTSSimpleEvent("stop"); err == nil {
-		_ = s.writeMessageData(websocket.BinaryMessage, stopMessage)
-	}
+	_ = s.endInputLocked()
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
@@ -561,6 +573,26 @@ func (s *fishAudioTTSSynthesizeStream) Close() error {
 		s.owner.unregisterStream(s)
 	}
 	return err
+}
+
+func (s *fishAudioTTSSynthesizeStream) endInputLocked() error {
+	if s.inputEnded {
+		return nil
+	}
+	if err := s.flushPendingTextLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	stopMessage, err := buildFishAudioTTSSimpleEvent("stop")
+	if err != nil {
+		return err
+	}
+	if err := s.writeMessageData(websocket.BinaryMessage, stopMessage); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	s.inputEnded = true
+	return nil
 }
 
 func (s *fishAudioTTSSynthesizeStream) writeMessageData(messageType int, data []byte) error {

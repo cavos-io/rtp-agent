@@ -129,6 +129,9 @@ func TestMistralAISTTRealtimeStreamSendsReferenceMessages(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PushFrame error = %v", err)
 	}
+	if messages := conn.messages(); len(messages) != 0 {
+		t.Fatalf("messages after partial PushFrame = %v, want buffered until Flush", messages)
+	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
@@ -528,10 +531,11 @@ func TestMistralAISTTRealtimeStreamUsesDefaultVADForEndpointing(t *testing.T) {
 		t.Fatalf("second event = %s, want end_of_speech", end.Type)
 	}
 	messages := conn.messages()
-	if len(messages) != 3 {
-		t.Fatalf("messages = %v, want two appends then default VAD flush", messages)
+	if len(messages) != 2 {
+		t.Fatalf("messages = %v, want buffered tail append then default VAD flush", messages)
 	}
-	assertMistralRealtimeMessage(t, messages[2], "input_audio.flush", nil)
+	assertMistralRealtimeMessage(t, messages[0], "input_audio.append", nil)
+	assertMistralRealtimeMessage(t, messages[1], "input_audio.flush", nil)
 }
 
 func TestMistralAISTTRealtimeErrorEventReturnsAPIStatusError(t *testing.T) {

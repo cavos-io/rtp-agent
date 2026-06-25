@@ -425,6 +425,7 @@ type basetenTTSSynthesizeStream struct {
 	errCh      chan error
 	mu         sync.Mutex
 	closed     bool
+	inputEnded bool
 
 	writeMessage func(int, []byte) error
 	closeConn    func() error
@@ -436,7 +437,7 @@ func (s *basetenTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	message, err := buildBasetenTTSTextMessage(text)
@@ -454,6 +455,15 @@ func (s *basetenTTSSynthesizeStream) Flush() error {
 	return nil
 }
 
+func (s *basetenTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	return s.endInputLocked()
+}
+
 func (s *basetenTTSSynthesizeStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -464,9 +474,7 @@ func (s *basetenTTSSynthesizeStream) Close() error {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if endMessage, err := buildBasetenTTSEndMessage(); err == nil {
-		_ = s.writeMessageData(websocket.TextMessage, endMessage)
-	}
+	_ = s.endInputLocked()
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
@@ -475,6 +483,22 @@ func (s *basetenTTSSynthesizeStream) Close() error {
 		s.owner.unregisterStream(s)
 	}
 	return err
+}
+
+func (s *basetenTTSSynthesizeStream) endInputLocked() error {
+	if s.inputEnded {
+		return nil
+	}
+	endMessage, err := buildBasetenTTSEndMessage()
+	if err != nil {
+		return err
+	}
+	if err := s.writeMessageData(websocket.TextMessage, endMessage); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	s.inputEnded = true
+	return nil
 }
 
 func (s *basetenTTSSynthesizeStream) writeMessageData(messageType int, data []byte) error {

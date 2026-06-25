@@ -264,6 +264,7 @@ type gradiumTTSSynthesizeStream struct {
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 	closed     bool
+	inputEnded bool
 	sampleRate int
 	finalDone  bool
 	pending    string
@@ -275,7 +276,7 @@ func (s *gradiumTTSSynthesizeStream) PushText(text string) error {
 	if text == "" {
 		return nil
 	}
-	if s.isClosed() {
+	if s.isInputClosed() {
 		return io.ErrClosedPipe
 	}
 	s.pending += text
@@ -294,12 +295,40 @@ func (s *gradiumTTSSynthesizeStream) PushText(text string) error {
 
 func (s *gradiumTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.inputEnded {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	s.finalDone = false
 	s.mu.Unlock()
+	return s.flushPendingWords()
+}
+
+func (s *gradiumTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		s.mu.Unlock()
+		return nil
+	}
+	s.finalDone = false
+	s.mu.Unlock()
+	if err := s.flushPendingWords(); err != nil {
+		return err
+	}
+	if err := s.writeMessageData(buildGradiumTTSEndMessage()); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.inputEnded = true
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *gradiumTTSSynthesizeStream) flushPendingWords() error {
 	tokens := tokenize.SplitWords(s.pending, false, false, false)
 	for _, token := range tokens {
 		if err := s.writeMessageData(buildGradiumTTSTextMessage(token.Token + " ")); err != nil {
@@ -307,7 +336,7 @@ func (s *gradiumTTSSynthesizeStream) Flush() error {
 		}
 	}
 	s.pending = ""
-	return s.writeMessageData(buildGradiumTTSEndMessage())
+	return nil
 }
 
 func (s *gradiumTTSSynthesizeStream) consumePendingToken(token string) {
@@ -350,6 +379,12 @@ func (s *gradiumTTSSynthesizeStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *gradiumTTSSynthesizeStream) isInputClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed || s.inputEnded
 }
 
 func (s *gradiumTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {

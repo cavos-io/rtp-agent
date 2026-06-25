@@ -432,12 +432,13 @@ type murfTTSSynthesizeStream struct {
 	pendingText string
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 }
 
 func (s *murfTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if text == "" {
@@ -450,9 +451,22 @@ func (s *murfTTSSynthesizeStream) PushText(text string) error {
 func (s *murfTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed || s.inputEnded {
+		return io.ErrClosedPipe
+	}
+	return s.flushPendingTextLocked()
+}
+
+func (s *murfTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	return s.endInputLocked()
+}
+
+func (s *murfTTSSynthesizeStream) flushPendingTextLocked() error {
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
@@ -460,11 +474,25 @@ func (s *murfTTSSynthesizeStream) Flush() error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *murfTTSSynthesizeStream) endInputLocked() error {
+	if s.inputEnded {
+		return nil
+	}
+	if err := s.flushPendingTextLocked(); err != nil {
+		return err
+	}
 	message, err := buildMurfTTSEndMessage(s.provider, s.contextID)
 	if err != nil {
 		return err
 	}
-	return s.writeMessageLocked(message)
+	if err := s.writeMessageLocked(message); err != nil {
+		return err
+	}
+	s.inputEnded = true
+	return nil
 }
 
 func (s *murfTTSSynthesizeStream) sendCompleteSentencesLocked() error {

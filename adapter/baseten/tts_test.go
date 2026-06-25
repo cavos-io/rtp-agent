@@ -432,6 +432,9 @@ func TestBasetenTTSStreamSendsReferenceSetupTextAndEnd(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("flush: %v", err)
 	}
+	if err := endBasetenTTSTestInput(stream); err != nil {
+		t.Fatalf("end input: %v", err)
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -445,6 +448,37 @@ func TestBasetenTTSStreamSendsReferenceSetupTextAndEnd(t *testing.T) {
 	}
 	if got := readBasetenTestChan(t, endCh, errCh); got != "__END__" {
 		t.Fatalf("end message = %q, want sentinel", got)
+	}
+}
+
+func TestBasetenTTSStreamEndInputSendsReferenceEndOnce(t *testing.T) {
+	var messages []string
+	stream := &basetenTTSSynthesizeStream{
+		writeMessage: func(_ int, payload []byte) error {
+			messages = append(messages, string(payload))
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after EndInput error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	want := []string{"hello", basetenTTSEndSentinel}
+	if strings.Join(messages, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("messages = %#v, want %#v", messages, want)
 	}
 }
 
@@ -928,6 +962,14 @@ func TestBasetenTTSStreamDialErrorReturnsFailure(t *testing.T) {
 	if _, err := provider.Stream(context.Background()); err == nil {
 		t.Fatal("stream error = nil, want dial failure")
 	}
+}
+
+func endBasetenTTSTestInput(stream tts.SynthesizeStream) error {
+	ending, ok := stream.(interface{ EndInput() error })
+	if !ok {
+		return errors.New("baseten stream does not implement EndInput")
+	}
+	return ending.EndInput()
 }
 
 func mustNewBasetenTTS(t *testing.T, apiKey string, model string, opts ...BasetenTTSOption) *BasetenTTS {
