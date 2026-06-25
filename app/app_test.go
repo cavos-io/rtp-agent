@@ -3170,19 +3170,25 @@ func TestDefaultConfigFromEnvSelectsSimliLLM(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvSelectsHedraLLM(t *testing.T) {
+func TestDefaultConfigFromEnvRejectsHedraLLMProvider(t *testing.T) {
 	t.Setenv("HEDRA_API_KEY", "test-hedra-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "hedra")
 
-	app, err := NewApp(DefaultConfigFromEnv())
-	if err != nil {
-		t.Fatalf("NewApp() error = %v", err)
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_PROVIDER "hedra"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Hedra LLM provider", err)
 	}
-	if app.Session == nil || app.Session.LLM == nil {
-		t.Fatal("Session LLM is nil")
-	}
-	if got := llm.Label(app.Session.LLM); got != "hedra.HedraLLM" {
-		t.Fatalf("LLM label = %q, want hedra.HedraLLM", got)
+}
+
+func TestDefaultConfigFromEnvRejectsHedraLLMFallbackProvider(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("HEDRA_API_KEY", "test-hedra-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "hedra")
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_LLM_FALLBACK_PROVIDERS entry "hedra"`) {
+		t.Fatalf("NewApp() error = %v, want unsupported Hedra LLM fallback provider", err)
 	}
 }
 
@@ -5945,7 +5951,6 @@ func TestDefaultConfigFromEnvAcceptsReferenceLLMFallbackProviders(t *testing.T) 
 		{name: "anthropic", provider: "anthropic", envKey: "ANTHROPIC_API_KEY", envValue: "test-anthropic-key"},
 		{name: "google", provider: "google", envKey: "GOOGLE_API_KEY", envValue: "test-google-key"},
 		{name: "baseten", provider: "baseten", envKey: "BASETEN_API_KEY", envValue: "test-baseten-key"},
-		{name: "hedra", provider: "hedra", envKey: "HEDRA_API_KEY", envValue: "test-hedra-key"},
 		{name: "langchain", provider: "langchain", envKey: "LANGCHAIN_API_KEY", envValue: "test-langchain-key"},
 		{name: "lemonslice", provider: "lemonslice", envKey: "LEMONSLICE_API_KEY", envValue: "test-lemonslice-key"},
 		{name: "minimax", provider: "minimax", envKey: "MINIMAX_API_KEY", envValue: "test-minimax-key"},

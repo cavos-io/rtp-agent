@@ -35,7 +35,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | google | yes | yes | yes |  |  |  |
 | gradium |  | yes | yes |  |  |  |
 | groq | yes | yes | yes |  |  |  |
-| hedra | yes |  |  |  | yes |  |
+| hedra |  |  |  |  | yes |  |
 | hume |  |  | yes |  |  |  |
 | inworld |  | yes | yes |  |  |  |
 | langchain | yes |  |  |  |  |  |
