@@ -1526,19 +1526,32 @@ func TestRealtimeSessionResamplesInputAudioWithReferenceStreamTiming(t *testing.
 func TestRealtimeSessionUpdateChatContextWaitsForProviderAck(t *testing.T) {
 	createReceived := make(chan map[string]any, 1)
 	allowAck := make(chan struct{})
+	serverErr := make(chan error, 1)
+	serverDone := make(chan struct{})
+	var serverDoneOnce sync.Once
+	finishServer := func() {
+		serverDoneOnce.Do(func() { close(serverDone) })
+	}
+	reportServerErr := func(err error) {
+		select {
+		case serverErr <- err:
+		default:
+		}
+	}
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		defer finishServer()
 		if _, _, err := conn.ReadMessage(); err != nil {
-			t.Errorf("Read initial session update error = %v", err)
+			reportServerErr(fmt.Errorf("read initial session update: %w", err))
 			return
 		}
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
-			t.Errorf("Read chat context update error = %v", err)
+			reportServerErr(fmt.Errorf("read chat context update: %w", err))
 			return
 		}
 		var msg map[string]any
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			t.Errorf("Decode chat context update error = %v", err)
+			reportServerErr(fmt.Errorf("decode chat context update: %w", err))
 			return
 		}
 		createReceived <- msg
@@ -1548,7 +1561,7 @@ func TestRealtimeSessionUpdateChatContextWaitsForProviderAck(t *testing.T) {
 			"previous_item_id": msg["previous_item_id"],
 			"item":             msg["item"],
 		}); err != nil {
-			t.Errorf("Write conversation.item.added error = %v", err)
+			reportServerErr(fmt.Errorf("write conversation.item.added: %w", err))
 		}
 	})
 
@@ -1593,6 +1606,16 @@ func TestRealtimeSessionUpdateChatContextWaitsForProviderAck(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("UpdateChatContext did not return after provider ACK")
+	}
+	select {
+	case <-serverDone:
+	case <-time.After(time.Second):
+		t.Fatal("server handler did not finish after provider ACK")
+	}
+	select {
+	case err := <-serverErr:
+		t.Fatalf("server handler error = %v", err)
+	default:
 	}
 }
 
@@ -5010,7 +5033,7 @@ func TestRealtimeSessionPersistsTextDeltaOnResponseDone(t *testing.T) {
 	}
 }
 
-func TestRealtimeSessionDoesNotDuplicateExistingRemoteOutputTranscript(t *testing.T) {
+func TestRealtimeSessionAppendsMatchingRemoteOutputTranscript(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	if err := session.remote.Insert(nil, &llm.ChatMessage{
 		ID:      "msg_text",
@@ -5053,11 +5076,55 @@ func TestRealtimeSessionDoesNotDuplicateExistingRemoteOutputTranscript(t *testin
 	if !ok {
 		t.Fatalf("remote item = %T, want *llm.ChatMessage", session.remote.Get("msg_text"))
 	}
-	if got := msg.TextContent(); got != "already spoken" {
-		t.Fatalf("remote text content = %q, want no duplicate output transcript", got)
+	if got := msg.TextContent(); got != "already spoken\nalready spoken" {
+		t.Fatalf("remote text content = %q, want existing text plus reference-appended transcript", got)
 	}
-	if len(msg.Content) != 1 {
-		t.Fatalf("remote content parts = %#v, want existing content only", msg.Content)
+	if len(msg.Content) != 2 {
+		t.Fatalf("remote content parts = %#v, want existing content plus reference-appended transcript", msg.Content)
+	}
+	if msg.Content[1].Text != "already spoken" {
+		t.Fatalf("remote appended transcript = %#v, want already spoken", msg.Content[1])
+	}
+}
+
+func TestRealtimeSessionAppendsEmptyOutputTranscriptOnResponseDone(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "msg_empty",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "prefilled"}},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_empty",
+			"type": "message",
+		},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_empty", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("msg_empty").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote item = %T, want *llm.ChatMessage", session.remote.Get("msg_empty"))
+	}
+	if len(msg.Content) != 2 {
+		t.Fatalf("remote content parts = %#v, want existing content plus empty output transcript", msg.Content)
+	}
+	if msg.Content[1].Text != "" {
+		t.Fatalf("remote appended transcript = %#v, want explicit empty text part", msg.Content[1])
 	}
 }
 

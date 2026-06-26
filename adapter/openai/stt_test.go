@@ -1022,6 +1022,92 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTProviderErrorRetryCountSurvivesInterim(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTConnectOptions(llm.APIConnectOptions{MaxRetry: 1, RetryInterval: time.Millisecond, Timeout: time.Second}),
+	)
+	var dialCount atomic.Int32
+	releaseThird := make(chan struct{})
+	allowSecondError := make(chan struct{})
+	var closeAllowSecondError sync.Once
+	defer closeAllowSecondError.Do(func() { close(allowSecondError) })
+	defer close(releaseThird)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if attempt <= 2 {
+				delta := fmt.Sprintf(`{
+					"type":"conversation.item.input_audio_transcription.delta",
+					"item_id":"item-%d",
+					"delta":"partial-%d"
+				}`, attempt, attempt)
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(delta)); err != nil {
+					t.Errorf("write interim transcript: %v", err)
+					return
+				}
+				if attempt == 2 {
+					<-allowSecondError
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"error",
+					"error":{"message":"temporary provider error","code":"server_error"}
+				}`)); err != nil {
+					t.Errorf("write provider error: %v", err)
+				}
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"conversation.item.input_audio_transcription.completed",
+				"item_id":"item-3",
+				"transcript":"unexpected third reconnect"
+			}`)); err != nil {
+				t.Errorf("write unexpected final transcript: %v", err)
+			}
+			<-releaseThird
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if first.Type != stt.SpeechEventInterimTranscript || first.Alternatives[0].Text != "partial-1" {
+		t.Fatalf("first event = %+v, want first interim transcript", first)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if second.Type != stt.SpeechEventInterimTranscript || second.Alternatives[0].Text != "partial-2" {
+		t.Fatalf("second event = %+v, want second interim transcript after one retry", second)
+	}
+	closeAllowSecondError.Do(func() { close(allowSecondError) })
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("third Next event = %+v, want retry exhaustion error", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("third Next error = %T %v, want APIConnectionError after retry exhaustion", err, err)
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want no third reconnect after interim-only retry", got)
+	}
+}
+
 func TestOpenAISTTStreamReconnectsAfterUnexpectedNormalClose(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),

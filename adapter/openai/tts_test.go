@@ -359,8 +359,12 @@ func TestOpenAITTSLabelCapabilitiesAndUnsupportedStream(t *testing.T) {
 	if provider.SampleRate() != 24000 || provider.NumChannels() != 1 {
 		t.Fatalf("audio format = %d/%d, want 24000/1", provider.SampleRate(), provider.NumChannels())
 	}
-	if _, err := provider.Stream(context.Background()); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("Stream error = %v, want io.ErrUnexpectedEOF", err)
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream returned %T, want nil", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "streaming is not supported") {
+		t.Fatalf("Stream error = %v, want explicit unsupported streaming error", err)
 	}
 }
 
@@ -494,6 +498,7 @@ func TestOpenAITTSRepeatedPrewarmDoesNotCancelPreviousRequest(t *testing.T) {
 func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	var gotAuth string
 	var gotPath string
+	const requestID = "req_audio_123"
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
@@ -516,7 +521,7 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}, "X-Request-Id": []string{requestID}},
 			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
 			Request:    r,
 		}, nil
@@ -545,11 +550,61 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	if string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
 		t.Fatalf("audio bytes = %v, want server bytes", audio.Frame.Data)
 	}
+	if audio.RequestID != requestID {
+		t.Fatalf("audio request id = %q, want provider request id", audio.RequestID)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != requestID {
+		t.Fatalf("final = %#v, want final marker with provider request id", final)
+	}
 	if gotAuth != "Bearer test-key" {
 		t.Fatalf("Authorization = %q, want bearer key", gotAuth)
 	}
 	if gotPath != "/v1/audio/speech" {
 		t.Fatalf("path = %q, want OpenAI speech endpoint", gotPath)
+	}
+}
+
+func TestOpenAITTSSynthesizeUsesUnknownRequestIDFallback(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+	provider, err := NewOpenAITTS("test-key", goopenai.TTSModel1, "",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.RequestID != "unknown" {
+		t.Fatalf("audio request id = %q, want reference unknown fallback", audio.RequestID)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != "unknown" {
+		t.Fatalf("final = %#v, want final marker with reference unknown request id", final)
 	}
 }
 
@@ -709,7 +764,7 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"req_sse_123"}},
 			Body:       io.NopCloser(strings.NewReader(sse)),
 			Request:    r,
 		}, nil
@@ -734,6 +789,9 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 	}
 	if audio.Frame.NumChannels != 1 {
 		t.Fatalf("channels = %d, want reference provider channels", audio.Frame.NumChannels)
+	}
+	if audio.RequestID != "req_sse_123" {
+		t.Fatalf("SSE audio request id = %q, want provider request id", audio.RequestID)
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")
@@ -1108,11 +1166,13 @@ func TestOpenAITTSSSEPCMEmitsFinalMarkerAfterCleanEOF(t *testing.T) {
 }
 
 func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
+	const requestID = "req_sse_usage"
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
-		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
+		sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}) + `"}` + "\n\n" +
+			`data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{requestID}},
 			Body:       io.NopCloser(strings.NewReader(sse)),
 		}, nil
 	})
@@ -1120,10 +1180,13 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
 		withOpenAITTSHTTPClient(client),
 	)
-	metricsCh := make(chan int, 1)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
 	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
 		if metrics.InputTokens == 7 && metrics.OutputTokens == 11 {
-			metricsCh <- metrics.CharactersCount
+			if metrics.RequestID != requestID {
+				t.Errorf("metrics request id = %q, want provider request id", metrics.RequestID)
+			}
+			metricsCh <- metrics
 		}
 	})
 
@@ -1132,17 +1195,70 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
-	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF after done event", err)
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.RequestID != requestID {
+		t.Fatalf("audio request id = %q, want provider request id", audio.RequestID)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != requestID {
+		t.Fatalf("final = %#v, want final marker with provider request id", final)
 	}
 
 	select {
-	case chars := <-metricsCh:
-		if chars != len("hello tokens") {
-			t.Fatalf("CharactersCount = %d, want input text length", chars)
+	case metrics := <-metricsCh:
+		if metrics.CharactersCount != len("hello tokens") {
+			t.Fatalf("CharactersCount = %d, want input text length", metrics.CharactersCount)
+		}
+		if metrics.AudioDuration <= 0 {
+			t.Fatalf("AudioDuration = %f, want synthesized audio duration", metrics.AudioDuration)
+		}
+		if metrics.TTFB < 0 {
+			t.Fatalf("TTFB = %f, want non-negative time to first byte", metrics.TTFB)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for SSE done usage metrics")
+	}
+}
+
+func TestOpenAITTSSSEDoneUsageWithoutAudioSuppressesMetrics(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"req_no_audio_usage"}},
+			Body:       io.NopCloser(strings.NewReader(sse)),
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		if metrics.InputTokens == 7 && metrics.OutputTokens == 11 {
+			metricsCh <- metrics
+		}
+	})
+
+	stream, err := provider.Synthesize(context.Background(), "hello tokens")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if audio, err := stream.Next(); !errors.Is(err, io.EOF) || audio != nil {
+		t.Fatalf("Next = (%#v, %v), want EOF without audio", audio, err)
+	}
+
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("unexpected token usage metrics without audio: %#v", metrics)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

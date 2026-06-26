@@ -1140,13 +1140,19 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 				connectedAt = time.Now()
 				continue
 			}
+			if errors.As(err, &apiErr) && s.owner != nil && s.owner.connect.MaxRetry > 0 {
+				s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to recognize speech after %d attempts", providerErrorRetries))
+				return
+			}
 			s.errCh <- err
 			return
 		}
 		for _, event := range events {
 			s.sendEvent(event)
 		}
-		providerErrorRetries = 0
+		if openAIRealtimeSTTHasFinalTranscript(events) {
+			providerErrorRetries = 0
+		}
 		if s.shouldRecycleAfterEvents(events, connectedAt) {
 			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
 				if s.isClosed() || s.ctx.Err() != nil {
@@ -1158,6 +1164,15 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 			connectedAt = time.Now()
 		}
 	}
+}
+
+func openAIRealtimeSTTHasFinalTranscript(events []*stt.SpeechEvent) bool {
+	for _, event := range events {
+		if event != nil && event.Type == stt.SpeechEventFinalTranscript {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *openAIRealtimeSTTStream) vadLoopFor(vadStream vad.VADStream) {

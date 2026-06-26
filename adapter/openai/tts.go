@@ -253,6 +253,7 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		streamFormat:   openAITTSStreamFormatForModel(t.model),
 		provider:       t,
 		inputText:      text,
+		metricsStarted: time.Now(),
 	}
 	if !t.registerStream(stream) {
 		stream.Close()
@@ -274,7 +275,7 @@ func buildOpenAITTSSpeechRequest(t *OpenAITTS, text string) openai.CreateSpeechR
 
 func (t *OpenAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	// OpenAI does not have a native streaming API for TTS via standard REST.
-	return nil, io.ErrUnexpectedEOF
+	return nil, fmt.Errorf("streaming is not supported by openai tts, use Synthesize or a StreamAdapter")
 }
 
 func (t *OpenAITTS) Prewarm() {
@@ -403,6 +404,7 @@ type openaiTTSChunkedStream struct {
 	streamFormat   string
 	provider       *OpenAITTS
 	inputText      string
+	requestID      string
 	startOnce      sync.Once
 	startErr       error
 	scanner        *bufio.Scanner
@@ -423,6 +425,9 @@ type openaiTTSChunkedStream struct {
 	sseDone        bool
 	sseSawAudio    bool
 	sseFinalSent   bool
+	metricsStarted time.Time
+	metricsFirst   time.Time
+	metricsAudio   float64
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -471,9 +476,23 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 			s.startErr = io.EOF
 			return
 		}
+		s.requestID = openAITTSRequestID(resp.Header())
 		s.resp = resp
 	})
 	return s.startErr
+}
+
+func openAITTSRequestID(header http.Header) string {
+	if header == nil {
+		return "unknown"
+	}
+	if requestID := header.Get("X-Request-Id"); requestID != "" {
+		return requestID
+	}
+	if requestID := header.Get("Openai-Request-Id"); requestID != "" {
+		return requestID
+	}
+	return "unknown"
 }
 
 func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
@@ -509,7 +528,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				if s.audioSawAudio && !s.audioFinalSent {
 					s.audioFinalSent = true
-					return &tts.SynthesizedAudio{IsFinal: true}, nil
+					return s.finalAudio(), nil
 				}
 				return nil, io.EOF
 			}
@@ -560,7 +579,7 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 		if openAITTSDecodeEOF(err) {
 			if s.audioSawAudio && !s.audioFinalSent {
 				s.audioFinalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.finalAudio(), nil
 			}
 			return nil, io.EOF
 		}
@@ -570,7 +589,7 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 	if err != nil {
 		return nil, err
 	}
-	return &tts.SynthesizedAudio{Frame: frame}, nil
+	return s.audioFrame(frame), nil
 }
 
 func (s *openaiTTSChunkedStream) feedDecodedAudio() {
@@ -617,7 +636,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			s.sseDone = true
 			if s.sseSawAudio && !s.sseFinalSent {
 				s.sseFinalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.finalAudio(), nil
 			}
 			return nil, io.EOF
 		}
@@ -653,7 +672,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			s.sseDone = true
 			if s.sseSawAudio {
 				s.sseFinalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.finalAudio(), nil
 			}
 			return nil, io.EOF
 		}
@@ -667,7 +686,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 	s.sseDone = true
 	if s.sseSawAudio && !s.sseFinalSent {
 		s.sseFinalSent = true
-		return &tts.SynthesizedAudio{IsFinal: true}, nil
+		return s.finalAudio(), nil
 	}
 	return nil, io.EOF
 }
@@ -693,7 +712,7 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 		if openAITTSDecodeEOF(err) {
 			if s.sseDone && s.sseSawAudio && !s.sseFinalSent {
 				s.sseFinalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.finalAudio(), nil
 			}
 			return nil, io.EOF
 		}
@@ -703,7 +722,24 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 	if err != nil {
 		return nil, err
 	}
-	return &tts.SynthesizedAudio{Frame: frame}, nil
+	return s.audioFrame(frame), nil
+}
+
+func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{IsFinal: true, RequestID: s.requestID}
+}
+
+func (s *openaiTTSChunkedStream) audioFrame(frame *model.AudioFrame) *tts.SynthesizedAudio {
+	if frame != nil {
+		if s.metricsStarted.IsZero() {
+			s.metricsStarted = time.Now()
+		}
+		if s.metricsFirst.IsZero() {
+			s.metricsFirst = time.Now()
+		}
+		s.metricsAudio += coreaudio.CalculateAudioDuration([]*model.AudioFrame{frame})
+	}
+	return &tts.SynthesizedAudio{Frame: frame, RequestID: s.requestID}
 }
 
 func (s *openaiTTSChunkedStream) decodedAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
@@ -806,7 +842,7 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 			if err != nil {
 				return nil, err
 			}
-			return &tts.SynthesizedAudio{Frame: frame}, nil
+			return s.audioFrame(frame), nil
 		}
 		return nil, nil
 	}
@@ -824,14 +860,12 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 	if len(data) == 0 {
 		return nil, nil
 	}
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              data,
-			SampleRate:        sampleRate,
-			NumChannels:       channels,
-			SamplesPerChannel: uint32(len(data)) / max(channels*2, 1),
-		},
-	}, nil
+	return s.audioFrame(&model.AudioFrame{
+		Data:              data,
+		SampleRate:        sampleRate,
+		NumChannels:       channels,
+		SamplesPerChannel: uint32(len(data)) / max(channels*2, 1),
+	}), nil
 }
 
 func (s *openaiTTSChunkedStream) nextWAVFrame(data []byte) (*model.AudioFrame, bool, error) {
@@ -1006,12 +1040,27 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 	if inputTokens == 0 && outputTokens == 0 {
 		return
 	}
+	if !s.sseSawAudio {
+		return
+	}
+	duration := 0.0
+	if !s.metricsStarted.IsZero() {
+		duration = time.Since(s.metricsStarted).Seconds()
+	}
+	ttfb := 0.0
+	if !s.metricsStarted.IsZero() && !s.metricsFirst.IsZero() {
+		ttfb = s.metricsFirst.Sub(s.metricsStarted).Seconds()
+	}
 	s.provider.EmitMetricsCollected(&telemetry.TTSMetrics{
 		Label:           s.provider.Label(),
 		Timestamp:       time.Now(),
+		RequestID:       s.requestID,
+		TTFB:            ttfb,
+		Duration:        duration,
 		CharactersCount: len(s.inputText),
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
+		AudioDuration:   s.metricsAudio,
 		Streamed:        false,
 		Metadata: &telemetry.Metadata{
 			ModelName:     s.provider.Model(),

@@ -1959,6 +1959,7 @@ func copyAgentRuntime(dst *agent.Agent, src *agent.Agent) {
 	dst.ChatCtx = src.ChatCtx
 	dst.TurnDetection = src.TurnDetection
 	dst.TurnDetector = src.TurnDetector
+	dst.AudioTurnDetector = src.AudioTurnDetector
 	dst.Avatar = src.Avatar
 	dst.STT = src.STT
 	dst.VAD = src.VAD
@@ -2282,6 +2283,17 @@ func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
 		return nil
 	case providerPipecat:
 		detector, err := appNewPipecatSmartTurn()
+		if err != nil {
+			return err
+		}
+		a.AudioTurnDetector = detector
+		return nil
+	case providerCavos:
+		var opts []cavos.SmartTurnOption
+		if addr := os.Getenv("RTP_AGENT_SMART_TURN_GRPC_ADDR"); addr != "" {
+			opts = append(opts, cavos.WithSmartTurnAddr(addr))
+		}
+		detector, err := cavos.NewSmartTurn(opts...)
 		if err != nil {
 			return err
 		}
