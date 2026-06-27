@@ -2118,44 +2118,60 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	if s.isClosed() {
 		return nil, io.EOF
 	}
-	resp, err := s.stream.Recv()
-	if err != nil {
-		if s.isClosed() {
-			return nil, io.EOF
+	for {
+		resp, err := s.stream.Recv()
+		if err != nil {
+			if s.isClosed() {
+				return nil, io.EOF
+			}
+			return nil, openAIStreamRecvError(err)
 		}
-		return nil, openAIStreamRecvError(err)
-	}
 
-	if len(resp.Choices) == 0 {
-		return &llm.ChatChunk{ID: resp.ID}, nil
-	}
-
-	choice := resp.Choices[0]
-	chunk := &llm.ChatChunk{
-		ID: resp.ID,
-		Delta: &llm.ChoiceDelta{
-			Role:    llm.ChatRole(choice.Delta.Role),
-			Content: choice.Delta.Content,
-		},
-	}
-
-	if len(choice.Delta.ToolCalls) > 0 {
-		chunk.Delta.ToolCalls = make([]llm.FunctionToolCall, 0, len(choice.Delta.ToolCalls))
-		for _, tc := range choice.Delta.ToolCalls {
-			chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
-				Type:      string(tc.Type),
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-				CallID:    tc.ID,
-			})
+		if len(resp.Choices) == 0 {
+			return &llm.ChatChunk{ID: resp.ID}, nil
 		}
-	}
 
-	if resp.Usage != nil {
-		chunk.Usage = openAICompletionUsage(resp.Usage)
-	}
+		choice := resp.Choices[0]
+		if resp.Usage == nil && isEmptyOpenAIStreamChoiceDelta(choice) {
+			continue
+		}
+		chunk := &llm.ChatChunk{
+			ID: resp.ID,
+			Delta: &llm.ChoiceDelta{
+				Role:    llm.ChatRole(choice.Delta.Role),
+				Content: choice.Delta.Content,
+			},
+		}
 
-	return chunk, nil
+		if len(choice.Delta.ToolCalls) > 0 {
+			chunk.Delta.ToolCalls = make([]llm.FunctionToolCall, 0, len(choice.Delta.ToolCalls))
+			for _, tc := range choice.Delta.ToolCalls {
+				chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
+					Type:      string(tc.Type),
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+					CallID:    tc.ID,
+				})
+			}
+		}
+
+		if resp.Usage != nil {
+			chunk.Usage = openAICompletionUsage(resp.Usage)
+		}
+
+		return chunk, nil
+	}
+}
+
+func isEmptyOpenAIStreamChoiceDelta(choice openai.ChatCompletionStreamChoice) bool {
+	delta := choice.Delta
+	return choice.FinishReason == "" &&
+		delta.Role == "" &&
+		delta.Content == "" &&
+		delta.Refusal == "" &&
+		delta.ReasoningContent == "" &&
+		delta.FunctionCall == nil &&
+		len(delta.ToolCalls) == 0
 }
 
 func openAIStreamRecvError(err error) error {
