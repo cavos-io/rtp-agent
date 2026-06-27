@@ -24,6 +24,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	langutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -1242,20 +1243,7 @@ func elevenLabsBaseLanguage(language string) string {
 	if language == "" {
 		return ""
 	}
-	base := strings.ToLower(language)
-	if idx := strings.IndexAny(base, "-_"); idx >= 0 {
-		base = base[:idx]
-	}
-	switch base {
-	case "jpn":
-		return "ja"
-	case "kor":
-		return "ko"
-	case "cmn", "zho", "chi":
-		return "zh"
-	default:
-		return base
-	}
+	return langutil.Language(language)
 }
 
 func elevenLabsPreferredAlignment(language string, preferred string) string {
