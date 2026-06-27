@@ -744,11 +744,20 @@ func (a *elevenLabsAlignment) durations() []int {
 }
 
 type elWSResponse struct {
+	ContextID           string               `json:"context_id"`
+	ContextIDCamel      string               `json:"contextId"`
 	Audio               string               `json:"audio"`
 	IsFinal             bool                 `json:"isFinal"`
 	NormalizedAlignment *elevenLabsAlignment `json:"normalizedAlignment"`
 	Alignment           *elevenLabsAlignment `json:"alignment"`
 	Error               string               `json:"error,omitempty"`
+}
+
+func (r elWSResponse) contextID() string {
+	if r.ContextID != "" {
+		return r.ContextID
+	}
+	return r.ContextIDCamel
 }
 
 func (s *elevenLabsStream) readLoop() {
@@ -771,6 +780,9 @@ func (s *elevenLabsStream) readLoop() {
 		var resp elWSResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			logger.Logger.Warnw("Failed to unmarshal ElevenLabs response", err, "payload", string(message))
+			continue
+		}
+		if respContextID := resp.contextID(); respContextID != "" && respContextID != s.contextID {
 			continue
 		}
 
