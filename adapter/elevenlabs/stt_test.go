@@ -1763,6 +1763,59 @@ func TestElevenLabsSTTStreamUnexpectedNormalCloseReturnsAPIStatusError(t *testin
 	}
 }
 
+func TestElevenLabsSTTStreamProviderCloseAfterEndInputReturnsEOF(t *testing.T) {
+	closed := make(chan struct{})
+	closeAfterHandshake := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runElevenLabsNormalCloseWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	concrete := stream.(*elevenLabsSTTStream)
+	if err := concrete.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	close(closeAfterHandshake)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normal close server")
+	}
+
+	event, err := stream.Next()
+	if event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after input-ended provider close = (%#v, %v), want nil EOF", event, err)
+	}
+}
+
 func TestElevenLabsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		stream := &elevenLabsSTTStream{

@@ -825,7 +825,7 @@ func (s *elevenLabsSTTStream) readLoop() {
 			if s.isStaleConn(version) {
 				continue
 			}
-			if !s.isClosed() {
+			if !s.isClosedOrInputEnded() {
 				s.errCh <- elevenLabsSTTUnexpectedCloseError(err)
 			}
 			return
@@ -851,6 +851,12 @@ func (s *elevenLabsSTTStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *elevenLabsSTTStream) isClosedOrInputEnded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed || s.inputEnded
 }
 
 func elevenLabsSTTUnexpectedCloseError(err error) error {
