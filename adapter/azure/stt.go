@@ -207,6 +207,13 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	s.mu.Lock()
 	beforeLanguage := s.language
 	beforeSampleRate := s.sampleRate
+	beforeSpeechHost := s.speechHost
+	beforeSpeechEndpoint := s.speechEndpoint
+	beforeAuthToken := s.authToken
+	beforeWebsocketURL := s.websocketURL
+	beforeTrueTextPostProcessing := s.trueTextPostProcessing
+	beforeExplicitPunctuation := s.explicitPunctuation
+	beforeProfanity := s.profanity
 	beforeActive := s.activeStreamOptions()
 	if language != "" {
 		s.language = language
@@ -218,6 +225,13 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 		}
 	}
 	s.sampleRate = beforeSampleRate
+	s.speechHost = beforeSpeechHost
+	s.speechEndpoint = beforeSpeechEndpoint
+	s.authToken = beforeAuthToken
+	s.websocketURL = beforeWebsocketURL
+	s.trueTextPostProcessing = beforeTrueTextPostProcessing
+	s.explicitPunctuation = beforeExplicitPunctuation
+	s.profanity = beforeProfanity
 	afterActive := s.activeStreamOptions()
 	activeChanged := beforeActive != afterActive
 	languageCandidatesChanged := beforeActive.language != afterActive.language || beforeActive.languages != afterActive.languages

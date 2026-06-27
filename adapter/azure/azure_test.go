@@ -1971,6 +1971,43 @@ func TestAzureSTTUpdateOptionsIgnoresReferenceImmutableSampleRate(t *testing.T) 
 	}
 }
 
+func TestAzureSTTUpdateOptionsIgnoresReferenceImmutableTransportOptions(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus",
+		WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"),
+		WithAzureSTTProfanity("raw"),
+		WithAzureSTTTrueTextPostProcessing(true),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	beforeURL := buildAzureSTTStreamURL(provider, "en-US")
+	beforeProperties := azureSTTSpeechConfigProperties(provider)
+
+	provider.UpdateOptions("id-ID",
+		WithAzureSTTSpeechEndpoint("https://speech.changed.test/custom"),
+		WithAzureSTTAuthToken("changed-token"),
+		WithAzureSTTWebsocketURL("ws://changed.test/recognition"),
+		WithAzureSTTProfanity("masked"),
+		WithAzureSTTExplicitPunctuation(true),
+		WithAzureSTTTrueTextPostProcessing(false),
+	)
+
+	afterURL := buildAzureSTTStreamURL(provider, "en-US")
+	if afterURL != beforeURL {
+		t.Fatalf("stream URL after update = %q, want original %q", afterURL, beforeURL)
+	}
+	if provider.authToken != "" {
+		t.Fatalf("authToken after update = %q, want original empty token", provider.authToken)
+	}
+	afterProperties := azureSTTSpeechConfigProperties(provider)
+	if afterProperties["SpeechServiceResponse_PostProcessingOption"] != beforeProperties["SpeechServiceResponse_PostProcessingOption"] {
+		t.Fatalf("TrueText property after update = %q, want original %q", afterProperties["SpeechServiceResponse_PostProcessingOption"], beforeProperties["SpeechServiceResponse_PostProcessingOption"])
+	}
+	if got := provider.streamLanguage(""); got != "id-ID" {
+		t.Fatalf("language after update = %q, want language still mutable", got)
+	}
+}
+
 func TestAzureSTTUpdateOptionsPropagatesSegmentationToActiveStream(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)
