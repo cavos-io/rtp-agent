@@ -1127,7 +1127,7 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 
-	if err := stream.PushText("hello"); err != nil {
+	if err := stream.PushText("hello world"); err != nil {
 		t.Fatalf("PushText() error = %v", err)
 	}
 
@@ -1224,6 +1224,69 @@ func TestElevenLabsTTSStreamAutoModeSendsSentencesAndFlushesTailLikeReference(t 
 	case extra := <-messages:
 		t.Fatalf("unexpected provider end packet after Flush: %#v", extra)
 	default:
+	}
+}
+
+func TestElevenLabsTTSStreamWordTokenizerHoldsTailUntilFlushLikeReference(t *testing.T) {
+	messages := make(chan map[string]any, 4)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsChunkLengthSchedule([]int{80, 120, 200}),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello wor"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	init := readElevenLabsTTSStreamMessage(t, messages)
+	contextID, _ := init["context_id"].(string)
+	if init["text"] != " " || contextID == "" {
+		t.Fatalf("init packet = %#v, want warmup packet with context_id", init)
+	}
+	first := readElevenLabsTTSStreamMessage(t, messages)
+	if first["text"] != "hello " || first["context_id"] != contextID {
+		t.Fatalf("first text packet = %#v, want complete word only for context %q", first, contextID)
+	}
+	if _, ok := first["flush"]; ok {
+		t.Fatalf("first text packet = %#v, want no flush for word tokenizer", first)
+	}
+	select {
+	case msg := <-messages:
+		t.Fatalf("partial tail sent before Flush: %#v", msg)
+	default:
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	tail := readElevenLabsTTSStreamMessage(t, messages)
+	if tail["text"] != "wor " || tail["context_id"] != contextID {
+		t.Fatalf("tail text packet = %#v, want flushed incomplete word for context %q", tail, contextID)
+	}
+	if _, ok := tail["flush"]; ok {
+		t.Fatalf("tail text packet = %#v, want no provider flush for word tokenizer", tail)
 	}
 }
 

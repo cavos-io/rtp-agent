@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
@@ -1268,7 +1269,12 @@ func (s *elevenLabsStream) PushText(text string) error {
 		}
 		return nil
 	}
-	return s.sendTextLocked(text, false)
+	s.pendingText += text
+	if err := s.sendCompleteWordsLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	return nil
 }
 
 func (s *elevenLabsStream) sendCompleteSentencesLocked() error {
@@ -1283,6 +1289,28 @@ func (s *elevenLabsStream) sendCompleteSentencesLocked() error {
 		}
 		s.pendingText = strings.TrimPrefix(s.pendingText, sentence)
 	}
+}
+
+func (s *elevenLabsStream) sendCompleteWordsLocked() error {
+	tokens := tokenize.SplitWords(s.pendingText, false, false, false)
+	if len(tokens) <= 1 {
+		return nil
+	}
+	words := make([]string, 0, len(tokens)-1)
+	for _, token := range tokens[:len(tokens)-1] {
+		words = append(words, token.Token)
+	}
+	if err := s.sendTextLocked(strings.Join(words, " "), false); err != nil {
+		return err
+	}
+	lastStart := tokens[len(tokens)-1].Start
+	runes := []rune(s.pendingText)
+	if lastStart < 0 || lastStart > len(runes) {
+		s.pendingText = ""
+		return nil
+	}
+	s.pendingText = strings.TrimLeftFunc(string(runes[lastStart:]), unicode.IsSpace)
+	return nil
 }
 
 func (s *elevenLabsStream) sendTextLocked(text string, flush bool) error {
@@ -1336,12 +1364,25 @@ func (s *elevenLabsStream) EndInput() error {
 }
 
 func (s *elevenLabsStream) flushPendingTextLocked() error {
-	if !s.autoMode || s.pendingText == "" {
+	if s.pendingText == "" {
 		return nil
 	}
-	text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+	var text string
+	if s.autoMode {
+		text = strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+	} else {
+		tokens := tokenize.SplitWords(s.pendingText, false, false, false)
+		words := make([]string, 0, len(tokens))
+		for _, token := range tokens {
+			words = append(words, token.Token)
+		}
+		text = strings.Join(words, " ")
+	}
 	s.pendingText = ""
-	return s.sendTextLocked(text, true)
+	if text == "" {
+		return nil
+	}
+	return s.sendTextLocked(text, s.autoMode)
 }
 
 func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{}, chunkLengthSchedule []int, dictionaries []ElevenLabsPronunciationDictionaryLocator) map[string]interface{} {
