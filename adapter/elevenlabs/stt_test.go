@@ -307,6 +307,35 @@ func TestElevenLabsSTTStreamURLAndMessagesMatchReference(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamLanguageOverrideNormalizesLikeReference(t *testing.T) {
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTBaseURL("https://eleven.example/v1"),
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTLanguage("english"),
+	)
+
+	streamURL, err := url.Parse(buildElevenLabsSTTStreamURL(provider, "fr_ca"))
+	if err != nil {
+		t.Fatalf("parse stream URL: %v", err)
+	}
+	assertElevenLabsQuery(t, streamURL.Query(), "language_code", "fr-CA")
+
+	events, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{
+		language: resolveElevenLabsSTTLanguage(provider, "fr_ca"),
+	}, map[string]any{
+		"message_type": "committed_transcript",
+		"text":         "bonjour",
+	})
+	if err != nil {
+		t.Fatalf("process final: %v", err)
+	}
+	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
+	assertElevenLabsSTTEvent(t, events, 1, stt.SpeechEventFinalTranscript, "bonjour")
+	if got := events[1].Alternatives[0].Language; got != "fr-CA" {
+		t.Fatalf("fallback language = %q, want normalized stream override fr-CA", got)
+	}
+}
+
 func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	messages := make(chan map[string]any, 2)
