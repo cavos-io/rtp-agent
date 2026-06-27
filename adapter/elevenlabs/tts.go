@@ -713,6 +713,8 @@ type elevenLabsStream struct {
 	mp3InputClosed bool
 	mp3DeltaText   string
 	mp3Timed       []tts.TimedString
+	pcmDeltaText   string
+	pcmTimed       []tts.TimedString
 }
 
 type elevenLabsAlignment struct {
@@ -809,10 +811,10 @@ func (s *elevenLabsStream) readLoop() {
 					s.sendError(elevenLabsTTSSynthesisStatusError(err))
 					return
 				}
+				audio.DeltaText, audio.TimedTranscript = s.takePCMMetadata(deltaText, timedTranscript)
 				if resp.IsFinal {
 					audio.IsFinal = false
 				}
-				audio.TimedTranscript = timedTranscript
 				select {
 				case <-s.ctx.Done():
 					return
@@ -826,6 +828,8 @@ func (s *elevenLabsStream) readLoop() {
 			}
 		} else if deltaText != "" && strings.HasPrefix(s.encoding, "mp3") {
 			s.bufferMP3Metadata(deltaText, timedTranscript)
+		} else if deltaText != "" && !resp.IsFinal {
+			s.bufferPCMMetadata(deltaText, timedTranscript)
 		} else if resp.IsFinal || deltaText != "" {
 			// Even if there's no audio, pass alignment or final flags
 			select {
@@ -867,6 +871,31 @@ func (s *elevenLabsStream) bufferMP3MetadataLocked(deltaText string, timedTransc
 	if len(timedTranscript) > 0 {
 		s.mp3Timed = append(s.mp3Timed, timedTranscript...)
 	}
+}
+
+func (s *elevenLabsStream) bufferPCMMetadata(deltaText string, timedTranscript []tts.TimedString) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if deltaText != "" {
+		s.pcmDeltaText += deltaText
+	}
+	if len(timedTranscript) > 0 {
+		s.pcmTimed = append(s.pcmTimed, timedTranscript...)
+	}
+}
+
+func (s *elevenLabsStream) takePCMMetadata(deltaText string, timedTranscript []tts.TimedString) (string, []tts.TimedString) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pcmDeltaText != "" {
+		deltaText = s.pcmDeltaText + deltaText
+		s.pcmDeltaText = ""
+	}
+	if len(s.pcmTimed) > 0 {
+		timedTranscript = append(append([]tts.TimedString(nil), s.pcmTimed...), timedTranscript...)
+		s.pcmTimed = nil
+	}
+	return deltaText, timedTranscript
 }
 
 func (s *elevenLabsStream) pushMP3Audio(encoded string, deltaText string, timedTranscript []tts.TimedString) error {
