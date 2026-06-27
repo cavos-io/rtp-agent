@@ -3343,6 +3343,42 @@ func TestAzureTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestAzureTTSSynthesizeStatusErrorCancelsRequestContext(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	requests := make(chan *http.Request, 1)
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			requests <- req
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+
+	req := receiveAzureTestValue(t, requests, "request")
+	select {
+	case <-req.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("request context still active after status error, want provider request cleanup")
+	}
+}
+
 func TestAzureTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {

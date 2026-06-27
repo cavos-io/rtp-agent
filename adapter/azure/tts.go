@@ -573,6 +573,7 @@ func (s *azureTTSChunkedStream) start() error {
 	req = req.Clone(timeoutCtx)
 	resp, err := client.Do(req)
 	if err != nil {
+		s.cancelRequest()
 		s.unregister()
 		if errors.Is(err, context.Canceled) && s.closed.Load() {
 			return io.EOF
@@ -590,11 +591,19 @@ func (s *azureTTSChunkedStream) start() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		s.cancelRequest()
 		s.unregister()
 		return llm.NewAPIStatusError("Azure TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.body = resp.Body
 	return nil
+}
+
+func (s *azureTTSChunkedStream) cancelRequest() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 }
 
 func (s *azureTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
