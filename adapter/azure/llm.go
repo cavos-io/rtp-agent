@@ -9,6 +9,10 @@ func WithAzureLLMMaxOutputTokens(maxOutputTokens int) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMMaxCompletionTokens(maxOutputTokens)
 }
 
+func WithAzureLLMTemperature(temperature float64) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMTemperature(temperature)
+}
+
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {
 	return adapteropenai.NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken, opts...)
 }
