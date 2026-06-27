@@ -837,7 +837,8 @@ func (s *elevenLabsSTTStream) readLoop() {
 		}
 		events, err := processElevenLabsSTTStreamEvent(s.state, data)
 		if err != nil {
-			continue
+			s.sendError(err)
+			return
 		}
 		for _, event := range events {
 			s.events <- event

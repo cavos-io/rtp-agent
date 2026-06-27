@@ -1398,6 +1398,34 @@ func TestElevenLabsSTTStreamEventReportsErrors(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamEventReportsReferenceErrorTypes(t *testing.T) {
+	for _, messageType := range []string{
+		"auth_error",
+		"quota_exceeded",
+		"transcriber_error",
+		"input_error",
+		"error",
+	} {
+		t.Run(messageType, func(t *testing.T) {
+			events, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
+				"message_type": messageType,
+				"message":      "provider failed",
+				"details":      "turn stopped",
+			})
+			if len(events) != 0 {
+				t.Fatalf("events = %#v, want none for provider error", events)
+			}
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+			}
+			if !strings.Contains(err.Error(), messageType+": provider failed - turn stopped") {
+				t.Fatalf("error = %v, want message type and details", err)
+			}
+		})
+	}
+}
+
 func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})
@@ -1480,10 +1508,10 @@ func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
-func TestElevenLabsSTTStreamProviderErrorMessageDoesNotAbortReferenceStream(t *testing.T) {
+func TestElevenLabsSTTStreamProviderErrorMessageAbortsLikeReference(t *testing.T) {
 	serverErr := make(chan error, 1)
 	clientConn, serverConn := net.Pipe()
-	go runElevenLabsSTTErrorThenTranscriptWebsocketServer(serverConn, serverErr)
+	go runElevenLabsSTTErrorWebsocketServer(serverConn, serverErr)
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -1508,18 +1536,15 @@ func TestElevenLabsSTTStreamProviderErrorMessageDoesNotAbortReferenceStream(t *t
 	defer stream.Close()
 
 	event, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next error = %v, want transcript after provider diagnostic", err)
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil when provider sends diagnostic error", event)
 	}
-	if event.Type != stt.SpeechEventStartOfSpeech {
-		t.Fatalf("first event = %#v, want start of speech", event)
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
-	event, err = stream.Next()
-	if err != nil {
-		t.Fatalf("Next final error = %v, want transcript after provider diagnostic", err)
-	}
-	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
-		t.Fatalf("final event = %#v, want final hello transcript", event)
+	if !strings.Contains(err.Error(), "quota_exceeded: diagnostic - continue") {
+		t.Fatalf("Next error = %v, want provider diagnostic details", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -1700,7 +1725,7 @@ func runElevenLabsNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake 
 	errCh <- err
 }
 
-func runElevenLabsSTTErrorThenTranscriptWebsocketServer(conn net.Conn, errCh chan<- error) {
+func runElevenLabsSTTErrorWebsocketServer(conn net.Conn, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
@@ -1719,22 +1744,6 @@ func runElevenLabsSTTErrorThenTranscriptWebsocketServer(conn net.Conn, errCh cha
 	}); err != nil {
 		errCh <- err
 		return
-	}
-	if err := writeElevenLabsServerWebsocketJSONFrame(conn, map[string]any{
-		"message_type":  "committed_transcript_with_timestamps",
-		"text":          "hello",
-		"language_code": "en",
-		"words": []map[string]any{
-			{"text": "hello", "start": 0.1, "end": 0.4},
-		},
-	}); err != nil {
-		errCh <- err
-		return
-	}
-	for {
-		if err := readElevenLabsClientWebsocketFrame(reader); err != nil {
-			break
-		}
 	}
 	errCh <- nil
 }
