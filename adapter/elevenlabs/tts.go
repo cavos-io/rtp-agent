@@ -59,6 +59,7 @@ type ElevenLabsTTS struct {
 	preferredAlignment             string
 	streamResponseTimeout          time.Duration
 	streams                        map[*elevenLabsStream]struct{}
+	currentStreamConn              *elevenLabsTTSConnection
 	closed                         bool
 }
 
@@ -260,11 +261,18 @@ func (t *ElevenLabsTTS) Close() error {
 		streams = append(streams, stream)
 	}
 	t.streams = nil
+	currentConn := t.currentStreamConn
+	t.currentStreamConn = nil
 	t.mu.Unlock()
 
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
+	if currentConn != nil {
+		if err := currentConn.close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 	}
@@ -643,8 +651,21 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 	if !t.registerStream(stream) {
 		return nil, io.ErrClosedPipe
 	}
-	go stream.connectLoop(buildElevenLabsStreamURL(t), header)
+	conn := t.currentConnection(ctx, buildElevenLabsStreamURL(t), header)
+	stream.sharedConn = conn
+	conn.registerStream(stream)
 	return stream, nil
+}
+
+func (t *ElevenLabsTTS) currentConnection(ctx context.Context, streamURL string, header http.Header) *elevenLabsTTSConnection {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.currentStreamConn != nil && t.currentStreamConn.matches(streamURL) {
+		return t.currentStreamConn
+	}
+	conn := newElevenLabsTTSConnection(t, ctx, streamURL, header)
+	t.currentStreamConn = conn
+	return conn
 }
 
 func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
@@ -693,6 +714,7 @@ func elevenLabsSampleRate(encoding string) int {
 
 type elevenLabsStream struct {
 	provider       *ElevenLabsTTS
+	sharedConn     *elevenLabsTTSConnection
 	conn           *websocket.Conn
 	audio          chan *tts.SynthesizedAudio
 	errCh          chan error
@@ -782,45 +804,266 @@ func (r elWSResponse) contextID() string {
 	return r.ContextIDCamel
 }
 
-func (s *elevenLabsStream) connectLoop(streamURL string, header http.Header) {
-	defer close(s.connReady)
+type elevenLabsTTSConnection struct {
+	provider  *ElevenLabsTTS
+	streamURL string
+	header    http.Header
+	dialer    *websocket.Dialer
+	ctx       context.Context
+	cancel    context.CancelFunc
+	ready     chan struct{}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, streamURL, header)
+	mu      sync.Mutex
+	conn    *websocket.Conn
+	streams map[string]*elevenLabsStream
+	closed  bool
+	err     error
+}
+
+func newElevenLabsTTSConnection(provider *ElevenLabsTTS, ctx context.Context, streamURL string, header http.Header) *elevenLabsTTSConnection {
+	connCtx, cancel := context.WithCancel(ctx)
+	c := &elevenLabsTTSConnection{
+		provider:  provider,
+		streamURL: streamURL,
+		header:    header.Clone(),
+		dialer:    websocket.DefaultDialer,
+		ctx:       connCtx,
+		cancel:    cancel,
+		ready:     make(chan struct{}),
+		streams:   make(map[string]*elevenLabsStream),
+	}
+	go c.connect()
+	return c
+}
+
+func (c *elevenLabsTTSConnection) matches(streamURL string) bool {
+	if c == nil || c.streamURL != streamURL {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.closed
+}
+
+func (c *elevenLabsTTSConnection) connect() {
+	defer close(c.ready)
+
+	conn, _, err := c.dialer.DialContext(c.ctx, c.streamURL, c.header)
 	if err != nil {
-		if s.isClosed() {
-			return
-		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			err = llm.NewAPITimeoutError(err.Error())
 		} else {
 			err = llm.NewAPIConnectionError(fmt.Sprintf("could not connect to ElevenLabs: %v", err))
 		}
-		s.mu.Lock()
-		if !s.closed {
-			s.closed = true
-			s.inputErr = io.ErrClosedPipe
-			s.connectErr = err
-			s.cancelResponseTimeoutLocked()
-		}
-		s.mu.Unlock()
-		s.sendError(err)
-		s.provider.unregisterStream(s)
-		s.closeAudio()
-		s.cancel()
+		c.fail(err)
 		return
 	}
 
-	s.mu.Lock()
-	if s.closed || s.provider.isClosed() {
-		s.mu.Unlock()
+	c.mu.Lock()
+	if c.closed || c.provider.isClosed() {
+		c.closed = true
+		c.mu.Unlock()
 		_ = conn.Close()
 		return
 	}
-	s.conn = conn
-	s.mu.Unlock()
+	c.conn = conn
+	c.mu.Unlock()
 
-	go s.readLoop()
-	go s.pingLoop()
+	go c.readLoop()
+}
+
+func (c *elevenLabsTTSConnection) registerStream(stream *elevenLabsStream) {
+	c.mu.Lock()
+	c.streams[stream.contextID] = stream
+	c.mu.Unlock()
+}
+
+func (c *elevenLabsTTSConnection) unregisterStream(stream *elevenLabsStream) {
+	c.mu.Lock()
+	delete(c.streams, stream.contextID)
+	empty := len(c.streams) == 0
+	c.mu.Unlock()
+	if empty {
+		time.AfterFunc(10*time.Millisecond, c.closeIfIdle)
+	}
+}
+
+func (c *elevenLabsTTSConnection) wait(ctx context.Context) (*websocket.Conn, error) {
+	c.mu.Lock()
+	if c.conn != nil {
+		conn := c.conn
+		c.mu.Unlock()
+		return conn, nil
+	}
+	if c.err != nil {
+		err := c.err
+		c.mu.Unlock()
+		return nil, err
+	}
+	if c.closed {
+		c.mu.Unlock()
+		return nil, io.ErrClosedPipe
+	}
+	ready := c.ready
+	c.mu.Unlock()
+
+	select {
+	case <-ready:
+	case <-ctx.Done():
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		return c.conn, nil
+	}
+	if c.err != nil {
+		return nil, c.err
+	}
+	if c.closed {
+		return nil, io.ErrClosedPipe
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, llm.NewAPITimeoutError(ctx.Err().Error())
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, llm.NewAPIConnectionError("could not connect to ElevenLabs")
+}
+
+func (c *elevenLabsTTSConnection) writeJSON(ctx context.Context, payload any) error {
+	conn, err := c.wait(ctx)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.conn == nil {
+		return io.ErrClosedPipe
+	}
+	return conn.WriteJSON(payload)
+}
+
+func (c *elevenLabsTTSConnection) readLoop() {
+	defer c.close()
+	for {
+		conn, err := c.wait(c.ctx)
+		if err != nil {
+			return
+		}
+		msgType, message, err := conn.ReadMessage()
+		if err != nil {
+			c.fail(elevenLabsTTSUnexpectedCloseError(err))
+			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
+		}
+		var resp elWSResponse
+		if err := json.Unmarshal(message, &resp); err != nil {
+			c.fail(elevenLabsTTSSynthesisStatusError(fmt.Errorf("elevenlabs TTS websocket response JSON: %w", err)))
+			return
+		}
+		stream := c.stream(resp.contextID())
+		if stream == nil {
+			continue
+		}
+		if stream.handleResponse(resp) {
+			stream.finishFromConnection()
+			c.unregisterStream(stream)
+		}
+	}
+}
+
+func (c *elevenLabsTTSConnection) stream(contextID string) *elevenLabsStream {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.streams[contextID]
+}
+
+func (c *elevenLabsTTSConnection) fail(err error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.closed = true
+	c.err = err
+	streams := make([]*elevenLabsStream, 0, len(c.streams))
+	for _, stream := range c.streams {
+		streams = append(streams, stream)
+	}
+	c.streams = nil
+	c.mu.Unlock()
+	c.cancel()
+	for _, stream := range streams {
+		stream.failConnection(err)
+	}
+	time.AfterFunc(10*time.Millisecond, c.closeTransport)
+}
+
+func (c *elevenLabsTTSConnection) closeIfIdle() {
+	c.mu.Lock()
+	idle := len(c.streams) == 0
+	c.mu.Unlock()
+	if idle {
+		_ = c.close()
+	}
+}
+
+func (c *elevenLabsTTSConnection) closeTransport() {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+}
+
+func (c *elevenLabsTTSConnection) close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	streams := make([]*elevenLabsStream, 0, len(c.streams))
+	for _, stream := range c.streams {
+		streams = append(streams, stream)
+	}
+	c.streams = nil
+	conn := c.conn
+	c.mu.Unlock()
+	c.cancel()
+	for _, stream := range streams {
+		stream.Close()
+	}
+	if conn != nil {
+		return conn.Close()
+	}
+	return nil
+}
+
+func (s *elevenLabsStream) failConnection(err error) {
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		s.inputErr = io.ErrClosedPipe
+		s.connectErr = err
+		s.cancelResponseTimeoutLocked()
+	}
+	s.mu.Unlock()
+	s.sendError(err)
+	s.provider.unregisterStream(s)
+	s.closeAudio()
+	s.cancel()
+}
+
+func (s *elevenLabsStream) finishFromConnection() {
+	s.closeMP3Decoder(false)
+	s.closeAudio()
+	s.provider.unregisterStream(s)
 }
 
 func (s *elevenLabsStream) closeAudio() {
@@ -829,107 +1072,77 @@ func (s *elevenLabsStream) closeAudio() {
 	})
 }
 
-func (s *elevenLabsStream) readLoop() {
-	defer s.Close()
-	defer func() {
-		s.closeMP3Decoder(false)
-		s.closeAudio()
-	}()
+func (s *elevenLabsStream) handleResponse(resp elWSResponse) bool {
+	if resp.Error != "" {
+		logger.Logger.Errorw("ElevenLabs WebSocket returned error", nil, "error", resp.Error)
+		s.sendError(llm.NewAPIStatusError("Could not synthesize", -1, "", resp.Error))
+		return true
+	}
 
-	for {
-		msgType, message, err := s.conn.ReadMessage()
-		if err != nil {
-			if !s.isClosed() {
-				logger.Logger.Errorw("ElevenLabs WebSocket read error", err)
-				s.sendError(elevenLabsTTSUnexpectedCloseError(err))
+	deltaText := s.deltaText(resp)
+	timedTranscript := s.timedTranscriptFromAlignment(resp)
+
+	if resp.Audio != "" {
+		s.cancelResponseTimeout()
+		if strings.HasPrefix(s.encoding, "mp3") || strings.HasPrefix(s.encoding, "opus") {
+			if err := s.pushCompressedAudio(resp.Audio, deltaText, timedTranscript); err != nil {
+				logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
+				s.sendError(elevenLabsTTSSynthesisStatusError(err))
+				return true
 			}
-			return
-		}
-		if msgType != websocket.TextMessage {
-			continue
-		}
-
-		var resp elWSResponse
-		if err := json.Unmarshal(message, &resp); err != nil {
-			logger.Logger.Warnw("Failed to unmarshal ElevenLabs response", err, "payload", string(message))
-			s.sendError(elevenLabsTTSSynthesisStatusError(fmt.Errorf("elevenlabs TTS websocket response JSON: %w", err)))
-			return
-		}
-		if respContextID := resp.contextID(); respContextID == "" || respContextID != s.contextID {
-			continue
-		}
-
-		if resp.Error != "" {
-			logger.Logger.Errorw("ElevenLabs WebSocket returned error", nil, "error", resp.Error)
-			s.sendError(llm.NewAPIStatusError("Could not synthesize", -1, "", resp.Error))
-			return
-		}
-
-		deltaText := s.deltaText(resp)
-		timedTranscript := s.timedTranscriptFromAlignment(resp)
-
-		if resp.Audio != "" {
-			s.cancelResponseTimeout()
-			if strings.HasPrefix(s.encoding, "mp3") || strings.HasPrefix(s.encoding, "opus") {
-				if err := s.pushCompressedAudio(resp.Audio, deltaText, timedTranscript); err != nil {
-					logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
-					s.sendError(elevenLabsTTSSynthesisStatusError(err))
-					return
-				}
-			} else {
-				audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
-				if err != nil {
-					logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
-					s.sendError(elevenLabsTTSSynthesisStatusError(err))
-					return
-				}
-				audio.DeltaText, audio.TimedTranscript = s.takePCMMetadata(deltaText, timedTranscript)
-				if resp.IsFinal {
-					audio.IsFinal = false
-				}
-				select {
-				case <-s.ctx.Done():
-					return
-				case s.audio <- audio:
-				}
-				if resp.IsFinal {
-					s.sendAudio(&tts.SynthesizedAudio{IsFinal: true})
-					s.markFinished()
-					return
-				}
+		} else {
+			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
+			if err != nil {
+				logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
+				s.sendError(elevenLabsTTSSynthesisStatusError(err))
+				return true
 			}
-		} else if deltaText != "" && (strings.HasPrefix(s.encoding, "mp3") || strings.HasPrefix(s.encoding, "opus")) {
-			s.bufferMP3Metadata(deltaText, timedTranscript)
-		} else if deltaText != "" && !resp.IsFinal {
-			s.bufferPCMMetadata(deltaText, timedTranscript)
-		} else if resp.IsFinal || deltaText != "" {
-			// Even if there's no audio, pass alignment or final flags
+			audio.DeltaText, audio.TimedTranscript = s.takePCMMetadata(deltaText, timedTranscript)
+			if resp.IsFinal {
+				audio.IsFinal = false
+			}
 			select {
 			case <-s.ctx.Done():
-				return
-			case s.audio <- &tts.SynthesizedAudio{
-				IsFinal:         resp.IsFinal,
-				DeltaText:       deltaText,
-				TimedTranscript: timedTranscript,
-			}:
+				return true
+			case s.audio <- audio:
+			}
+			if resp.IsFinal {
+				s.sendAudio(&tts.SynthesizedAudio{IsFinal: true})
+				s.markFinished()
+				return true
 			}
 		}
-
-		if resp.IsFinal {
-			s.cancelResponseTimeout()
-			s.markFinished()
-			if (strings.HasPrefix(s.encoding, "mp3") || strings.HasPrefix(s.encoding, "opus")) && !s.hasCompressedDecoder() {
-				s.sendAudio(&tts.SynthesizedAudio{
-					IsFinal:         true,
-					DeltaText:       deltaText,
-					TimedTranscript: timedTranscript,
-				})
-				return
-			}
-			s.closeMP3Decoder(true)
-			return
+	} else if deltaText != "" && (strings.HasPrefix(s.encoding, "mp3") || strings.HasPrefix(s.encoding, "opus")) {
+		s.bufferMP3Metadata(deltaText, timedTranscript)
+	} else if deltaText != "" && !resp.IsFinal {
+		s.bufferPCMMetadata(deltaText, timedTranscript)
+	} else if resp.IsFinal || deltaText != "" {
+		select {
+		case <-s.ctx.Done():
+			return true
+		case s.audio <- &tts.SynthesizedAudio{
+			IsFinal:         resp.IsFinal,
+			DeltaText:       deltaText,
+			TimedTranscript: timedTranscript,
+		}:
 		}
 	}
+
+	if resp.IsFinal {
+		s.cancelResponseTimeout()
+		s.markFinished()
+		if (strings.HasPrefix(s.encoding, "mp3") || strings.HasPrefix(s.encoding, "opus")) && !s.hasCompressedDecoder() {
+			s.sendAudio(&tts.SynthesizedAudio{
+				IsFinal:         true,
+				DeltaText:       deltaText,
+				TimedTranscript: timedTranscript,
+			})
+			return true
+		}
+		s.closeMP3Decoder(true)
+		return true
+	}
+	return false
 }
 
 func elevenLabsTTSSynthesisStatusError(err error) error {
@@ -1424,24 +1637,6 @@ func elevenLabsDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
 	return &mono
 }
 
-func (s *elevenLabsStream) pingLoop() {
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			s.mu.Lock()
-			if !s.closed && s.conn != nil {
-				_ = s.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(5*time.Second))
-			}
-			s.mu.Unlock()
-		}
-	}
-}
-
 func (s *elevenLabsStream) sendError(err error) {
 	select {
 	case s.errCh <- err:
@@ -1598,7 +1793,7 @@ func (s *elevenLabsStream) sendTextLocked(text string, flush bool) error {
 	if err := s.sendInitLocked(); err != nil {
 		return err
 	}
-	if err := s.conn.WriteJSON(elevenLabsTextPayload(s.contextID, text, flush)); err != nil {
+	if err := s.writeJSONLocked(elevenLabsTextPayload(s.contextID, text, flush)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)
 	}
@@ -1633,12 +1828,12 @@ func (s *elevenLabsStream) EndInput() error {
 	if err := s.sendInitLocked(); err != nil {
 		return err
 	}
-	if err := s.conn.WriteJSON(elevenLabsFlushPayload(s.contextID)); err != nil {
+	if err := s.writeJSONLocked(elevenLabsFlushPayload(s.contextID)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
 	s.armResponseTimeoutLocked()
-	if err := s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID)); err != nil {
+	if err := s.writeJSONLocked(elevenLabsCloseContextPayload(s.contextID)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -1777,7 +1972,7 @@ func (s *elevenLabsStream) sendInitLocked() error {
 	if err := s.waitConnectionLocked(); err != nil {
 		return err
 	}
-	if err := s.conn.WriteJSON(elevenLabsInitPayload(s.contextID, elevenLabsVoiceSettingsPayload(s.voiceSettings), s.chunkLengthSchedule, s.pronunciationDictionaries)); err != nil {
+	if err := s.writeJSONLocked(elevenLabsInitPayload(s.contextID, elevenLabsVoiceSettingsPayload(s.voiceSettings), s.chunkLengthSchedule, s.pronunciationDictionaries)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write initial config to elevenlabs: %w", err)
 	}
@@ -1785,7 +1980,25 @@ func (s *elevenLabsStream) sendInitLocked() error {
 	return nil
 }
 
+func (s *elevenLabsStream) writeJSONLocked(payload any) error {
+	if s.sharedConn != nil {
+		return s.sharedConn.writeJSON(s.ctx, payload)
+	}
+	if s.conn == nil {
+		return llm.NewAPIConnectionError("could not connect to ElevenLabs")
+	}
+	return s.conn.WriteJSON(payload)
+}
+
 func (s *elevenLabsStream) waitConnectionLocked() error {
+	if s.sharedConn != nil {
+		conn, err := s.sharedConn.wait(s.ctx)
+		if err != nil {
+			return err
+		}
+		s.conn = conn
+		return nil
+	}
 	if s.conn != nil {
 		return nil
 	}
@@ -1842,6 +2055,9 @@ func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 	if s.conn != nil {
 		_ = s.conn.Close()
 	}
+	if s.sharedConn != nil {
+		s.sharedConn.unregisterStream(s)
+	}
 }
 
 func (s *elevenLabsStream) closedInputErrorLocked() error {
@@ -1867,11 +2083,19 @@ func (s *elevenLabsStream) rejectClosedPipe() error {
 		}
 		_ = s.mp3Decoder.Close()
 	}
-	if s.initSent && !s.inputEnd && s.conn != nil {
-		_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
+	if s.initSent && !s.inputEnd {
+		if s.sharedConn != nil {
+			_ = s.sharedConn.writeJSON(s.ctx, elevenLabsCloseContextPayload(s.contextID))
+		} else if s.conn != nil {
+			_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
+		}
 	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
+	}
+	if s.sharedConn != nil {
+		s.sharedConn.unregisterStream(s)
+		return nil
 	}
 	if s.conn != nil {
 		return s.conn.Close()
@@ -1896,11 +2120,17 @@ func (s *elevenLabsStream) Close() error {
 		_ = s.mp3Decoder.Close()
 	}
 	if s.initSent && !s.inputEnd {
-		if s.conn != nil {
+		if s.sharedConn != nil {
+			_ = s.sharedConn.writeJSON(s.ctx, elevenLabsCloseContextPayload(s.contextID))
+		} else if s.conn != nil {
 			_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
 		}
 	}
 	s.provider.unregisterStream(s)
+	if s.sharedConn != nil {
+		s.sharedConn.unregisterStream(s)
+		return nil
+	}
 	if s.conn != nil {
 		return s.conn.Close()
 	}
