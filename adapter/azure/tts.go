@@ -239,22 +239,9 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Azure TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	stream := &azureTTSChunkedStream{
-		body:       resp.Body,
+		req:        req,
+		client:     client,
 		sampleRate: t.sampleRate,
 		provider:   t,
 	}
@@ -445,15 +432,26 @@ func (t *AzureTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 type azureTTSChunkedStream struct {
 	body       io.ReadCloser
+	req        *http.Request
+	client     *http.Client
 	sampleRate int
 	carry      byte
 	hasCarry   bool
 	pendingEOF bool
 	finalSent  bool
+	closed     bool
 	provider   *AzureTTS
 }
 
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+	if s.body == nil && s.req != nil {
+		if err := s.start(); err != nil {
+			return nil, err
+		}
+	}
 	if s.body == nil {
 		return nil, io.EOF
 	}
@@ -480,7 +478,7 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				return s.emitFinal()
 			}
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, s.failRead(err)
 		}
 
 		total := start + n
@@ -510,9 +508,35 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				return s.emitFinal()
 			}
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, s.failRead(err)
 		}
 	}
+}
+
+func (s *azureTTSChunkedStream) start() error {
+	client := s.client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	req := s.req
+	s.req = nil
+	s.client = nil
+	resp, err := client.Do(req)
+	if err != nil {
+		s.unregister()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		s.unregister()
+		return llm.NewAPIStatusError("Azure TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.body = resp.Body
+	return nil
 }
 
 func (s *azureTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
@@ -520,34 +544,56 @@ func (s *azureTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 	s.finalSent = true
+	s.closed = true
 	if s.body != nil {
 		body := s.body
 		s.body = nil
 		s.carry = 0
 		s.hasCarry = false
 		_ = body.Close()
-		if s.provider != nil {
-			s.provider.unregisterStream(s)
-		}
 	}
+	s.unregister()
 	return &tts.SynthesizedAudio{IsFinal: true}, nil
 }
 
+func (s *azureTTSChunkedStream) failRead(err error) error {
+	s.closed = true
+	s.finalSent = true
+	if s.body != nil {
+		body := s.body
+		s.body = nil
+		s.carry = 0
+		s.hasCarry = false
+		_ = body.Close()
+	}
+	s.unregister()
+	return llm.NewAPIConnectionError(err.Error())
+}
+
 func (s *azureTTSChunkedStream) Close() error {
-	if s.body == nil {
-		if s.provider != nil {
-			s.provider.unregisterStream(s)
-		}
+	if s.closed {
+		s.unregister()
 		return nil
 	}
+	s.closed = true
 	s.finalSent = true
+	s.req = nil
+	s.client = nil
+	if s.body == nil {
+		s.unregister()
+		return nil
+	}
 	body := s.body
 	s.body = nil
 	s.carry = 0
 	s.hasCarry = false
 	err := body.Close()
+	s.unregister()
+	return err
+}
+
+func (s *azureTTSChunkedStream) unregister() {
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
-	return err
 }

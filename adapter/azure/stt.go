@@ -215,13 +215,15 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 			opt(s)
 		}
 	}
-	activeChanged := beforeActive != s.activeStreamOptions()
+	afterActive := s.activeStreamOptions()
+	activeChanged := beforeActive != afterActive
+	languageCandidatesChanged := beforeActive.language != afterActive.language || beforeActive.languages != afterActive.languages
 	streamLanguage := language
 	if streamLanguage == "" && s.language != beforeLanguage {
 		streamLanguage = s.language
 	}
 	var streamLanguages []string
-	if streamLanguage != "" || activeChanged {
+	if streamLanguage != "" || languageCandidatesChanged {
 		streamLanguages = s.streamLanguageCandidates("")
 	}
 	for stream := range s.streams {
@@ -716,6 +718,7 @@ type azureSTTStream struct {
 	startTimeOffset float64
 	startTime       float64
 	speaking        bool
+	pushedChannels  uint32
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -739,6 +742,12 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return fmt.Errorf("azure stt input sample rate changed from %d to %d", s.pushedSR, frame.SampleRate)
 		}
 		s.pushedSR = frame.SampleRate
+	}
+	if frame.NumChannels != 0 {
+		if s.pushedChannels != 0 && s.pushedChannels != frame.NumChannels {
+			return fmt.Errorf("azure stt input channel count changed from %d to %d", s.pushedChannels, frame.NumChannels)
+		}
+		s.pushedChannels = frame.NumChannels
 	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
@@ -1019,6 +1028,7 @@ func (s *azureSTTStream) parseMessage(payload []byte) *stt.SpeechEvent {
 		s.markSessionStarted()
 		return nil
 	case "turn.end":
+		s.markSessionStopped()
 		return nil
 	}
 	event := parseAzureSTTMessageWithOffset(s.language, payload, s.StartTimeOffset())
@@ -1060,6 +1070,21 @@ func (s *azureSTTStream) markSessionStarted() {
 		if !s.sessionStarted {
 			s.pendingAudio = append(s.pendingAudio, pending[i+1:]...)
 			return
+		}
+	}
+}
+
+func (s *azureSTTStream) markSessionStopped() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.sessionStopped {
+		return
+	}
+	s.sessionStopped = true
+	if s.errCh != nil {
+		select {
+		case s.errCh <- llm.NewAPIConnectionError("SpeechRecognition session stopped"):
+		default:
 		}
 	}
 }
