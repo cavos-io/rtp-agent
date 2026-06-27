@@ -85,6 +85,7 @@ type OpenAILLM struct {
 	toolChoice           llm.ToolChoice
 	defaultReasoning     bool
 	strictToolSchema     bool
+	defaultConnect       *llm.APIConnectOptions
 	extraHeaders         map[string]string
 	extraQuery           map[string]string
 	extraBody            map[string]any
@@ -372,7 +373,9 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		azureDeployment = model
 	}
 
-	provider := &OpenAILLM{model: model, defaultReasoning: true, strictToolSchema: true}
+	defaultConnect := llm.DefaultAPIConnectOptions()
+	defaultConnect.MaxRetry = 0
+	provider := &OpenAILLM{model: model, defaultReasoning: true, strictToolSchema: true, defaultConnect: &defaultConnect}
 	for _, opt := range opts {
 		opt(provider)
 	}
@@ -891,7 +894,7 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		opt(options)
 	}
 
-	connectOptions, err := options.EffectiveConnectOptions()
+	connectOptions, err := l.effectiveConnectOptions(options)
 	if err != nil {
 		return nil, err
 	}
@@ -965,6 +968,19 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		cancel()
 	}
 	return nil, lastErr
+}
+
+func (l *OpenAILLM) effectiveConnectOptions(options *llm.ChatOptions) (llm.APIConnectOptions, error) {
+	if options != nil && options.ConnectOptions != nil {
+		return options.EffectiveConnectOptions()
+	}
+	if l != nil && l.defaultConnect != nil {
+		if err := l.defaultConnect.Validate(); err != nil {
+			return llm.APIConnectOptions{}, err
+		}
+		return *l.defaultConnect, nil
+	}
+	return options.EffectiveConnectOptions()
 }
 
 func (l *OpenAILLM) isClosed() bool {

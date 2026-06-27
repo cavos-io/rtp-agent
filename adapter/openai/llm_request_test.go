@@ -345,6 +345,39 @@ func TestNewAzureOpenAILLMFallsBackToReferenceOrganizationProjectEnvironment(t *
 	}
 }
 
+func TestNewAzureOpenAILLMDoesNotRetryByDefault(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusTooManyRequests, `{"error":{"message":"rate limit","type":"rate_limit","code":"rate_limit"}}`),
+		openAITestResponse(http.StatusOK, "data: [DONE]\n\n"),
+	}}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	stream, err := model.Chat(context.Background(), llm.NewChatContext())
+	if stream != nil {
+		_ = stream.Close()
+	}
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want first Azure status error without retry", err, err)
+	}
+	if capture.calls != 1 {
+		t.Fatalf("HTTP calls = %d, want no default retry for Azure responses LLM", capture.calls)
+	}
+}
+
 func TestNewAzureOpenAILLMRequiresEndpoint(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
 	t.Setenv("AZURE_OPENAI_API_KEY", "key")
