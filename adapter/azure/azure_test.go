@@ -1636,6 +1636,40 @@ func TestAzureSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	receiveAzureTestSignal(t, serverClosed, "server close")
 }
 
+func TestAzureSTTStreamContextDeadlineClosesReferenceStream(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{})
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestHoldOpenDialer(t, requests, configMessages, serverClosed)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	stream, err := provider.Stream(ctx, "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+
+	_, err = stream.Next()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Next error = %v, want context deadline exceeded", err)
+	}
+	receiveAzureTestSignal(t, serverClosed, "server close after context deadline")
+
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after context deadline = %d, want stream unregistered", active)
+	}
+}
+
 func TestAzureSTTClosedStreamRejectsFlush(t *testing.T) {
 	stream := &azureSTTStream{closed: true}
 

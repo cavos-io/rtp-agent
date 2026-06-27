@@ -918,7 +918,17 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 		if s.isClosed() {
 			return nil, io.EOF
 		}
-		return nil, s.ctx.Err()
+		err := s.ctx.Err()
+		s.mu.Lock()
+		if !s.closed {
+			s.finishWithErrorLocked(err)
+			select {
+			case <-s.errCh:
+			default:
+			}
+		}
+		s.mu.Unlock()
+		return nil, err
 	}
 }
 
