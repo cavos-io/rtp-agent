@@ -43,3 +43,21 @@ func TestAzureResponsesLLMRequiresCredential(t *testing.T) {
 		t.Fatalf("NewAzureLLM error = %v, want missing credential error", err)
 	}
 }
+
+func TestAzureResponsesLLMAcceptsReferenceMaxOutputTokensOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMMaxOutputTokens(128),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
