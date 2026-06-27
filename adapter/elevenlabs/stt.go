@@ -480,7 +480,7 @@ func buildElevenLabsSTTAudioChunkMessage(audio []byte, sampleRate int, commit bo
 
 func resolveElevenLabsSTTLanguage(s *ElevenLabsSTT, language string) string {
 	if language != "" {
-		return language
+		return elevenLabsNormalizeSTTLanguage(language)
 	}
 	return s.languageCode
 }
