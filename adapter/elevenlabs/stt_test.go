@@ -456,6 +456,40 @@ func TestElevenLabsSTTStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamRejectsMismatchedSampleRatesLikeReference(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:     make(chan *stt.SpeechEvent, 1),
+		sampleRate: 16000,
+		state:      &elevenLabsSTTStreamState{language: "en"},
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x00},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x02, 0x00},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if err == nil || err.Error() != "the sample rate of the input frames must be consistent" {
+		t.Fatalf("mismatched PushFrame error = %v, want reference sample-rate consistency error", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("messages after undersized/mismatched frames = %d, want no provider writes", len(messages))
+	}
+}
+
 func TestElevenLabsSTTUpdateOptionsMatchesReference(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTModel("scribe_v2_realtime"),

@@ -522,6 +522,7 @@ type elevenLabsSTTStream struct {
 	audioBuf    *audio.AudioByteStream
 	audioDur    float64
 	state       *elevenLabsSTTStreamState
+	rateGuard   stt.SampleRateGuard
 	writeJSON   func(map[string]any) error
 	unregister  func(*elevenLabsSTTStream)
 	unregOnce   sync.Once
@@ -538,6 +539,9 @@ func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
+	}
+	if err := s.rateGuard.Check(frame); err != nil {
+		return err
 	}
 	if s.audioBuf == nil {
 		s.audioBuf = audio.NewAudioByteStream(uint32(s.sampleRate), 1, uint32(s.sampleRate/20))
