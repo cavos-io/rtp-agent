@@ -229,6 +229,7 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
+	streamNow := time.Now()
 	stream := &elevenLabsSTTStream{
 		conn:               conn,
 		events:             make(chan *stt.SpeechEvent, 100),
@@ -236,12 +237,13 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 		ctx:                streamCtx,
 		cancel:             cancel,
 		sampleRate:         s.sampleRate,
-		usageLastFlush:     time.Now(),
+		usageLastFlush:     streamNow,
 		usageFlushInterval: elevenLabsSTTUsageInterval,
 		state: &elevenLabsSTTStreamState{
 			language:          resolveElevenLabsSTTLanguage(s, language),
 			includeTimestamps: s.includeTimestamps,
 			serverVAD:         s.serverVAD != nil,
+			startTime:         float64(streamNow.UnixNano()) / 1e9,
 		},
 	}
 	if !s.registerStream(stream) {

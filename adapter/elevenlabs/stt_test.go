@@ -351,6 +351,62 @@ func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamSeedsStartTimeLikeReference(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	releaseServer := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		serverErr <- nil
+		<-releaseServer
+	})}
+	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	defer func() {
+		close(releaseServer)
+		server.Close()
+	}()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	before := float64(time.Now().UnixNano()) / 1e9
+	stream, err := provider.Stream(context.Background(), "en")
+	after := float64(time.Now().UnixNano()) / 1e9
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+
+	timing, ok := stream.(interface{ StartTime() float64 })
+	if !ok {
+		t.Fatal("stream does not expose StartTime")
+	}
+	if got := timing.StartTime(); got < before || got > after {
+		t.Fatalf("StartTime = %v, want seeded between %v and %v", got, before, after)
+	}
+}
+
 func TestElevenLabsSTTStreamFlushReportsReferenceUsage(t *testing.T) {
 	var messages []map[string]any
 	stream := &elevenLabsSTTStream{
