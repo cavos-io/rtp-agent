@@ -664,6 +664,8 @@ type elevenLabsStream struct {
 	mp3DecodeDone  chan struct{}
 	mp3Finalizing  bool
 	mp3InputClosed bool
+	mp3DeltaText   string
+	mp3Timed       []tts.TimedString
 }
 
 type elevenLabsAlignment struct {
@@ -736,7 +738,7 @@ func (s *elevenLabsStream) readLoop() {
 
 		if resp.Audio != "" {
 			if strings.HasPrefix(s.encoding, "mp3") {
-				if err := s.pushMP3Audio(resp.Audio); err != nil {
+				if err := s.pushMP3Audio(resp.Audio, deltaText, timedTranscript); err != nil {
 					logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
 					s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
 					return
@@ -775,7 +777,7 @@ func (s *elevenLabsStream) readLoop() {
 	}
 }
 
-func (s *elevenLabsStream) pushMP3Audio(encoded string) error {
+func (s *elevenLabsStream) pushMP3Audio(encoded string, deltaText string, timedTranscript []tts.TimedString) error {
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return err
@@ -789,6 +791,12 @@ func (s *elevenLabsStream) pushMP3Audio(encoded string) error {
 		s.mp3Input = make(chan []byte, 16)
 		s.mp3DecodeDone = make(chan struct{})
 		go s.mp3DecodeLoop(s.mp3Decoder, s.mp3Input, s.mp3DecodeDone)
+	}
+	if deltaText != "" {
+		s.mp3DeltaText += deltaText
+	}
+	if len(timedTranscript) > 0 {
+		s.mp3Timed = append(s.mp3Timed, timedTranscript...)
 	}
 	input := s.mp3Input
 	s.mu.Unlock()
@@ -852,8 +860,23 @@ func (s *elevenLabsStream) mp3DecodeLoop(decoder codecs.AudioStreamDecoder, inpu
 			return
 		}
 		emitted = true
-		s.sendAudio(&tts.SynthesizedAudio{Frame: frame})
+		deltaText, timedTranscript := s.takeMP3Metadata()
+		s.sendAudio(&tts.SynthesizedAudio{
+			Frame:           frame,
+			DeltaText:       deltaText,
+			TimedTranscript: timedTranscript,
+		})
 	}
+}
+
+func (s *elevenLabsStream) takeMP3Metadata() (string, []tts.TimedString) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	deltaText := s.mp3DeltaText
+	timedTranscript := append([]tts.TimedString(nil), s.mp3Timed...)
+	s.mp3DeltaText = ""
+	s.mp3Timed = nil
+	return deltaText, timedTranscript
 }
 
 func (s *elevenLabsStream) isMP3Finalizing() bool {

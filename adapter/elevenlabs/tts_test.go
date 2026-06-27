@@ -1676,10 +1676,10 @@ func TestElevenLabsTTSWebsocketMP3DecodesSplitProviderAudio(t *testing.T) {
 		encoding:   "mp3_22050_32",
 		sampleRate: 22050,
 	}
-	if err := stream.pushMP3Audio(base64.StdEncoding.EncodeToString(mp3Data[:8])); err != nil {
+	if err := stream.pushMP3Audio(base64.StdEncoding.EncodeToString(mp3Data[:8]), "", nil); err != nil {
 		t.Fatalf("push first split MP3 chunk: %v", err)
 	}
-	if err := stream.pushMP3Audio(base64.StdEncoding.EncodeToString(mp3Data[8:])); err != nil {
+	if err := stream.pushMP3Audio(base64.StdEncoding.EncodeToString(mp3Data[8:]), "", nil); err != nil {
 		t.Fatalf("push second split MP3 chunk: %v", err)
 	}
 	done := make(chan struct{})
@@ -1720,6 +1720,76 @@ func TestElevenLabsTTSWebsocketMP3DecodesSplitProviderAudio(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for split MP3 decoder shutdown")
+	}
+}
+
+func TestElevenLabsTTSWebsocketMP3CarriesReferenceAlignmentMetadata(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &elevenLabsStream{
+		audio:      make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
+		ctx:        ctx,
+		cancel:     cancel,
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	timed := []tts.TimedString{
+		{Text: "hello ", StartTime: 0, EndTime: 0.06},
+		{Text: "world", StartTime: 0.06, EndTime: 0.11},
+	}
+	if err := stream.pushMP3Audio(base64.StdEncoding.EncodeToString(mp3Data), "hello world", timed); err != nil {
+		t.Fatalf("push MP3 with alignment: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		stream.closeMP3Decoder(true)
+		close(stream.audio)
+		close(done)
+	}()
+
+	seenMetadata := false
+	for range 5000 {
+		var audio *tts.SynthesizedAudio
+		select {
+		case err := <-stream.errCh:
+			t.Fatalf("MP3 decode error = %v", err)
+		case audio = <-stream.audio:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for MP3 decoded audio")
+		}
+		if audio == nil {
+			t.Fatal("audio = nil, want decoded frame")
+		}
+		if audio.IsFinal {
+			if !seenMetadata {
+				t.Fatal("final marker arrived before alignment metadata")
+			}
+			break
+		}
+		if audio.DeltaText == "" && len(audio.TimedTranscript) == 0 {
+			continue
+		}
+		if audio.DeltaText != "hello world" {
+			t.Fatalf("DeltaText = %q, want hello world", audio.DeltaText)
+		}
+		if len(audio.TimedTranscript) != 2 {
+			t.Fatalf("TimedTranscript = %#v, want two timed words", audio.TimedTranscript)
+		}
+		seenMetadata = true
+	}
+	if !seenMetadata {
+		t.Fatal("stream did not emit MP3 alignment metadata")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for MP3 decoder shutdown")
 	}
 }
 
