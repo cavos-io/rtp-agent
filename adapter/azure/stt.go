@@ -55,6 +55,7 @@ type AzureSTT struct {
 	mu                     sync.Mutex
 	streams                map[*azureSTTStream]struct{}
 	closed                 bool
+	reconnectOnUpdate      bool
 }
 
 type AzureSTTOption func(*AzureSTT)
@@ -96,6 +97,7 @@ func WithAzureSTTLanguage(language string) AzureSTTOption {
 		if language != "" {
 			s.language = language
 			s.languages = []string{language}
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -106,6 +108,7 @@ func WithAzureSTTLanguages(languages ...string) AzureSTTOption {
 		if len(resolved) > 0 {
 			s.languages = resolved
 			s.language = resolved[0]
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -122,6 +125,7 @@ func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if timeoutMS > 0 {
 			s.segmentationSilence = timeoutMS
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -130,6 +134,7 @@ func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if maxTimeMS > 0 {
 			s.segmentationMaxTime = maxTimeMS
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -138,6 +143,7 @@ func WithAzureSTTSegmentationStrategy(strategy string) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if strategy != "" {
 			s.segmentationStrategy = strategy
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -182,6 +188,7 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.reconnectOnUpdate = false
 	if provider.speechEndpoint != "" && provider.region != "" {
 		provider.region = ""
 	}
@@ -216,6 +223,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	beforeExplicitPunctuation := s.explicitPunctuation
 	beforeProfanity := s.profanity
 	beforeActive := s.activeStreamOptions()
+	s.reconnectOnUpdate = language != ""
 	if language != "" {
 		s.language = language
 		s.languages = []string{language}
@@ -233,8 +241,10 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	s.trueTextPostProcessing = beforeTrueTextPostProcessing
 	s.explicitPunctuation = beforeExplicitPunctuation
 	s.profanity = beforeProfanity
+	reconnectRequested := s.reconnectOnUpdate
+	s.reconnectOnUpdate = false
 	afterActive := s.activeStreamOptions()
-	activeChanged := beforeActive != afterActive
+	activeChanged := beforeActive != afterActive || reconnectRequested
 	languageCandidatesChanged := beforeActive.language != afterActive.language || beforeActive.languages != afterActive.languages
 	streamLanguage := language
 	if streamLanguage == "" && s.language != beforeLanguage {
@@ -391,10 +401,16 @@ func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, strea
 	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
 	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to dial azure stt websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfigWithLanguages(provider, languages))); err != nil {
 		_ = conn.Close()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize azure stt websocket: %v", err))
 	}
 	return conn, connectionID, nil
@@ -419,7 +435,7 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 		return nil, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("azure stt error: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, llm.NewAPIStatusError("Azure STT request failed", resp.StatusCode, "", strings.TrimSpace(string(body)))
 	}
 	var result azureSTTRecognizeResponse
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -1020,7 +1036,7 @@ func (s *azureSTTStream) reconnectLocked() error {
 		return io.ErrClosedPipe
 	}
 	if s.reconnects >= s.maxReconnects {
-		return fmt.Errorf("azure stt websocket reconnect attempts exhausted")
+		return llm.NewAPIConnectionError("azure stt websocket reconnect attempts exhausted")
 	}
 	s.reconnects++
 	oldConn := s.conn
@@ -1113,8 +1129,26 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 			continue
 		}
 		if event := s.parseMessage(payload); event != nil {
-			s.events <- event
+			if !s.enqueueEvent(event) {
+				return
+			}
 		}
+	}
+}
+
+func (s *azureSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {
+	if event == nil {
+		return true
+	}
+	var done <-chan struct{}
+	if s.ctx != nil {
+		done = s.ctx.Done()
+	}
+	select {
+	case s.events <- event:
+		return true
+	case <-done:
+		return false
 	}
 }
 
@@ -1162,6 +1196,14 @@ func (s *azureSTTStream) markSessionStarted() {
 		return
 	}
 	s.sessionStarted = true
+	if s.reconnectNext {
+		if err := s.reconnectLocked(); err != nil {
+			s.finishWithErrorLocked(err)
+			return
+		}
+		s.reconnectNext = false
+		return
+	}
 	pending := s.pendingAudio
 	s.pendingAudio = nil
 	for i, audio := range pending {
@@ -1194,9 +1236,10 @@ func (s *azureSTTStream) writeAudioLocked(audio azureSTTPendingAudio) error {
 					return nil
 				}
 				continue
+			} else {
+				s.finishWithErrorLocked(reconnectErr)
+				return reconnectErr
 			}
-			s.finishWithErrorLocked(err)
-			return err
 		}
 		s.audioWritten = true
 		return nil

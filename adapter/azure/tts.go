@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -26,6 +27,7 @@ const (
 	defaultAzureTTSSampleRate   = 24000
 	defaultAzureTTSSampleFormat = "raw-24khz-16bit-mono-pcm"
 	azureSpeechEndpointEnv      = "AZURE_SPEECH_ENDPOINT"
+	azureTTSRequestTimeout      = 30 * time.Second
 )
 
 var azureTTSSampleFormats = map[int]string{
@@ -559,8 +561,19 @@ func (s *azureTTSChunkedStream) start() error {
 	req := s.req
 	s.req = nil
 	s.client = nil
+	timeoutCtx, timeoutCancel := context.WithTimeout(req.Context(), azureTTSRequestTimeout)
+	if previousCancel := s.cancel; previousCancel != nil {
+		s.cancel = func() {
+			timeoutCancel()
+			previousCancel()
+		}
+	} else {
+		s.cancel = timeoutCancel
+	}
+	req = req.Clone(timeoutCtx)
 	resp, err := client.Do(req)
 	if err != nil {
+		s.cancelRequest()
 		s.unregister()
 		if errors.Is(err, context.Canceled) && s.closed.Load() {
 			return io.EOF
@@ -578,11 +591,19 @@ func (s *azureTTSChunkedStream) start() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		s.cancelRequest()
 		s.unregister()
 		return llm.NewAPIStatusError("Azure TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.body = resp.Body
 	return nil
+}
+
+func (s *azureTTSChunkedStream) cancelRequest() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 }
 
 func (s *azureTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
@@ -621,6 +642,9 @@ func (s *azureTTSChunkedStream) failRead(err error) error {
 		_ = body.Close()
 	}
 	s.unregister()
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
 	return llm.NewAPIConnectionError(err.Error())
 }
 

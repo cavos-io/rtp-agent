@@ -548,6 +548,93 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeSessionDialFailureReturnsAPIConnectionError(t *testing.T) {
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		WithOpenAIRealtimeWebsocketDialer(func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.New("dial refused")
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+
+	_, err = realtimeModel.Session()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "failed to connect to OpenAI realtime") ||
+		!strings.Contains(connectionErr.Error(), "dial refused") {
+		t.Fatalf("APIConnectionError = %q, want realtime dial failure context", connectionErr.Error())
+	}
+}
+
+func TestAzureOpenAIRealtimeSessionConnectTimeoutReturnsAPITimeoutError(t *testing.T) {
+	releaseDialer := make(chan struct{})
+	defer close(releaseDialer)
+
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{Timeout: time.Millisecond, MaxRetry: 0}),
+		WithOpenAIRealtimeWebsocketDialer(func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+			<-releaseDialer
+			return nil, nil, errors.New("late dial")
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+
+	_, err = realtimeModel.Session()
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Session() error = %T %v, want APITimeoutError", err, err)
+	}
+	if !strings.Contains(timeoutErr.Error(), "OpenAI realtime connection timed out") {
+		t.Fatalf("APITimeoutError = %q, want realtime timeout context", timeoutErr.Error())
+	}
+}
+
+func TestAzureOpenAIRealtimeInitialSessionSendFailureReturnsAPIConnectionError(t *testing.T) {
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		WithOpenAIRealtimeWebsocketDialer(newOpenAIRealtimeWriteFailAfterDialer(t, errors.New("write refused"))),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+
+	_, err = realtimeModel.Session()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "failed to initialize OpenAI realtime session") {
+		t.Fatalf("APIConnectionError = %q, want initial session update context", connectionErr.Error())
+	}
+}
+
 func TestAzureOpenAIRealtimeNormalizesAssistantTextForLegacyAPI(t *testing.T) {
 	messages := make(chan string, 2)
 	releaseServer := make(chan struct{})
@@ -1770,6 +1857,68 @@ func newOpenAIRealtimeTestWebsocketDialer(t *testing.T, handler func(*websocket.
 		}
 		return conn, response, err
 	}
+}
+
+func newOpenAIRealtimeWriteFailAfterDialer(t *testing.T, writeErr error) openAIRealtimeWebsocketDialer {
+	t.Helper()
+	upgrader := websocket.Upgrader{}
+	return func(endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		failConn := &openAIRealtimeFailWriteConn{Conn: clientConn, err: writeErr}
+		listener := newOpenAISingleConnListener(serverConn)
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Errorf("Upgrade error = %v", err)
+					return
+				}
+				defer conn.Close()
+				for {
+					if _, _, err := conn.ReadMessage(); err != nil {
+						return
+					}
+				}
+			}),
+		}
+		go func() {
+			_ = server.Serve(listener)
+		}()
+		t.Cleanup(func() {
+			_ = server.Close()
+			_ = listener.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+		})
+
+		dialer := websocket.Dialer{
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return failConn, nil
+			},
+		}
+		conn, response, err := dialer.Dial(endpoint, headers)
+		if err != nil {
+			return nil, response, err
+		}
+		failConn.fail.Store(true)
+		return conn, response, nil
+	}
+}
+
+type openAIRealtimeFailWriteConn struct {
+	net.Conn
+	fail atomic.Bool
+	err  error
+}
+
+func (c *openAIRealtimeFailWriteConn) Write(p []byte) (int, error) {
+	if c.fail.Load() {
+		if c.err != nil {
+			return 0, c.err
+		}
+		return 0, errors.New("write failed")
+	}
+	return c.Conn.Write(p)
 }
 
 func ackOpenAIRealtimeChatContextMessage(t *testing.T, conn *websocket.Conn, raw []byte) {
