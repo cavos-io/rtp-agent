@@ -702,6 +702,23 @@ func TestElevenLabsStreamURLUsesReferenceTextNormalizationOverride(t *testing.T)
 	}
 }
 
+func TestElevenLabsStreamURLForwardsReferenceLanguageForConfiguredModel(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_multilingual_v2",
+		WithElevenLabsLanguage("fr"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildElevenLabsStreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("language_code") != "fr" {
+		t.Fatalf("language_code = %q, want fr", parsed.Query().Get("language_code"))
+	}
+}
+
 func TestElevenLabsStreamURLUsesReferenceSyncAlignmentOverride(t *testing.T) {
 	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsSyncAlignment(false))
 	if err != nil {
@@ -861,8 +878,8 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if parsedStream.Query().Get("model_id") != "eleven_multilingual_v2" {
 		t.Fatalf("stream model_id = %q, want eleven_multilingual_v2", parsedStream.Query().Get("model_id"))
 	}
-	if parsedStream.Query().Get("language_code") != "" {
-		t.Fatalf("stream language_code = %q, eleven_multilingual_v2 must not include language_code", parsedStream.Query().Get("language_code"))
+	if parsedStream.Query().Get("language_code") != "id" {
+		t.Fatalf("stream language_code = %q, want id", parsedStream.Query().Get("language_code"))
 	}
 	if got := provider.Model(); got != "eleven_multilingual_v2" {
 		t.Fatalf("Model() = %q, want eleven_multilingual_v2", got)
