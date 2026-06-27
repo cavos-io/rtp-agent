@@ -362,6 +362,32 @@ func TestAzureSTTRecognizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAzureSTTRecognizeReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       errorReadCloser{err: context.DeadlineExceeded},
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	_, err = provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAzureSTTBuildsReferenceStreamURL(t *testing.T) {
 	provider, err := NewAzureSTT("key", "eastus")
 	if err != nil {
