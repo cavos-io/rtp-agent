@@ -2243,6 +2243,9 @@ func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
 	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
 		t.Fatalf("chunk = %#v, want one accumulated tool call", chunk)
 	}
+	if chunk.Delta.Role != llm.ChatRoleAssistant {
+		t.Fatalf("tool call chunk role = %q, want assistant", chunk.Delta.Role)
+	}
 	call := chunk.Delta.ToolCalls[0]
 	if call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != `{"query":"weather"}` {
 		t.Fatalf("tool call = %+v, want accumulated Azure tool-call arguments", call)

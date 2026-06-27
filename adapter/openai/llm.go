@@ -2202,7 +2202,7 @@ func (s *openaiStream) finishOpenAIStreamToolCall(id string, choice openai.ChatC
 	chunk := &llm.ChatChunk{
 		ID: id,
 		Delta: &llm.ChoiceDelta{
-			Role:    llm.ChatRole(choice.Delta.Role),
+			Role:    llm.ChatRoleAssistant,
 			Content: choice.Delta.Content,
 			ToolCalls: []llm.FunctionToolCall{{
 				Type:      s.toolCallType,
