@@ -672,8 +672,8 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 	q := parsed.Query()
 	q.Set("model_id", t.modelID)
 	q.Set("output_format", t.encoding)
-	if t.language != "" {
-		q.Set("language_code", t.language)
+	if language := elevenLabsBaseLanguage(t.language); language != "" {
+		q.Set("language_code", language)
 	}
 	q.Set("enable_ssml_parsing", strconv.FormatBool(t.enableSSMLParsing))
 	q.Set("enable_logging", strconv.FormatBool(t.enableLogging))
@@ -1229,11 +1229,32 @@ func (s *elevenLabsStream) preferredElevenLabsAlignment(resp elWSResponse) *elev
 }
 
 func elevenLabsDefaultPreferredAlignment(language string) string {
-	switch language {
+	switch elevenLabsBaseLanguage(language) {
 	case "ja", "ko", "zh":
 		return "original"
 	default:
 		return "normalized"
+	}
+}
+
+func elevenLabsBaseLanguage(language string) string {
+	language = strings.TrimSpace(language)
+	if language == "" {
+		return ""
+	}
+	base := strings.ToLower(language)
+	if idx := strings.IndexAny(base, "-_"); idx >= 0 {
+		base = base[:idx]
+	}
+	switch base {
+	case "jpn":
+		return "ja"
+	case "kor":
+		return "ko"
+	case "cmn", "zho", "chi":
+		return "zh"
+	default:
+		return base
 	}
 }
 

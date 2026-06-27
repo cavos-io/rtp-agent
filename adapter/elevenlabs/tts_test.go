@@ -986,6 +986,20 @@ func TestElevenLabsStreamURLForwardsReferenceLanguageForConfiguredModel(t *testi
 	if parsed.Query().Get("language_code") != "fr" {
 		t.Fatalf("language_code = %q, want fr", parsed.Query().Get("language_code"))
 	}
+
+	regional, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_multilingual_v2",
+		WithElevenLabsLanguage("zh-CN"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() regional error = %v", err)
+	}
+	parsedRegional, err := url.Parse(buildElevenLabsStreamURL(regional))
+	if err != nil {
+		t.Fatalf("parse regional stream url: %v", err)
+	}
+	if parsedRegional.Query().Get("language_code") != "zh" {
+		t.Fatalf("regional language_code = %q, want reference base zh", parsedRegional.Query().Get("language_code"))
+	}
 }
 
 func TestElevenLabsStreamURLUsesReferenceSyncAlignmentOverride(t *testing.T) {
@@ -3984,6 +3998,9 @@ func TestElevenLabsTTSIgnoresMalformedAlignmentTextLikeReference(t *testing.T) {
 func TestElevenLabsTTSUsesOriginalAlignmentForCJKReferenceDefault(t *testing.T) {
 	if got := elevenLabsDefaultPreferredAlignment("ja"); got != "original" {
 		t.Fatalf("default preferred alignment = %q, want original for ja", got)
+	}
+	if got := elevenLabsDefaultPreferredAlignment("zh-CN"); got != "original" {
+		t.Fatalf("default preferred alignment = %q, want original for zh-CN base language", got)
 	}
 	if got := elevenLabsDefaultPreferredAlignment("en"); got != "normalized" {
 		t.Fatalf("default preferred alignment = %q, want normalized for en", got)
