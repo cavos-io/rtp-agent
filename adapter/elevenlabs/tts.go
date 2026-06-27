@@ -631,6 +631,7 @@ type elevenLabsStream struct {
 	errCh    chan error
 	mu       sync.Mutex
 	closed   bool
+	finished bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -741,11 +742,19 @@ func (s *elevenLabsStream) readLoop() {
 					s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
 					return
 				}
+				if resp.IsFinal {
+					audio.IsFinal = false
+				}
 				audio.TimedTranscript = timedTranscript
 				select {
 				case <-s.ctx.Done():
 					return
 				case s.audio <- audio:
+				}
+				if resp.IsFinal {
+					s.sendAudio(&tts.SynthesizedAudio{IsFinal: true})
+					s.markFinished()
+					return
 				}
 			}
 		} else if resp.IsFinal || deltaText != "" {
@@ -762,6 +771,7 @@ func (s *elevenLabsStream) readLoop() {
 		}
 
 		if resp.IsFinal {
+			s.markFinished()
 			s.closeMP3Decoder(true)
 			return
 		}
@@ -887,6 +897,18 @@ func (s *elevenLabsStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *elevenLabsStream) isFinished() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.finished
+}
+
+func (s *elevenLabsStream) markFinished() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finished = true
 }
 
 func elevenLabsTTSUnexpectedCloseError(err error) error {
@@ -1370,7 +1392,7 @@ func (s *elevenLabsStream) Close() error {
 }
 
 func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.isClosed() {
+	if s.isClosed() && !s.isFinished() {
 		return nil, io.EOF
 	}
 
