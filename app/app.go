@@ -3312,6 +3312,9 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
 		llmOpts = append(llmOpts, azure.WithAzureLLMToolChoice(toolChoice))
 	}
+	if reasoning, ok := cfg.LLMModelOptions["reasoning"].(map[string]any); ok && len(reasoning) > 0 {
+		llmOpts = append(llmOpts, azure.WithAzureLLMReasoning(reasoning))
+	}
 	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
 		llmOpts = append(llmOpts, azure.WithAzureLLMTopP(*topP))
 	}
