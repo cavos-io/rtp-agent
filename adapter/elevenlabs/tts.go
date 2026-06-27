@@ -1093,13 +1093,22 @@ func (s *elevenLabsStream) deltaText(resp elWSResponse) string {
 
 func elevenLabsAlignmentText(alignment *elevenLabsAlignment) string {
 	var deltaText strings.Builder
-	if alignment == nil {
+	if !elevenLabsAlignmentValid(alignment) {
 		return ""
 	}
 	for _, char := range alignment.Chars {
 		deltaText.WriteString(char)
 	}
 	return deltaText.String()
+}
+
+func elevenLabsAlignmentValid(alignment *elevenLabsAlignment) bool {
+	if alignment == nil {
+		return false
+	}
+	startTimes := alignment.starts()
+	durationTimes := alignment.durations()
+	return len(alignment.Chars) == len(startTimes) && len(alignment.Chars) == len(durationTimes)
 }
 
 func (s *elevenLabsStream) timedTranscriptFromAlignment(resp elWSResponse) []tts.TimedString {
@@ -1169,14 +1178,11 @@ func elevenLabsPreferredAlignment(language string, preferred string) string {
 }
 
 func appendElevenLabsAlignment(runes *[]rune, starts *[]int, durations *[]int, alignment *elevenLabsAlignment) {
-	if alignment == nil {
+	if !elevenLabsAlignmentValid(alignment) {
 		return
 	}
 	startTimes := alignment.starts()
 	durationTimes := alignment.durations()
-	if len(alignment.Chars) != len(startTimes) || len(alignment.Chars) != len(durationTimes) {
-		return
-	}
 	for i, char := range alignment.Chars {
 		charRunes := []rune(char)
 		if len(charRunes) == 0 {

@@ -3600,6 +3600,28 @@ func TestElevenLabsTTSAlignmentMapsTimedTranscript(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSIgnoresMalformedAlignmentTextLikeReference(t *testing.T) {
+	resp := elWSResponse{
+		Audio: base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		NormalizedAlignment: &elevenLabsAlignment{
+			Chars:            []string{"h", "i"},
+			CharStartTimesMs: []int{0},
+			CharDurationsMs:  []int{10, 10},
+		},
+	}
+
+	audio, err := elevenLabsSynthesizedAudio(resp, 22050, "pcm_22050")
+	if err != nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
+	}
+	if audio.DeltaText != "" {
+		t.Fatalf("DeltaText = %q, want empty for malformed alignment", audio.DeltaText)
+	}
+	if len(audio.TimedTranscript) != 0 {
+		t.Fatalf("TimedTranscript = %#v, want none for malformed alignment", audio.TimedTranscript)
+	}
+}
+
 func TestElevenLabsTTSUsesOriginalAlignmentForCJKReferenceDefault(t *testing.T) {
 	if got := elevenLabsDefaultPreferredAlignment("ja"); got != "original" {
 		t.Fatalf("default preferred alignment = %q, want original for ja", got)
