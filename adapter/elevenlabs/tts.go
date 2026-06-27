@@ -413,6 +413,7 @@ type elevenLabsChunkedStream struct {
 	emitted    bool
 	finalSent  bool
 	mp3ReadErr error
+	mp3ReadLen int
 	mu         sync.Mutex
 }
 
@@ -484,18 +485,27 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 
 	frame, err := decoder.Next()
 	if err != nil {
+		s.mu.Lock()
+		readErr := s.mp3ReadErr
+		readLen := s.mp3ReadLen
+		emitted := s.emitted
+		finalSent := s.finalSent
+		if readErr == nil && readLen == 0 && !finalSent {
+			s.finalSent = true
+		}
+		s.mu.Unlock()
+		if readErr != nil {
+			return nil, fmt.Errorf("elevenlabs TTS chunked mp3 response read %s: %w", s.audioByteState(), readErr)
+		}
+		if readLen == 0 && !finalSent {
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
 		if strings.Contains(err.Error(), "decoder closed") {
 			s.mu.Lock()
-			readErr := s.mp3ReadErr
-			emitted := s.emitted
-			finalSent := s.finalSent
-			if emitted && !finalSent && readErr == nil {
+			if emitted && !finalSent {
 				s.finalSent = true
 			}
 			s.mu.Unlock()
-			if readErr != nil {
-				return nil, fmt.Errorf("elevenlabs TTS chunked mp3 response read %s: %w", s.audioByteState(), readErr)
-			}
 			if emitted && !finalSent {
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
@@ -520,6 +530,9 @@ func (s *elevenLabsChunkedStream) streamMP3Response(decoder codecs.AudioStreamDe
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
+			s.mu.Lock()
+			s.mp3ReadLen += n
+			s.mu.Unlock()
 			decoder.Push(chunk)
 		}
 		if err == nil {

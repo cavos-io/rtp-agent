@@ -512,6 +512,32 @@ func TestElevenLabsTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 	t.Fatalf("stream did not emit final marker after %d frames", frames)
 }
 
+func TestElevenLabsTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyMP3Audio(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want final marker", err)
+	}
+	if audio == nil {
+		t.Fatal("first Next audio = nil, want final marker")
+	}
+	if !audio.IsFinal {
+		t.Fatal("first Next IsFinal = false, want boundary-only final marker")
+	}
+	if audio.Frame != nil {
+		t.Fatalf("final marker frame = %#v, want nil marker", audio.Frame)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func TestElevenLabsTTSChunkedMP3StreamsBeforeProviderEOF(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
