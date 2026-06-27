@@ -123,6 +123,14 @@ func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
 	}
 }
 
+func WithAzureSTTNumChannels(numChannels int) AzureSTTOption {
+	return func(s *AzureSTT) {
+		if numChannels > 0 {
+			s.numChannels = numChannels
+		}
+	}
+}
+
 func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if timeoutMS >= 0 {

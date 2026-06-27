@@ -757,6 +757,35 @@ func TestAzureSTTStreamRejectsReferenceConfiguredChannelMismatch(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamAcceptsReferenceConfiguredChannelCount(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTNumChannels(2))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	stream := &azureSTTStream{
+		provider:    provider,
+		ctx:         context.Background(),
+		numChannels: provider.inputNumChannels(),
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame configured channel count error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x05, 0x06},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err == nil || !strings.Contains(err.Error(), "channel count") {
+		t.Fatalf("PushFrame mismatched channel count error = %v, want channel count mismatch", err)
+	}
+}
+
 func TestAzureSTTStreamUsesWebsocketProtocol(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)
