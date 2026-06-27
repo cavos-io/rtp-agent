@@ -1640,6 +1640,101 @@ func TestElevenLabsTTSUpdateOptionsInvalidatesReferenceWebsocketConnection(t *te
 	}
 }
 
+func TestElevenLabsTTSUpdateOptionsClosesDrainedNonCurrentConnectionLikeReference(t *testing.T) {
+	firstServerErr := make(chan error, 1)
+	secondServerErr := make(chan error, 1)
+	firstClientConn, firstServerConn := net.Pipe()
+	secondClientConn, secondServerConn := net.Pipe()
+	go runElevenLabsTTSOneContextWebsocketServer(firstServerConn, []byte{1, 0, 2, 0}, firstServerErr)
+	go runElevenLabsTTSOneContextWebsocketServer(secondServerConn, []byte{3, 0, 4, 0}, secondServerErr)
+
+	dials := make(chan string, 2)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			switch len(dials) {
+			case 0:
+				dials <- "first"
+				return firstClientConn, nil
+			case 1:
+				dials <- "second"
+				return secondClientConn, nil
+			default:
+				return nil, errors.New("unexpected extra websocket dial")
+			}
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsEncoding("pcm_16000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	defer provider.Close()
+	first, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("first Stream error = %v", err)
+	}
+	defer first.Close()
+	if err := first.PushText("alpha beta"); err != nil {
+		t.Fatalf("first PushText error = %v", err)
+	}
+	if err := first.Flush(); err != nil {
+		t.Fatalf("first Flush error = %v", err)
+	}
+
+	provider.UpdateOptions(WithElevenLabsVoiceSettings(ElevenLabsVoiceSettings{
+		Stability:       0.7,
+		SimilarityBoost: 0.8,
+	}))
+
+	second, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("second Stream error = %v", err)
+	}
+	defer second.Close()
+	if err := second.PushText("bravo charlie"); err != nil {
+		t.Fatalf("second PushText error = %v", err)
+	}
+	if err := second.Flush(); err != nil {
+		t.Fatalf("second Flush error = %v", err)
+	}
+
+	firstAudio, err := first.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if got := firstAudio.Frame.Data; !bytes.Equal(got, []byte{1, 0, 2, 0}) {
+		t.Fatalf("first audio = %v, want old connection audio", got)
+	}
+	if final, err := first.Next(); err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("first final = (%#v, %v), want final marker", final, err)
+	}
+	secondAudio, err := second.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if got := secondAudio.Frame.Data; !bytes.Equal(got, []byte{3, 0, 4, 0}) {
+		t.Fatalf("second audio = %v, want new connection audio", got)
+	}
+
+	select {
+	case err := <-firstServerErr:
+		if err != nil {
+			t.Fatalf("first server error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for non-current websocket to close after drain")
+	}
+	if err := <-secondServerErr; err != nil {
+		t.Fatalf("second server error = %v", err)
+	}
+}
+
 func TestElevenLabsTTSSequentialStreamsReuseReferenceWebsocketConnection(t *testing.T) {
 	serverErr := make(chan error, 1)
 	dialCount := make(chan struct{}, 2)

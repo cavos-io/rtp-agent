@@ -323,8 +323,12 @@ func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
 	after := t.connectionKey()
 	if before != after {
 		t.mu.Lock()
+		currentConn := t.currentStreamConn
 		t.currentStreamConn = nil
 		t.mu.Unlock()
+		if currentConn != nil {
+			currentConn.markNonCurrent()
+		}
 	}
 }
 
@@ -873,6 +877,7 @@ type elevenLabsTTSConnection struct {
 	conn    *websocket.Conn
 	streams map[string]*elevenLabsStream
 	closed  bool
+	current bool
 	err     error
 }
 
@@ -887,6 +892,7 @@ func newElevenLabsTTSConnection(provider *ElevenLabsTTS, ctx context.Context, st
 		cancel:    cancel,
 		ready:     make(chan struct{}),
 		streams:   make(map[string]*elevenLabsStream),
+		current:   true,
 	}
 	go c.connect()
 	return c
@@ -936,8 +942,15 @@ func (c *elevenLabsTTSConnection) registerStream(stream *elevenLabsStream) {
 
 func (c *elevenLabsTTSConnection) unregisterStream(stream *elevenLabsStream) {
 	c.mu.Lock()
+	shouldClose := false
 	delete(c.streams, stream.contextID)
+	if !c.current && len(c.streams) == 0 {
+		shouldClose = true
+	}
 	c.mu.Unlock()
+	if shouldClose {
+		_ = c.close()
+	}
 }
 
 func (c *elevenLabsTTSConnection) wait(ctx context.Context) (*websocket.Conn, error) {
@@ -1061,6 +1074,16 @@ func (c *elevenLabsTTSConnection) closeTransport() {
 	c.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
+	}
+}
+
+func (c *elevenLabsTTSConnection) markNonCurrent() {
+	c.mu.Lock()
+	c.current = false
+	shouldClose := len(c.streams) == 0
+	c.mu.Unlock()
+	if shouldClose {
+		_ = c.close()
 	}
 }
 
