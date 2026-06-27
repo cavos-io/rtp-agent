@@ -208,6 +208,12 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	if _, ok := azureTTSSampleFormats[next.sampleRate]; !ok {
 		return fmt.Errorf("azure tts unsupported sample rate: %d", next.sampleRate)
 	}
+	if next.sampleRate != t.sampleRate {
+		return fmt.Errorf("azure tts sample rate is immutable after construction")
+	}
+	if next.apiKey != t.apiKey || next.region != t.region || next.speechEndpoint != t.speechEndpoint || next.deploymentID != t.deploymentID || next.authToken != t.authToken {
+		return fmt.Errorf("azure tts transport configuration is immutable after construction")
+	}
 	if err := validateAzureTTSVoiceControls(&next); err != nil {
 		return err
 	}
