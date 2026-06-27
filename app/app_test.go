@@ -2886,6 +2886,28 @@ func TestDefaultConfigFromEnvPreservesOpenAITTSExplicitZeroSpeed(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsAzureResponsesLLM(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://voice-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+	t.Setenv("OPENAI_API_VERSION", "2024-08-01-preview")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if got := llm.Model(app.Session.LLM); got != "gpt-4o-mini" {
+		t.Fatalf("LLM model = %q, want gpt-4o-mini", got)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "voice-resource.openai.azure.com" {
+		t.Fatalf("LLM provider = %q, want Azure endpoint host", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
 	t.Setenv("PERPLEXITY_API_KEY", "test-perplexity-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "perplexity")
@@ -5965,6 +5987,24 @@ func TestDefaultConfigFromEnvWrapsLLMFallbackProviders(t *testing.T) {
 	}
 	if got := llm.Label(app.Agent.LLM); got != "llm.FallbackAdapter" {
 		t.Fatalf("LLM label = %q, want fallback adapter around primary OpenAI LLM", got)
+	}
+}
+
+func TestDefaultConfigFromEnvAcceptsAzureResponsesLLMFallbackProvider(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "openai")
+	t.Setenv("RTP_AGENT_LLM_FALLBACK_PROVIDERS", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://voice-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+	t.Setenv("OPENAI_API_VERSION", "2024-08-01-preview")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := llm.Label(app.Agent.LLM); got != "llm.FallbackAdapter" {
+		t.Fatalf("LLM label = %q, want fallback adapter around Azure responses LLM", got)
 	}
 }
 

@@ -2342,6 +2342,8 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
 	case providerAWS:
 		return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
+	case providerAzure:
+		return azure.NewAzureLLM(cfg.LLMModel, "", "", "", "", "")
 	case providerCerebras:
 		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
 	case providerFireworks:
@@ -4377,6 +4379,12 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case "":
 	case providerAWS:
 		provider, err := adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
+		if err != nil {
+			return nil, err
+		}
+		a.LLM = provider
+	case providerAzure:
+		provider, err := azure.NewAzureLLM(cfg.LLMModel, "", "", "", "", "")
 		if err != nil {
 			return nil, err
 		}
