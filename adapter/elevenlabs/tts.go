@@ -1366,7 +1366,7 @@ func (s *elevenLabsStream) sendCompleteWordsLocked() error {
 		return nil
 	}
 	if s.enableSSMLParsing {
-		cutoff, err := s.sendSSMLWordTokensLocked(tokens[:len(tokens)-1], tokens[len(tokens)-1].Start)
+		cutoff, err := s.sendSSMLWordTokensLocked(tokens[:len(tokens)-1], tokens[len(tokens)-1].Start, false)
 		if err != nil {
 			return err
 		}
@@ -1393,7 +1393,7 @@ func (s *elevenLabsStream) sendCompleteWordsLocked() error {
 	return nil
 }
 
-func (s *elevenLabsStream) sendSSMLWordTokensLocked(tokens []tokenize.TokenData, defaultCutoff int) (int, error) {
+func (s *elevenLabsStream) sendSSMLWordTokensLocked(tokens []tokenize.TokenData, defaultCutoff int, flush bool) (int, error) {
 	cutoff := defaultCutoff
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
@@ -1412,13 +1412,13 @@ func (s *elevenLabsStream) sendSSMLWordTokensLocked(tokens []tokenize.TokenData,
 			for _, part := range tokens[i : end+1] {
 				parts = append(parts, part.Token)
 			}
-			if err := s.sendTextLocked(strings.Join(parts, " "), false); err != nil {
+			if err := s.sendTextLocked(strings.Join(parts, " "), flush); err != nil {
 				return cutoff, err
 			}
 			i = end
 			continue
 		}
-		if err := s.sendTextLocked(token.Token, false); err != nil {
+		if err := s.sendTextLocked(token.Token, flush); err != nil {
 			return cutoff, err
 		}
 	}
@@ -1487,13 +1487,13 @@ func (s *elevenLabsStream) flushPendingTextLocked() error {
 	if s.pendingText == "" {
 		return nil
 	}
-	if s.enableSSMLParsing && !s.autoMode {
+	if s.enableSSMLParsing {
 		tokens := tokenize.SplitWords(s.pendingText, false, false, false)
 		if len(tokens) == 0 {
 			s.pendingText = ""
 			return nil
 		}
-		cutoff, err := s.sendSSMLWordTokensLocked(tokens, len([]rune(s.pendingText)))
+		cutoff, err := s.sendSSMLWordTokensLocked(tokens, len([]rune(s.pendingText)), s.autoMode)
 		if err != nil {
 			return err
 		}
