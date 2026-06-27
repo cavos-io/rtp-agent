@@ -1175,6 +1175,50 @@ func TestAzureSTTStreamRejectsAudioAfterReferenceTurnEnd(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamRejectsFlushAfterReferenceTurnEnd(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{})
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestTurnEndHoldOpenDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+
+	azureStream := stream.(*azureSTTStream)
+	deadline := time.After(time.Second)
+	for {
+		azureStream.mu.Lock()
+		stopped := azureStream.sessionStopped
+		azureStream.mu.Unlock()
+		if stopped {
+			break
+		}
+		select {
+		case <-deadline:
+			_ = stream.Close()
+			<-serverClosed
+			t.Fatal("Azure turn.end was not observed")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after Azure turn.end error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
 func TestAzureSTTStreamBuffersAudioUntilSessionStarted(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)

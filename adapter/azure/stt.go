@@ -737,7 +737,7 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if s.sessionStopped {
+	if s.sessionStopped && !s.reconnectNext {
 		s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 		return io.ErrClosedPipe
 	}
@@ -795,6 +795,10 @@ func (s *azureSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.sessionStopped && !s.reconnectNext {
+		s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 		return io.ErrClosedPipe
 	}
 	return nil
