@@ -208,6 +208,12 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	if _, ok := azureTTSSampleFormats[next.sampleRate]; !ok {
 		return fmt.Errorf("azure tts unsupported sample rate: %d", next.sampleRate)
 	}
+	if next.sampleRate != t.sampleRate {
+		return fmt.Errorf("azure tts sample rate is immutable after construction")
+	}
+	if next.apiKey != t.apiKey || next.region != t.region || next.speechEndpoint != t.speechEndpoint || next.deploymentID != t.deploymentID || next.authToken != t.authToken {
+		return fmt.Errorf("azure tts transport configuration is immutable after construction")
+	}
 	if err := validateAzureTTSVoiceControls(&next); err != nil {
 		return err
 	}
@@ -438,6 +444,7 @@ type azureTTSChunkedStream struct {
 	carry      byte
 	hasCarry   bool
 	pendingEOF bool
+	pendingErr error
 	finalSent  bool
 	closed     bool
 	provider   *AzureTTS
@@ -458,6 +465,11 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.pendingEOF {
 		s.pendingEOF = false
 		return s.emitFinal()
+	}
+	if s.pendingErr != nil {
+		err := s.pendingErr
+		s.pendingErr = nil
+		return nil, s.failRead(err)
 	}
 	buf := make([]byte, 4096)
 	var start int
@@ -493,6 +505,8 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if total > 0 {
 			if err == io.EOF {
 				s.pendingEOF = true
+			} else if err != nil {
+				s.pendingErr = err
 			}
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{

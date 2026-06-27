@@ -332,6 +332,7 @@ type AppConfig struct {
 	LLMProvider                             string
 	LLMModel                                string
 	LLMBaseURL                              string
+	LLMModelOptions                         map[string]any
 	LLMExtraHeaders                         map[string]string
 	LLMExtraBody                            map[string]any
 	LLMFallbackProviders                    []string
@@ -715,6 +716,7 @@ func DefaultConfigFromEnv() AppConfig {
 		LLMProvider:                             normalizedEnv("RTP_AGENT_LLM_PROVIDER"),
 		LLMModel:                                os.Getenv("RTP_AGENT_LLM_MODEL"),
 		LLMBaseURL:                              os.Getenv("RTP_AGENT_LLM_BASE_URL"),
+		LLMModelOptions:                         splitEnvMap("RTP_AGENT_LLM_MODEL_OPTIONS"),
 		LLMExtraHeaders:                         splitEnvStringMap("RTP_AGENT_LLM_EXTRA_HEADERS"),
 		LLMExtraBody:                            splitEnvMap("RTP_AGENT_LLM_JSON_CONFIG"),
 		LLMFallbackProviders:                    splitEnvList("RTP_AGENT_LLM_FALLBACK_PROVIDERS"),
@@ -2343,7 +2345,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerAWS:
 		return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
 	case providerAzure:
-		return azure.NewAzureLLM(cfg.LLMModel, "", "", "", "", "")
+		return azureLLMFromConfig(cfg)
 	case providerCerebras:
 		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
 	case providerFireworks:
@@ -3285,6 +3287,21 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSampleRate(sampleRate))
 	}
 	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
+}
+
+var newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+	return azure.NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken, opts...)
+}
+
+func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
+	return newAzureLLM(
+		cfg.LLMModel,
+		cfg.LLMBaseURL,
+		modelOptionString(cfg.LLMModelOptions, "azure_deployment"),
+		modelOptionString(cfg.LLMModelOptions, "api_version"),
+		"",
+		"",
+	)
 }
 
 func validateAzureSTTConfig(cfg AppConfig) error {
@@ -4384,7 +4401,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerAzure:
-		provider, err := azure.NewAzureLLM(cfg.LLMModel, "", "", "", "", "")
+		provider, err := azureLLMFromConfig(cfg)
 		if err != nil {
 			return nil, err
 		}

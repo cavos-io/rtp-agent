@@ -169,13 +169,14 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 		region = os.Getenv(azureSpeechRegionEnv)
 	}
 	provider := &AzureSTT{
-		apiKey:        apiKey,
-		region:        region,
-		speechHost:    os.Getenv(azureSpeechHostEnv),
-		sampleRate:    defaultAzureSTTSampleRate,
-		httpClient:    http.DefaultClient,
-		dialWebsocket: defaultAzureSTTWebsocketDialer,
-		streams:       make(map[*azureSTTStream]struct{}),
+		apiKey:         apiKey,
+		region:         region,
+		speechHost:     os.Getenv(azureSpeechHostEnv),
+		speechEndpoint: os.Getenv(azureSpeechEndpointEnv),
+		sampleRate:     defaultAzureSTTSampleRate,
+		httpClient:     http.DefaultClient,
+		dialWebsocket:  defaultAzureSTTWebsocketDialer,
+		streams:        make(map[*azureSTTStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -205,6 +206,14 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	var streams []*azureSTTStream
 	s.mu.Lock()
 	beforeLanguage := s.language
+	beforeSampleRate := s.sampleRate
+	beforeSpeechHost := s.speechHost
+	beforeSpeechEndpoint := s.speechEndpoint
+	beforeAuthToken := s.authToken
+	beforeWebsocketURL := s.websocketURL
+	beforeTrueTextPostProcessing := s.trueTextPostProcessing
+	beforeExplicitPunctuation := s.explicitPunctuation
+	beforeProfanity := s.profanity
 	beforeActive := s.activeStreamOptions()
 	if language != "" {
 		s.language = language
@@ -215,6 +224,14 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 			opt(s)
 		}
 	}
+	s.sampleRate = beforeSampleRate
+	s.speechHost = beforeSpeechHost
+	s.speechEndpoint = beforeSpeechEndpoint
+	s.authToken = beforeAuthToken
+	s.websocketURL = beforeWebsocketURL
+	s.trueTextPostProcessing = beforeTrueTextPostProcessing
+	s.explicitPunctuation = beforeExplicitPunctuation
+	s.profanity = beforeProfanity
 	afterActive := s.activeStreamOptions()
 	activeChanged := beforeActive != afterActive
 	languageCandidatesChanged := beforeActive.language != afterActive.language || beforeActive.languages != afterActive.languages
@@ -372,11 +389,11 @@ func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, strea
 	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
 	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to dial azure stt websocket: %w", err)
+		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to dial azure stt websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfigWithLanguages(provider, languages))); err != nil {
 		_ = conn.Close()
-		return nil, "", fmt.Errorf("failed to initialize azure stt websocket: %w", err)
+		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize azure stt websocket: %v", err))
 	}
 	return conn, connectionID, nil
 }
@@ -737,6 +754,10 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.sessionStopped && !s.reconnectNext {
+		s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
+		return io.ErrClosedPipe
+	}
 	if frame.SampleRate != 0 {
 		if s.pushedSR != 0 && s.pushedSR != frame.SampleRate {
 			return fmt.Errorf("azure stt input sample rate changed from %d to %d", s.pushedSR, frame.SampleRate)
@@ -793,6 +814,10 @@ func (s *azureSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.sessionStopped && !s.reconnectNext {
+		s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
+		return io.ErrClosedPipe
+	}
 	return nil
 }
 
@@ -831,14 +856,14 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
 		if s.hasClosedWithError() {
 			select {
-			case err := <-s.errCh:
-				select {
-				case event, ok := <-s.events:
-					if ok {
-						return event, nil
-					}
-				default:
+			case event, ok := <-s.events:
+				if ok {
+					return event, nil
 				}
+			default:
+			}
+			select {
+			case err := <-s.errCh:
 				return nil, s.finalizeSessionStopError(err)
 			default:
 			}
@@ -846,14 +871,14 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, io.EOF
 	}
 	select {
-	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+	case event, ok := <-s.events:
+		if ok {
+			return event, nil
 		}
+	default:
+	}
+	select {
+	case err := <-s.errCh:
 		return nil, s.finalizeSessionStopError(err)
 	default:
 	}
@@ -966,12 +991,18 @@ func (s *azureSTTStream) finishWithErrorLocked(err error) {
 	}
 	s.closed = true
 	s.closedWithError = true
-	select {
-	case s.errCh <- err:
-	default:
+	if s.errCh != nil {
+		select {
+		case s.errCh <- err:
+		default:
+		}
 	}
-	s.cancel()
-	_ = s.conn.Close()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
@@ -1081,12 +1112,7 @@ func (s *azureSTTStream) markSessionStopped() {
 		return
 	}
 	s.sessionStopped = true
-	if s.errCh != nil {
-		select {
-		case s.errCh <- llm.NewAPIConnectionError("SpeechRecognition session stopped"):
-		default:
-		}
-	}
+	s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 }
 
 func (s *azureSTTStream) writeAudioLocked(audio azureSTTPendingAudio) error {

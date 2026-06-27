@@ -2908,6 +2908,49 @@ func TestDefaultConfigFromEnvSelectsAzureResponsesLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMBaseURL(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "configured-resource.openai.azure.com" {
+		t.Fatalf("LLM provider = %q, want configured Azure endpoint host", got)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMDeploymentOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "azure_deployment=voice-deployment,api_version=2024-06-01")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotModel, gotEndpoint, gotDeployment, gotAPIVersion string
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotModel = model
+		gotEndpoint = azureEndpoint
+		gotDeployment = azureDeployment
+		gotAPIVersion = apiVersion
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotModel != "gpt-4o-mini" || gotEndpoint != "https://configured-resource.openai.azure.com" || gotDeployment != "voice-deployment" || gotAPIVersion != "2024-06-01" {
+		t.Fatalf("Azure LLM args = model %q endpoint %q deployment %q apiVersion %q", gotModel, gotEndpoint, gotDeployment, gotAPIVersion)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
 	t.Setenv("PERPLEXITY_API_KEY", "test-perplexity-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "perplexity")
