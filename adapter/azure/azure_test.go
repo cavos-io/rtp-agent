@@ -1636,6 +1636,68 @@ func TestAzureSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	receiveAzureTestSignal(t, serverClosed, "server close")
 }
 
+func TestAzureSTTReadLoopUnblocksWhenClosedWithFullEventQueue(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer serverConn.Close()
+	handshakeErr := make(chan error, 1)
+	go func() {
+		reader := bufio.NewReader(serverConn)
+		req, err := http.ReadRequest(reader)
+		if err != nil {
+			handshakeErr <- err
+			return
+		}
+		_, err = fmt.Fprintf(serverConn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", azureTestAcceptKey(req.Header.Get("Sec-WebSocket-Key")))
+		handshakeErr <- err
+	}()
+
+	wsURL, err := url.Parse("ws://azure.test/speech")
+	if err != nil {
+		t.Fatalf("parse websocket URL: %v", err)
+	}
+	conn, _, err := websocket.NewClient(clientConn, wsURL, http.Header{}, 1024, 1024)
+	if err != nil {
+		t.Fatalf("NewClient error = %v", err)
+	}
+	defer conn.Close()
+	if err := <-handshakeErr; err != nil {
+		t.Fatalf("websocket handshake error: %v", err)
+	}
+
+	streamCtx, cancel := context.WithCancel(context.Background())
+	stream := &azureSTTStream{
+		conn:   conn,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+		ctx:    streamCtx,
+		cancel: cancel,
+	}
+	done := make(chan struct{})
+	go func() {
+		stream.readLoop(conn)
+		close(done)
+	}()
+
+	if err := writeAzureTestWebsocketFrame(serverConn, websocket.TextMessage, []byte("Path: speech.hypothesis\r\nContent-Type: application/json\r\n\r\n{\"Text\":\"queued\"}")); err != nil {
+		t.Fatalf("write websocket event: %v", err)
+	}
+
+	select {
+	case <-done:
+		t.Fatal("readLoop returned before close; want blocked on full event queue")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not unblock after Close with full event queue")
+	}
+}
+
 func TestAzureSTTStreamContextDeadlineClosesReferenceStream(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)

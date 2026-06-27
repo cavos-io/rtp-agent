@@ -1123,8 +1123,26 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 			continue
 		}
 		if event := s.parseMessage(payload); event != nil {
-			s.events <- event
+			if !s.enqueueEvent(event) {
+				return
+			}
 		}
+	}
+}
+
+func (s *azureSTTStream) enqueueEvent(event *stt.SpeechEvent) bool {
+	if event == nil {
+		return true
+	}
+	var done <-chan struct{}
+	if s.ctx != nil {
+		done = s.ctx.Done()
+	}
+	select {
+	case s.events <- event:
+		return true
+	case <-done:
+		return false
 	}
 }
 
