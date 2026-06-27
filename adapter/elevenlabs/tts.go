@@ -1520,6 +1520,9 @@ func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		default:
 		}
+		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(s.ctx.Err().Error())
+		}
 		return nil, io.EOF
 	case err := <-s.errCh:
 		return nil, err
