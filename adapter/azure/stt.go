@@ -1162,6 +1162,14 @@ func (s *azureSTTStream) markSessionStarted() {
 		return
 	}
 	s.sessionStarted = true
+	if s.reconnectNext {
+		if err := s.reconnectLocked(); err != nil {
+			s.finishWithErrorLocked(err)
+			return
+		}
+		s.reconnectNext = false
+		return
+	}
 	pending := s.pendingAudio
 	s.pendingAudio = nil
 	for i, audio := range pending {
