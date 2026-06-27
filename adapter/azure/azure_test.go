@@ -1913,6 +1913,28 @@ func TestAzureSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		return nil, nil, context.DeadlineExceeded
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err == nil {
+		t.Fatal("Stream error = nil, want APITimeoutError")
+	}
+	if stream != nil {
+		t.Fatalf("Stream result = %#v, want nil", stream)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAzureSTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)

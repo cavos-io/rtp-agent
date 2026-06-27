@@ -401,10 +401,16 @@ func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, strea
 	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
 	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to dial azure stt websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfigWithLanguages(provider, languages))); err != nil {
 		_ = conn.Close()
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, "", llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize azure stt websocket: %v", err))
 	}
 	return conn, connectionID, nil
