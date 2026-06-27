@@ -123,7 +123,7 @@ func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
 
 func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
-		if timeoutMS > 0 {
+		if timeoutMS >= 0 {
 			s.segmentationSilence = timeoutMS
 			s.reconnectOnUpdate = true
 		}
@@ -132,7 +132,7 @@ func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
 
 func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
-		if maxTimeMS > 0 {
+		if maxTimeMS >= 0 {
 			s.segmentationMaxTime = maxTimeMS
 			s.reconnectOnUpdate = true
 		}
@@ -141,10 +141,8 @@ func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
 
 func WithAzureSTTSegmentationStrategy(strategy string) AzureSTTOption {
 	return func(s *AzureSTT) {
-		if strategy != "" {
-			s.segmentationStrategy = strategy
-			s.reconnectOnUpdate = true
-		}
+		s.segmentationStrategy = strategy
+		s.reconnectOnUpdate = true
 	}
 }
 
@@ -427,21 +425,31 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, llm.NewAPIStatusError("Azure STT request failed", resp.StatusCode, "", strings.TrimSpace(string(body)))
 	}
 	var result azureSTTRecognizeResponse
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
-	return azureSTTRecognizeSpeechEvent(s.streamLanguage(languageStr), result)
+	event, err := azureSTTRecognizeSpeechEvent(s.streamLanguage(languageStr), result)
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	return event, nil
 }
 
 type azureSTTRecognizeResponse struct {
@@ -755,6 +763,7 @@ type azureSTTStream struct {
 	startTime       float64
 	speaking        bool
 	pushedChannels  uint32
+	inputEnded      bool
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -771,6 +780,9 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil && s.ctx.Err() != nil {
@@ -834,7 +846,14 @@ func (s *azureSTTStream) audioContentType() string {
 func (s *azureSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.flushLocked()
+}
+
+func (s *azureSTTStream) flushLocked() error {
 	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil && s.ctx.Err() != nil {
@@ -861,6 +880,16 @@ func (s *azureSTTStream) Flush() error {
 		return nil
 	}
 	return s.writeAudioLocked(silence)
+}
+
+func (s *azureSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.flushLocked(); err != nil {
+		return err
+	}
+	s.inputEnded = true
+	return nil
 }
 
 func (s *azureSTTStream) Close() error {
@@ -1121,7 +1150,7 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 				s.mu.Unlock()
 				return
 			}
-			s.finishWithErrorLocked(err)
+			s.finishWithErrorLocked(llm.NewAPIConnectionError(err.Error()))
 			s.mu.Unlock()
 			return
 		}
@@ -1307,7 +1336,7 @@ func parseAzureSTTMessageWithOffset(language string, payload []byte, startTimeOf
 		if err := json.Unmarshal(body, &message); err != nil {
 			return nil
 		}
-		if message.RecognitionStatus != "" && message.RecognitionStatus != "Success" {
+		if message.RecognitionStatus != "" && !strings.EqualFold(message.RecognitionStatus, "Success") {
 			return nil
 		}
 		text := message.DisplayText
