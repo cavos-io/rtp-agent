@@ -3681,6 +3681,32 @@ func TestAzureTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestAzureTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 499,
+				Body:       io.NopCloser(strings.NewReader(`{"error":"client closed"}`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next = (%#v, %v), want nil, io.EOF for reference client-closed status", audio, err)
+	}
+}
+
 func TestAzureTTSSynthesizeStatusErrorCancelsRequestContext(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {

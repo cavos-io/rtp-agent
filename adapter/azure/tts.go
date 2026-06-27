@@ -593,6 +593,9 @@ func (s *azureTTSChunkedStream) start() error {
 		resp.Body.Close()
 		s.cancelRequest()
 		s.unregister()
+		if resp.StatusCode == 499 {
+			return io.EOF
+		}
 		return llm.NewAPIStatusError("Azure TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	s.body = resp.Body
