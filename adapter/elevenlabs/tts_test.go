@@ -1231,6 +1231,25 @@ func TestElevenLabsTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSStreamIgnoresInputAfterCloseLikeReference(t *testing.T) {
+	stream := &elevenLabsStream{
+		ctx:    context.Background(),
+		audio:  make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want nil", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput after Close error = %v, want nil", err)
+	}
+}
+
 func TestElevenLabsTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	providerErr := errors.New("provider failed after audio")
 	for i := range 200 {
@@ -1367,8 +1386,8 @@ func TestElevenLabsTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after provider Close error = %v, want nil", err)
 	}
 
 	select {

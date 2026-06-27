@@ -274,7 +274,7 @@ func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) bool {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		_ = stream.Close()
+		_ = stream.rejectClosedPipe()
 		return false
 	}
 	if t.streams == nil {
@@ -632,6 +632,7 @@ type elevenLabsStream struct {
 	mu       sync.Mutex
 	closed   bool
 	finished bool
+	inputErr error
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -1191,7 +1192,7 @@ func (s *elevenLabsStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return s.closedInputErrorLocked()
 	}
 	if text == "" {
 		return nil
@@ -1236,7 +1237,7 @@ func (s *elevenLabsStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return s.closedInputErrorLocked()
 	}
 	return s.flushPendingTextLocked()
 }
@@ -1245,7 +1246,7 @@ func (s *elevenLabsStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return s.closedInputErrorLocked()
 	}
 	if err := s.flushPendingTextLocked(); err != nil {
 		return err
@@ -1364,9 +1365,50 @@ func (s *elevenLabsStream) sendInitLocked() error {
 
 func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 	s.closed = true
-	s.cancel()
-	s.provider.unregisterStream(s)
-	_ = s.conn.Close()
+	s.inputErr = io.ErrClosedPipe
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
+}
+
+func (s *elevenLabsStream) closedInputErrorLocked() error {
+	return s.inputErr
+}
+
+func (s *elevenLabsStream) rejectClosedPipe() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.inputErr = io.ErrClosedPipe
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.mp3Decoder != nil {
+		if s.mp3Input != nil && !s.mp3InputClosed {
+			close(s.mp3Input)
+			s.mp3InputClosed = true
+		}
+		_ = s.mp3Decoder.Close()
+	}
+	if s.initSent && s.conn != nil {
+		_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	if s.conn != nil {
+		return s.conn.Close()
+	}
+	return nil
 }
 
 func (s *elevenLabsStream) Close() error {
