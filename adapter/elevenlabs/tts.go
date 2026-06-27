@@ -786,14 +786,14 @@ func (s *elevenLabsStream) readLoop() {
 			if strings.HasPrefix(s.encoding, "mp3") {
 				if err := s.pushMP3Audio(resp.Audio, deltaText, timedTranscript); err != nil {
 					logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
-					s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
+					s.sendError(elevenLabsTTSSynthesisStatusError(err))
 					return
 				}
 			} else {
 				audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
 				if err != nil {
 					logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
-					s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
+					s.sendError(elevenLabsTTSSynthesisStatusError(err))
 					return
 				}
 				if resp.IsFinal {
@@ -830,6 +830,13 @@ func (s *elevenLabsStream) readLoop() {
 			return
 		}
 	}
+}
+
+func elevenLabsTTSSynthesisStatusError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return llm.NewAPIStatusError("Could not synthesize", -1, "", err.Error())
 }
 
 func (s *elevenLabsStream) pushMP3Audio(encoded string, deltaText string, timedTranscript []tts.TimedString) error {
