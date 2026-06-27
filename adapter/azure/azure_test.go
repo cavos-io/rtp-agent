@@ -418,6 +418,32 @@ func TestAzureSTTRecognizeReadFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAzureSTTRecognizeMalformedResponseReturnsAPIConnectionError(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"RecognitionStatus":"Success"`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	_, err = provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAzureSTTBuildsReferenceStreamURL(t *testing.T) {
 	provider, err := NewAzureSTT("key", "eastus")
 	if err != nil {
