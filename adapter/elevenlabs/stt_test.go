@@ -456,6 +456,40 @@ func TestElevenLabsSTTStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamRejectsMismatchedSampleRatesLikeReference(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:     make(chan *stt.SpeechEvent, 1),
+		sampleRate: 16000,
+		state:      &elevenLabsSTTStreamState{language: "en"},
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x00},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x02, 0x00},
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if err == nil || err.Error() != "the sample rate of the input frames must be consistent" {
+		t.Fatalf("mismatched PushFrame error = %v, want reference sample-rate consistency error", err)
+	}
+	if len(messages) != 0 {
+		t.Fatalf("messages after undersized/mismatched frames = %d, want no provider writes", len(messages))
+	}
+}
+
 func TestElevenLabsSTTUpdateOptionsMatchesReference(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTModel("scribe_v2_realtime"),
@@ -973,7 +1007,14 @@ func TestElevenLabsSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
-	if statusErr.Body != `{"detail":"rate limited"}` {
+	if statusErr.Message != "rate limited" {
+		t.Fatalf("message = %q, want provider detail", statusErr.Message)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("body = %#v, want parsed provider JSON body", statusErr.Body)
+	}
+	if body["detail"] != "rate limited" {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
 	}
 }
@@ -1318,6 +1359,60 @@ func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamProviderErrorMessageDoesNotAbortReferenceStream(t *testing.T) {
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsSTTErrorThenTranscriptWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsSTTIncludeTimestamps(true),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript after provider diagnostic", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %#v, want start of speech", event)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v, want transcript after provider diagnostic", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("final event = %#v, want final hello transcript", event)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+}
+
 func TestElevenLabsSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})
@@ -1482,6 +1577,45 @@ func runElevenLabsNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake 
 	_, err = conn.Write([]byte{0x88, 0x02, 0x03, 0xe8})
 	close(closed)
 	errCh <- err
+}
+
+func runElevenLabsSTTErrorThenTranscriptWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeElevenLabsServerWebsocketJSONFrame(conn, map[string]any{
+		"message_type": "quota_exceeded",
+		"message":      "diagnostic",
+		"details":      "continue",
+	}); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeElevenLabsServerWebsocketJSONFrame(conn, map[string]any{
+		"message_type":  "committed_transcript_with_timestamps",
+		"text":          "hello",
+		"language_code": "en",
+		"words": []map[string]any{
+			{"text": "hello", "start": 0.1, "end": 0.4},
+		},
+	}); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		if err := readElevenLabsClientWebsocketFrame(reader); err != nil {
+			break
+		}
+	}
+	errCh <- nil
 }
 
 func runElevenLabsSTTHandshakeRecorder(conn net.Conn, queries chan<- url.Values, release <-chan struct{}, errCh chan<- error) {

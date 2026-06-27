@@ -305,13 +305,28 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("ElevenLabs STT request failed", resp.StatusCode, "", string(respBody))
+		message, body := elevenLabsSTTStatusErrorBody(respBody)
+		return nil, llm.NewAPIStatusError(message, resp.StatusCode, "", body)
 	}
 	var result elevenLabsSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return elevenLabsSTTSpeechEvent(resolveElevenLabsSTTLanguage(s, language), result), nil
+}
+
+func elevenLabsSTTStatusErrorBody(respBody []byte) (string, any) {
+	if len(respBody) == 0 {
+		return "Unknown ElevenLabs error", ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(respBody, &payload); err != nil {
+		return "Unknown ElevenLabs error", string(respBody)
+	}
+	if detail, _ := payload["detail"].(string); detail != "" {
+		return detail, payload
+	}
+	return "Unknown ElevenLabs error", payload
 }
 
 func elevenLabsSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, defaultNumChannels uint32) []byte {
@@ -507,6 +522,7 @@ type elevenLabsSTTStream struct {
 	audioBuf    *audio.AudioByteStream
 	audioDur    float64
 	state       *elevenLabsSTTStreamState
+	rateGuard   stt.SampleRateGuard
 	writeJSON   func(map[string]any) error
 	unregister  func(*elevenLabsSTTStream)
 	unregOnce   sync.Once
@@ -523,6 +539,9 @@ func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
+	}
+	if err := s.rateGuard.Check(frame); err != nil {
+		return err
 	}
 	if s.audioBuf == nil {
 		s.audioBuf = audio.NewAudioByteStream(uint32(s.sampleRate), 1, uint32(s.sampleRate/20))
@@ -793,8 +812,7 @@ func (s *elevenLabsSTTStream) readLoop() {
 		}
 		events, err := processElevenLabsSTTStreamEvent(s.state, data)
 		if err != nil {
-			s.errCh <- err
-			return
+			continue
 		}
 		for _, event := range events {
 			s.events <- event
