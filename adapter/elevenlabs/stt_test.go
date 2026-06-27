@@ -122,8 +122,8 @@ func TestElevenLabsSTTRealtimeCapabilitiesMatchReference(t *testing.T) {
 	if caps.AlignedTranscript != "word" {
 		t.Fatalf("aligned transcript = %q, want word", caps.AlignedTranscript)
 	}
-	if caps.OfflineRecognize {
-		t.Fatal("offline recognize = true, want false for realtime")
+	if !caps.OfflineRecognize {
+		t.Fatal("offline recognize = false, want reference default true for realtime")
 	}
 }
 
@@ -226,6 +226,43 @@ func TestElevenLabsSTTRecognizeLanguageOverridePersistsLikeReference(t *testing.
 	fields, _ := readElevenLabsMultipartRequest(t, req)
 	if fields["language_code"] != "fr" {
 		t.Fatalf("later language_code = %q, want persisted fr", fields["language_code"])
+	}
+}
+
+func TestElevenLabsSTTRealtimeModelRecognizeUsesReferenceBatchEndpoint(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		fields, _ := readElevenLabsMultipartRequest(t, r)
+		if fields["model_id"] != "scribe_v2_realtime" {
+			t.Fatalf("model_id = %q, want realtime model sent to batch endpoint", fields["model_id"])
+		}
+		if fields["language_code"] != "en" {
+			t.Fatalf("language_code = %q, want request language", fields["language_code"])
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello","language_code":"en"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTBaseURL("https://eleven.example/v1"),
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+	)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %#v, want final hello transcript", event)
 	}
 }
 

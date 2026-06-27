@@ -154,7 +154,7 @@ func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
 		InterimResults:    true,
 		Diarization:       false,
 		AlignedTranscript: aligned,
-		OfflineRecognize:  !realtime,
+		OfflineRecognize:  true,
 	}
 }
 
@@ -294,9 +294,6 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 		s.mu.Unlock()
 	}
 
-	if elevenLabsSTTIsRealtime(s.modelID) {
-		return nil, fmt.Errorf("elevenlabs realtime models do not support offline recognize")
-	}
 	audio := elevenLabsSTTWAVBytes(frames, uint32(s.sampleRate), 1)
 	req, err := buildElevenLabsSTTRecognizeRequest(ctx, s, audio, language)
 	if err != nil {
