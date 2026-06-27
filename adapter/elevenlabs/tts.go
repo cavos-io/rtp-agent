@@ -371,9 +371,12 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("ElevenLabs TTS request failed", resp.StatusCode, "", string(respBody))
+		message := http.StatusText(resp.StatusCode)
+		if message == "" {
+			message = resp.Status
+		}
+		return nil, llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
