@@ -3630,6 +3630,9 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
 		}
+		if deploymentID := modelOptionString(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSDeploymentID(deploymentID))
+		}
 		return azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 	case providerBaseten:
 		ttsOpts := []baseten.BasetenTTSOption{}
@@ -5455,6 +5458,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
+		}
+		if deploymentID := modelOptionString(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSDeploymentID(deploymentID))
 		}
 		provider, err := azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 		if err != nil {

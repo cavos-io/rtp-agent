@@ -9477,6 +9477,9 @@ func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 		TTSLanguage:   "id-ID",
 		TTSSampleRate: &sampleRate,
 		TTSBaseURL:    "https://speech.example.test/cognitiveservices/v1",
+		TTSModelOptions: map[string]any{
+			"deployment_id": "voice-deployment",
+		},
 	}, providerAzure)
 	if err != nil {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
@@ -9504,6 +9507,9 @@ func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 	state := reflect.ValueOf(azureProvider).Elem()
 	if got, want := state.FieldByName("speechEndpoint").String(), "https://speech.example.test/cognitiveservices/v1"; got != want {
 		t.Fatalf("speechEndpoint = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("deploymentID").String(), "voice-deployment"; got != want {
+		t.Fatalf("deploymentID = %q, want %q", got, want)
 	}
 	if caps := azureProvider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
