@@ -1725,6 +1725,26 @@ func TestElevenLabsTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSNextReturnsQueuedStreamErrorAfterClose(t *testing.T) {
+	providerErr := llm.NewAPIStatusError("connection closed", 1006, "", "")
+	stream := &elevenLabsStream{
+		ctx:    context.Background(),
+		audio:  make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.errCh <- providerErr
+	close(stream.audio)
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("Next error = %v, want queued provider error", err)
+	}
+}
+
 func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	closed := make(chan struct{})
 	serverErr := make(chan error, 1)

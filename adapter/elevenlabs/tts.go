@@ -1688,6 +1688,11 @@ func (s *elevenLabsStream) Close() error {
 
 func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.isClosed() && !s.isFinished() {
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+		}
 		return nil, io.EOF
 	}
 
