@@ -1657,6 +1657,72 @@ func TestElevenLabsTTSStreamProviderErrorReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSWebsocketMP3DecodesSplitProviderAudio(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	if len(mp3Data) < 32 {
+		t.Fatalf("mp3 fixture length = %d, want enough bytes to split", len(mp3Data))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &elevenLabsStream{
+		audio:      make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
+		ctx:        ctx,
+		cancel:     cancel,
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	if err := stream.pushMP3Audio(base64.StdEncoding.EncodeToString(mp3Data[:8])); err != nil {
+		t.Fatalf("push first split MP3 chunk: %v", err)
+	}
+	if err := stream.pushMP3Audio(base64.StdEncoding.EncodeToString(mp3Data[8:])); err != nil {
+		t.Fatalf("push second split MP3 chunk: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		stream.closeMP3Decoder(true)
+		close(stream.audio)
+		close(done)
+	}()
+
+	decodedFrames := 0
+	for range 5000 {
+		var audio *tts.SynthesizedAudio
+		select {
+		case err := <-stream.errCh:
+			t.Fatalf("split MP3 decode error = %v", err)
+		case audio = <-stream.audio:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for split MP3 decoded audio")
+		}
+		if audio.IsFinal {
+			if decodedFrames == 0 {
+				t.Fatal("final marker arrived before decoded split MP3 audio")
+			}
+			break
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("decoded audio = %#v, want PCM frame", audio)
+		}
+		if audio.Frame.SampleRate != 22050 || audio.Frame.NumChannels != 1 {
+			t.Fatalf("decoded frame format = %d Hz/%d ch, want 22050 Hz mono", audio.Frame.SampleRate, audio.Frame.NumChannels)
+		}
+		decodedFrames++
+	}
+	if decodedFrames == 0 {
+		t.Fatal("decoded split MP3 frames = 0")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for split MP3 decoder shutdown")
+	}
+}
+
 func readElevenLabsTTSStreamMessage(t *testing.T, messages <-chan map[string]any) map[string]any {
 	t.Helper()
 	select {

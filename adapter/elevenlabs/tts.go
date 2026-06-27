@@ -655,6 +655,12 @@ type elevenLabsStream struct {
 	alignRunes    []rune
 	alignStartsMs []int
 	alignDurMs    []int
+
+	mp3Decoder     codecs.AudioStreamDecoder
+	mp3Input       chan []byte
+	mp3DecodeDone  chan struct{}
+	mp3Finalizing  bool
+	mp3InputClosed bool
 }
 
 type elevenLabsAlignment struct {
@@ -695,7 +701,10 @@ type elWSResponse struct {
 
 func (s *elevenLabsStream) readLoop() {
 	defer s.Close()
-	defer close(s.audio)
+	defer func() {
+		s.closeMP3Decoder(false)
+		close(s.audio)
+	}()
 
 	for {
 		_, message, err := s.conn.ReadMessage()
@@ -723,17 +732,25 @@ func (s *elevenLabsStream) readLoop() {
 		timedTranscript := s.timedTranscriptFromAlignment(resp)
 
 		if resp.Audio != "" {
-			audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
-			if err != nil {
-				logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
-				s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
-				return
-			}
-			audio.TimedTranscript = timedTranscript
-			select {
-			case <-s.ctx.Done():
-				return
-			case s.audio <- audio:
+			if strings.HasPrefix(s.encoding, "mp3") {
+				if err := s.pushMP3Audio(resp.Audio); err != nil {
+					logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
+					s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
+					return
+				}
+			} else {
+				audio, err := elevenLabsSynthesizedAudio(resp, s.sampleRate, s.encoding)
+				if err != nil {
+					logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
+					s.sendError(fmt.Errorf("elevenlabs TTS websocket audio decode: %w", err))
+					return
+				}
+				audio.TimedTranscript = timedTranscript
+				select {
+				case <-s.ctx.Done():
+					return
+				case s.audio <- audio:
+				}
 			}
 		} else if resp.IsFinal || deltaText != "" {
 			// Even if there's no audio, pass alignment or final flags
@@ -749,8 +766,103 @@ func (s *elevenLabsStream) readLoop() {
 		}
 
 		if resp.IsFinal {
+			s.closeMP3Decoder(true)
 			return
 		}
+	}
+}
+
+func (s *elevenLabsStream) pushMP3Audio(encoded string) error {
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	if s.mp3Decoder == nil {
+		s.mp3Decoder = codecs.NewMP3AudioStreamDecoder()
+		s.mp3Input = make(chan []byte, 16)
+		s.mp3DecodeDone = make(chan struct{})
+		go s.mp3DecodeLoop(s.mp3Decoder, s.mp3Input, s.mp3DecodeDone)
+	}
+	input := s.mp3Input
+	s.mu.Unlock()
+	select {
+	case <-s.ctx.Done():
+	case input <- data:
+	}
+	return nil
+}
+
+func (s *elevenLabsStream) closeMP3Decoder(final bool) {
+	s.mu.Lock()
+	decoder := s.mp3Decoder
+	input := s.mp3Input
+	done := s.mp3DecodeDone
+	if decoder == nil {
+		s.mu.Unlock()
+		return
+	}
+	if input != nil && !s.mp3InputClosed {
+		close(input)
+		s.mp3InputClosed = true
+	}
+	if final {
+		s.mp3Finalizing = true
+	} else {
+		_ = decoder.Close()
+	}
+	s.mu.Unlock()
+	<-done
+}
+
+func (s *elevenLabsStream) mp3DecodeLoop(decoder codecs.AudioStreamDecoder, input <-chan []byte, done chan<- struct{}) {
+	defer close(done)
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for chunk := range input {
+			decoder.Push(chunk)
+		}
+		decoder.EndInput()
+	}()
+	emitted := false
+	for {
+		frame, err := decoder.Next()
+		if err != nil {
+			if strings.Contains(err.Error(), "decoder closed") {
+				<-writerDone
+				if emitted && s.isMP3Finalizing() {
+					s.sendAudio(&tts.SynthesizedAudio{IsFinal: true})
+				}
+				return
+			}
+			_ = decoder.Close()
+			s.sendError(fmt.Errorf("elevenlabs TTS websocket mp3 decode: %w", err))
+			return
+		}
+		frame, err = normalizeElevenLabsMP3Frame(frame, s.sampleRate)
+		if err != nil {
+			s.sendError(fmt.Errorf("elevenlabs TTS websocket mp3 resample: %w", err))
+			return
+		}
+		emitted = true
+		s.sendAudio(&tts.SynthesizedAudio{Frame: frame})
+	}
+}
+
+func (s *elevenLabsStream) isMP3Finalizing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mp3Finalizing
+}
+
+func (s *elevenLabsStream) sendAudio(audio *tts.SynthesizedAudio) {
+	select {
+	case <-s.ctx.Done():
+	case s.audio <- audio:
 	}
 }
 
@@ -1223,6 +1335,13 @@ func (s *elevenLabsStream) Close() error {
 	}
 	s.closed = true
 	s.cancel()
+	if s.mp3Decoder != nil {
+		if s.mp3Input != nil && !s.mp3InputClosed {
+			close(s.mp3Input)
+			s.mp3InputClosed = true
+		}
+		_ = s.mp3Decoder.Close()
+	}
 	if s.initSent {
 		_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
 	}
