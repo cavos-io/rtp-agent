@@ -1125,6 +1125,51 @@ func TestAzureSTTStreamTurnEndReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamTurnEndClosesReferenceStream(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{})
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestTurnEndHoldOpenDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+
+	deadline := time.After(time.Second)
+	for {
+		provider.mu.Lock()
+		active := len(provider.streams)
+		provider.mu.Unlock()
+		if active == 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			_ = stream.Close()
+			<-serverClosed
+			t.Fatalf("active streams after Azure turn.end = %d, want stream closed and unregistered", active)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error after Azure turn.end cleanup = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAzureSTTStreamRejectsAudioAfterReferenceTurnEnd(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)

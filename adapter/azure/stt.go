@@ -974,12 +974,18 @@ func (s *azureSTTStream) finishWithErrorLocked(err error) {
 	}
 	s.closed = true
 	s.closedWithError = true
-	select {
-	case s.errCh <- err:
-	default:
+	if s.errCh != nil {
+		select {
+		case s.errCh <- err:
+		default:
+		}
 	}
-	s.cancel()
-	_ = s.conn.Close()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
@@ -1089,12 +1095,7 @@ func (s *azureSTTStream) markSessionStopped() {
 		return
 	}
 	s.sessionStopped = true
-	if s.errCh != nil {
-		select {
-		case s.errCh <- llm.NewAPIConnectionError("SpeechRecognition session stopped"):
-		default:
-		}
-	}
+	s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 }
 
 func (s *azureSTTStream) writeAudioLocked(audio azureSTTPendingAudio) error {
