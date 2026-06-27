@@ -3286,6 +3286,11 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	} else if sampleRate := azureSTTIntModelOption(cfg.STTModelOptions, "sample_rate"); sampleRate > 0 {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSampleRate(sampleRate))
 	}
+	if cfg.STTNumberOfChannels != nil {
+		sttOpts = append(sttOpts, azure.WithAzureSTTNumChannels(*cfg.STTNumberOfChannels))
+	} else if numChannels := azureSTTIntModelOption(cfg.STTModelOptions, "num_channels"); numChannels > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTNumChannels(numChannels))
+	}
 	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
 }
 

@@ -487,6 +487,123 @@ func TestNewAzureOpenAILLMUsesReferenceEntraTokenProvider(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAILLMUsesReferenceBaseURLOption(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMAzureBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := model.Provider(); got != "gateway.openai.azure.test" {
+		t.Fatalf("Provider() = %q, want base_url host", got)
+	}
+	if !strings.HasPrefix(capture.requestURL, "https://gateway.openai.azure.test/custom/openai/deployments/chat-deployment/chat/completions") {
+		t.Fatalf("request URL = %s, want reference base_url route", capture.requestURL)
+	}
+}
+
+func TestNewAzureOpenAILLMUsesReferenceTimeoutOption(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMAzureTimeout(75*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext())
+
+	if !capture.hasDeadline {
+		t.Fatal("request context has no deadline, want Azure constructor timeout deadline")
+	}
+	if capture.remaining <= 0 || capture.remaining > 75*time.Millisecond {
+		t.Fatalf("request context deadline remaining = %v, want bounded by Azure constructor timeout", capture.remaining)
+	}
+}
+
+func TestNewAzureOpenAILLMUsesReferenceReasoningObject(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-5",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMReasoning(map[string]any{
+			"effort":  "low",
+			"summary": "auto",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(capture.requestBody, `"reasoning":{"effort":"low","summary":"auto"}`) {
+		t.Fatalf("request body = %s, want reference reasoning object", capture.requestBody)
+	}
+}
+
+func TestNewAzureOpenAILLMReasoningObjectOmitsDefaultEffort(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-5",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMReasoning(map[string]any{"effort": "minimal"}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if strings.Contains(capture.requestBody, `"reasoning_effort"`) {
+		t.Fatalf("request body = %s, want no reasoning_effort when reference reasoning object is configured", capture.requestBody)
+	}
+}
+
 func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
 	t.Setenv(ovhcloudAPIKeyEnv, "env-ovh-key")
 	capture := &captureDeadlineHTTPClient{

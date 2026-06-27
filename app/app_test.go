@@ -12608,6 +12608,7 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
 	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "8000")
+	t.Setenv("RTP_AGENT_STT_NUMBER_OF_CHANNELS", "2")
 	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -12627,6 +12628,9 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	}
 	if got, want := stt.InputSampleRate(azureProvider), uint32(8000); got != want {
 		t.Fatalf("Azure STT input sample rate = %d, want %d", got, want)
+	}
+	if got, want := int(state.FieldByName("numChannels").Int()), 2; got != want {
+		t.Fatalf("Azure STT numChannels = %d, want %d", got, want)
 	}
 }
 

@@ -90,6 +90,7 @@ type OpenAILLM struct {
 	extraQuery           map[string]string
 	extraBody            map[string]any
 	azureADTokenProvider func(context.Context) (string, error)
+	reasoningObjectSet   bool
 	mu                   sync.Mutex
 	closed               bool
 	streams              map[*openaiStream]struct{}
@@ -239,6 +240,23 @@ func WithOpenAILLMAzureADTokenProvider(provider func(context.Context) (string, e
 	}
 }
 
+func WithOpenAILLMAzureBaseURL(baseURL string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.baseURL = baseURL
+	}
+}
+
+func WithOpenAILLMAzureTimeout(timeout time.Duration) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		connectOptions := llm.DefaultAPIConnectOptions()
+		if l.defaultConnect != nil {
+			connectOptions = *l.defaultConnect
+		}
+		connectOptions.Timeout = timeout
+		l.defaultConnect = &connectOptions
+	}
+}
+
 func withOpenAILLMExtraHeader(key string, value string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		if l.extraHeaders == nil {
@@ -263,6 +281,16 @@ func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
 			l.extraParams = map[string]any{}
 		}
 		l.extraParams["verbosity"] = verbosity
+	}
+}
+
+func WithOpenAILLMReasoning(reasoning map[string]any) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraBody == nil {
+			l.extraBody = map[string]any{}
+		}
+		l.extraBody["reasoning"] = cloneOpenAIAnyMap(reasoning)
+		l.reasoningObjectSet = true
 	}
 }
 
@@ -406,6 +434,9 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
 	config.AzureModelMapperFunc = func(string) string {
 		return azureDeployment
+	}
+	if provider.baseURL != "" {
+		config.BaseURL = provider.baseURL
 	}
 	if apiVersion != "" {
 		config.APIVersion = apiVersion
@@ -968,7 +999,8 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		effectiveOptions = &copied
 	}
 
-	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, l.defaultReasoning, l.strictToolSchema)
+	defaultReasoning := l.defaultReasoning && !l.reasoningObjectSet
+	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, defaultReasoning, l.strictToolSchema)
 	client := l.client
 	if callClient := l.openAIClientWithCallExtras(effectiveOptions.ExtraParams); callClient != nil {
 		client = callClient

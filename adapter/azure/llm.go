@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"time"
 
 	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -18,6 +19,22 @@ func WithAzureLLMTemperature(temperature float64) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMTemperature(temperature)
 }
 
+func WithAzureLLMTopP(topP float64) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMTopP(topP)
+}
+
+func WithAzureLLMServiceTier(serviceTier string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMServiceTier(serviceTier)
+}
+
+func WithAzureLLMPromptCacheKey(promptCacheKey string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMPromptCacheKey(promptCacheKey)
+}
+
+func WithAzureLLMPromptCacheRetention(promptCacheRetention string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMPromptCacheRetention(promptCacheRetention)
+}
+
 func WithAzureLLMParallelToolCalls(parallelToolCalls bool) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMParallelToolCalls(parallelToolCalls)
 }
@@ -28,6 +45,14 @@ func WithAzureLLMToolChoice(toolChoice llm.ToolChoice) AzureLLMOption {
 
 func WithAzureLLMReasoningEffort(reasoningEffort string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMReasoningEffort(reasoningEffort)
+}
+
+func WithAzureLLMReasoning(reasoning map[string]any) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMReasoning(reasoning)
+}
+
+func WithAzureLLMVerbosity(verbosity string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMVerbosity(verbosity)
 }
 
 func WithAzureLLMUser(user string) AzureLLMOption {
@@ -44,6 +69,14 @@ func WithAzureLLMProject(project string) AzureLLMOption {
 
 func WithAzureLLMADTokenProvider(provider func(context.Context) (string, error)) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMAzureADTokenProvider(provider)
+}
+
+func WithAzureLLMBaseURL(baseURL string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMAzureBaseURL(baseURL)
+}
+
+func WithAzureLLMTimeout(timeout time.Duration) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMAzureTimeout(timeout)
 }
 
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {

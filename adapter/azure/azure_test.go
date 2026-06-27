@@ -108,6 +108,33 @@ func TestAzureSTTFallsBackToSpeechEndpointEnvironment(t *testing.T) {
 	}
 }
 
+func TestAzureSTTFallsBackToSpeechAuthTokenEnvironment(t *testing.T) {
+	t.Setenv(azureSpeechHostEnv, "")
+	t.Setenv(azureSpeechKeyEnv, "")
+	t.Setenv(azureSpeechRegionEnv, "eastus")
+	t.Setenv(azureSpeechEndpointEnv, "")
+	t.Setenv("AZURE_SPEECH_AUTH_TOKEN", "env-token")
+
+	provider, err := NewAzureSTT("", "")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v, want nil from auth token env config", err)
+	}
+
+	if provider.authToken != "env-token" {
+		t.Fatalf("authToken = %q, want env-token", provider.authToken)
+	}
+	if provider.apiKey != "" {
+		t.Fatalf("apiKey = %q, want empty when auth token is configured", provider.apiKey)
+	}
+	headers := buildAzureSTTHeaders(provider, "conn-123")
+	if got := headers.Get("Authorization"); got != "Bearer env-token" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+	if got := headers.Get("Ocp-Apim-Subscription-Key"); got != "" {
+		t.Fatalf("subscription header = %q, want omitted for auth token", got)
+	}
+}
+
 func TestAzureSTTRequiresSpeechConfig(t *testing.T) {
 	t.Setenv(azureSpeechHostEnv, "")
 	t.Setenv(azureSpeechKeyEnv, "")
@@ -197,6 +224,42 @@ func TestAzureSTTRecognizeUsesRESTRequestAndMapsDetailedResult(t *testing.T) {
 	}
 }
 
+func TestAzureSTTRecognizeUsesReferenceAuthToken(t *testing.T) {
+	provider, err := NewAzureSTT("", "eastus", WithAzureSTTAuthToken("token-123"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.Header.Get("Authorization"); got != "Bearer token-123" {
+				t.Fatalf("Authorization = %q, want bearer token", got)
+			}
+			if got := req.Header.Get("Ocp-Apim-Subscription-Key"); got != "" {
+				t.Fatalf("subscription header = %q, want omitted for auth token", got)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"RecognitionStatus":"Success","DisplayText":"token final"}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "token final" {
+		t.Fatalf("recognized text = %q, want token final", got)
+	}
+}
+
 func TestAzureSTTRecognizeUsesConfiguredSpeechHost(t *testing.T) {
 	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"))
 	if err != nil {
@@ -233,6 +296,42 @@ func TestAzureSTTRecognizeUsesConfiguredSpeechHost(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Text; got != "host final" {
 		t.Fatalf("recognized text = %q, want host final", got)
+	}
+}
+
+func TestAzureSTTRecognizeUsesConfiguredSpeechEndpoint(t *testing.T) {
+	provider, err := NewAzureSTT("key", "", WithAzureSTTSpeechEndpoint("https://speech.endpoint.test/custom/stt"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Scheme != "https" || req.URL.Host != "speech.endpoint.test" || req.URL.Path != "/custom/stt" {
+				t.Fatalf("URL = %q, want configured Azure Speech endpoint", req.URL.String())
+			}
+			if req.URL.Query().Get("language") != "id-ID" {
+				t.Fatalf("language query = %q, want id-ID", req.URL.Query().Get("language"))
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"RecognitionStatus":"Success","DisplayText":"endpoint final"}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "id-ID")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "endpoint final" {
+		t.Fatalf("recognized text = %q, want endpoint final", got)
 	}
 }
 
@@ -493,6 +592,14 @@ func TestAzureSTTStreamURLUsesExplicitPunctuationOption(t *testing.T) {
 	if got := parsed.Query().Get("punctuation"); got != "explicit" {
 		t.Fatalf("punctuation query = %q, want explicit", got)
 	}
+
+	req, err := buildAzureSTTRecognizeRequest(context.Background(), provider, nil, "id-ID")
+	if err != nil {
+		t.Fatalf("build recognize request: %v", err)
+	}
+	if got := req.URL.Query().Get("punctuation"); got != "explicit" {
+		t.Fatalf("recognize punctuation query = %q, want explicit", got)
+	}
 }
 
 func TestAzureSTTUsesReferenceProfanityOption(t *testing.T) {
@@ -734,6 +841,55 @@ func TestAzureSTTStreamRejectsReferenceChannelCountChange(t *testing.T) {
 		SamplesPerChannel: 1,
 	}); err == nil || !strings.Contains(err.Error(), "channel count") {
 		t.Fatalf("PushFrame changed channel count error = %v, want channel count mismatch", err)
+	}
+}
+
+func TestAzureSTTStreamRejectsReferenceConfiguredChannelMismatch(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	stream := &azureSTTStream{
+		provider: provider,
+		ctx:      context.Background(),
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 1,
+	}); err == nil || !strings.Contains(err.Error(), "channel count") {
+		t.Fatalf("PushFrame channel count error = %v, want configured channel count mismatch", err)
+	}
+}
+
+func TestAzureSTTStreamAcceptsReferenceConfiguredChannelCount(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTNumChannels(2))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	stream := &azureSTTStream{
+		provider:    provider,
+		ctx:         context.Background(),
+		numChannels: provider.inputNumChannels(),
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame configured channel count error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x05, 0x06},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err == nil || !strings.Contains(err.Error(), "channel count") {
+		t.Fatalf("PushFrame mismatched channel count error = %v, want channel count mismatch", err)
 	}
 }
 
@@ -2861,6 +3017,36 @@ func TestAzureTTSRequiresSpeechConfig(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "AZURE_SPEECH_ENDPOINT") {
 		t.Fatalf("NewAzureTTS error = %v, want speech config error", err)
+	}
+}
+
+func TestAzureTTSFallsBackToSpeechAuthTokenEnvironment(t *testing.T) {
+	t.Setenv(azureSpeechKeyEnv, "")
+	t.Setenv(azureSpeechRegionEnv, "eastus")
+	t.Setenv(azureSpeechEndpointEnv, "")
+	t.Setenv(azureSpeechAuthTokenEnv, "env-token")
+
+	provider, err := NewAzureTTS("", "", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v, want nil from auth token env config", err)
+	}
+
+	if provider.authToken != "env-token" {
+		t.Fatalf("authToken = %q, want env-token", provider.authToken)
+	}
+	if provider.apiKey != "" {
+		t.Fatalf("apiKey = %q, want empty when auth token env config is used", provider.apiKey)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer env-token" {
+		t.Fatalf("Authorization = %q, want bearer auth token", got)
+	}
+	if got := req.Header.Get("Ocp-Apim-Subscription-Key"); got != "" {
+		t.Fatalf("Ocp-Apim-Subscription-Key = %q, want empty when bearer auth is used", got)
 	}
 }
 
