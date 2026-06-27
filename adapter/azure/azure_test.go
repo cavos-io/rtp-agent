@@ -3707,6 +3707,39 @@ func TestAzureTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestAzureTTSSynthesizeClientClosedStatusSkipsBodyRead(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	body := &readTrackingCloser{}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 499,
+				Body:       body,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next error = %v, want io.EOF for reference client-closed status", err)
+	}
+	if body.reads != 0 {
+		t.Fatalf("body reads = %d, want 0 for client-closed status cleanup", body.reads)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body closes = %d, want 1", body.closed)
+	}
+}
+
 func TestAzureTTSSynthesizeStatusErrorCancelsRequestContext(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
@@ -3825,6 +3858,21 @@ func (r errorReadCloser) Read([]byte) (int, error) {
 }
 
 func (r errorReadCloser) Close() error {
+	return nil
+}
+
+type readTrackingCloser struct {
+	reads  int
+	closed int
+}
+
+func (r *readTrackingCloser) Read([]byte) (int, error) {
+	r.reads++
+	return 0, errors.New("unexpected body read")
+}
+
+func (r *readTrackingCloser) Close() error {
+	r.closed++
 	return nil
 }
 
