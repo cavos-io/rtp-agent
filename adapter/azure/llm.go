@@ -19,6 +19,10 @@ func WithAzureLLMTemperature(temperature float64) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMTemperature(temperature)
 }
 
+func WithAzureLLMTopP(topP float64) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMTopP(topP)
+}
+
 func WithAzureLLMParallelToolCalls(parallelToolCalls bool) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMParallelToolCalls(parallelToolCalls)
 }
