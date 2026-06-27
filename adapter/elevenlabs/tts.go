@@ -770,13 +770,16 @@ func (s *elevenLabsStream) readLoop() {
 	}()
 
 	for {
-		_, message, err := s.conn.ReadMessage()
+		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
 				logger.Logger.Errorw("ElevenLabs WebSocket read error", err)
 				s.sendError(elevenLabsTTSUnexpectedCloseError(err))
 			}
 			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
 		}
 
 		var resp elWSResponse
