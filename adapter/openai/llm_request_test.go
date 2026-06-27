@@ -2178,6 +2178,41 @@ func TestOpenAIStreamSkipsAzureNullDeltaWithFinishReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"query\":"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"weather\"}"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want accumulated tool call chunk", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one accumulated tool call", chunk)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("tool call = %+v, want accumulated Azure tool-call arguments", call)
+	}
+}
+
 func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
 	err := openAIStreamRecvError(llm.NewAPIStatusError("client closed", 499, "req_499", nil))
 	if !errors.Is(err, io.EOF) {

@@ -2107,11 +2107,17 @@ func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatComple
 }
 
 type openaiStream struct {
-	stream   *openai.ChatCompletionStream
-	cancel   context.CancelFunc
-	provider *OpenAILLM
-	mu       sync.Mutex
-	closed   bool
+	stream          *openai.ChatCompletionStream
+	cancel          context.CancelFunc
+	provider        *OpenAILLM
+	mu              sync.Mutex
+	closed          bool
+	toolIndex       int
+	toolIndexSet    bool
+	toolCallID      string
+	toolCallType    string
+	toolCallName    string
+	toolCallRawArgs string
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
@@ -2132,8 +2138,19 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		choice := resp.Choices[0]
+		if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
+			return s.finishOpenAIStreamToolCall(resp.ID, choice), nil
+		}
 		if resp.Usage == nil && isEmptyOpenAIStreamChoiceDelta(choice) {
 			continue
+		}
+		if len(choice.Delta.ToolCalls) > 0 {
+			if chunk := s.processOpenAIStreamToolCalls(resp.ID, choice); chunk != nil {
+				return chunk, nil
+			}
+			if choice.Delta.Content == "" && resp.Usage == nil {
+				continue
+			}
 		}
 		chunk := &llm.ChatChunk{
 			ID: resp.ID,
@@ -2143,24 +2160,69 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 			},
 		}
 
-		if len(choice.Delta.ToolCalls) > 0 {
-			chunk.Delta.ToolCalls = make([]llm.FunctionToolCall, 0, len(choice.Delta.ToolCalls))
-			for _, tc := range choice.Delta.ToolCalls {
-				chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
-					Type:      string(tc.Type),
-					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
-					CallID:    tc.ID,
-				})
-			}
-		}
-
 		if resp.Usage != nil {
 			chunk.Usage = openAICompletionUsage(resp.Usage)
 		}
 
 		return chunk, nil
 	}
+}
+
+func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openai.ChatCompletionStreamChoice) *llm.ChatChunk {
+	for _, tc := range choice.Delta.ToolCalls {
+		if tc.Function.Name == "" && tc.Function.Arguments == "" {
+			continue
+		}
+		index := 0
+		if tc.Index != nil {
+			index = *tc.Index
+		}
+		var completed *llm.ChatChunk
+		if s.toolCallID != "" && tc.ID != "" && (!s.toolIndexSet || index != s.toolIndex) {
+			completed = s.finishOpenAIStreamToolCall(id, choice)
+		}
+		if tc.Function.Name != "" {
+			s.toolIndex = index
+			s.toolIndexSet = true
+			s.toolCallID = tc.ID
+			s.toolCallType = string(tc.Type)
+			s.toolCallName = tc.Function.Name
+			s.toolCallRawArgs = tc.Function.Arguments
+		} else if tc.Function.Arguments != "" {
+			s.toolCallRawArgs += tc.Function.Arguments
+		}
+		if completed != nil {
+			return completed
+		}
+	}
+	return nil
+}
+
+func (s *openaiStream) finishOpenAIStreamToolCall(id string, choice openai.ChatCompletionStreamChoice) *llm.ChatChunk {
+	chunk := &llm.ChatChunk{
+		ID: id,
+		Delta: &llm.ChoiceDelta{
+			Role:    llm.ChatRole(choice.Delta.Role),
+			Content: choice.Delta.Content,
+			ToolCalls: []llm.FunctionToolCall{{
+				Type:      s.toolCallType,
+				Name:      s.toolCallName,
+				Arguments: s.toolCallRawArgs,
+				CallID:    s.toolCallID,
+			}},
+		},
+	}
+	s.toolIndex = 0
+	s.toolIndexSet = false
+	s.toolCallID = ""
+	s.toolCallType = ""
+	s.toolCallName = ""
+	s.toolCallRawArgs = ""
+	return chunk
+}
+
+func isOpenAIStreamToolCallFinish(choice openai.ChatCompletionStreamChoice) bool {
+	return choice.FinishReason == openai.FinishReasonToolCalls || choice.FinishReason == openai.FinishReasonStop
 }
 
 func isEmptyOpenAIStreamChoiceDelta(choice openai.ChatCompletionStreamChoice) bool {
