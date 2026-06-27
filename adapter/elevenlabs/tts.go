@@ -883,6 +883,14 @@ func (s *elevenLabsStream) readLoop() {
 		if resp.IsFinal {
 			s.cancelResponseTimeout()
 			s.markFinished()
+			if (strings.HasPrefix(s.encoding, "mp3") || strings.HasPrefix(s.encoding, "opus")) && !s.hasCompressedDecoder() {
+				s.sendAudio(&tts.SynthesizedAudio{
+					IsFinal:         true,
+					DeltaText:       deltaText,
+					TimedTranscript: timedTranscript,
+				})
+				return
+			}
 			s.closeMP3Decoder(true)
 			return
 		}
@@ -989,6 +997,12 @@ func (s *elevenLabsStream) closeMP3Decoder(final bool) {
 	}
 	s.mu.Unlock()
 	<-done
+}
+
+func (s *elevenLabsStream) hasCompressedDecoder() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mp3Decoder != nil
 }
 
 func (s *elevenLabsStream) mp3DecodeLoop(decoder codecs.AudioStreamDecoder, input <-chan []byte, done chan<- struct{}) {
