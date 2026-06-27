@@ -28,6 +28,7 @@ const (
 	azureSpeechRegionEnv      = "AZURE_SPEECH_REGION"
 	defaultAzureSTTLanguage   = "en-US"
 	defaultAzureSTTSampleRate = 16000
+	defaultAzureSTTChannels   = 1
 	defaultAzureSTTRetries    = 3
 	azureSTTFlushSilenceMS    = 200
 )
@@ -43,6 +44,7 @@ type AzureSTT struct {
 	language               string
 	languages              []string
 	sampleRate             int
+	numChannels            int
 	segmentationSilence    int
 	segmentationMaxTime    int
 	segmentationStrategy   string
@@ -179,6 +181,7 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 		speechHost:     os.Getenv(azureSpeechHostEnv),
 		speechEndpoint: os.Getenv(azureSpeechEndpointEnv),
 		sampleRate:     defaultAzureSTTSampleRate,
+		numChannels:    defaultAzureSTTChannels,
 		httpClient:     http.DefaultClient,
 		dialWebsocket:  defaultAzureSTTWebsocketDialer,
 		streams:        make(map[*azureSTTStream]struct{}),
@@ -213,6 +216,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	s.mu.Lock()
 	beforeLanguage := s.language
 	beforeSampleRate := s.sampleRate
+	beforeNumChannels := s.numChannels
 	beforeSpeechHost := s.speechHost
 	beforeSpeechEndpoint := s.speechEndpoint
 	beforeAuthToken := s.authToken
@@ -232,6 +236,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 		}
 	}
 	s.sampleRate = beforeSampleRate
+	s.numChannels = beforeNumChannels
 	s.speechHost = beforeSpeechHost
 	s.speechEndpoint = beforeSpeechEndpoint
 	s.authToken = beforeAuthToken
@@ -323,6 +328,12 @@ func (s *AzureSTT) InputSampleRate() uint32 {
 	}
 	return uint32(s.sampleRate)
 }
+func (s *AzureSTT) inputNumChannels() uint32 {
+	if s == nil || s.numChannels <= 0 {
+		return defaultAzureSTTChannels
+	}
+	return uint32(s.numChannels)
+}
 func (s *AzureSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "chunk", OfflineRecognize: false}
 }
@@ -351,6 +362,7 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 		language:      resolvedLanguage,
 		languages:     languageCandidates,
 		sampleRate:    s.InputSampleRate(),
+		numChannels:   s.inputNumChannels(),
 		events:        make(chan *stt.SpeechEvent, 100),
 		errCh:         make(chan error, 1),
 		ctx:           streamCtx,
@@ -745,6 +757,7 @@ type azureSTTStream struct {
 	language        string
 	languages       []string
 	sampleRate      uint32
+	numChannels     uint32
 	events          chan *stt.SpeechEvent
 	errCh           chan error
 	mu              sync.Mutex
@@ -800,6 +813,9 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.pushedSR = frame.SampleRate
 	}
 	if frame.NumChannels != 0 {
+		if expected := s.expectedNumChannels(); expected != 0 && frame.NumChannels != expected {
+			return fmt.Errorf("azure stt input channel count %d does not match configured %d", frame.NumChannels, expected)
+		}
 		if s.pushedChannels != 0 && s.pushedChannels != frame.NumChannels {
 			return fmt.Errorf("azure stt input channel count changed from %d to %d", s.pushedChannels, frame.NumChannels)
 		}
@@ -843,6 +859,16 @@ func (s *azureSTTStream) audioContentType() string {
 	return fmt.Sprintf("audio/x-wav;codec=audio/pcm;samplerate=%d", sampleRate)
 }
 
+func (s *azureSTTStream) expectedNumChannels() uint32 {
+	if s.numChannels != 0 {
+		return s.numChannels
+	}
+	if s.provider != nil {
+		return s.provider.inputNumChannels()
+	}
+	return defaultAzureSTTChannels
+}
+
 func (s *azureSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -873,7 +899,7 @@ func (s *azureSTTStream) flushLocked() error {
 	}
 	silence := azureSTTPendingAudio{
 		contentType: s.audioContentType(),
-		data:        make([]byte, int(s.sampleRate)*2*azureSTTFlushSilenceMS/1000),
+		data:        make([]byte, int(s.sampleRate)*int(s.expectedNumChannels())*2*azureSTTFlushSilenceMS/1000),
 	}
 	if !s.sessionStarted {
 		s.pendingAudio = append(s.pendingAudio, silence)
