@@ -2795,6 +2795,54 @@ func TestAzureTTSChunkedStreamCloseDropsLateResponse(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	body := newBlockingCloseReadCloser()
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       body,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	nextErr := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextErr <- err
+	}()
+
+	select {
+	case <-body.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start reading Azure TTS response")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextErr:
+		if err != io.EOF {
+			t.Fatalf("Next after Close during read error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not return after Close during read")
+	}
+	if body.closed != 1 {
+		t.Fatalf("response body Close calls = %d, want 1", body.closed)
+	}
+}
+
 func TestAzureTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
@@ -3056,6 +3104,31 @@ func (r *countingErrorReadCloser) Read([]byte) (int, error) {
 
 func (r *countingErrorReadCloser) Close() error {
 	r.closed++
+	return nil
+}
+
+type blockingCloseReadCloser struct {
+	entered chan struct{}
+	closedC chan struct{}
+	closed  int
+}
+
+func newBlockingCloseReadCloser() *blockingCloseReadCloser {
+	return &blockingCloseReadCloser{
+		entered: make(chan struct{}),
+		closedC: make(chan struct{}),
+	}
+}
+
+func (r *blockingCloseReadCloser) Read([]byte) (int, error) {
+	close(r.entered)
+	<-r.closedC
+	return 0, io.ErrClosedPipe
+}
+
+func (r *blockingCloseReadCloser) Close() error {
+	r.closed++
+	close(r.closedC)
 	return nil
 }
 

@@ -474,6 +474,9 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.pendingErr != nil {
 		err := s.pendingErr
 		s.pendingErr = nil
+		if s.closed.Load() {
+			return nil, io.EOF
+		}
 		return nil, s.failRead(err)
 	}
 	buf := make([]byte, 4096)
@@ -494,6 +497,9 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err != nil && n == 0 {
 			if err == io.EOF {
 				return s.emitFinal()
+			}
+			if s.closed.Load() {
+				return nil, io.EOF
 			}
 			return nil, s.failRead(err)
 		}
@@ -526,6 +532,9 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err != nil {
 			if err == io.EOF {
 				return s.emitFinal()
+			}
+			if s.closed.Load() {
+				return nil, io.EOF
 			}
 			return nil, s.failRead(err)
 		}
