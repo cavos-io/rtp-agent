@@ -31,6 +31,7 @@ const (
 	defaultElevenLabsSTTSampleRate = 16000
 	elevenLabsSTTAuthHeader        = "xi-api-key"
 	elevenLabsSTTUsageInterval     = 5 * time.Second
+	elevenLabsSTTKeepAliveInterval = 10 * time.Second
 )
 
 type ElevenLabsVADOptions struct {
@@ -239,6 +240,7 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 		sampleRate:         s.sampleRate,
 		usageLastFlush:     streamNow,
 		usageFlushInterval: elevenLabsSTTUsageInterval,
+		keepAliveInterval:  elevenLabsSTTKeepAliveInterval,
 		state: &elevenLabsSTTStreamState{
 			language:          resolveElevenLabsSTTLanguage(s, language),
 			includeTimestamps: s.includeTimestamps,
@@ -528,6 +530,7 @@ type elevenLabsSTTStream struct {
 	audioDur           float64
 	usageLastFlush     time.Time
 	usageFlushInterval time.Duration
+	keepAliveInterval  time.Duration
 	state              *elevenLabsSTTStreamState
 	rateGuard          stt.SampleRateGuard
 	writeJSON          func(map[string]any) error
@@ -858,7 +861,11 @@ func elevenLabsSTTUnexpectedCloseError(err error) error {
 }
 
 func (s *elevenLabsSTTStream) keepAliveLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	interval := s.keepAliveInterval
+	if interval <= 0 {
+		interval = elevenLabsSTTKeepAliveInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

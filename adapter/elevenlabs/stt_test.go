@@ -496,6 +496,31 @@ func TestElevenLabsSTTStreamPushFrameReportsPeriodicReferenceUsage(t *testing.T)
 	}
 }
 
+func TestElevenLabsSTTStreamKeepAliveSendsReferenceEmptyAudioChunk(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	messages := make(chan map[string]any, 1)
+	stream := &elevenLabsSTTStream{
+		ctx:               ctx,
+		sampleRate:        16000,
+		keepAliveInterval: time.Millisecond,
+		writeJSON: func(message map[string]any) error {
+			messages <- message
+			return nil
+		},
+	}
+	go stream.keepAliveLoop()
+
+	select {
+	case msg := <-messages:
+		if msg["message_type"] != "input_audio_chunk" || msg["audio_base_64"] != "" || msg["commit"] != false || msg["sample_rate"] != 16000 {
+			t.Fatalf("keepalive message = %#v, want reference empty audio chunk", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for keepalive message")
+	}
+}
+
 func TestElevenLabsSTTStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	var messages []map[string]any
 	stream := &elevenLabsSTTStream{
