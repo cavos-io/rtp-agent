@@ -51,6 +51,10 @@ func WithAzureLLMReasoning(reasoning map[string]any) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMReasoning(reasoning)
 }
 
+func WithAzureLLMVerbosity(verbosity string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMVerbosity(verbosity)
+}
+
 func WithAzureLLMUser(user string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMUser(user)
 }
