@@ -2134,7 +2134,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		if len(resp.Choices) == 0 {
-			return &llm.ChatChunk{ID: resp.ID}, nil
+			return &llm.ChatChunk{ID: resp.ID, Usage: openAICompletionUsage(resp.Usage)}, nil
 		}
 
 		choice := resp.Choices[0]

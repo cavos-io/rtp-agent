@@ -2178,6 +2178,42 @@ func TestOpenAIStreamSkipsAzureNullDeltaWithFinishReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamPreservesAzureUsageOnlyChunk(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-usage","choices":[],"usage":{"completion_tokens":3,"prompt_tokens":2,"total_tokens":5,"prompt_tokens_details":{"cached_tokens":1}}}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want usage chunk", err)
+	}
+	if chunk == nil || chunk.ID != "chatcmpl-usage" {
+		t.Fatalf("chunk = %#v, want usage chunk id", chunk)
+	}
+	if chunk.Usage == nil {
+		t.Fatalf("chunk.Usage = nil, want usage from Azure usage-only stream chunk")
+	}
+	if chunk.Usage.CompletionTokens != 3 || chunk.Usage.PromptTokens != 2 ||
+		chunk.Usage.TotalTokens != 5 || chunk.Usage.PromptCachedTokens != 1 {
+		t.Fatalf("chunk.Usage = %+v, want mapped usage-only stream tokens", chunk.Usage)
+	}
+}
+
 func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
