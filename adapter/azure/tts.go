@@ -73,9 +73,7 @@ type AzureTTSOption func(*AzureTTS)
 
 func WithAzureTTSLanguage(language string) AzureTTSOption {
 	return func(t *AzureTTS) {
-		if language != "" {
-			t.language = language
-		}
+		t.language = language
 	}
 }
 

@@ -3181,6 +3181,38 @@ func TestAzureTTSUpdateOptionsPreservesExplicitEmptyReferenceLexicon(t *testing.
 	}
 }
 
+func TestAzureTTSUpdateOptionsClearsLanguageToReferenceDefault(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"id-ID-GadisNeural",
+		WithAzureTTSLanguage("id-ID"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	if err := provider.UpdateOptions("", "", WithAzureTTSLanguage("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `xml:lang="en-US"`) {
+		t.Fatalf("SSML = %q, want default language after explicit empty reference update", ssml)
+	}
+	if strings.Contains(ssml, `xml:lang="id-ID"`) {
+		t.Fatalf("SSML = %q, want previous language cleared", ssml)
+	}
+}
+
 func TestAzureTTSUpdateOptionsRejectsUnsupportedSampleRate(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
