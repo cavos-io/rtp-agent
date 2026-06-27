@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -509,6 +510,52 @@ func TestElevenLabsTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 		frames++
 	}
 	t.Fatalf("stream did not emit final marker after %d frames", frames)
+}
+
+func TestElevenLabsTTSChunkedMP3StreamsBeforeProviderEOF(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	body := newElevenLabsBlockingEOFBody(mp3Data)
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: body},
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	type nextResult struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	resultCh := make(chan nextResult, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- nextResult{audio: audio, err: err}
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("Next before provider EOF error = %v", result.err)
+		}
+		if result.audio == nil || result.audio.Frame == nil || len(result.audio.Frame.Data) == 0 {
+			t.Fatalf("Next before provider EOF audio = %#v, want decoded frame", result.audio)
+		}
+		if result.audio.IsFinal {
+			t.Fatal("Next before provider EOF IsFinal = true, want streaming audio frame")
+		}
+	case <-time.After(750 * time.Millisecond):
+		body.Close()
+		select {
+		case result := <-resultCh:
+			t.Fatalf("Next waited for provider EOF; after close got (%#v, %v)", result.audio, result.err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("Next blocked waiting for provider EOF")
+		}
+	}
 }
 
 func TestElevenLabsTTSChunkedStreamEmitsReferencePCMFinalMarker(t *testing.T) {
@@ -2366,6 +2413,34 @@ func (b *elevenLabsReadOnceEOFBody) Read(p []byte) (int, error) {
 }
 
 func (b *elevenLabsReadOnceEOFBody) Close() error {
+	return nil
+}
+
+type elevenLabsBlockingEOFBody struct {
+	data    []byte
+	read    bool
+	closeCh chan struct{}
+	once    sync.Once
+}
+
+func newElevenLabsBlockingEOFBody(data []byte) *elevenLabsBlockingEOFBody {
+	return &elevenLabsBlockingEOFBody{
+		data:    data,
+		closeCh: make(chan struct{}),
+	}
+}
+
+func (b *elevenLabsBlockingEOFBody) Read(p []byte) (int, error) {
+	if !b.read {
+		b.read = true
+		return copy(p, b.data), nil
+	}
+	<-b.closeCh
+	return 0, io.EOF
+}
+
+func (b *elevenLabsBlockingEOFBody) Close() error {
+	b.once.Do(func() { close(b.closeCh) })
 	return nil
 }
 

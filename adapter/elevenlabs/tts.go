@@ -412,18 +412,21 @@ type elevenLabsChunkedStream struct {
 	started    bool
 	emitted    bool
 	finalSent  bool
+	mp3ReadErr error
 	mu         sync.Mutex
 }
 
 func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.resp == nil || s.resp.Body == nil {
+		s.mu.Unlock()
 		return nil, io.EOF
 	}
 	if strings.HasPrefix(s.encoding, "mp3") {
+		s.mu.Unlock()
 		return s.nextDecodedMP3()
 	}
+	defer s.mu.Unlock()
 	if !strings.HasPrefix(s.encoding, "pcm") {
 		return nil, fmt.Errorf("unsupported elevenlabs TTS encoding %q: no decoder available", s.encoding)
 	}
@@ -468,28 +471,32 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	s.mu.Lock()
 	if !s.started {
 		s.started = true
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
-		data, err := io.ReadAll(s.resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("elevenlabs TTS chunked mp3 response read %s: %w", s.audioByteState(), err)
-		}
-		if len(data) == 0 {
-			return nil, io.EOF
-		}
 		decoder := s.decoder
-		go func() {
-			decoder.Push(data)
-			decoder.EndInput()
-		}()
+		body := s.resp.Body
+		go s.streamMP3Response(decoder, body)
 	}
+	decoder := s.decoder
+	s.mu.Unlock()
 
-	frame, err := s.decoder.Next()
+	frame, err := decoder.Next()
 	if err != nil {
 		if strings.Contains(err.Error(), "decoder closed") {
-			if s.emitted && !s.finalSent {
+			s.mu.Lock()
+			readErr := s.mp3ReadErr
+			emitted := s.emitted
+			finalSent := s.finalSent
+			if emitted && !finalSent && readErr == nil {
 				s.finalSent = true
+			}
+			s.mu.Unlock()
+			if readErr != nil {
+				return nil, fmt.Errorf("elevenlabs TTS chunked mp3 response read %s: %w", s.audioByteState(), readErr)
+			}
+			if emitted && !finalSent {
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
 			return nil, io.EOF
@@ -500,8 +507,34 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 	if err != nil {
 		return nil, fmt.Errorf("elevenlabs TTS chunked mp3 resample %s: %w", s.audioByteState(), err)
 	}
+	s.mu.Lock()
 	s.emitted = true
+	s.mu.Unlock()
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *elevenLabsChunkedStream) streamMP3Response(decoder codecs.AudioStreamDecoder, body io.Reader) {
+	buf := make([]byte, 8192)
+	for {
+		n, err := body.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			decoder.Push(chunk)
+		}
+		if err == nil {
+			continue
+		}
+		if err == io.EOF {
+			decoder.EndInput()
+			return
+		}
+		s.mu.Lock()
+		s.mp3ReadErr = err
+		s.mu.Unlock()
+		_ = decoder.Close()
+		return
+	}
 }
 
 func (s *elevenLabsChunkedStream) audioByteState() string {
