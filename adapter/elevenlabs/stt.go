@@ -312,7 +312,10 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		message, body := elevenLabsSTTStatusErrorBody(respBody)
+		message, body, err := elevenLabsSTTStatusErrorBody(respBody)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(err.Error())
+		}
 		return nil, llm.NewAPIStatusError(message, resp.StatusCode, "", body)
 	}
 	var result elevenLabsSTTResponse
@@ -322,18 +325,18 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	return elevenLabsSTTSpeechEvent(resolveElevenLabsSTTLanguage(s, language), result), nil
 }
 
-func elevenLabsSTTStatusErrorBody(respBody []byte) (string, any) {
+func elevenLabsSTTStatusErrorBody(respBody []byte) (string, any, error) {
 	if len(respBody) == 0 {
-		return "Unknown ElevenLabs error", ""
+		return "Unknown ElevenLabs error", "", nil
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(respBody, &payload); err != nil {
-		return "Unknown ElevenLabs error", string(respBody)
+		return "", nil, err
 	}
 	if detail, _ := payload["detail"].(string); detail != "" {
-		return detail, payload
+		return detail, payload, nil
 	}
-	return "Unknown ElevenLabs error", payload
+	return "Unknown ElevenLabs error", payload, nil
 }
 
 func elevenLabsSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, defaultNumChannels uint32) []byte {
