@@ -1351,6 +1351,52 @@ func TestElevenLabsTTSStreamWordTokenizerSendsCompleteWordsIndividuallyLikeRefer
 	}
 }
 
+func TestElevenLabsTTSStreamSSMLParsingSendsCompleteReferenceTag(t *testing.T) {
+	messages := make(chan map[string]any, 20)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsAutoMode(false),
+		WithElevenLabsEnableSSMLParsing(true),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText(`<phoneme alphabet="ipa" ph="h eh l ow">hello</phoneme> world`); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	init := readElevenLabsTTSStreamMessage(t, messages)
+	contextID, _ := init["context_id"].(string)
+	tag := readElevenLabsTTSStreamMessage(t, messages)
+	want := `<phoneme alphabet="ipa" ph="h eh l ow">hello</phoneme> `
+	if tag["text"] != want || tag["context_id"] != contextID {
+		t.Fatalf("SSML packet = %#v, want complete reference tag %q for context %q", tag, want, contextID)
+	}
+}
+
 func TestElevenLabsTTSStreamEndInputClosesContextLikeReference(t *testing.T) {
 	messages := make(chan map[string]any, 4)
 	serverErr := make(chan error, 1)

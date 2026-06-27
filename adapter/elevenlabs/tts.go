@@ -621,6 +621,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		chunkLengthSchedule:       append([]int(nil), t.chunkLengthSchedule...),
 		voiceSettings:             cloneElevenLabsVoiceSettings(t.voiceSettings),
 		pronunciationDictionaries: append([]ElevenLabsPronunciationDictionaryLocator(nil), t.pronunciationDictionaries...),
+		enableSSMLParsing:         t.enableSSMLParsing,
 		preferredAlignment:        elevenLabsPreferredAlignment(t.language, t.preferredAlignment),
 		autoMode:                  t.autoMode != nil && *t.autoMode,
 	}
@@ -698,6 +699,7 @@ type elevenLabsStream struct {
 	chunkLengthSchedule       []int
 	voiceSettings             *ElevenLabsVoiceSettings
 	pronunciationDictionaries []ElevenLabsPronunciationDictionaryLocator
+	enableSSMLParsing         bool
 	preferredAlignment        string
 	autoMode                  bool
 	pendingText               string
@@ -1360,6 +1362,19 @@ func (s *elevenLabsStream) sendCompleteWordsLocked() error {
 	if len(tokens) <= 1 {
 		return nil
 	}
+	if s.enableSSMLParsing {
+		cutoff, err := s.sendSSMLWordTokensLocked(tokens[:len(tokens)-1], tokens[len(tokens)-1].Start)
+		if err != nil {
+			return err
+		}
+		runes := []rune(s.pendingText)
+		if cutoff < 0 || cutoff > len(runes) {
+			s.pendingText = ""
+			return nil
+		}
+		s.pendingText = strings.TrimLeftFunc(string(runes[cutoff:]), unicode.IsSpace)
+		return nil
+	}
 	for _, token := range tokens[:len(tokens)-1] {
 		if err := s.sendTextLocked(token.Token, false); err != nil {
 			return err
@@ -1373,6 +1388,46 @@ func (s *elevenLabsStream) sendCompleteWordsLocked() error {
 	}
 	s.pendingText = strings.TrimLeftFunc(string(runes[lastStart:]), unicode.IsSpace)
 	return nil
+}
+
+func (s *elevenLabsStream) sendSSMLWordTokensLocked(tokens []tokenize.TokenData, defaultCutoff int) (int, error) {
+	cutoff := defaultCutoff
+	for i := 0; i < len(tokens); i++ {
+		token := tokens[i]
+		if elevenLabsStartsSSMLToken(token.Token) {
+			end := -1
+			for j := i; j < len(tokens); j++ {
+				if elevenLabsEndsSSMLToken(tokens[j].Token) {
+					end = j
+					break
+				}
+			}
+			if end == -1 {
+				return token.Start, nil
+			}
+			parts := make([]string, 0, end-i+1)
+			for _, part := range tokens[i : end+1] {
+				parts = append(parts, part.Token)
+			}
+			if err := s.sendTextLocked(strings.Join(parts, " "), false); err != nil {
+				return cutoff, err
+			}
+			i = end
+			continue
+		}
+		if err := s.sendTextLocked(token.Token, false); err != nil {
+			return cutoff, err
+		}
+	}
+	return cutoff, nil
+}
+
+func elevenLabsStartsSSMLToken(token string) bool {
+	return strings.HasPrefix(token, "<phoneme") || strings.HasPrefix(token, "<break")
+}
+
+func elevenLabsEndsSSMLToken(token string) bool {
+	return strings.Contains(token, "</phoneme>") || strings.Contains(token, "/>")
 }
 
 func (s *elevenLabsStream) sendTextLocked(text string, flush bool) error {
