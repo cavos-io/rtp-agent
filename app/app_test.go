@@ -9516,6 +9516,36 @@ func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestAzureTTSFallbackMapsBundleSettingEndpoint(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSVoice: "id-ID-GadisNeural",
+		TTSModelOptions: map[string]any{
+			"setting": map[string]any{
+				"azure_endpoint": "https://southindia.tts.speech.microsoft.com/cognitiveservices/v1",
+				"deployment_id":  "voice-deployment",
+			},
+		},
+	}, providerAzure)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	azureProvider, ok := provider.(*azure.AzureTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("speechEndpoint").String(), "https://southindia.tts.speech.microsoft.com/cognitiveservices/v1"; got != want {
+		t.Fatalf("speechEndpoint = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("deploymentID").String(), "voice-deployment"; got != want {
+		t.Fatalf("deploymentID = %q, want %q", got, want)
+	}
+}
+
 func TestBasetenTTSFallbackPassesReferenceOptions(t *testing.T) {
 	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
 	temperature := 0.72

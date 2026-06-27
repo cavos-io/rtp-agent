@@ -3359,6 +3359,29 @@ func azureSTTModelOption(options map[string]any, key string) string {
 	return modelOptionString(setting, key)
 }
 
+func azureTTSSpeechEndpointFromConfig(cfg AppConfig) string {
+	if strings.TrimSpace(cfg.TTSBaseURL) != "" {
+		return strings.TrimSpace(cfg.TTSBaseURL)
+	}
+	for _, key := range []string{"azure_endpoint", "speech_endpoint"} {
+		if value := azureTTSModelOption(cfg.TTSModelOptions, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func azureTTSModelOption(options map[string]any, key string) string {
+	if value := modelOptionString(options, key); value != "" {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return modelOptionString(setting, key)
+}
+
 func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
 	sttOpts := []adapteraws.AWSSTTOption{}
 	if cfg.STTSampleRate != nil {
@@ -3621,8 +3644,8 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 	case providerAzure:
 		ttsOpts := []azure.AzureTTSOption{}
-		if cfg.TTSBaseURL != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(cfg.TTSBaseURL))
+		if speechEndpoint := azureTTSSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(speechEndpoint))
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(cfg.TTSLanguage))
@@ -3630,7 +3653,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
 		}
-		if deploymentID := modelOptionString(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
+		if deploymentID := azureTTSModelOption(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSDeploymentID(deploymentID))
 		}
 		return azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
@@ -5450,8 +5473,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		a.TTS = provider
 	case providerAzure:
 		ttsOpts := []azure.AzureTTSOption{}
-		if cfg.TTSBaseURL != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(cfg.TTSBaseURL))
+		if speechEndpoint := azureTTSSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
+			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(speechEndpoint))
 		}
 		if cfg.TTSLanguage != "" {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(cfg.TTSLanguage))
@@ -5459,7 +5482,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		if cfg.TTSSampleRate != nil {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
 		}
-		if deploymentID := modelOptionString(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
+		if deploymentID := azureTTSModelOption(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
 			ttsOpts = append(ttsOpts, azure.WithAzureTTSDeploymentID(deploymentID))
 		}
 		provider, err := azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
