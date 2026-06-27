@@ -191,3 +191,21 @@ func TestAzureResponsesLLMAcceptsReferenceADTokenProviderOption(t *testing.T) {
 		t.Fatal("NewAzureLLM returned nil model")
 	}
 }
+
+func TestAzureResponsesLLMAcceptsReferenceBaseURLOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if got := model.Provider(); got != "gateway.openai.azure.test" {
+		t.Fatalf("Provider = %q, want base_url host", got)
+	}
+}

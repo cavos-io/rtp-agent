@@ -239,6 +239,12 @@ func WithOpenAILLMAzureADTokenProvider(provider func(context.Context) (string, e
 	}
 }
 
+func WithOpenAILLMAzureBaseURL(baseURL string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.baseURL = baseURL
+	}
+}
+
 func withOpenAILLMExtraHeader(key string, value string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		if l.extraHeaders == nil {
@@ -406,6 +412,9 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
 	config.AzureModelMapperFunc = func(string) string {
 		return azureDeployment
+	}
+	if provider.baseURL != "" {
+		config.BaseURL = provider.baseURL
 	}
 	if apiVersion != "" {
 		config.APIVersion = apiVersion

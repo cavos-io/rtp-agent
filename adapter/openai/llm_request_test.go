@@ -487,6 +487,36 @@ func TestNewAzureOpenAILLMUsesReferenceEntraTokenProvider(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAILLMUsesReferenceBaseURLOption(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMAzureBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := model.Provider(); got != "gateway.openai.azure.test" {
+		t.Fatalf("Provider() = %q, want base_url host", got)
+	}
+	if !strings.HasPrefix(capture.requestURL, "https://gateway.openai.azure.test/custom/openai/deployments/chat-deployment/chat/completions") {
+		t.Fatalf("request URL = %s, want reference base_url route", capture.requestURL)
+	}
+}
+
 func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
 	t.Setenv(ovhcloudAPIKeyEnv, "env-ovh-key")
 	capture := &captureDeadlineHTTPClient{

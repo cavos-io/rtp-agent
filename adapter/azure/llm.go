@@ -46,6 +46,10 @@ func WithAzureLLMADTokenProvider(provider func(context.Context) (string, error))
 	return adapteropenai.WithOpenAILLMAzureADTokenProvider(provider)
 }
 
+func WithAzureLLMBaseURL(baseURL string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMAzureBaseURL(baseURL)
+}
+
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {
 	return adapteropenai.NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken, opts...)
 }
