@@ -777,6 +777,11 @@ func (s *elevenLabsSTTStream) addAudioDurationLocked(duration float64) {
 
 func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+		}
 		return nil, io.EOF
 	}
 	select {

@@ -1732,6 +1732,23 @@ func TestElevenLabsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T)
 	}
 }
 
+func TestElevenLabsSTTNextReturnsQueuedStreamErrorAfterClose(t *testing.T) {
+	providerErr := llm.NewAPIStatusError("connection closed", 1006, "", "")
+	stream := &elevenLabsSTTStream{
+		closed: true,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+		ctx:    context.Background(),
+	}
+	close(stream.events)
+	stream.errCh <- providerErr
+
+	_, err := stream.Next()
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("Next error = %v, want queued provider error", err)
+	}
+}
+
 func runElevenLabsClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
