@@ -824,6 +824,8 @@ func (s *elevenLabsStream) readLoop() {
 					return
 				}
 			}
+		} else if deltaText != "" && strings.HasPrefix(s.encoding, "mp3") {
+			s.bufferMP3Metadata(deltaText, timedTranscript)
 		} else if resp.IsFinal || deltaText != "" {
 			// Even if there's no audio, pass alignment or final flags
 			select {
@@ -852,6 +854,21 @@ func elevenLabsTTSSynthesisStatusError(err error) error {
 	return llm.NewAPIStatusError("Could not synthesize", -1, "", err.Error())
 }
 
+func (s *elevenLabsStream) bufferMP3Metadata(deltaText string, timedTranscript []tts.TimedString) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bufferMP3MetadataLocked(deltaText, timedTranscript)
+}
+
+func (s *elevenLabsStream) bufferMP3MetadataLocked(deltaText string, timedTranscript []tts.TimedString) {
+	if deltaText != "" {
+		s.mp3DeltaText += deltaText
+	}
+	if len(timedTranscript) > 0 {
+		s.mp3Timed = append(s.mp3Timed, timedTranscript...)
+	}
+}
+
 func (s *elevenLabsStream) pushMP3Audio(encoded string, deltaText string, timedTranscript []tts.TimedString) error {
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
@@ -867,12 +884,7 @@ func (s *elevenLabsStream) pushMP3Audio(encoded string, deltaText string, timedT
 		s.mp3DecodeDone = make(chan struct{})
 		go s.mp3DecodeLoop(s.mp3Decoder, s.mp3Input, s.mp3DecodeDone)
 	}
-	if deltaText != "" {
-		s.mp3DeltaText += deltaText
-	}
-	if len(timedTranscript) > 0 {
-		s.mp3Timed = append(s.mp3Timed, timedTranscript...)
-	}
+	s.bufferMP3MetadataLocked(deltaText, timedTranscript)
 	input := s.mp3Input
 	s.mu.Unlock()
 	select {
@@ -1055,6 +1067,13 @@ func elevenLabsAlignmentText(alignment *elevenLabsAlignment) string {
 func (s *elevenLabsStream) timedTranscriptFromAlignment(resp elWSResponse) []tts.TimedString {
 	alignment := s.preferredElevenLabsAlignment(resp)
 	if alignment == nil {
+		if resp.IsFinal {
+			timed, _, _, _ := elevenLabsTimedWords(s.alignRunes, s.alignStartsMs, s.alignDurMs, true)
+			s.alignRunes = nil
+			s.alignStartsMs = nil
+			s.alignDurMs = nil
+			return timed
+		}
 		return nil
 	}
 	appendElevenLabsAlignment(&s.alignRunes, &s.alignStartsMs, &s.alignDurMs, alignment)
