@@ -3755,6 +3755,30 @@ func TestElevenLabsTTSAlignmentMapsTimedTranscript(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSAlignmentSplitsCJKTimedTranscriptLikeReference(t *testing.T) {
+	resp := elWSResponse{
+		Audio:   base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		IsFinal: true,
+		Alignment: &elevenLabsAlignment{
+			Chars:            []string{"你", "好"},
+			CharStartTimesMs: []int{0, 80},
+			CharDurationsMs:  []int{80, 90},
+		},
+	}
+
+	stream := &elevenLabsStream{preferredAlignment: "original"}
+	timed := stream.timedTranscriptFromAlignment(resp)
+	if len(timed) != 2 {
+		t.Fatalf("TimedTranscript = %#v, want one timed entry per CJK character", timed)
+	}
+	if got := timed[0]; got.Text != "你" || got.StartTime != 0 || got.EndTime != 0.08 {
+		t.Fatalf("TimedTranscript[0] = %#v, want first CJK character timing", got)
+	}
+	if got := timed[1]; got.Text != "好" || got.StartTime != 0.08 || got.EndTime != 0.17 {
+		t.Fatalf("TimedTranscript[1] = %#v, want second CJK character timing", got)
+	}
+}
+
 func TestElevenLabsTTSIgnoresMalformedAlignmentTextLikeReference(t *testing.T) {
 	resp := elWSResponse{
 		Audio: base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),

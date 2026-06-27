@@ -1292,12 +1292,24 @@ func elevenLabsWordStartIndices(runes []rune) []int {
 			inWord = false
 			continue
 		}
+		if elevenLabsIsCharacterBasedWord(r) {
+			starts = append(starts, i)
+			inWord = false
+			continue
+		}
 		if !inWord {
 			starts = append(starts, i)
 			inWord = true
 		}
 	}
 	return starts
+}
+
+func elevenLabsIsCharacterBasedWord(r rune) bool {
+	return (r >= '\u4e00' && r <= '\u9fff') ||
+		(r >= '\u3040' && r <= '\u30ff') ||
+		(r >= '\u3400' && r <= '\u4dbf') ||
+		(r >= '\u0e00' && r <= '\u0e7f')
 }
 
 func decodeElevenLabsMP3Audio(data []byte, sampleRate int) (*model.AudioFrame, error) {
