@@ -490,8 +490,12 @@ func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*m
 		Host:   fmt.Sprintf("%s.stt.speech.microsoft.com", s.region),
 		Path:   "/speech/recognition/conversation/cognitiveservices/v1",
 	}
-	if s.speechHost != "" {
-		hostURL, err := url.Parse(s.speechHost)
+	if s.speechEndpoint != "" || s.speechHost != "" {
+		endpoint := s.speechEndpoint
+		if endpoint == "" {
+			endpoint = s.speechHost
+		}
+		hostURL, err := url.Parse(endpoint)
 		if err == nil {
 			u.Scheme = hostURL.Scheme
 			u.Host = hostURL.Host
