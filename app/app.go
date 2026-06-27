@@ -3278,8 +3278,12 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	if speechHost := azureSTTSpeechHostFromConfig(cfg); speechHost != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSpeechHost(speechHost))
 	}
-	if language := azureSTTLanguageFromConfig(cfg); language != "" {
+	if language := strings.TrimSpace(cfg.STTLanguage); language != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTLanguage(language))
+	} else if languages := azureSTTStringListModelOption(cfg.STTModelOptions, "language"); len(languages) > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTLanguages(languages...))
+	} else if languages := azureSTTStringListModelOption(cfg.STTModelOptions, "languages"); len(languages) > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTLanguages(languages...))
 	}
 	if cfg.STTSampleRate != nil {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSampleRate(*cfg.STTSampleRate))
@@ -3291,6 +3295,26 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	} else if numChannels := azureSTTIntModelOption(cfg.STTModelOptions, "num_channels"); numChannels > 0 {
 		sttOpts = append(sttOpts, azure.WithAzureSTTNumChannels(numChannels))
 	}
+	if cfg.STTEndpointingMS != nil {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationSilenceTimeout(*cfg.STTEndpointingMS))
+	} else if silenceTimeout := azureSTTIntModelOption(cfg.STTModelOptions, "segmentation_silence_timeout_ms"); silenceTimeout > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationSilenceTimeout(silenceTimeout))
+	}
+	if maxTime := azureSTTIntModelOption(cfg.STTModelOptions, "segmentation_max_time_ms"); maxTime > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationMaxTime(maxTime))
+	}
+	if strategy := azureSTTModelOption(cfg.STTModelOptions, "segmentation_strategy"); strategy != "" {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationStrategy(strategy))
+	}
+	if trueText := azureSTTBoolModelOption(cfg.STTModelOptions, "true_text_post_processing"); trueText != nil {
+		sttOpts = append(sttOpts, azure.WithAzureSTTTrueTextPostProcessing(*trueText))
+	}
+	if explicitPunctuation := azureSTTBoolModelOption(cfg.STTModelOptions, "explicit_punctuation"); explicitPunctuation != nil {
+		sttOpts = append(sttOpts, azure.WithAzureSTTExplicitPunctuation(*explicitPunctuation))
+	}
+	if profanity := azureSTTModelOption(cfg.STTModelOptions, "profanity"); profanity != "" {
+		sttOpts = append(sttOpts, azure.WithAzureSTTProfanity(profanity))
+	}
 	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
 }
 
@@ -3299,6 +3323,31 @@ var newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 }
 
 func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
+	llmOpts := []azure.AzureLLMOption{}
+	if maxOutputTokens := modelOptionInt(cfg.LLMModelOptions, "max_output_tokens"); maxOutputTokens > 0 {
+		llmOpts = append(llmOpts, azure.WithAzureLLMMaxOutputTokens(maxOutputTokens))
+	}
+	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
+		llmOpts = append(llmOpts, azure.WithAzureLLMTemperature(*temperature))
+	}
+	if parallelToolCalls := modelOptionBool(cfg.LLMModelOptions, "parallel_tool_calls"); parallelToolCalls != nil {
+		llmOpts = append(llmOpts, azure.WithAzureLLMParallelToolCalls(*parallelToolCalls))
+	}
+	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMToolChoice(toolChoice))
+	}
+	if reasoning, ok := cfg.LLMModelOptions["reasoning"].(map[string]any); ok && len(reasoning) > 0 {
+		llmOpts = append(llmOpts, azure.WithAzureLLMReasoning(reasoning))
+	}
+	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
+		llmOpts = append(llmOpts, azure.WithAzureLLMTopP(*topP))
+	}
+	if serviceTier := modelOptionString(cfg.LLMModelOptions, "service_tier"); serviceTier != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMServiceTier(serviceTier))
+	}
+	if verbosity := modelOptionString(cfg.LLMModelOptions, "verbosity"); verbosity != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMVerbosity(verbosity))
+	}
 	return newAzureLLM(
 		cfg.LLMModel,
 		cfg.LLMBaseURL,
@@ -3306,6 +3355,7 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 		modelOptionString(cfg.LLMModelOptions, "api_version"),
 		"",
 		"",
+		llmOpts...,
 	)
 }
 
@@ -3348,7 +3398,128 @@ func azureSTTIntModelOption(options map[string]any, key string) int {
 	return modelOptionInt(setting, key)
 }
 
+func azureSTTBoolModelOption(options map[string]any, key string) *bool {
+	if value := modelOptionBool(options, key); value != nil {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return modelOptionBool(setting, key)
+}
+
+func azureSTTStringListModelOption(options map[string]any, key string) []string {
+	if values := modelOptionStringList(options, key); len(values) > 0 {
+		return values
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return modelOptionStringList(setting, key)
+}
+
 func azureSTTModelOption(options map[string]any, key string) string {
+	if value := modelOptionString(options, key); value != "" {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return modelOptionString(setting, key)
+}
+
+func azureTTSSpeechEndpointFromConfig(cfg AppConfig) string {
+	if strings.TrimSpace(cfg.TTSBaseURL) != "" {
+		return strings.TrimSpace(cfg.TTSBaseURL)
+	}
+	for _, key := range []string{"azure_endpoint", "speech_endpoint"} {
+		if value := azureTTSModelOption(cfg.TTSModelOptions, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func azureTTSOptionsFromConfig(cfg AppConfig) []azure.AzureTTSOption {
+	ttsOpts := []azure.AzureTTSOption{}
+	if speechEndpoint := azureTTSSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(speechEndpoint))
+	}
+	if language := azureTTSLanguageFromConfig(cfg); language != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(language))
+	}
+	if cfg.TTSSampleRate != nil {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
+	} else if sampleRate := azureTTSIntModelOption(cfg.TTSModelOptions, "sample_rate"); sampleRate > 0 {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(sampleRate))
+	}
+	if deploymentID := azureTTSModelOption(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSDeploymentID(deploymentID))
+	}
+	if lexiconURI := azureTTSModelOption(cfg.TTSModelOptions, "lexicon_uri"); lexiconURI != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSLexiconURI(lexiconURI))
+	}
+	if styleName := azureTTSModelOption(cfg.TTSModelOptions, "style"); styleName != "" {
+		style := azure.AzureTTSStyle{Style: styleName}
+		if degree := azureTTSFloatModelOption(cfg.TTSModelOptions, "style_degree"); degree != nil {
+			style.Degree = *degree
+		}
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSStyle(style))
+	}
+	prosody := azure.AzureTTSProsody{
+		Rate:   azureTTSScalarModelOption(cfg.TTSModelOptions, "prosody_rate"),
+		Volume: azureTTSScalarModelOption(cfg.TTSModelOptions, "prosody_volume"),
+		Pitch:  azureTTSModelOption(cfg.TTSModelOptions, "prosody_pitch"),
+	}
+	if prosody.Rate != "" || prosody.Volume != "" || prosody.Pitch != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSProsody(prosody))
+	}
+	return ttsOpts
+}
+
+func azureTTSLanguageFromConfig(cfg AppConfig) string {
+	if strings.TrimSpace(cfg.TTSLanguage) != "" {
+		return strings.TrimSpace(cfg.TTSLanguage)
+	}
+	return azureTTSModelOption(cfg.TTSModelOptions, "language")
+}
+
+func azureTTSIntModelOption(options map[string]any, key string) int {
+	if value := modelOptionInt(options, key); value > 0 {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return 0
+	}
+	return modelOptionInt(setting, key)
+}
+
+func azureTTSFloatModelOption(options map[string]any, key string) *float64 {
+	if value := modelOptionFloat(options, key); value != nil {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return modelOptionFloat(setting, key)
+}
+
+func azureTTSScalarModelOption(options map[string]any, key string) string {
+	if value := azureTTSModelOption(options, key); value != "" {
+		return value
+	}
+	if value := azureTTSFloatModelOption(options, key); value != nil {
+		return strconv.FormatFloat(*value, 'f', -1, 64)
+	}
+	return ""
+}
+
+func azureTTSModelOption(options map[string]any, key string) string {
 	if value := modelOptionString(options, key); value != "" {
 		return value
 	}
@@ -3620,16 +3791,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 	case providerAzure:
-		ttsOpts := []azure.AzureTTSOption{}
-		if cfg.TTSBaseURL != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(cfg.TTSBaseURL))
-		}
-		if cfg.TTSLanguage != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(cfg.TTSLanguage))
-		}
-		if cfg.TTSSampleRate != nil {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
-		}
+		ttsOpts := azureTTSOptionsFromConfig(cfg)
 		return azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 	case providerBaseten:
 		ttsOpts := []baseten.BasetenTTSOption{}
@@ -5446,16 +5608,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerAzure:
-		ttsOpts := []azure.AzureTTSOption{}
-		if cfg.TTSBaseURL != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(cfg.TTSBaseURL))
-		}
-		if cfg.TTSLanguage != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(cfg.TTSLanguage))
-		}
-		if cfg.TTSSampleRate != nil {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
-		}
+		ttsOpts := azureTTSOptionsFromConfig(cfg)
 		provider, err := azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 		if err != nil {
 			return nil, err

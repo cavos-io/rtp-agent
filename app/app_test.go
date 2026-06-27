@@ -2951,6 +2951,84 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMDeploymentOptions(t *testing.T
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMRequestOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "azure_deployment=voice-deployment,api_version=2024-06-01,top_p=0.4,service_tier=priority,verbosity=low")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 3 {
+		t.Fatalf("Azure LLM option count = %d, want top_p, service_tier, and verbosity options", gotOptions)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMLatencyOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "max_output_tokens=96,temperature=0.2,parallel_tool_calls=false,tool_choice=none")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 4 {
+		t.Fatalf("Azure LLM option count = %d, want max_output_tokens, temperature, parallel_tool_calls, and tool_choice options", gotOptions)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMReasoningOption(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-5")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	cfg := DefaultConfigFromEnv()
+	cfg.LLMModelOptions = map[string]any{
+		"reasoning": map[string]any{
+			"effort":  "low",
+			"summary": "auto",
+		},
+	}
+	_, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 1 {
+		t.Fatalf("Azure LLM option count = %d, want reasoning option", gotOptions)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
 	t.Setenv("PERPLEXITY_API_KEY", "test-perplexity-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "perplexity")
@@ -6200,8 +6278,11 @@ func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if app.Session.STT == nil {
+		t.Fatal("STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -6245,8 +6326,11 @@ func TestDefaultConfigFromEnvAcceptsAzureSTTFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if app.Session.STT == nil {
+		t.Fatal("STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -9477,6 +9561,9 @@ func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 		TTSLanguage:   "id-ID",
 		TTSSampleRate: &sampleRate,
 		TTSBaseURL:    "https://speech.example.test/cognitiveservices/v1",
+		TTSModelOptions: map[string]any{
+			"deployment_id": "voice-deployment",
+		},
 	}, providerAzure)
 	if err != nil {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
@@ -9505,8 +9592,132 @@ func TestAzureTTSFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := state.FieldByName("speechEndpoint").String(), "https://speech.example.test/cognitiveservices/v1"; got != want {
 		t.Fatalf("speechEndpoint = %q, want %q", got, want)
 	}
+	if got, want := state.FieldByName("deploymentID").String(), "voice-deployment"; got != want {
+		t.Fatalf("deploymentID = %q, want %q", got, want)
+	}
 	if caps := azureProvider.Capabilities(); caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("Capabilities() = %+v, want reference non-streaming without aligned transcript", caps)
+	}
+}
+
+func TestAzureTTSFallbackMapsBundleSettingEndpoint(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSVoice: "id-ID-GadisNeural",
+		TTSModelOptions: map[string]any{
+			"setting": map[string]any{
+				"azure_endpoint": "https://southindia.tts.speech.microsoft.com/cognitiveservices/v1",
+				"deployment_id":  "voice-deployment",
+				"language":       "id-ID",
+				"sample_rate":    "16000",
+			},
+		},
+	}, providerAzure)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	azureProvider, ok := provider.(*azure.AzureTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("speechEndpoint").String(), "https://southindia.tts.speech.microsoft.com/cognitiveservices/v1"; got != want {
+		t.Fatalf("speechEndpoint = %q, want %q", got, want)
+	}
+	if got, want := state.FieldByName("deploymentID").String(), "voice-deployment"; got != want {
+		t.Fatalf("deploymentID = %q, want %q", got, want)
+	}
+	if got, want := azureProvider.Language(), "id-ID"; got != want {
+		t.Fatalf("Language() = %q, want %q", got, want)
+	}
+	if got, want := azureProvider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want %d", got, want)
+	}
+}
+
+func TestAzureTTSFallbackPassesReferenceVoiceControls(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSVoice: "en-US-JennyNeural",
+		TTSModelOptions: map[string]any{
+			"lexicon_uri":    "https://voice.example.test/lexicon.xml",
+			"style":          "chat",
+			"style_degree":   "1.4",
+			"prosody_rate":   "fast",
+			"prosody_volume": "loud",
+			"prosody_pitch":  "high",
+		},
+	}, providerAzure)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	azureProvider, ok := provider.(*azure.AzureTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("lexiconURI").String(), "https://voice.example.test/lexicon.xml"; got != want {
+		t.Fatalf("lexiconURI = %q, want %q", got, want)
+	}
+	if !state.FieldByName("lexiconURISet").Bool() {
+		t.Fatal("lexiconURISet = false, want true")
+	}
+	style := state.FieldByName("style")
+	if got, want := style.FieldByName("Style").String(), "chat"; got != want {
+		t.Fatalf("style = %q, want %q", got, want)
+	}
+	if got, want := style.FieldByName("Degree").Float(), 1.4; got != want {
+		t.Fatalf("style degree = %v, want %v", got, want)
+	}
+	if !state.FieldByName("styleSet").Bool() {
+		t.Fatal("styleSet = false, want true")
+	}
+	prosody := state.FieldByName("prosody")
+	if got, want := prosody.FieldByName("Rate").String(), "fast"; got != want {
+		t.Fatalf("prosody rate = %q, want %q", got, want)
+	}
+	if got, want := prosody.FieldByName("Volume").String(), "loud"; got != want {
+		t.Fatalf("prosody volume = %q, want %q", got, want)
+	}
+	if got, want := prosody.FieldByName("Pitch").String(), "high"; got != want {
+		t.Fatalf("prosody pitch = %q, want %q", got, want)
+	}
+	if !state.FieldByName("prosodySet").Bool() {
+		t.Fatal("prosodySet = false, want true")
+	}
+}
+
+func TestAzureTTSFallbackPassesReferenceNumericProsody(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSVoice: "en-US-JennyNeural",
+		TTSModelOptions: map[string]any{
+			"prosody_rate":   1.2,
+			"prosody_volume": 75.0,
+		},
+	}, providerAzure)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	azureProvider, ok := provider.(*azure.AzureTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+	}
+	prosody := reflect.ValueOf(azureProvider).Elem().FieldByName("prosody")
+	if got, want := prosody.FieldByName("Rate").String(), "1.2"; got != want {
+		t.Fatalf("prosody rate = %q, want %q", got, want)
+	}
+	if got, want := prosody.FieldByName("Volume").String(), "75"; got != want {
+		t.Fatalf("prosody volume = %q, want %q", got, want)
 	}
 }
 
@@ -12579,8 +12790,8 @@ func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
 	if got := app.Session.STT.Label(); got != "azure.STT" {
 		t.Fatalf("STT label = %q, want azure.STT", got)
 	}
-	if got := app.Session.TTS.Label(); got != "StreamAdapter(azure.TTS)" {
-		t.Fatalf("TTS label = %q, want Azure TTS wrapped by core stream adapter", got)
+	if got := app.Session.TTS.Label(); got != "tts.StreamAdapter" {
+		t.Fatalf("TTS label = %q, want core stream adapter wrapping Azure TTS", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 24000 {
 		t.Fatalf("TTS sample rate = %d, want 24000", got)
@@ -12631,6 +12842,87 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	}
 	if got, want := int(state.FieldByName("numChannels").Int()), 2; got != want {
 		t.Fatalf("Azure STT numChannels = %d, want %d", got, want)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureSTTLanguageCandidates(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "language=en-US|id-ID")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("language").String(), "en-US"; got != want {
+		t.Fatalf("Azure STT language = %q, want first candidate %q", got, want)
+	}
+	languages := state.FieldByName("languages")
+	gotLanguages := make([]string, 0, languages.Len())
+	for i := 0; i < languages.Len(); i++ {
+		gotLanguages = append(gotLanguages, languages.Index(i).String())
+	}
+	if !reflect.DeepEqual(gotLanguages, []string{"en-US", "id-ID"}) {
+		t.Fatalf("Azure STT languages = %#v, want [en-US id-ID]", gotLanguages)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureSTTSegmentationOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "250")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "segmentation_max_time_ms=1200,segmentation_strategy=Semantic")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := int(state.FieldByName("segmentationSilence").Int()), 250; got != want {
+		t.Fatalf("Azure STT segmentationSilence = %d, want %d", got, want)
+	}
+	if got, want := int(state.FieldByName("segmentationMaxTime").Int()), 1200; got != want {
+		t.Fatalf("Azure STT segmentationMaxTime = %d, want %d", got, want)
+	}
+	if got, want := state.FieldByName("segmentationStrategy").String(), "Semantic"; got != want {
+		t.Fatalf("Azure STT segmentationStrategy = %q, want %q", got, want)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureSTTTranscriptOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "true_text_post_processing=true,explicit_punctuation=true,profanity=raw")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if !state.FieldByName("trueTextPostProcessing").Bool() {
+		t.Fatal("Azure STT trueTextPostProcessing = false, want true")
+	}
+	if !state.FieldByName("explicitPunctuation").Bool() {
+		t.Fatal("Azure STT explicitPunctuation = false, want true")
+	}
+	if got, want := state.FieldByName("profanity").String(), "raw"; got != want {
+		t.Fatalf("Azure STT profanity = %q, want %q", got, want)
 	}
 }
 
