@@ -122,8 +122,8 @@ func TestElevenLabsSTTRealtimeCapabilitiesMatchReference(t *testing.T) {
 	if caps.AlignedTranscript != "word" {
 		t.Fatalf("aligned transcript = %q, want word", caps.AlignedTranscript)
 	}
-	if caps.OfflineRecognize {
-		t.Fatal("offline recognize = true, want false for realtime")
+	if !caps.OfflineRecognize {
+		t.Fatal("offline recognize = false, want reference default true for realtime")
 	}
 }
 
@@ -226,6 +226,43 @@ func TestElevenLabsSTTRecognizeLanguageOverridePersistsLikeReference(t *testing.
 	fields, _ := readElevenLabsMultipartRequest(t, req)
 	if fields["language_code"] != "fr" {
 		t.Fatalf("later language_code = %q, want persisted fr", fields["language_code"])
+	}
+}
+
+func TestElevenLabsSTTRealtimeModelRecognizeUsesReferenceBatchEndpoint(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		fields, _ := readElevenLabsMultipartRequest(t, r)
+		if fields["model_id"] != "scribe_v2_realtime" {
+			t.Fatalf("model_id = %q, want realtime model sent to batch endpoint", fields["model_id"])
+		}
+		if fields["language_code"] != "en" {
+			t.Fatalf("language_code = %q, want request language", fields["language_code"])
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello","language_code":"en"}`)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTBaseURL("https://eleven.example/v1"),
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+	)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %#v, want final hello transcript", event)
 	}
 }
 
@@ -1141,29 +1178,41 @@ func TestElevenLabsSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 }
 
 func TestElevenLabsSTTRecognizeMalformedStatusBodyReturnsAPIConnectionError(t *testing.T) {
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusBadGateway,
-			Body:       io.NopCloser(strings.NewReader(`<html>bad gateway</html>`)),
-			Header:     make(http.Header),
-			Request:    r,
-		}, nil
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
-
-	provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
-
-	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
-	if err == nil {
-		t.Fatal("Recognize error = nil, want APIConnectionError")
+	tests := []struct {
+		name       string
+		body       string
+		wantDetail string
+	}{
+		{name: "html", body: `<html>bad gateway</html>`, wantDetail: "invalid character"},
+		{name: "empty", body: "", wantDetail: "unexpected end of JSON input"},
 	}
-	var connectionErr *llm.APIConnectionError
-	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
-	}
-	if !strings.Contains(err.Error(), "invalid character") {
-		t.Fatalf("Recognize error = %v, want JSON decode detail", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldClient := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusBadGateway,
+					Body:       io.NopCloser(strings.NewReader(tt.body)),
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			})}
+			t.Cleanup(func() { http.DefaultClient = oldClient })
+
+			provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
+
+			_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+			if err == nil {
+				t.Fatal("Recognize error = nil, want APIConnectionError")
+			}
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+			}
+			if !strings.Contains(err.Error(), tt.wantDetail) {
+				t.Fatalf("Recognize error = %v, want JSON decode detail %q", err, tt.wantDetail)
+			}
+		})
 	}
 }
 
@@ -1281,6 +1330,9 @@ func TestElevenLabsSTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	if alt.SpeakerID != "speaker-1" {
 		t.Fatalf("speaker = %q, want speaker-1", alt.SpeakerID)
 	}
+	if alt.Confidence != 0 {
+		t.Fatalf("confidence = %v, want reference default 0", alt.Confidence)
+	}
 	if len(alt.Words) != 2 || alt.Words[0].Text != "hello" {
 		t.Fatalf("words = %+v, want timed words", alt.Words)
 	}
@@ -1299,6 +1351,9 @@ func TestElevenLabsSTTStreamEventsMapLifecycle(t *testing.T) {
 	}
 	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
 	assertElevenLabsSTTEvent(t, events, 1, stt.SpeechEventInterimTranscript, "hel")
+	if got := events[1].Alternatives[0].Confidence; got != 0 {
+		t.Fatalf("interim confidence = %v, want reference default 0", got)
+	}
 
 	events, err = processElevenLabsSTTStreamEvent(state, map[string]any{
 		"message_type":  "committed_transcript_with_timestamps",
@@ -1312,6 +1367,9 @@ func TestElevenLabsSTTStreamEventsMapLifecycle(t *testing.T) {
 		t.Fatalf("process final: %v", err)
 	}
 	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hello")
+	if got := events[0].Alternatives[0].Confidence; got != 0 {
+		t.Fatalf("final confidence = %v, want reference default 0", got)
+	}
 
 	events, err = processElevenLabsSTTStreamEvent(state, map[string]any{
 		"message_type": "committed_transcript_with_timestamps",
@@ -1448,6 +1506,16 @@ func TestElevenLabsSTTStreamEventReportsReferenceErrorTypes(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), messageType+": provider failed - turn stopped") {
 				t.Fatalf("error = %v, want message type and details", err)
+			}
+
+			_, err = processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
+				"message_type": messageType,
+			})
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("default error = %T %v, want APIConnectionError", err, err)
+			}
+			if !strings.Contains(err.Error(), messageType+": Unknown error") {
+				t.Fatalf("default error = %v, want reference default message", err)
 			}
 		})
 	}
@@ -1717,6 +1785,23 @@ func TestElevenLabsSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T)
 		if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
 			t.Fatalf("Next event = %#v, want queued final transcript", event)
 		}
+	}
+}
+
+func TestElevenLabsSTTNextReturnsQueuedStreamErrorAfterClose(t *testing.T) {
+	providerErr := llm.NewAPIStatusError("connection closed", 1006, "", "")
+	stream := &elevenLabsSTTStream{
+		closed: true,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+		ctx:    context.Background(),
+	}
+	close(stream.events)
+	stream.errCh <- providerErr
+
+	_, err := stream.Next()
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("Next error = %v, want queued provider error", err)
 	}
 }
 

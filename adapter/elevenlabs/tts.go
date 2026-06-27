@@ -31,6 +31,7 @@ import (
 const (
 	defaultElevenLabsBaseURL           = "https://api.elevenlabs.io/v1"
 	defaultElevenLabsInactivityTimeout = 180
+	defaultElevenLabsStreamTimeout     = 10 * time.Second
 )
 
 type ElevenLabsTTS struct {
@@ -55,6 +56,7 @@ type ElevenLabsTTS struct {
 	applyTextNormalization         string
 	applyLanguageTextNormalization *bool
 	preferredAlignment             string
+	streamResponseTimeout          time.Duration
 	streams                        map[*elevenLabsStream]struct{}
 	closed                         bool
 }
@@ -152,6 +154,14 @@ func WithElevenLabsInactivityTimeout(timeoutSeconds int) ElevenLabsTTSOption {
 	}
 }
 
+func WithElevenLabsStreamResponseTimeout(timeout time.Duration) ElevenLabsTTSOption {
+	return func(t *ElevenLabsTTS) {
+		if timeout >= 0 {
+			t.streamResponseTimeout = timeout
+		}
+	}
+}
+
 func WithElevenLabsEnableLogging(enabled bool) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.enableLogging = enabled
@@ -214,6 +224,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		encoding:               "mp3_22050_32",
 		sampleRate:             22050,
 		inactivityTimeout:      defaultElevenLabsInactivityTimeout,
+		streamResponseTimeout:  defaultElevenLabsStreamTimeout,
 		enableLogging:          true,
 		syncAlignment:          true,
 		applyTextNormalization: "auto",
@@ -371,14 +382,17 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("ElevenLabs TTS request failed", resp.StatusCode, "", string(respBody))
+		message := http.StatusText(resp.StatusCode)
+		if message == "" {
+			message = resp.Status
+		}
+		return nil, llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
+		return nil, llm.NewAPIStatusError("Could not synthesize", -1, "", fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
 	}
 
 	return &elevenLabsChunkedStream{
@@ -624,6 +638,7 @@ func (t *ElevenLabsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 		enableSSMLParsing:         t.enableSSMLParsing,
 		preferredAlignment:        elevenLabsPreferredAlignment(t.language, t.preferredAlignment),
 		autoMode:                  t.autoMode != nil && *t.autoMode,
+		responseTimeout:           t.streamResponseTimeout,
 	}
 
 	if !t.registerStream(stream) {
@@ -708,15 +723,17 @@ type elevenLabsStream struct {
 	alignStartsMs []int
 	alignDurMs    []int
 
-	mp3Decoder     codecs.AudioStreamDecoder
-	mp3Input       chan []byte
-	mp3DecodeDone  chan struct{}
-	mp3Finalizing  bool
-	mp3InputClosed bool
-	mp3DeltaText   string
-	mp3Timed       []tts.TimedString
-	pcmDeltaText   string
-	pcmTimed       []tts.TimedString
+	mp3Decoder      codecs.AudioStreamDecoder
+	mp3Input        chan []byte
+	mp3DecodeDone   chan struct{}
+	mp3Finalizing   bool
+	mp3InputClosed  bool
+	mp3DeltaText    string
+	mp3Timed        []tts.TimedString
+	pcmDeltaText    string
+	pcmTimed        []tts.TimedString
+	responseTimeout time.Duration
+	responseTimer   *time.Timer
 }
 
 type elevenLabsAlignment struct {
@@ -804,6 +821,7 @@ func (s *elevenLabsStream) readLoop() {
 		timedTranscript := s.timedTranscriptFromAlignment(resp)
 
 		if resp.Audio != "" {
+			s.cancelResponseTimeout()
 			if strings.HasPrefix(s.encoding, "mp3") {
 				if err := s.pushMP3Audio(resp.Audio, deltaText, timedTranscript); err != nil {
 					logger.Logger.Errorw("Failed to decode ElevenLabs audio", err)
@@ -850,6 +868,7 @@ func (s *elevenLabsStream) readLoop() {
 		}
 
 		if resp.IsFinal {
+			s.cancelResponseTimeout()
 			s.markFinished()
 			s.closeMP3Decoder(true)
 			return
@@ -1090,13 +1109,22 @@ func (s *elevenLabsStream) deltaText(resp elWSResponse) string {
 
 func elevenLabsAlignmentText(alignment *elevenLabsAlignment) string {
 	var deltaText strings.Builder
-	if alignment == nil {
+	if !elevenLabsAlignmentValid(alignment) {
 		return ""
 	}
 	for _, char := range alignment.Chars {
 		deltaText.WriteString(char)
 	}
 	return deltaText.String()
+}
+
+func elevenLabsAlignmentValid(alignment *elevenLabsAlignment) bool {
+	if alignment == nil {
+		return false
+	}
+	startTimes := alignment.starts()
+	durationTimes := alignment.durations()
+	return len(alignment.Chars) == len(startTimes) && len(alignment.Chars) == len(durationTimes)
 }
 
 func (s *elevenLabsStream) timedTranscriptFromAlignment(resp elWSResponse) []tts.TimedString {
@@ -1166,14 +1194,11 @@ func elevenLabsPreferredAlignment(language string, preferred string) string {
 }
 
 func appendElevenLabsAlignment(runes *[]rune, starts *[]int, durations *[]int, alignment *elevenLabsAlignment) {
-	if alignment == nil {
+	if !elevenLabsAlignmentValid(alignment) {
 		return
 	}
 	startTimes := alignment.starts()
 	durationTimes := alignment.durations()
-	if len(alignment.Chars) != len(startTimes) || len(alignment.Chars) != len(durationTimes) {
-		return
-	}
 	for i, char := range alignment.Chars {
 		charRunes := []rune(char)
 		if len(charRunes) == 0 {
@@ -1315,6 +1340,36 @@ func (s *elevenLabsStream) sendError(err error) {
 	}
 }
 
+func (s *elevenLabsStream) armResponseTimeoutLocked() {
+	if s.responseTimeout <= 0 || s.responseTimer != nil {
+		return
+	}
+	timeout := s.responseTimeout
+	s.responseTimer = time.AfterFunc(timeout, func() {
+		s.sendError(llm.NewAPITimeoutError(fmt.Sprintf("11labs tts timed out after %s", elevenLabsTimeoutString(timeout))))
+		_ = s.Close()
+	})
+}
+
+func (s *elevenLabsStream) cancelResponseTimeout() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cancelResponseTimeoutLocked()
+}
+
+func (s *elevenLabsStream) cancelResponseTimeoutLocked() {
+	if s.responseTimer != nil {
+		s.responseTimer.Stop()
+	}
+}
+
+func elevenLabsTimeoutString(timeout time.Duration) string {
+	if timeout%time.Second == 0 {
+		return strconv.FormatInt(int64(timeout/time.Second), 10)
+	}
+	return strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64)
+}
+
 func (s *elevenLabsStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1363,7 +1418,7 @@ func (s *elevenLabsStream) sendCompleteWordsLocked() error {
 		return nil
 	}
 	if s.enableSSMLParsing {
-		cutoff, err := s.sendSSMLWordTokensLocked(tokens[:len(tokens)-1], tokens[len(tokens)-1].Start)
+		cutoff, err := s.sendSSMLWordTokensLocked(tokens[:len(tokens)-1], tokens[len(tokens)-1].Start, false)
 		if err != nil {
 			return err
 		}
@@ -1390,7 +1445,7 @@ func (s *elevenLabsStream) sendCompleteWordsLocked() error {
 	return nil
 }
 
-func (s *elevenLabsStream) sendSSMLWordTokensLocked(tokens []tokenize.TokenData, defaultCutoff int) (int, error) {
+func (s *elevenLabsStream) sendSSMLWordTokensLocked(tokens []tokenize.TokenData, defaultCutoff int, flush bool) (int, error) {
 	cutoff := defaultCutoff
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
@@ -1409,13 +1464,13 @@ func (s *elevenLabsStream) sendSSMLWordTokensLocked(tokens []tokenize.TokenData,
 			for _, part := range tokens[i : end+1] {
 				parts = append(parts, part.Token)
 			}
-			if err := s.sendTextLocked(strings.Join(parts, " "), false); err != nil {
+			if err := s.sendTextLocked(strings.Join(parts, " "), flush); err != nil {
 				return cutoff, err
 			}
 			i = end
 			continue
 		}
-		if err := s.sendTextLocked(token.Token, false); err != nil {
+		if err := s.sendTextLocked(token.Token, flush); err != nil {
 			return cutoff, err
 		}
 	}
@@ -1438,6 +1493,7 @@ func (s *elevenLabsStream) sendTextLocked(text string, flush bool) error {
 		s.closeAfterWriteFailureLocked()
 		return fmt.Errorf("failed to write text to elevenlabs: %w", err)
 	}
+	s.armResponseTimeoutLocked()
 	return nil
 }
 
@@ -1472,6 +1528,7 @@ func (s *elevenLabsStream) EndInput() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	s.armResponseTimeoutLocked()
 	if err := s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID)); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
@@ -1484,13 +1541,13 @@ func (s *elevenLabsStream) flushPendingTextLocked() error {
 	if s.pendingText == "" {
 		return nil
 	}
-	if s.enableSSMLParsing && !s.autoMode {
+	if s.enableSSMLParsing {
 		tokens := tokenize.SplitWords(s.pendingText, false, false, false)
 		if len(tokens) == 0 {
 			s.pendingText = ""
 			return nil
 		}
-		cutoff, err := s.sendSSMLWordTokensLocked(tokens, len([]rune(s.pendingText)))
+		cutoff, err := s.sendSSMLWordTokensLocked(tokens, len([]rune(s.pendingText)), s.autoMode)
 		if err != nil {
 			return err
 		}
@@ -1521,12 +1578,15 @@ func (s *elevenLabsStream) flushPendingTextLocked() error {
 }
 
 func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{}, chunkLengthSchedule []int, dictionaries []ElevenLabsPronunciationDictionaryLocator) map[string]interface{} {
-	if voiceSettings == nil {
-		voiceSettings = map[string]interface{}{}
+	var voiceSettingsValue interface{}
+	if voiceSettings != nil {
+		voiceSettingsValue = voiceSettings
+	} else {
+		voiceSettingsValue = map[string]interface{}{}
 	}
 	payload := map[string]interface{}{
 		"text":           " ",
-		"voice_settings": voiceSettings,
+		"voice_settings": voiceSettingsValue,
 		"context_id":     contextID,
 	}
 	if len(chunkLengthSchedule) > 0 {
@@ -1616,6 +1676,7 @@ func (s *elevenLabsStream) sendInitLocked() error {
 func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	s.inputErr = io.ErrClosedPipe
+	s.cancelResponseTimeoutLocked()
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -1639,6 +1700,7 @@ func (s *elevenLabsStream) rejectClosedPipe() error {
 	}
 	s.closed = true
 	s.inputErr = io.ErrClosedPipe
+	s.cancelResponseTimeoutLocked()
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -1668,6 +1730,7 @@ func (s *elevenLabsStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.cancelResponseTimeoutLocked()
 	s.cancel()
 	if s.mp3Decoder != nil {
 		if s.mp3Input != nil && !s.mp3InputClosed {
@@ -1685,6 +1748,11 @@ func (s *elevenLabsStream) Close() error {
 
 func (s *elevenLabsStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.isClosed() && !s.isFinished() {
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+		}
 		return nil, io.EOF
 	}
 

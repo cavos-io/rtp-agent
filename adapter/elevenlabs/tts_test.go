@@ -276,9 +276,12 @@ func TestElevenLabsTTSRejectsNonAudioResponse(t *testing.T) {
 	if !strings.Contains(err.Error(), "non-audio") {
 		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
 	}
-	var connectionErr *llm.APIConnectionError
-	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "Could not synthesize" {
+		t.Fatalf("Synthesize status message = %q, want reference synthesis failure", statusErr.Message)
 	}
 }
 
@@ -313,8 +316,11 @@ func TestElevenLabsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
-	if statusErr.Body != `{"detail":"rate limited"}` {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	if statusErr.Message != "Too Many Requests" {
+		t.Fatalf("message = %q, want reference response reason", statusErr.Message)
+	}
+	if statusErr.Body != nil {
+		t.Fatalf("body = %#v, want nil like reference ClientResponseError mapping", statusErr.Body)
 	}
 }
 
@@ -412,6 +418,58 @@ func TestElevenLabsTTSStreamNextReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestElevenLabsTTSStreamTimesOutSilentContextLikeReference(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runElevenLabsTTSSilentWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider, err := NewElevenLabsTTS(
+		"test-key",
+		"voice-1",
+		"eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("http://eleven.test"),
+		WithElevenLabsStreamResponseTimeout(20*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+	if !strings.Contains(err.Error(), "11labs tts timed out after") {
+		t.Fatalf("Next error = %v, want reference timeout message", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error = %v", err)
 	}
 }
 
@@ -1086,12 +1144,15 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	if init["text"] != " " || init["context_id"] != contextID {
 		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
 	}
+	if _, ok := init["voice_settings"]; !ok {
+		t.Fatalf("init payload = %#v, want explicit voice_settings field", init)
+	}
 	voiceSettings, ok := init["voice_settings"].(map[string]any)
 	if !ok {
-		t.Fatalf("init voice_settings = %#v, want empty settings object", init["voice_settings"])
+		t.Fatalf("init voice_settings = %#v, want reference empty object", init["voice_settings"])
 	}
 	if len(voiceSettings) != 0 {
-		t.Fatalf("init voice_settings = %#v, want empty settings object", voiceSettings)
+		t.Fatalf("init voice_settings = %#v, want reference empty object", init["voice_settings"])
 	}
 	if _, ok := init["generation_config"]; ok {
 		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
@@ -1203,8 +1264,15 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	if contextID == "" {
 		t.Fatalf("init context_id = %#v, want non-empty string", init["context_id"])
 	}
-	if _, ok := init["voice_settings"].(map[string]any); !ok {
-		t.Fatalf("init voice_settings = %#v, want object", init["voice_settings"])
+	if _, ok := init["voice_settings"]; !ok {
+		t.Fatalf("init payload = %#v, want explicit voice_settings field", init)
+	}
+	voiceSettings, ok := init["voice_settings"].(map[string]any)
+	if !ok {
+		t.Fatalf("init voice_settings = %#v, want reference empty object", init["voice_settings"])
+	}
+	if len(voiceSettings) != 0 {
+		t.Fatalf("init voice_settings = %#v, want reference empty object", init["voice_settings"])
 	}
 	generationConfig, ok := init["generation_config"].(map[string]any)
 	if !ok {
@@ -1528,6 +1596,71 @@ completeTag:
 	}
 }
 
+func TestElevenLabsTTSStreamAutoModeSSMLHoldsIncompleteReferenceTag(t *testing.T) {
+	messages := make(chan map[string]any, 20)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsAutoMode(true),
+		WithElevenLabsEnableSSMLParsing(true),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText(`<phoneme alphabet="ipa" ph="h eh l ow">hello`); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case msg := <-messages:
+		if msg["text"] != " " {
+			t.Fatalf("incomplete SSML packet sent: %#v", msg)
+		}
+	default:
+	}
+
+	if err := stream.PushText(`</phoneme> world`); err != nil {
+		t.Fatalf("PushText completion error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush completion error = %v", err)
+	}
+	contextID := ""
+	tag := readElevenLabsTTSStreamMessage(t, messages)
+	if tag["text"] == " " {
+		contextID, _ = tag["context_id"].(string)
+		tag = readElevenLabsTTSStreamMessage(t, messages)
+	} else {
+		contextID, _ = tag["context_id"].(string)
+	}
+	want := `<phoneme alphabet="ipa" ph="h eh l ow">hello</phoneme> `
+	if tag["text"] != want || tag["context_id"] != contextID || tag["flush"] != true {
+		t.Fatalf("completed auto-mode SSML packet = %#v, want flushed complete tag %q for context %q", tag, want, contextID)
+	}
+}
+
 func TestElevenLabsTTSStreamEndInputClosesContextLikeReference(t *testing.T) {
 	messages := make(chan map[string]any, 4)
 	serverErr := make(chan error, 1)
@@ -1719,6 +1852,26 @@ func TestElevenLabsTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 		if audio != want {
 			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
 		}
+	}
+}
+
+func TestElevenLabsTTSNextReturnsQueuedStreamErrorAfterClose(t *testing.T) {
+	providerErr := llm.NewAPIStatusError("connection closed", 1006, "", "")
+	stream := &elevenLabsStream{
+		ctx:    context.Background(),
+		audio:  make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error, 1),
+		closed: true,
+	}
+	stream.errCh <- providerErr
+	close(stream.audio)
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, providerErr) {
+		t.Fatalf("Next error = %v, want queued provider error", err)
 	}
 }
 
@@ -3325,6 +3478,34 @@ func runElevenLabsTTSAudioPayloadWebsocketServer(conn net.Conn, audio string, wa
 	errCh <- nil
 }
 
+func runElevenLabsTTSSilentWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := readElevenLabsClientWebsocketJSONFrame(reader); err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := readElevenLabsClientWebsocketJSONFrame(reader); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		if err := readElevenLabsClientWebsocketFrame(reader); err != nil {
+			errCh <- nil
+			return
+		}
+	}
+}
+
 func runElevenLabsTTSFinalPCMWebsocketServer(conn net.Conn, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -3507,6 +3688,28 @@ func TestElevenLabsTTSAlignmentMapsTimedTranscript(t *testing.T) {
 	}
 	if got := audio.TimedTranscript[1]; got.Text != "world" || got.StartTime != 0.06 || got.EndTime != 0.11 {
 		t.Fatalf("TimedTranscript[1] = %#v, want world from 0.06 to 0.11", got)
+	}
+}
+
+func TestElevenLabsTTSIgnoresMalformedAlignmentTextLikeReference(t *testing.T) {
+	resp := elWSResponse{
+		Audio: base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		NormalizedAlignment: &elevenLabsAlignment{
+			Chars:            []string{"h", "i"},
+			CharStartTimesMs: []int{0},
+			CharDurationsMs:  []int{10, 10},
+		},
+	}
+
+	audio, err := elevenLabsSynthesizedAudio(resp, 22050, "pcm_22050")
+	if err != nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
+	}
+	if audio.DeltaText != "" {
+		t.Fatalf("DeltaText = %q, want empty for malformed alignment", audio.DeltaText)
+	}
+	if len(audio.TimedTranscript) != 0 {
+		t.Fatalf("TimedTranscript = %#v, want none for malformed alignment", audio.TimedTranscript)
 	}
 }
 

@@ -154,7 +154,7 @@ func (s *ElevenLabsSTT) Capabilities() stt.STTCapabilities {
 		InterimResults:    true,
 		Diarization:       false,
 		AlignedTranscript: aligned,
-		OfflineRecognize:  !realtime,
+		OfflineRecognize:  true,
 	}
 }
 
@@ -294,9 +294,6 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 		s.mu.Unlock()
 	}
 
-	if elevenLabsSTTIsRealtime(s.modelID) {
-		return nil, fmt.Errorf("elevenlabs realtime models do not support offline recognize")
-	}
 	audio := elevenLabsSTTWAVBytes(frames, uint32(s.sampleRate), 1)
 	req, err := buildElevenLabsSTTRecognizeRequest(ctx, s, audio, language)
 	if err != nil {
@@ -326,9 +323,6 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 }
 
 func elevenLabsSTTStatusErrorBody(respBody []byte) (string, any, error) {
-	if len(respBody) == 0 {
-		return "Unknown ElevenLabs error", "", nil
-	}
 	var payload map[string]any
 	if err := json.Unmarshal(respBody, &payload); err != nil {
 		return "", nil, err
@@ -780,6 +774,11 @@ func (s *elevenLabsSTTStream) addAudioDurationLocked(duration float64) {
 
 func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+		}
 		return nil, io.EOF
 	}
 	select {
@@ -925,10 +924,9 @@ func elevenLabsSTTSpeechEvent(defaultLanguage string, resp elevenLabsSTTResponse
 		language = defaultLanguage
 	}
 	data := stt.SpeechData{
-		Text:       resp.Text,
-		Language:   language,
-		Confidence: stt.DefaultTranscriptConfidence(resp.Text),
-		Words:      elevenLabsSTTTimedStrings(resp.Words, 0),
+		Text:     resp.Text,
+		Language: language,
+		Words:    elevenLabsSTTTimedStrings(resp.Words, 0),
 	}
 	if len(resp.Words) > 0 {
 		data.SpeakerID = resp.Words[0].SpeakerID
@@ -970,6 +968,9 @@ func processElevenLabsSTTStreamEvent(state *elevenLabsSTTStreamState, data map[s
 		return nil, nil
 	case "auth_error", "quota_exceeded", "transcriber_error", "input_error", "error":
 		msg, _ := data["message"].(string)
+		if msg == "" {
+			msg = "Unknown error"
+		}
 		details, _ := data["details"].(string)
 		if details != "" {
 			msg += " - " + details
@@ -1016,11 +1017,10 @@ func elevenLabsSTTSpeechDataFromStream(state *elevenLabsSTTStreamState, data map
 	}
 	words := elevenLabsSTTWordsFromAny(data["words"])
 	speechData := stt.SpeechData{
-		Text:       text,
-		Language:   language,
-		Confidence: stt.DefaultTranscriptConfidence(text),
-		StartTime:  state.startTimeOffset,
-		EndTime:    state.startTimeOffset,
+		Text:      text,
+		Language:  language,
+		StartTime: state.startTimeOffset,
+		EndTime:   state.startTimeOffset,
 	}
 	if len(words) > 0 {
 		speechData.StartTime = words[0].Start + state.startTimeOffset
