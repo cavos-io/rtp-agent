@@ -435,7 +435,7 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 		return nil, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("azure stt error: status=%d body=%s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, llm.NewAPIStatusError("Azure STT request failed", resp.StatusCode, "", strings.TrimSpace(string(body)))
 	}
 	var result azureSTTRecognizeResponse
 	if err := json.Unmarshal(body, &result); err != nil {

@@ -307,6 +307,13 @@ func TestAzureSTTRecognizeHTTPErrorIncludesBody(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "bad key") {
 		t.Fatalf("Recognize error = %v, want response body context", err)
 	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusUnauthorized)
+	}
 }
 
 func TestAzureSTTBuildsReferenceStreamURL(t *testing.T) {
