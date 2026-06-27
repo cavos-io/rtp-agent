@@ -1127,7 +1127,7 @@ func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
 				s.mu.Unlock()
 				return
 			}
-			s.finishWithErrorLocked(err)
+			s.finishWithErrorLocked(llm.NewAPIConnectionError(err.Error()))
 			s.mu.Unlock()
 			return
 		}
