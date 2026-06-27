@@ -973,7 +973,14 @@ func TestElevenLabsSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
-	if statusErr.Body != `{"detail":"rate limited"}` {
+	if statusErr.Message != "rate limited" {
+		t.Fatalf("message = %q, want provider detail", statusErr.Message)
+	}
+	body, ok := statusErr.Body.(map[string]any)
+	if !ok {
+		t.Fatalf("body = %#v, want parsed provider JSON body", statusErr.Body)
+	}
+	if body["detail"] != "rate limited" {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
 	}
 }

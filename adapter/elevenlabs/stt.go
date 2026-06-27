@@ -305,13 +305,28 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, llm.NewAPIStatusError("ElevenLabs STT request failed", resp.StatusCode, "", string(respBody))
+		message, body := elevenLabsSTTStatusErrorBody(respBody)
+		return nil, llm.NewAPIStatusError(message, resp.StatusCode, "", body)
 	}
 	var result elevenLabsSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	return elevenLabsSTTSpeechEvent(resolveElevenLabsSTTLanguage(s, language), result), nil
+}
+
+func elevenLabsSTTStatusErrorBody(respBody []byte) (string, any) {
+	if len(respBody) == 0 {
+		return "Unknown ElevenLabs error", ""
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(respBody, &payload); err != nil {
+		return "Unknown ElevenLabs error", string(respBody)
+	}
+	if detail, _ := payload["detail"].(string); detail != "" {
+		return detail, payload
+	}
+	return "Unknown ElevenLabs error", payload
 }
 
 func elevenLabsSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, defaultNumChannels uint32) []byte {
