@@ -1533,6 +1533,8 @@ func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{
 	var voiceSettingsValue interface{}
 	if voiceSettings != nil {
 		voiceSettingsValue = voiceSettings
+	} else {
+		voiceSettingsValue = map[string]interface{}{}
 	}
 	payload := map[string]interface{}{
 		"text":           " ",
