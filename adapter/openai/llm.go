@@ -90,6 +90,7 @@ type OpenAILLM struct {
 	extraQuery           map[string]string
 	extraBody            map[string]any
 	azureADTokenProvider func(context.Context) (string, error)
+	reasoningObjectSet   bool
 	mu                   sync.Mutex
 	closed               bool
 	streams              map[*openaiStream]struct{}
@@ -289,6 +290,7 @@ func WithOpenAILLMReasoning(reasoning map[string]any) OpenAILLMOption {
 			l.extraBody = map[string]any{}
 		}
 		l.extraBody["reasoning"] = cloneOpenAIAnyMap(reasoning)
+		l.reasoningObjectSet = true
 	}
 }
 
@@ -997,7 +999,8 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		effectiveOptions = &copied
 	}
 
-	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, l.defaultReasoning, l.strictToolSchema)
+	defaultReasoning := l.defaultReasoning && !l.reasoningObjectSet
+	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, defaultReasoning, l.strictToolSchema)
 	client := l.client
 	if callClient := l.openAIClientWithCallExtras(effectiveOptions.ExtraParams); callClient != nil {
 		client = callClient
