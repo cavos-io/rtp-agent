@@ -89,6 +89,7 @@ type OpenAILLM struct {
 	extraHeaders         map[string]string
 	extraQuery           map[string]string
 	extraBody            map[string]any
+	azureADTokenProvider func(context.Context) (string, error)
 	mu                   sync.Mutex
 	closed               bool
 	streams              map[*openaiStream]struct{}
@@ -230,6 +231,12 @@ func WithOpenAILLMOrganization(organization string) OpenAILLMOption {
 
 func WithOpenAILLMProject(project string) OpenAILLMOption {
 	return withOpenAILLMExtraHeader("OpenAI-Project", project)
+}
+
+func WithOpenAILLMAzureADTokenProvider(provider func(context.Context) (string, error)) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		l.azureADTokenProvider = provider
+	}
 }
 
 func withOpenAILLMExtraHeader(key string, value string) OpenAILLMOption {
@@ -383,18 +390,17 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if azureEndpoint == "" {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI LLM", azureOpenAIEndpointEnv)
 	}
-	if apiKey == "" && azureADToken == "" {
-		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI LLM", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
-	}
-	if azureDeployment == "" {
-		azureDeployment = model
-	}
-
 	defaultConnect := llm.DefaultAPIConnectOptions()
 	defaultConnect.MaxRetry = 0
 	provider := &OpenAILLM{model: model, defaultReasoning: true, strictToolSchema: true, defaultConnect: &defaultConnect}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if apiKey == "" && azureADToken == "" && provider.azureADTokenProvider == nil {
+		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI LLM", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
+	}
+	if azureDeployment == "" {
+		azureDeployment = model
 	}
 
 	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
@@ -422,6 +428,12 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		config.HTTPClient = &azureADTokenHTTPClient{
 			base:  config.HTTPClient,
 			token: azureADToken,
+		}
+	}
+	if provider.azureADTokenProvider != nil {
+		config.HTTPClient = &azureADTokenProviderHTTPClient{
+			base:     config.HTTPClient,
+			provider: provider.azureADTokenProvider,
 		}
 	}
 	wrapOpenAIExtraHeaders(provider, &config)
@@ -700,6 +712,26 @@ func (c *azureADTokenHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	cloned := req.Clone(req.Context())
 	cloned.Header.Del(openai.AzureAPIKeyHeader)
 	cloned.Header.Set("Authorization", "Bearer "+c.token)
+	return base.Do(cloned)
+}
+
+type azureADTokenProviderHTTPClient struct {
+	base     openai.HTTPDoer
+	provider func(context.Context) (string, error)
+}
+
+func (c *azureADTokenProviderHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	token, err := c.provider(req.Context())
+	if err != nil {
+		return nil, err
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Header.Del(openai.AzureAPIKeyHeader)
+	cloned.Header.Set("Authorization", "Bearer "+token)
 	return base.Do(cloned)
 }
 

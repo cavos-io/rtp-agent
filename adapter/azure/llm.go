@@ -1,6 +1,8 @@
 package azure
 
 import (
+	"context"
+
 	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -38,6 +40,10 @@ func WithAzureLLMOrganization(organization string) AzureLLMOption {
 
 func WithAzureLLMProject(project string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMProject(project)
+}
+
+func WithAzureLLMADTokenProvider(provider func(context.Context) (string, error)) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMAzureADTokenProvider(provider)
 }
 
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {

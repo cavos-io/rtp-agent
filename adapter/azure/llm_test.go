@@ -1,6 +1,7 @@
 package azure
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -162,6 +163,26 @@ func TestAzureResponsesLLMAcceptsReferenceOrganizationProjectOptions(t *testing.
 		"",
 		WithAzureLLMOrganization("org-123"),
 		WithAzureLLMProject("proj-456"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceADTokenProviderOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"",
+		"",
+		WithAzureLLMADTokenProvider(func(context.Context) (string, error) {
+			return "provider-token", nil
+		}),
 	)
 	if err != nil {
 		t.Fatalf("NewAzureLLM error = %v", err)

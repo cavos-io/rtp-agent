@@ -450,6 +450,43 @@ func TestNewAzureOpenAILLMUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAILLMUsesReferenceEntraTokenProvider(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	tokenCalls := 0
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if tokenCalls != 1 {
+		t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+	}
+	if capture.apiKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token provider auth", capture.apiKey)
+	}
+	if capture.authorization != "Bearer provider-token" {
+		t.Fatalf("Authorization = %q, want provider bearer token", capture.authorization)
+	}
+}
+
 func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
 	t.Setenv(ovhcloudAPIKeyEnv, "env-ovh-key")
 	capture := &captureDeadlineHTTPClient{
