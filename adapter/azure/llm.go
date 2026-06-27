@@ -24,6 +24,10 @@ func WithAzureLLMToolChoice(toolChoice llm.ToolChoice) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMToolChoice(toolChoice)
 }
 
+func WithAzureLLMReasoningEffort(reasoningEffort string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMReasoningEffort(reasoningEffort)
+}
+
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {
 	return adapteropenai.NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken, opts...)
 }
