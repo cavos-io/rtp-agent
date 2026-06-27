@@ -507,6 +507,9 @@ func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*m
 	query := u.Query()
 	query.Set("language", s.streamLanguage(language))
 	query.Set("format", "detailed")
+	if s.explicitPunctuation {
+		query.Set("punctuation", "explicit")
+	}
 	if s.profanity != "" {
 		query.Set("profanity", s.profanity)
 	}

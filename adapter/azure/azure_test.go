@@ -565,6 +565,14 @@ func TestAzureSTTStreamURLUsesExplicitPunctuationOption(t *testing.T) {
 	if got := parsed.Query().Get("punctuation"); got != "explicit" {
 		t.Fatalf("punctuation query = %q, want explicit", got)
 	}
+
+	req, err := buildAzureSTTRecognizeRequest(context.Background(), provider, nil, "id-ID")
+	if err != nil {
+		t.Fatalf("build recognize request: %v", err)
+	}
+	if got := req.URL.Query().Get("punctuation"); got != "explicit" {
+		t.Fatalf("recognize punctuation query = %q, want explicit", got)
+	}
 }
 
 func TestAzureSTTUsesReferenceProfanityOption(t *testing.T) {
