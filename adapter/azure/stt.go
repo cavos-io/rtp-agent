@@ -438,7 +438,7 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError(err.Error())
 		}
-		return nil, err
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		return nil, llm.NewAPIStatusError("Azure STT request failed", resp.StatusCode, "", strings.TrimSpace(string(body)))
