@@ -389,11 +389,11 @@ func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, strea
 	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
 	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to dial azure stt websocket: %w", err)
+		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to dial azure stt websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfigWithLanguages(provider, languages))); err != nil {
 		_ = conn.Close()
-		return nil, "", fmt.Errorf("failed to initialize azure stt websocket: %w", err)
+		return nil, "", llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize azure stt websocket: %v", err))
 	}
 	return conn, connectionID, nil
 }
