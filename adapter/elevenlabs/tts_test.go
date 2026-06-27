@@ -2756,6 +2756,70 @@ func TestElevenLabsTTSWebsocketMP3DecodesSplitProviderAudio(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSWebsocketOpusDecodesSplitProviderAudio(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(elevenLabsOpusFixtureBase64)
+	if err != nil {
+		t.Fatalf("DecodeString fixture error = %v", err)
+	}
+	splitAt := len(opusData) / 2
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &elevenLabsStream{
+		audio:      make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
+		ctx:        ctx,
+		cancel:     cancel,
+		encoding:   "opus_48000_64",
+		sampleRate: 48000,
+	}
+	if err := stream.pushCompressedAudio(base64.StdEncoding.EncodeToString(opusData[:splitAt]), "", nil); err != nil {
+		t.Fatalf("push first split Opus chunk: %v", err)
+	}
+	if err := stream.pushCompressedAudio(base64.StdEncoding.EncodeToString(opusData[splitAt:]), "", nil); err != nil {
+		t.Fatalf("push second split Opus chunk: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		stream.closeMP3Decoder(true)
+		close(stream.audio)
+		close(done)
+	}()
+
+	decodedFrames := 0
+	for range 5000 {
+		var audio *tts.SynthesizedAudio
+		select {
+		case err := <-stream.errCh:
+			t.Fatalf("split Opus decode error = %v", err)
+		case audio = <-stream.audio:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for split Opus decoded audio")
+		}
+		if audio.IsFinal {
+			if decodedFrames == 0 {
+				t.Fatal("final marker arrived before decoded split Opus audio")
+			}
+			break
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("decoded audio = %#v, want PCM frame", audio)
+		}
+		if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 1 {
+			t.Fatalf("decoded frame format = %d Hz/%d ch, want 48000 Hz mono", audio.Frame.SampleRate, audio.Frame.NumChannels)
+		}
+		decodedFrames++
+	}
+	if decodedFrames == 0 {
+		t.Fatal("decoded split Opus frames = 0")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Opus decoder close")
+	}
+}
+
 func TestElevenLabsTTSWebsocketMP3CarriesReferenceAlignmentMetadata(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -3691,6 +3755,30 @@ func TestElevenLabsTTSAlignmentMapsTimedTranscript(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSAlignmentSplitsCJKTimedTranscriptLikeReference(t *testing.T) {
+	resp := elWSResponse{
+		Audio:   base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		IsFinal: true,
+		Alignment: &elevenLabsAlignment{
+			Chars:            []string{"你", "好"},
+			CharStartTimesMs: []int{0, 80},
+			CharDurationsMs:  []int{80, 90},
+		},
+	}
+
+	stream := &elevenLabsStream{preferredAlignment: "original"}
+	timed := stream.timedTranscriptFromAlignment(resp)
+	if len(timed) != 2 {
+		t.Fatalf("TimedTranscript = %#v, want one timed entry per CJK character", timed)
+	}
+	if got := timed[0]; got.Text != "你" || got.StartTime != 0 || got.EndTime != 0.08 {
+		t.Fatalf("TimedTranscript[0] = %#v, want first CJK character timing", got)
+	}
+	if got := timed[1]; got.Text != "好" || got.StartTime != 0.08 || got.EndTime != 0.17 {
+		t.Fatalf("TimedTranscript[1] = %#v, want second CJK character timing", got)
+	}
+}
+
 func TestElevenLabsTTSIgnoresMalformedAlignmentTextLikeReference(t *testing.T) {
 	resp := elWSResponse{
 		Audio: base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
@@ -3808,19 +3896,75 @@ func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.
 	}
 }
 
-func TestElevenLabsSynthesizedAudioRejectsUnsupportedOpusEncoding(t *testing.T) {
+func TestElevenLabsSynthesizedAudioDecodesReferenceOpusEncoding(t *testing.T) {
 	resp := elWSResponse{
-		Audio: base64.StdEncoding.EncodeToString([]byte{0x4f, 0x70, 0x75, 0x73}),
+		Audio: elevenLabsOpusFixtureBase64,
 	}
 
 	audio, err := elevenLabsSynthesizedAudio(resp, 48000, "opus_48000_64")
-	if err == nil {
-		t.Fatalf("elevenLabsSynthesizedAudio() audio = %#v, want unsupported opus error", audio)
+	if err != nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported elevenlabs TTS encoding") || !strings.Contains(err.Error(), "opus_48000_64") {
-		t.Fatalf("error = %v, want unsupported opus encoding context", err)
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() audio = %#v, want decoded Opus PCM frame", audio)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("SampleRate = %d, want 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded Opus frame data is empty")
+	}
+	if got, want := len(audio.Frame.Data), int(audio.Frame.SamplesPerChannel*audio.Frame.NumChannels*2); got != want {
+		t.Fatalf("frame byte length = %d, want %d from samples/channels", got, want)
 	}
 }
+
+func TestElevenLabsChunkedStreamDecodesReferenceOpusResponse(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(elevenLabsOpusFixtureBase64)
+	if err != nil {
+		t.Fatalf("DecodeString fixture error = %v", err)
+	}
+	stream := &elevenLabsChunkedStream{
+		resp: &http.Response{
+			Body: io.NopCloser(bytes.NewReader(opusData)),
+		},
+		encoding:   "opus_48000_64",
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	var decodedFrames int
+	for {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		if audio == nil {
+			t.Fatal("Next() audio = nil")
+		}
+		if audio.IsFinal {
+			if audio.Frame != nil {
+				t.Fatalf("final Next() audio = %#v, want boundary-only final marker", audio)
+			}
+			break
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("Next() audio = %#v, want decoded Opus PCM frame", audio)
+		}
+		if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 1 {
+			t.Fatalf("decoded frame format = %d Hz/%d channels, want 48000 Hz mono", audio.Frame.SampleRate, audio.Frame.NumChannels)
+		}
+		decodedFrames++
+	}
+	if decodedFrames == 0 {
+		t.Fatal("decoded frame count = 0, want Opus audio before final marker")
+	}
+}
+
+const elevenLabsOpusFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
 
 type elevenLabsRoundTripFunc func(*http.Request) (*http.Response, error)
 
