@@ -147,6 +147,7 @@ func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...
 	if region == "" {
 		region = os.Getenv(azureSpeechRegionEnv)
 	}
+	authToken := os.Getenv(azureSpeechAuthTokenEnv)
 	if voice == "" {
 		voice = defaultAzureTTSVoice
 	}
@@ -157,6 +158,7 @@ func NewAzureTTSWithOptions(apiKey string, region string, voice string, opts ...
 		language:       defaultAzureTTSLanguage,
 		sampleRate:     defaultAzureTTSSampleRate,
 		speechEndpoint: os.Getenv(azureSpeechEndpointEnv),
+		authToken:      authToken,
 		httpClient:     http.DefaultClient,
 		streams:        make(map[*azureTTSChunkedStream]struct{}),
 	}

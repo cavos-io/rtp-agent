@@ -3020,6 +3020,36 @@ func TestAzureTTSRequiresSpeechConfig(t *testing.T) {
 	}
 }
 
+func TestAzureTTSFallsBackToSpeechAuthTokenEnvironment(t *testing.T) {
+	t.Setenv(azureSpeechKeyEnv, "")
+	t.Setenv(azureSpeechRegionEnv, "eastus")
+	t.Setenv(azureSpeechEndpointEnv, "")
+	t.Setenv(azureSpeechAuthTokenEnv, "env-token")
+
+	provider, err := NewAzureTTS("", "", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v, want nil from auth token env config", err)
+	}
+
+	if provider.authToken != "env-token" {
+		t.Fatalf("authToken = %q, want env-token", provider.authToken)
+	}
+	if provider.apiKey != "" {
+		t.Fatalf("apiKey = %q, want empty when auth token env config is used", provider.apiKey)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := req.Header.Get("Authorization"); got != "Bearer env-token" {
+		t.Fatalf("Authorization = %q, want bearer auth token", got)
+	}
+	if got := req.Header.Get("Ocp-Apim-Subscription-Key"); got != "" {
+		t.Fatalf("Ocp-Apim-Subscription-Key = %q, want empty when bearer auth is used", got)
+	}
+}
+
 func TestAzureTTSBuildsReferenceRequest(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "en-US-AvaNeural")
 	if err != nil {
