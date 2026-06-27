@@ -673,6 +673,26 @@ func TestElevenLabsSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamNextReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	stream := &elevenLabsSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestElevenLabsSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	handlerDone := make(chan struct{})

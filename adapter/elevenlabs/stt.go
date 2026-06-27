@@ -759,6 +759,9 @@ func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
 		if s.isClosed() {
 			return nil, io.EOF
 		}
+		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(s.ctx.Err().Error())
+		}
 		return nil, s.ctx.Err()
 	}
 }
