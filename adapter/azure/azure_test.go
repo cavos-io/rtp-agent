@@ -108,6 +108,33 @@ func TestAzureSTTFallsBackToSpeechEndpointEnvironment(t *testing.T) {
 	}
 }
 
+func TestAzureSTTFallsBackToSpeechAuthTokenEnvironment(t *testing.T) {
+	t.Setenv(azureSpeechHostEnv, "")
+	t.Setenv(azureSpeechKeyEnv, "")
+	t.Setenv(azureSpeechRegionEnv, "eastus")
+	t.Setenv(azureSpeechEndpointEnv, "")
+	t.Setenv("AZURE_SPEECH_AUTH_TOKEN", "env-token")
+
+	provider, err := NewAzureSTT("", "")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v, want nil from auth token env config", err)
+	}
+
+	if provider.authToken != "env-token" {
+		t.Fatalf("authToken = %q, want env-token", provider.authToken)
+	}
+	if provider.apiKey != "" {
+		t.Fatalf("apiKey = %q, want empty when auth token is configured", provider.apiKey)
+	}
+	headers := buildAzureSTTHeaders(provider, "conn-123")
+	if got := headers.Get("Authorization"); got != "Bearer env-token" {
+		t.Fatalf("Authorization = %q, want bearer token", got)
+	}
+	if got := headers.Get("Ocp-Apim-Subscription-Key"); got != "" {
+		t.Fatalf("subscription header = %q, want omitted for auth token", got)
+	}
+}
+
 func TestAzureSTTRequiresSpeechConfig(t *testing.T) {
 	t.Setenv(azureSpeechHostEnv, "")
 	t.Setenv(azureSpeechKeyEnv, "")

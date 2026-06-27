@@ -26,6 +26,7 @@ const (
 	azureSpeechHostEnv        = "AZURE_SPEECH_HOST"
 	azureSpeechKeyEnv         = "AZURE_SPEECH_KEY"
 	azureSpeechRegionEnv      = "AZURE_SPEECH_REGION"
+	azureSpeechAuthTokenEnv   = "AZURE_SPEECH_AUTH_TOKEN"
 	defaultAzureSTTLanguage   = "en-US"
 	defaultAzureSTTSampleRate = 16000
 	defaultAzureSTTChannels   = 1
@@ -183,11 +184,13 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	if region == "" {
 		region = os.Getenv(azureSpeechRegionEnv)
 	}
+	authToken := os.Getenv(azureSpeechAuthTokenEnv)
 	provider := &AzureSTT{
 		apiKey:         apiKey,
 		region:         region,
 		speechHost:     os.Getenv(azureSpeechHostEnv),
 		speechEndpoint: os.Getenv(azureSpeechEndpointEnv),
+		authToken:      authToken,
 		sampleRate:     defaultAzureSTTSampleRate,
 		numChannels:    defaultAzureSTTChannels,
 		httpClient:     http.DefaultClient,
