@@ -713,14 +713,31 @@ func TestElevenLabsTTSChunkedStreamDoesNotDuplicatePCMFinalMarker(t *testing.T) 
 		t.Fatalf("first Next error = %v", err)
 	}
 	if audio == nil || audio.Frame == nil {
-		t.Fatalf("first Next audio = %#v, want final PCM frame", audio)
+		t.Fatalf("first Next audio = %#v, want PCM frame", audio)
 	}
-	if !audio.IsFinal {
-		t.Fatal("first Next IsFinal = false, want final PCM frame")
+	if audio.IsFinal {
+		t.Fatal("first Next IsFinal = true, want audio before separate reference final marker")
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 0, 2, 0}) {
+		t.Fatalf("first Next frame data = %v, want provider EOF bytes", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil {
+		t.Fatal("second Next audio = nil, want final marker")
+	}
+	if !final.IsFinal {
+		t.Fatal("second Next IsFinal = false, want reference final marker")
+	}
+	if final.Frame != nil {
+		t.Fatalf("second Next frame = %#v, want boundary-only final marker", final.Frame)
 	}
 
 	if next, err := stream.Next(); next != nil || err != io.EOF {
-		t.Fatalf("second Next = (%#v, %v), want nil EOF", next, err)
+		t.Fatalf("third Next = (%#v, %v), want nil EOF", next, err)
 	}
 }
 
