@@ -2343,7 +2343,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerAWS:
 		return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
 	case providerAzure:
-		return azure.NewAzureLLM(cfg.LLMModel, "", "", "", "", "")
+		return azureLLMFromConfig(cfg)
 	case providerCerebras:
 		return cerebras.NewCerebrasLLM(cfg.CerebrasAPIKey, cfg.LLMModel), nil
 	case providerFireworks:
@@ -3285,6 +3285,10 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSampleRate(sampleRate))
 	}
 	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
+}
+
+func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
+	return azure.NewAzureLLM(cfg.LLMModel, cfg.LLMBaseURL, "", "", "", "")
 }
 
 func validateAzureSTTConfig(cfg AppConfig) error {
@@ -4384,7 +4388,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerAzure:
-		provider, err := azure.NewAzureLLM(cfg.LLMModel, "", "", "", "", "")
+		provider, err := azureLLMFromConfig(cfg)
 		if err != nil {
 			return nil, err
 		}

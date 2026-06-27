@@ -2908,6 +2908,22 @@ func TestDefaultConfigFromEnvSelectsAzureResponsesLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMBaseURL(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if got := llm.Provider(app.Session.LLM); got != "configured-resource.openai.azure.com" {
+		t.Fatalf("LLM provider = %q, want configured Azure endpoint host", got)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
 	t.Setenv("PERPLEXITY_API_KEY", "test-perplexity-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "perplexity")
