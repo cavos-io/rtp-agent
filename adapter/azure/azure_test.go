@@ -2908,6 +2908,22 @@ func TestAzureTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T)
 	}
 }
 
+func TestAzureTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &azureTTSChunkedStream{
+		body:       errorReadCloser{err: context.DeadlineExceeded},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAzureTTSChunkedStreamKeepsAudioBeforeReferenceReadFailure(t *testing.T) {
 	body := &bytesThenErrorReadCloser{
 		data: []byte{0x01, 0x02},

@@ -642,6 +642,9 @@ func (s *azureTTSChunkedStream) failRead(err error) error {
 		_ = body.Close()
 	}
 	s.unregister()
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
 	return llm.NewAPIConnectionError(err.Error())
 }
 
