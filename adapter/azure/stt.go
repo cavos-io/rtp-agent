@@ -353,6 +353,7 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 		conn.Close()
 		return nil, io.ErrClosedPipe
 	}
+	go stream.watchContext()
 	go stream.readLoop(conn)
 	return stream, nil
 }
@@ -724,6 +725,7 @@ type azureSTTStream struct {
 	mu              sync.Mutex
 	closed          bool
 	closedWithError bool
+	terminalErr     error
 	audioWritten    bool
 	sessionStarted  bool
 	pendingAudio    []azureSTTPendingAudio
@@ -852,6 +854,15 @@ func (s *azureSTTStream) hasClosedWithError() bool {
 	return s.closed && s.closedWithError
 }
 
+func (s *azureSTTStream) closedError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed && s.closedWithError {
+		return s.terminalErr
+	}
+	return nil
+}
+
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
 		if s.hasClosedWithError() {
@@ -866,6 +877,9 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 			case err := <-s.errCh:
 				return nil, s.finalizeSessionStopError(err)
 			default:
+			}
+			if err := s.closedError(); err != nil {
+				return nil, err
 			}
 		}
 		return nil, io.EOF
@@ -916,6 +930,9 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, s.finalizeSessionStopError(err)
 	case <-s.ctx.Done():
 		if s.isClosed() {
+			if err := s.closedError(); err != nil {
+				return nil, err
+			}
 			return nil, io.EOF
 		}
 		err := s.ctx.Err()
@@ -1001,6 +1018,7 @@ func (s *azureSTTStream) finishWithErrorLocked(err error) {
 	}
 	s.closed = true
 	s.closedWithError = true
+	s.terminalErr = err
 	if s.errCh != nil {
 		select {
 		case s.errCh <- err:
@@ -1016,6 +1034,16 @@ func (s *azureSTTStream) finishWithErrorLocked(err error) {
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
+}
+
+func (s *azureSTTStream) watchContext() {
+	<-s.ctx.Done()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.finishWithErrorLocked(s.ctx.Err())
 }
 
 func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
