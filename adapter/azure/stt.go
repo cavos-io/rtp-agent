@@ -839,14 +839,14 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
 		if s.hasClosedWithError() {
 			select {
-			case err := <-s.errCh:
-				select {
-				case event, ok := <-s.events:
-					if ok {
-						return event, nil
-					}
-				default:
+			case event, ok := <-s.events:
+				if ok {
+					return event, nil
 				}
+			default:
+			}
+			select {
+			case err := <-s.errCh:
 				return nil, s.finalizeSessionStopError(err)
 			default:
 			}
@@ -854,14 +854,14 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, io.EOF
 	}
 	select {
-	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+	case event, ok := <-s.events:
+		if ok {
+			return event, nil
 		}
+	default:
+	}
+	select {
+	case err := <-s.errCh:
 		return nil, s.finalizeSessionStopError(err)
 	default:
 	}

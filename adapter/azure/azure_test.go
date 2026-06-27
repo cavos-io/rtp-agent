@@ -1604,6 +1604,44 @@ func TestAzureSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	}
 }
 
+func TestAzureSTTNextDrainsQueuedTranscriptsBeforeSessionStopError(t *testing.T) {
+	first := &stt.SpeechEvent{
+		Type: stt.SpeechEventInterimTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued interim",
+		}},
+	}
+	second := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued final",
+		}},
+	}
+	stream := &azureSTTStream{
+		events:          make(chan *stt.SpeechEvent, 2),
+		errCh:           make(chan error, 1),
+		closed:          true,
+		closedWithError: true,
+	}
+	stream.events <- first
+	stream.events <- second
+	stream.errCh <- llm.NewAPIConnectionError("SpeechRecognition session stopped")
+
+	got, err := stream.Next()
+	if err != nil || got != first {
+		t.Fatalf("first Next = (%+v, %v), want first queued transcript", got, err)
+	}
+	got, err = stream.Next()
+	if err != nil || got != second {
+		t.Fatalf("second Next = (%+v, %v), want second queued transcript before stop error", got, err)
+	}
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("third Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAzureSTTStreamAfterCloseIsRejected(t *testing.T) {
 	dials := 0
 	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
