@@ -464,6 +464,10 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 
 	conn, err := m.dialRealtimeWebsocket(context.Background(), wsURL, header)
 	if err != nil {
+		var timeoutErr *llm.APITimeoutError
+		if errors.As(err, &timeoutErr) {
+			return nil, timeoutErr
+		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to connect to OpenAI realtime: %v", err))
 	}
 
@@ -595,7 +599,7 @@ func (m *RealtimeModel) dialRealtimeWebsocketAttempt(ctx context.Context, wsURL 
 		return result.conn, result.err
 	case <-attemptCtx.Done():
 		if errors.Is(attemptCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("OpenAI realtime connection timed out")
+			return nil, llm.NewAPITimeoutError("OpenAI realtime connection timed out")
 		}
 		return nil, attemptCtx.Err()
 	}

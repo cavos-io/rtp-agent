@@ -577,6 +577,38 @@ func TestAzureOpenAIRealtimeSessionDialFailureReturnsAPIConnectionError(t *testi
 	}
 }
 
+func TestAzureOpenAIRealtimeSessionConnectTimeoutReturnsAPITimeoutError(t *testing.T) {
+	releaseDialer := make(chan struct{})
+	defer close(releaseDialer)
+
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{Timeout: time.Millisecond, MaxRetry: 0}),
+		WithOpenAIRealtimeWebsocketDialer(func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+			<-releaseDialer
+			return nil, nil, errors.New("late dial")
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+
+	_, err = realtimeModel.Session()
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Session() error = %T %v, want APITimeoutError", err, err)
+	}
+	if !strings.Contains(timeoutErr.Error(), "OpenAI realtime connection timed out") {
+		t.Fatalf("APITimeoutError = %q, want realtime timeout context", timeoutErr.Error())
+	}
+}
+
 func TestAzureOpenAIRealtimeNormalizesAssistantTextForLegacyAPI(t *testing.T) {
 	messages := make(chan string, 2)
 	releaseServer := make(chan struct{})
