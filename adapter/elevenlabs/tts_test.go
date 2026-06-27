@@ -548,6 +548,30 @@ func TestElevenLabsTTSChunkedStreamEmitsReferencePCMFinalMarker(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSChunkedStreamDoesNotDuplicatePCMFinalMarker(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: &elevenLabsReadOnceEOFBody{data: []byte{1, 0, 2, 0}}},
+		encoding:   "pcm_8000",
+		sampleRate: 8000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first Next audio = %#v, want final PCM frame", audio)
+	}
+	if !audio.IsFinal {
+		t.Fatal("first Next IsFinal = false, want final PCM frame")
+	}
+
+	if next, err := stream.Next(); next != nil || err != io.EOF {
+		t.Fatalf("second Next = (%#v, %v), want nil EOF", next, err)
+	}
+}
+
 func TestElevenLabsTTSReadErrorIncludesProviderOperationContext(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -2006,6 +2030,23 @@ func (r elevenLabsErrReader) Read([]byte) (int, error) {
 }
 
 func (r elevenLabsErrReader) Close() error {
+	return nil
+}
+
+type elevenLabsReadOnceEOFBody struct {
+	data []byte
+	read bool
+}
+
+func (b *elevenLabsReadOnceEOFBody) Read(p []byte) (int, error) {
+	if b.read {
+		return 0, io.EOF
+	}
+	b.read = true
+	return copy(p, b.data), io.EOF
+}
+
+func (b *elevenLabsReadOnceEOFBody) Close() error {
 	return nil
 }
 

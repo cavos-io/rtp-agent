@@ -431,6 +431,7 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err != nil {
 		if err == io.EOF && n > 0 {
 			s.emitted = true
+			s.finalSent = true
 			// Return final chunk
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
