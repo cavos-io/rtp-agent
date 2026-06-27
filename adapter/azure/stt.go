@@ -169,13 +169,14 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 		region = os.Getenv(azureSpeechRegionEnv)
 	}
 	provider := &AzureSTT{
-		apiKey:        apiKey,
-		region:        region,
-		speechHost:    os.Getenv(azureSpeechHostEnv),
-		sampleRate:    defaultAzureSTTSampleRate,
-		httpClient:    http.DefaultClient,
-		dialWebsocket: defaultAzureSTTWebsocketDialer,
-		streams:       make(map[*azureSTTStream]struct{}),
+		apiKey:         apiKey,
+		region:         region,
+		speechHost:     os.Getenv(azureSpeechHostEnv),
+		speechEndpoint: os.Getenv(azureSpeechEndpointEnv),
+		sampleRate:     defaultAzureSTTSampleRate,
+		httpClient:     http.DefaultClient,
+		dialWebsocket:  defaultAzureSTTWebsocketDialer,
+		streams:        make(map[*azureSTTStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)

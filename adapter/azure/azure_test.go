@@ -68,6 +68,7 @@ func TestAzureSTTFallsBackToSpeechHostEnvironment(t *testing.T) {
 	t.Setenv(azureSpeechHostEnv, "https://speech.container.test")
 	t.Setenv(azureSpeechKeyEnv, "")
 	t.Setenv(azureSpeechRegionEnv, "")
+	t.Setenv(azureSpeechEndpointEnv, "")
 
 	provider, err := NewAzureSTT("", "")
 	if err != nil {
@@ -85,10 +86,33 @@ func TestAzureSTTFallsBackToSpeechHostEnvironment(t *testing.T) {
 	}
 }
 
+func TestAzureSTTFallsBackToSpeechEndpointEnvironment(t *testing.T) {
+	t.Setenv(azureSpeechHostEnv, "")
+	t.Setenv(azureSpeechKeyEnv, "env-key")
+	t.Setenv(azureSpeechRegionEnv, "")
+	t.Setenv(azureSpeechEndpointEnv, "https://speech.endpoint.test/custom/stt")
+
+	provider, err := NewAzureSTT("", "")
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v, want nil from speech endpoint env config", err)
+	}
+
+	if provider.speechEndpoint != "https://speech.endpoint.test/custom/stt" {
+		t.Fatalf("speechEndpoint = %q, want speech endpoint from env", provider.speechEndpoint)
+	}
+	if provider.apiKey != "env-key" {
+		t.Fatalf("apiKey = %q, want env-key", provider.apiKey)
+	}
+	if provider.region != "" {
+		t.Fatalf("region = %q, want empty for endpoint-only config", provider.region)
+	}
+}
+
 func TestAzureSTTRequiresSpeechConfig(t *testing.T) {
 	t.Setenv(azureSpeechHostEnv, "")
 	t.Setenv(azureSpeechKeyEnv, "")
 	t.Setenv(azureSpeechRegionEnv, "")
+	t.Setenv(azureSpeechEndpointEnv, "")
 
 	_, err := NewAzureSTT("", "")
 
@@ -101,6 +125,7 @@ func TestAzureSTTRequiresKeyWithSpeechEndpoint(t *testing.T) {
 	t.Setenv(azureSpeechHostEnv, "")
 	t.Setenv(azureSpeechKeyEnv, "")
 	t.Setenv(azureSpeechRegionEnv, "")
+	t.Setenv(azureSpeechEndpointEnv, "")
 
 	_, err := NewAzureSTT("", "", WithAzureSTTSpeechEndpoint("https://speech.endpoint.test/custom/stt"))
 
