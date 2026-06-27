@@ -49,8 +49,11 @@ type AzureTTS struct {
 	deploymentID   string
 	authToken      string
 	prosody        AzureTTSProsody
+	prosodySet     bool
 	style          AzureTTSStyle
+	styleSet       bool
 	lexiconURI     string
+	lexiconURISet  bool
 	httpClient     *http.Client
 	mu             sync.Mutex
 	streams        map[*azureTTSChunkedStream]struct{}
@@ -72,9 +75,7 @@ type AzureTTSOption func(*AzureTTS)
 
 func WithAzureTTSLanguage(language string) AzureTTSOption {
 	return func(t *AzureTTS) {
-		if language != "" {
-			t.language = language
-		}
+		t.language = language
 	}
 }
 
@@ -89,20 +90,21 @@ func WithAzureTTSSampleRate(sampleRate int) AzureTTSOption {
 func WithAzureTTSProsody(prosody AzureTTSProsody) AzureTTSOption {
 	return func(t *AzureTTS) {
 		t.prosody = prosody
+		t.prosodySet = true
 	}
 }
 
 func WithAzureTTSStyle(style AzureTTSStyle) AzureTTSOption {
 	return func(t *AzureTTS) {
 		t.style = style
+		t.styleSet = true
 	}
 }
 
 func WithAzureTTSLexiconURI(lexiconURI string) AzureTTSOption {
 	return func(t *AzureTTS) {
-		if lexiconURI != "" {
-			t.lexiconURI = lexiconURI
-		}
+		t.lexiconURI = lexiconURI
+		t.lexiconURISet = true
 	}
 }
 
@@ -196,8 +198,11 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 		deploymentID:   t.deploymentID,
 		authToken:      t.authToken,
 		prosody:        t.prosody,
+		prosodySet:     t.prosodySet,
 		style:          t.style,
+		styleSet:       t.styleSet,
 		lexiconURI:     t.lexiconURI,
+		lexiconURISet:  t.lexiconURISet,
 		httpClient:     t.httpClient,
 	}
 	if voice != "" {
@@ -230,8 +235,11 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	t.deploymentID = next.deploymentID
 	t.authToken = next.authToken
 	t.prosody = next.prosody
+	t.prosodySet = next.prosodySet
 	t.style = next.style
+	t.styleSet = next.styleSet
 	t.lexiconURI = next.lexiconURI
+	t.lexiconURISet = next.lexiconURISet
 	t.httpClient = next.httpClient
 	return nil
 }
@@ -406,17 +414,17 @@ func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
 	escapedText := azureTTSEscapeText(text)
 	b.WriteString(fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="%s">`, language))
 	b.WriteString(fmt.Sprintf(`<voice name="%s">`, t.voice))
-	if t.lexiconURI != "" {
+	if t.lexiconURISet {
 		b.WriteString(fmt.Sprintf(`<lexicon uri="%s"/>`, t.lexiconURI))
 	}
-	if t.style.Style != "" {
+	if t.styleSet {
 		b.WriteString(fmt.Sprintf(`<mstts:express-as style="%s"`, t.style.Style))
 		if t.style.Degree != 0 {
 			b.WriteString(fmt.Sprintf(` styledegree="%s"`, strconv.FormatFloat(t.style.Degree, 'f', -1, 64)))
 		}
 		b.WriteString(">")
 	}
-	if t.prosody.Rate != "" || t.prosody.Volume != "" || t.prosody.Pitch != "" {
+	if t.prosodySet {
 		b.WriteString("<prosody")
 		if t.prosody.Rate != "" {
 			b.WriteString(fmt.Sprintf(` rate="%s"`, t.prosody.Rate))
@@ -433,7 +441,7 @@ func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
 	} else {
 		b.WriteString(escapedText)
 	}
-	if t.style.Style != "" {
+	if t.styleSet {
 		b.WriteString("</mstts:express-as>")
 	}
 	b.WriteString("</voice></speak>")

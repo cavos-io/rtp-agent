@@ -345,6 +345,39 @@ func TestNewAzureOpenAILLMFallsBackToReferenceOrganizationProjectEnvironment(t *
 	}
 }
 
+func TestNewAzureOpenAILLMUsesExplicitOrganizationProjectOptions(t *testing.T) {
+	t.Setenv("OPENAI_ORG_ID", "env-org")
+	t.Setenv("OPENAI_PROJECT_ID", "env-project")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMOrganization("explicit-org"),
+		WithOpenAILLMProject("explicit-project"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := capture.header.Get("OpenAI-Organization"); got != "explicit-org" {
+		t.Fatalf("OpenAI-Organization header = %q, want explicit organization", got)
+	}
+	if got := capture.header.Get("OpenAI-Project"); got != "explicit-project" {
+		t.Fatalf("OpenAI-Project header = %q, want explicit project", got)
+	}
+}
+
 func TestNewAzureOpenAILLMDoesNotRetryByDefault(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusTooManyRequests, `{"error":{"message":"rate limit","type":"rate_limit","code":"rate_limit"}}`),
@@ -414,6 +447,43 @@ func TestNewAzureOpenAILLMUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 	if capture.authorization != "Bearer entra-token" {
 		t.Fatalf("Authorization = %q, want Entra bearer token", capture.authorization)
+	}
+}
+
+func TestNewAzureOpenAILLMUsesReferenceEntraTokenProvider(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	tokenCalls := 0
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if tokenCalls != 1 {
+		t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+	}
+	if capture.apiKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token provider auth", capture.apiKey)
+	}
+	if capture.authorization != "Bearer provider-token" {
+		t.Fatalf("Authorization = %q, want provider bearer token", capture.authorization)
 	}
 }
 
@@ -2242,6 +2312,9 @@ func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
 	}
 	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
 		t.Fatalf("chunk = %#v, want one accumulated tool call", chunk)
+	}
+	if chunk.Delta.Role != llm.ChatRoleAssistant {
+		t.Fatalf("tool call chunk role = %q, want assistant", chunk.Delta.Role)
 	}
 	call := chunk.Delta.ToolCalls[0]
 	if call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != `{"query":"weather"}` {

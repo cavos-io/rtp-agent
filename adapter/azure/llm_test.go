@@ -1,6 +1,7 @@
 package azure
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -41,5 +42,152 @@ func TestAzureResponsesLLMRequiresCredential(t *testing.T) {
 	_, err := NewAzureLLM("gpt-4o", "", "", "", "", "")
 	if err == nil || !strings.Contains(err.Error(), "AZURE_OPENAI_API_KEY") || !strings.Contains(err.Error(), "AZURE_OPENAI_AD_TOKEN") {
 		t.Fatalf("NewAzureLLM error = %v, want missing credential error", err)
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceMaxOutputTokensOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMMaxOutputTokens(128),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceTemperatureOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMTemperature(0.3),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceParallelToolCallsOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMParallelToolCalls(false),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceToolChoiceOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMToolChoice("none"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceReasoningEffortOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-5",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMReasoningEffort("low"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceUserOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMUser("caller-123"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceOrganizationProjectOptions(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMOrganization("org-123"),
+		WithAzureLLMProject("proj-456"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceADTokenProviderOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"",
+		"",
+		WithAzureLLMADTokenProvider(func(context.Context) (string, error) {
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
 	}
 }

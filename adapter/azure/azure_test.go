@@ -3149,6 +3149,134 @@ func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAzureTTSUpdateOptionsPreservesExplicitEmptyReferenceLexicon(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSLexiconURI("https://example.com/runtime-lexicon.xml"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	if err := provider.UpdateOptions("", "", WithAzureTTSLexiconURI("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `<lexicon uri=""/>`) {
+		t.Fatalf("SSML = %q, want explicit empty lexicon tag like reference NotGiven handling", ssml)
+	}
+	if strings.Contains(ssml, "runtime-lexicon.xml") {
+		t.Fatalf("SSML = %q, want previous lexicon replaced by explicit empty lexicon", ssml)
+	}
+}
+
+func TestAzureTTSUpdateOptionsClearsLanguageToReferenceDefault(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"id-ID-GadisNeural",
+		WithAzureTTSLanguage("id-ID"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	if err := provider.UpdateOptions("", "", WithAzureTTSLanguage("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `xml:lang="en-US"`) {
+		t.Fatalf("SSML = %q, want default language after explicit empty reference update", ssml)
+	}
+	if strings.Contains(ssml, `xml:lang="id-ID"`) {
+		t.Fatalf("SSML = %q, want previous language cleared", ssml)
+	}
+}
+
+func TestAzureTTSUpdateOptionsPreservesExplicitEmptyReferenceProsody(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSProsody(AzureTTSProsody{Rate: "slow"}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	if err := provider.UpdateOptions("", "", WithAzureTTSProsody(AzureTTSProsody{})); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `<prosody>hello</prosody>`) {
+		t.Fatalf("SSML = %q, want explicit empty reference prosody wrapper", ssml)
+	}
+	if strings.Contains(ssml, `rate="slow"`) {
+		t.Fatalf("SSML = %q, want previous prosody rate cleared", ssml)
+	}
+}
+
+func TestAzureTTSUpdateOptionsPreservesExplicitEmptyReferenceStyle(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSStyle(AzureTTSStyle{Style: "cheerful", Degree: 1.5}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	if err := provider.UpdateOptions("", "", WithAzureTTSStyle(AzureTTSStyle{})); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `<mstts:express-as style="">hello</mstts:express-as>`) {
+		t.Fatalf("SSML = %q, want explicit empty reference style wrapper", ssml)
+	}
+	if strings.Contains(ssml, `style="cheerful"`) || strings.Contains(ssml, `styledegree="1.5"`) {
+		t.Fatalf("SSML = %q, want previous style controls cleared", ssml)
+	}
+}
+
 func TestAzureTTSUpdateOptionsRejectsUnsupportedSampleRate(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
