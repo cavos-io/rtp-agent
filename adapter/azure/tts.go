@@ -478,7 +478,7 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				return s.emitFinal()
 			}
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, s.failRead(err)
 		}
 
 		total := start + n
@@ -508,7 +508,7 @@ func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				return s.emitFinal()
 			}
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, s.failRead(err)
 		}
 	}
 }
@@ -554,6 +554,20 @@ func (s *azureTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	}
 	s.unregister()
 	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
+func (s *azureTTSChunkedStream) failRead(err error) error {
+	s.closed = true
+	s.finalSent = true
+	if s.body != nil {
+		body := s.body
+		s.body = nil
+		s.carry = 0
+		s.hasCarry = false
+		_ = body.Close()
+	}
+	s.unregister()
+	return llm.NewAPIConnectionError(err.Error())
 }
 
 func (s *azureTTSChunkedStream) Close() error {

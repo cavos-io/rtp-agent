@@ -2213,6 +2213,40 @@ func TestAzureTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T)
 	}
 }
 
+func TestAzureTTSChunkedStreamReadFailureClosesReferenceStream(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	body := &countingErrorReadCloser{err: errors.New("socket closed")}
+	stream := &azureTTSChunkedStream{
+		body:       body,
+		sampleRate: 24000,
+		provider:   provider,
+	}
+	if !provider.registerStream(stream) {
+		t.Fatal("registerStream returned false, want active stream")
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after read failure", body.closed)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("active streams = %d, want read-failed stream unregistered", len(provider.streams))
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after read failure = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+}
+
 func TestAzureTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &countingReadCloser{}
 	stream := &azureTTSChunkedStream{
@@ -2516,6 +2550,20 @@ func (r *countingReadCloser) Close() error {
 	if r.closed > 1 {
 		return fmt.Errorf("closed twice")
 	}
+	return nil
+}
+
+type countingErrorReadCloser struct {
+	err    error
+	closed int
+}
+
+func (r *countingErrorReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r *countingErrorReadCloser) Close() error {
+	r.closed++
 	return nil
 }
 
