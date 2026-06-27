@@ -2472,6 +2472,30 @@ func TestAzureTTSBuildsRequestWithReferenceSSMLOptions(t *testing.T) {
 	}
 }
 
+func TestAzureTTSRequestEscapesTextForReferenceSSML(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "en-US-AvaNeural")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "one < two & three")
+	if err != nil {
+		t.Fatalf("buildAzureTTSRequest error = %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	bodyText := string(body)
+
+	if strings.Contains(bodyText, "one < two & three") {
+		t.Fatalf("SSML body = %s, want escaped text content", bodyText)
+	}
+	if !strings.Contains(bodyText, "one &lt; two &amp; three") {
+		t.Fatalf("SSML body = %s, want escaped text content", bodyText)
+	}
+}
+
 func TestAzureTTSRejectsInvalidReferenceVoiceControls(t *testing.T) {
 	tests := []struct {
 		name string
