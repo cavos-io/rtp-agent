@@ -1703,6 +1703,30 @@ func TestAzureSTTStreamContextCancelClosesWithoutNext(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamRejectsAudioAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &azureSTTStream{
+		ctx:    ctx,
+		cancel: func() {},
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after context cancel error = %v, want io.ErrClosedPipe", err)
+	}
+	if len(stream.pendingAudio) != 0 {
+		t.Fatalf("pending audio after context cancel = %d frames, want none", len(stream.pendingAudio))
+	}
+}
+
 func TestAzureSTTClosedStreamRejectsFlush(t *testing.T) {
 	stream := &azureSTTStream{closed: true}
 
