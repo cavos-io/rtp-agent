@@ -1422,6 +1422,62 @@ func TestAzureSTTStreamPendingAudioSessionStopReturnsAPIConnectionError(t *testi
 	}
 }
 
+func TestAzureSTTStreamWriteReconnectExhaustedReturnsAPIConnectionError(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{}, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestClosingDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+	receiveAzureTestSignal(t, serverClosed, "server close")
+
+	providerStream := stream.(*azureSTTStream)
+	providerStream.mu.Lock()
+	providerStream.maxReconnects = 0
+	providerStream.mu.Unlock()
+
+	deadline := time.After(time.Second)
+	for {
+		providerStream.mu.Lock()
+		reconnectNext := providerStream.reconnectNext
+		providerStream.mu.Unlock()
+		if reconnectNext {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Azure STT reconnect flag")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if err == nil {
+		t.Fatal("PushFrame error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("PushFrame error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAzureSTTStreamSessionStopReturnsAPIConnectionError(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)

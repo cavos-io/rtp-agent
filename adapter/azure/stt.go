@@ -1036,7 +1036,7 @@ func (s *azureSTTStream) reconnectLocked() error {
 		return io.ErrClosedPipe
 	}
 	if s.reconnects >= s.maxReconnects {
-		return fmt.Errorf("azure stt websocket reconnect attempts exhausted")
+		return llm.NewAPIConnectionError("azure stt websocket reconnect attempts exhausted")
 	}
 	s.reconnects++
 	oldConn := s.conn
@@ -1236,9 +1236,10 @@ func (s *azureSTTStream) writeAudioLocked(audio azureSTTPendingAudio) error {
 					return nil
 				}
 				continue
+			} else {
+				s.finishWithErrorLocked(reconnectErr)
+				return reconnectErr
 			}
-			s.finishWithErrorLocked(err)
-			return err
 		}
 		s.audioWritten = true
 		return nil
