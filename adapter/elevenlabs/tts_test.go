@@ -3808,19 +3808,75 @@ func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.
 	}
 }
 
-func TestElevenLabsSynthesizedAudioRejectsUnsupportedOpusEncoding(t *testing.T) {
+func TestElevenLabsSynthesizedAudioDecodesReferenceOpusEncoding(t *testing.T) {
 	resp := elWSResponse{
-		Audio: base64.StdEncoding.EncodeToString([]byte{0x4f, 0x70, 0x75, 0x73}),
+		Audio: elevenLabsOpusFixtureBase64,
 	}
 
 	audio, err := elevenLabsSynthesizedAudio(resp, 48000, "opus_48000_64")
-	if err == nil {
-		t.Fatalf("elevenLabsSynthesizedAudio() audio = %#v, want unsupported opus error", audio)
+	if err != nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "unsupported elevenlabs TTS encoding") || !strings.Contains(err.Error(), "opus_48000_64") {
-		t.Fatalf("error = %v, want unsupported opus encoding context", err)
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() audio = %#v, want decoded Opus PCM frame", audio)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("SampleRate = %d, want 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want mono", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded Opus frame data is empty")
+	}
+	if got, want := len(audio.Frame.Data), int(audio.Frame.SamplesPerChannel*audio.Frame.NumChannels*2); got != want {
+		t.Fatalf("frame byte length = %d, want %d from samples/channels", got, want)
 	}
 }
+
+func TestElevenLabsChunkedStreamDecodesReferenceOpusResponse(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(elevenLabsOpusFixtureBase64)
+	if err != nil {
+		t.Fatalf("DecodeString fixture error = %v", err)
+	}
+	stream := &elevenLabsChunkedStream{
+		resp: &http.Response{
+			Body: io.NopCloser(bytes.NewReader(opusData)),
+		},
+		encoding:   "opus_48000_64",
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	var decodedFrames int
+	for {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		if audio == nil {
+			t.Fatal("Next() audio = nil")
+		}
+		if audio.IsFinal {
+			if audio.Frame != nil {
+				t.Fatalf("final Next() audio = %#v, want boundary-only final marker", audio)
+			}
+			break
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("Next() audio = %#v, want decoded Opus PCM frame", audio)
+		}
+		if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 1 {
+			t.Fatalf("decoded frame format = %d Hz/%d channels, want 48000 Hz mono", audio.Frame.SampleRate, audio.Frame.NumChannels)
+		}
+		decodedFrames++
+	}
+	if decodedFrames == 0 {
+		t.Fatal("decoded frame count = 0, want Opus audio before final marker")
+	}
+}
+
+const elevenLabsOpusFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
 
 type elevenLabsRoundTripFunc func(*http.Request) (*http.Response, error)
 

@@ -1,6 +1,7 @@
 package codecs
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 	"time"
@@ -70,3 +71,42 @@ func TestPCMAudioStreamDecoderCloseIsIdempotent(t *testing.T) {
 		t.Fatalf("Close() second error = %v", err)
 	}
 }
+
+func TestOpusAudioStreamDecoderDecodesOggOpus(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(opusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("DecodeString fixture error = %v", err)
+	}
+	decoder := NewOpusAudioStreamDecoder(48000, 1)
+	decoder.Push(opusData)
+	decoder.EndInput()
+
+	var decodedFrames int
+	for {
+		frame, err := decoder.Next()
+		if err != nil {
+			if strings.Contains(err.Error(), "decoder closed") {
+				break
+			}
+			t.Fatalf("Next() error = %v", err)
+		}
+		if frame == nil {
+			t.Fatal("Next() frame = nil")
+		}
+		if frame.SampleRate != 48000 || frame.NumChannels != 1 {
+			t.Fatalf("decoded frame format = %d Hz/%d channels, want 48000 Hz mono", frame.SampleRate, frame.NumChannels)
+		}
+		if len(frame.Data) == 0 {
+			t.Fatal("decoded Opus frame data is empty")
+		}
+		if got, want := len(frame.Data), int(frame.SamplesPerChannel*frame.NumChannels*2); got != want {
+			t.Fatalf("frame byte length = %d, want %d from samples/channels", got, want)
+		}
+		decodedFrames++
+	}
+	if decodedFrames == 0 {
+		t.Fatal("decoded frame count = 0, want Opus audio")
+	}
+}
+
+const opusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="

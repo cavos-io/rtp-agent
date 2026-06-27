@@ -2,14 +2,17 @@ package codecs
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/hajimehoshi/go-mp3"
+	"github.com/hraban/opus"
 )
 
 // AudioStreamDecoder is a generic interface for decoding compressed audio formats
@@ -24,8 +27,9 @@ type AudioStreamDecoder interface {
 type DecoderType string
 
 const (
-	DecoderTypePCM DecoderType = "pcm"
-	DecoderTypeMP3 DecoderType = "mp3"
+	DecoderTypePCM  DecoderType = "pcm"
+	DecoderTypeMP3  DecoderType = "mp3"
+	DecoderTypeOpus DecoderType = "opus"
 )
 
 type MP3AudioStreamDecoder struct {
@@ -134,6 +138,161 @@ func (d *MP3AudioStreamDecoder) processLoop() {
 			break
 		}
 	}
+}
+
+type OpusAudioStreamDecoder struct {
+	pipeReader *io.PipeReader
+	pipeWriter *io.PipeWriter
+
+	sampleRate  int
+	numChannels int
+
+	outputCh chan *model.AudioFrame
+	errCh    chan error
+
+	mu     sync.Mutex
+	closed bool
+	ended  bool
+}
+
+func NewOpusAudioStreamDecoder(sampleRate int, numChannels int) AudioStreamDecoder {
+	pr, pw := io.Pipe()
+	d := &OpusAudioStreamDecoder{
+		pipeReader:  pr,
+		pipeWriter:  pw,
+		sampleRate:  sampleRate,
+		numChannels: numChannels,
+		outputCh:    make(chan *model.AudioFrame, 100),
+		errCh:       make(chan error, 1),
+	}
+
+	go d.processLoop()
+	return d
+}
+
+func (d *OpusAudioStreamDecoder) Push(data []byte) {
+	d.mu.Lock()
+	if d.closed || d.ended {
+		d.mu.Unlock()
+		return
+	}
+	d.mu.Unlock()
+
+	if _, err := d.pipeWriter.Write(data); err != nil {
+		logger.Logger.Errorw("failed to write to opus decoder pipe", err)
+	}
+}
+
+func (d *OpusAudioStreamDecoder) EndInput() {
+	d.mu.Lock()
+	if !d.ended {
+		d.ended = true
+		d.pipeWriter.Close()
+	}
+	d.mu.Unlock()
+}
+
+func (d *OpusAudioStreamDecoder) Next() (*model.AudioFrame, error) {
+	select {
+	case frame, ok := <-d.outputCh:
+		if !ok {
+			return nil, fmt.Errorf("decoder closed")
+		}
+		return frame, nil
+	case err := <-d.errCh:
+		return nil, err
+	}
+}
+
+func (d *OpusAudioStreamDecoder) Close() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.closed {
+		d.closed = true
+		d.pipeReader.Close()
+		d.pipeWriter.Close()
+	}
+	return nil
+}
+
+func (d *OpusAudioStreamDecoder) processLoop() {
+	defer close(d.outputCh)
+
+	stream, err := opus.NewStream(d.pipeReader)
+	if err != nil {
+		d.errCh <- fmt.Errorf("failed to initialize opus decoder: %w", err)
+		return
+	}
+	defer stream.Close()
+
+	numChannels := uint32(d.numChannels)
+	if numChannels == 0 {
+		numChannels = 1
+	}
+	pcm := make([]int16, 960*int(numChannels))
+	for {
+		n, err := stream.Read(pcm)
+		if n > 0 {
+			chunk := int16SliceToBytes(pcm[:n])
+			d.outputCh <- &model.AudioFrame{
+				Data:              chunk,
+				SampleRate:        uint32(d.sampleRate),
+				NumChannels:       numChannels,
+				SamplesPerChannel: uint32(n) / numChannels,
+			}
+		}
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			d.errCh <- fmt.Errorf("opus decode error: %w", err)
+			break
+		}
+	}
+}
+
+func DecodeOpusAudio(data []byte, sampleRate int, numChannels int) (*model.AudioFrame, error) {
+	decoder := NewOpusAudioStreamDecoder(sampleRate, numChannels)
+	defer decoder.Close()
+	decoder.Push(data)
+	decoder.EndInput()
+
+	var pcm bytes.Buffer
+	var samplesPerChannel uint32
+	var outputRate uint32
+	var outputChannels uint32
+	for {
+		frame, err := decoder.Next()
+		if err != nil {
+			if strings.Contains(err.Error(), "decoder closed") {
+				break
+			}
+			return nil, err
+		}
+		if frame == nil {
+			continue
+		}
+		pcm.Write(frame.Data)
+		samplesPerChannel += frame.SamplesPerChannel
+		outputRate = frame.SampleRate
+		outputChannels = frame.NumChannels
+	}
+	if pcm.Len() == 0 {
+		return nil, fmt.Errorf("opus decode produced no audio")
+	}
+	return &model.AudioFrame{
+		Data:              pcm.Bytes(),
+		SampleRate:        outputRate,
+		NumChannels:       outputChannels,
+		SamplesPerChannel: samplesPerChannel,
+	}, nil
+}
+
+func int16SliceToBytes(samples []int16) []byte {
+	data := make([]byte, len(samples)*2)
+	for i, sample := range samples {
+		binary.LittleEndian.PutUint16(data[i*2:], uint16(sample))
+	}
+	return data
 }
 
 // PCMAudioStreamDecoder implements AudioStreamDecoder for raw PCM streams
