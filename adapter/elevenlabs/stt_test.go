@@ -351,6 +351,62 @@ func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamSeedsStartTimeLikeReference(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	releaseServer := make(chan struct{})
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		serverErr <- nil
+		<-releaseServer
+	})}
+	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	defer func() {
+		close(releaseServer)
+		server.Close()
+	}()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	before := float64(time.Now().UnixNano()) / 1e9
+	stream, err := provider.Stream(context.Background(), "en")
+	after := float64(time.Now().UnixNano()) / 1e9
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+
+	timing, ok := stream.(interface{ StartTime() float64 })
+	if !ok {
+		t.Fatal("stream does not expose StartTime")
+	}
+	if got := timing.StartTime(); got < before || got > after {
+		t.Fatalf("StartTime = %v, want seeded between %v and %v", got, before, after)
+	}
+}
+
 func TestElevenLabsSTTStreamFlushReportsReferenceUsage(t *testing.T) {
 	var messages []map[string]any
 	stream := &elevenLabsSTTStream{
@@ -397,6 +453,71 @@ func TestElevenLabsSTTStreamFlushReportsReferenceUsage(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for recognition_usage")
+	}
+}
+
+func TestElevenLabsSTTStreamPushFrameReportsPeriodicReferenceUsage(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:             make(chan *stt.SpeechEvent, 1),
+		sampleRate:         16000,
+		state:              &elevenLabsSTTStreamState{language: "en"},
+		usageFlushInterval: 5 * time.Second,
+		usageLastFlush:     time.Now().Add(-5 * time.Second),
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after PushFrame = %d, want one 50ms chunk", len(messages))
+	}
+	assertElevenLabsSTTAudioMessage(t, messages[0], 1600, false)
+	select {
+	case usage := <-stream.events:
+		if usage.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %v, want recognition_usage", usage.Type)
+		}
+		if usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.05 {
+			t.Fatalf("recognition usage = %#v, want 0.05 audio duration", usage.RecognitionUsage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for periodic recognition_usage")
+	}
+}
+
+func TestElevenLabsSTTStreamKeepAliveSendsReferenceEmptyAudioChunk(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	messages := make(chan map[string]any, 1)
+	stream := &elevenLabsSTTStream{
+		ctx:               ctx,
+		sampleRate:        16000,
+		keepAliveInterval: time.Millisecond,
+		writeJSON: func(message map[string]any) error {
+			messages <- message
+			return nil
+		},
+	}
+	go stream.keepAliveLoop()
+
+	select {
+	case msg := <-messages:
+		if msg["message_type"] != "input_audio_chunk" || msg["audio_base_64"] != "" || msg["commit"] != false || msg["sample_rate"] != 16000 {
+			t.Fatalf("keepalive message = %#v, want reference empty audio chunk", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for keepalive message")
 	}
 }
 
@@ -1019,6 +1140,33 @@ func TestElevenLabsSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTRecognizeMalformedStatusBodyReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Body:       io.NopCloser(strings.NewReader(`<html>bad gateway</html>`)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("Recognize error = %v, want JSON decode detail", err)
+	}
+}
+
 func TestElevenLabsSTTRecognizeReturnsAPITimeoutError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1274,6 +1422,34 @@ func TestElevenLabsSTTStreamEventReportsErrors(t *testing.T) {
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestElevenLabsSTTStreamEventReportsReferenceErrorTypes(t *testing.T) {
+	for _, messageType := range []string{
+		"auth_error",
+		"quota_exceeded",
+		"transcriber_error",
+		"input_error",
+		"error",
+	} {
+		t.Run(messageType, func(t *testing.T) {
+			events, err := processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
+				"message_type": messageType,
+				"message":      "provider failed",
+				"details":      "turn stopped",
+			})
+			if len(events) != 0 {
+				t.Fatalf("events = %#v, want none for provider error", events)
+			}
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+			}
+			if !strings.Contains(err.Error(), messageType+": provider failed - turn stopped") {
+				t.Fatalf("error = %v, want message type and details", err)
+			}
+		})
 	}
 }
 

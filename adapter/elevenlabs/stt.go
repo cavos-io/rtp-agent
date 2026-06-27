@@ -30,6 +30,8 @@ const (
 	defaultElevenLabsSTTModel      = "scribe_v1"
 	defaultElevenLabsSTTSampleRate = 16000
 	elevenLabsSTTAuthHeader        = "xi-api-key"
+	elevenLabsSTTUsageInterval     = 5 * time.Second
+	elevenLabsSTTKeepAliveInterval = 10 * time.Second
 )
 
 type ElevenLabsVADOptions struct {
@@ -228,17 +230,22 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 		return nil, io.ErrClosedPipe
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
+	streamNow := time.Now()
 	stream := &elevenLabsSTTStream{
-		conn:       conn,
-		events:     make(chan *stt.SpeechEvent, 100),
-		errCh:      make(chan error, 1),
-		ctx:        streamCtx,
-		cancel:     cancel,
-		sampleRate: s.sampleRate,
+		conn:               conn,
+		events:             make(chan *stt.SpeechEvent, 100),
+		errCh:              make(chan error, 1),
+		ctx:                streamCtx,
+		cancel:             cancel,
+		sampleRate:         s.sampleRate,
+		usageLastFlush:     streamNow,
+		usageFlushInterval: elevenLabsSTTUsageInterval,
+		keepAliveInterval:  elevenLabsSTTKeepAliveInterval,
 		state: &elevenLabsSTTStreamState{
 			language:          resolveElevenLabsSTTLanguage(s, language),
 			includeTimestamps: s.includeTimestamps,
 			serverVAD:         s.serverVAD != nil,
+			startTime:         float64(streamNow.UnixNano()) / 1e9,
 		},
 	}
 	if !s.registerStream(stream) {
@@ -305,7 +312,10 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		message, body := elevenLabsSTTStatusErrorBody(respBody)
+		message, body, err := elevenLabsSTTStatusErrorBody(respBody)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(err.Error())
+		}
 		return nil, llm.NewAPIStatusError(message, resp.StatusCode, "", body)
 	}
 	var result elevenLabsSTTResponse
@@ -315,18 +325,18 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	return elevenLabsSTTSpeechEvent(resolveElevenLabsSTTLanguage(s, language), result), nil
 }
 
-func elevenLabsSTTStatusErrorBody(respBody []byte) (string, any) {
+func elevenLabsSTTStatusErrorBody(respBody []byte) (string, any, error) {
 	if len(respBody) == 0 {
-		return "Unknown ElevenLabs error", ""
+		return "Unknown ElevenLabs error", "", nil
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(respBody, &payload); err != nil {
-		return "Unknown ElevenLabs error", string(respBody)
+		return "", nil, err
 	}
 	if detail, _ := payload["detail"].(string); detail != "" {
-		return detail, payload
+		return detail, payload, nil
 	}
-	return "Unknown ElevenLabs error", payload
+	return "Unknown ElevenLabs error", payload, nil
 }
 
 func elevenLabsSTTWAVBytes(frames []*model.AudioFrame, defaultSampleRate uint32, defaultNumChannels uint32) []byte {
@@ -509,23 +519,26 @@ func elevenLabsIntPtrEqual(a, b *int) bool {
 }
 
 type elevenLabsSTTStream struct {
-	conn        *websocket.Conn
-	connVersion int64
-	events      chan *stt.SpeechEvent
-	errCh       chan error
-	mu          sync.Mutex
-	closed      bool
-	inputEnded  bool
-	ctx         context.Context
-	cancel      context.CancelFunc
-	sampleRate  int
-	audioBuf    *audio.AudioByteStream
-	audioDur    float64
-	state       *elevenLabsSTTStreamState
-	rateGuard   stt.SampleRateGuard
-	writeJSON   func(map[string]any) error
-	unregister  func(*elevenLabsSTTStream)
-	unregOnce   sync.Once
+	conn               *websocket.Conn
+	connVersion        int64
+	events             chan *stt.SpeechEvent
+	errCh              chan error
+	mu                 sync.Mutex
+	closed             bool
+	inputEnded         bool
+	ctx                context.Context
+	cancel             context.CancelFunc
+	sampleRate         int
+	audioBuf           *audio.AudioByteStream
+	audioDur           float64
+	usageLastFlush     time.Time
+	usageFlushInterval time.Duration
+	keepAliveInterval  time.Duration
+	state              *elevenLabsSTTStreamState
+	rateGuard          stt.SampleRateGuard
+	writeJSON          func(map[string]any) error
+	unregister         func(*elevenLabsSTTStream)
+	unregOnce          sync.Once
 }
 
 func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -550,7 +563,7 @@ func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 			return err
 		}
-		s.audioDur += audio.CalculateFrameDuration(chunk)
+		s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 	}
 	return nil
 }
@@ -571,7 +584,7 @@ func (s *elevenLabsSTTStream) Flush() error {
 		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 			return err
 		}
-		s.audioDur += audio.CalculateFrameDuration(chunk)
+		s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 	}
 	s.emitRecognitionUsageLocked()
 	return nil
@@ -592,7 +605,7 @@ func (s *elevenLabsSTTStream) EndInput() error {
 			if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 				return err
 			}
-			s.audioDur += audio.CalculateFrameDuration(chunk)
+			s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 		}
 	}
 	s.emitRecognitionUsageLocked()
@@ -748,6 +761,21 @@ func (s *elevenLabsSTTStream) emitRecognitionUsageLocked() {
 		Type:             stt.SpeechEventRecognitionUsage,
 		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
 	}
+	s.usageLastFlush = time.Now()
+}
+
+func (s *elevenLabsSTTStream) addAudioDurationLocked(duration float64) {
+	s.audioDur += duration
+	if s.usageFlushInterval <= 0 {
+		s.usageFlushInterval = elevenLabsSTTUsageInterval
+	}
+	if s.usageLastFlush.IsZero() {
+		s.usageLastFlush = time.Now()
+		return
+	}
+	if time.Since(s.usageLastFlush) >= s.usageFlushInterval {
+		s.emitRecognitionUsageLocked()
+	}
 }
 
 func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
@@ -836,7 +864,11 @@ func elevenLabsSTTUnexpectedCloseError(err error) error {
 }
 
 func (s *elevenLabsSTTStream) keepAliveLoop() {
-	ticker := time.NewTicker(10 * time.Second)
+	interval := s.keepAliveInterval
+	if interval <= 0 {
+		interval = elevenLabsSTTKeepAliveInterval
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {

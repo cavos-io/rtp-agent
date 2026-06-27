@@ -696,8 +696,9 @@ func TestElevenLabsTTSReadErrorIncludesProviderOperationContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("Next returned nil error, want wrapped closed-pipe read error")
 	}
-	if !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("Next error = %v, want errors.Is io.ErrClosedPipe", err)
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 	for _, want := range []string{"elevenlabs TTS", "chunked pcm response", "before audio bytes"} {
 		if !strings.Contains(err.Error(), want) {
@@ -724,6 +725,27 @@ func TestElevenLabsTTSPCMReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSPCMReadErrorReturnsAPIConnectionError(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: elevenLabsErrReader{err: errors.New("provider read failed")}},
+		encoding:   "pcm_8000",
+		sampleRate: 8000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "provider read failed") || !strings.Contains(err.Error(), "before audio bytes") {
+		t.Fatalf("Next error = %v, want provider read and byte-state context", err)
+	}
+}
+
 func TestElevenLabsTTSMP3ReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 	stream := &elevenLabsChunkedStream{
 		resp:       &http.Response{Body: elevenLabsErrReader{err: context.DeadlineExceeded}},
@@ -739,6 +761,48 @@ func TestElevenLabsTTSMP3ReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestElevenLabsTTSMP3ReadErrorReturnsAPIConnectionError(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: elevenLabsErrReader{err: errors.New("provider mp3 read failed")}},
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "provider mp3 read failed") || !strings.Contains(err.Error(), "before audio bytes") {
+		t.Fatalf("Next error = %v, want provider read and byte-state context", err)
+	}
+}
+
+func TestElevenLabsTTSChunkedMP3DecodeErrorReturnsAPIConnectionError(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(strings.NewReader("not an mp3 frame"))},
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "chunked mp3 decode") || !strings.Contains(err.Error(), "before audio bytes") {
+		t.Fatalf("Next error = %v, want decode and byte-state context", err)
 	}
 }
 
