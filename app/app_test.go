@@ -2951,6 +2951,30 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMDeploymentOptions(t *testing.T
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMRequestOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "azure_deployment=voice-deployment,api_version=2024-06-01,top_p=0.4,service_tier=priority,verbosity=low")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 3 {
+		t.Fatalf("Azure LLM option count = %d, want top_p, service_tier, and verbosity options", gotOptions)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsPerplexityLLM(t *testing.T) {
 	t.Setenv("PERPLEXITY_API_KEY", "test-perplexity-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "perplexity")

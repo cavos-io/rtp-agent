@@ -3299,6 +3299,16 @@ var newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 }
 
 func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
+	llmOpts := []azure.AzureLLMOption{}
+	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
+		llmOpts = append(llmOpts, azure.WithAzureLLMTopP(*topP))
+	}
+	if serviceTier := modelOptionString(cfg.LLMModelOptions, "service_tier"); serviceTier != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMServiceTier(serviceTier))
+	}
+	if verbosity := modelOptionString(cfg.LLMModelOptions, "verbosity"); verbosity != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMVerbosity(verbosity))
+	}
 	return newAzureLLM(
 		cfg.LLMModel,
 		cfg.LLMBaseURL,
@@ -3306,6 +3316,7 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 		modelOptionString(cfg.LLMModelOptions, "api_version"),
 		"",
 		"",
+		llmOpts...,
 	)
 }
 
