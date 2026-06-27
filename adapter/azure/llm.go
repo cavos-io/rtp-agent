@@ -23,6 +23,10 @@ func WithAzureLLMTopP(topP float64) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMTopP(topP)
 }
 
+func WithAzureLLMServiceTier(serviceTier string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMServiceTier(serviceTier)
+}
+
 func WithAzureLLMParallelToolCalls(parallelToolCalls bool) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMParallelToolCalls(parallelToolCalls)
 }
