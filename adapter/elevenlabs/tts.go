@@ -913,12 +913,12 @@ func (s *elevenLabsStream) mp3DecodeLoop(decoder codecs.AudioStreamDecoder, inpu
 				return
 			}
 			_ = decoder.Close()
-			s.sendError(fmt.Errorf("elevenlabs TTS websocket mp3 decode: %w", err))
+			s.sendError(elevenLabsTTSSynthesisStatusError(fmt.Errorf("elevenlabs TTS websocket mp3 decode: %w", err)))
 			return
 		}
 		frame, err = normalizeElevenLabsMP3Frame(frame, s.sampleRate)
 		if err != nil {
-			s.sendError(fmt.Errorf("elevenlabs TTS websocket mp3 resample: %w", err))
+			s.sendError(elevenLabsTTSSynthesisStatusError(fmt.Errorf("elevenlabs TTS websocket mp3 resample: %w", err)))
 			return
 		}
 		emitted = true
