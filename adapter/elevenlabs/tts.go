@@ -713,6 +713,8 @@ type elevenLabsStream struct {
 	mp3InputClosed bool
 	mp3DeltaText   string
 	mp3Timed       []tts.TimedString
+	pcmDeltaText   string
+	pcmTimed       []tts.TimedString
 }
 
 type elevenLabsAlignment struct {
@@ -744,11 +746,20 @@ func (a *elevenLabsAlignment) durations() []int {
 }
 
 type elWSResponse struct {
+	ContextID           string               `json:"context_id"`
+	ContextIDCamel      string               `json:"contextId"`
 	Audio               string               `json:"audio"`
 	IsFinal             bool                 `json:"isFinal"`
 	NormalizedAlignment *elevenLabsAlignment `json:"normalizedAlignment"`
 	Alignment           *elevenLabsAlignment `json:"alignment"`
 	Error               string               `json:"error,omitempty"`
+}
+
+func (r elWSResponse) contextID() string {
+	if r.ContextID != "" {
+		return r.ContextID
+	}
+	return r.ContextIDCamel
 }
 
 func (s *elevenLabsStream) readLoop() {
@@ -771,6 +782,9 @@ func (s *elevenLabsStream) readLoop() {
 		var resp elWSResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			logger.Logger.Warnw("Failed to unmarshal ElevenLabs response", err, "payload", string(message))
+			continue
+		}
+		if respContextID := resp.contextID(); respContextID == "" || respContextID != s.contextID {
 			continue
 		}
 
@@ -797,10 +811,10 @@ func (s *elevenLabsStream) readLoop() {
 					s.sendError(elevenLabsTTSSynthesisStatusError(err))
 					return
 				}
+				audio.DeltaText, audio.TimedTranscript = s.takePCMMetadata(deltaText, timedTranscript)
 				if resp.IsFinal {
 					audio.IsFinal = false
 				}
-				audio.TimedTranscript = timedTranscript
 				select {
 				case <-s.ctx.Done():
 					return
@@ -812,6 +826,10 @@ func (s *elevenLabsStream) readLoop() {
 					return
 				}
 			}
+		} else if deltaText != "" && strings.HasPrefix(s.encoding, "mp3") {
+			s.bufferMP3Metadata(deltaText, timedTranscript)
+		} else if deltaText != "" && !resp.IsFinal {
+			s.bufferPCMMetadata(deltaText, timedTranscript)
 		} else if resp.IsFinal || deltaText != "" {
 			// Even if there's no audio, pass alignment or final flags
 			select {
@@ -840,6 +858,46 @@ func elevenLabsTTSSynthesisStatusError(err error) error {
 	return llm.NewAPIStatusError("Could not synthesize", -1, "", err.Error())
 }
 
+func (s *elevenLabsStream) bufferMP3Metadata(deltaText string, timedTranscript []tts.TimedString) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bufferMP3MetadataLocked(deltaText, timedTranscript)
+}
+
+func (s *elevenLabsStream) bufferMP3MetadataLocked(deltaText string, timedTranscript []tts.TimedString) {
+	if deltaText != "" {
+		s.mp3DeltaText += deltaText
+	}
+	if len(timedTranscript) > 0 {
+		s.mp3Timed = append(s.mp3Timed, timedTranscript...)
+	}
+}
+
+func (s *elevenLabsStream) bufferPCMMetadata(deltaText string, timedTranscript []tts.TimedString) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if deltaText != "" {
+		s.pcmDeltaText += deltaText
+	}
+	if len(timedTranscript) > 0 {
+		s.pcmTimed = append(s.pcmTimed, timedTranscript...)
+	}
+}
+
+func (s *elevenLabsStream) takePCMMetadata(deltaText string, timedTranscript []tts.TimedString) (string, []tts.TimedString) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pcmDeltaText != "" {
+		deltaText = s.pcmDeltaText + deltaText
+		s.pcmDeltaText = ""
+	}
+	if len(s.pcmTimed) > 0 {
+		timedTranscript = append(append([]tts.TimedString(nil), s.pcmTimed...), timedTranscript...)
+		s.pcmTimed = nil
+	}
+	return deltaText, timedTranscript
+}
+
 func (s *elevenLabsStream) pushMP3Audio(encoded string, deltaText string, timedTranscript []tts.TimedString) error {
 	data, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
@@ -855,12 +913,7 @@ func (s *elevenLabsStream) pushMP3Audio(encoded string, deltaText string, timedT
 		s.mp3DecodeDone = make(chan struct{})
 		go s.mp3DecodeLoop(s.mp3Decoder, s.mp3Input, s.mp3DecodeDone)
 	}
-	if deltaText != "" {
-		s.mp3DeltaText += deltaText
-	}
-	if len(timedTranscript) > 0 {
-		s.mp3Timed = append(s.mp3Timed, timedTranscript...)
-	}
+	s.bufferMP3MetadataLocked(deltaText, timedTranscript)
 	input := s.mp3Input
 	s.mu.Unlock()
 	select {
@@ -1043,6 +1096,13 @@ func elevenLabsAlignmentText(alignment *elevenLabsAlignment) string {
 func (s *elevenLabsStream) timedTranscriptFromAlignment(resp elWSResponse) []tts.TimedString {
 	alignment := s.preferredElevenLabsAlignment(resp)
 	if alignment == nil {
+		if resp.IsFinal {
+			timed, _, _, _ := elevenLabsTimedWords(s.alignRunes, s.alignStartsMs, s.alignDurMs, true)
+			s.alignRunes = nil
+			s.alignStartsMs = nil
+			s.alignDurMs = nil
+			return timed
+		}
 		return nil
 	}
 	appendElevenLabsAlignment(&s.alignRunes, &s.alignStartsMs, &s.alignDurMs, alignment)
