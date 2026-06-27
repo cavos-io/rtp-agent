@@ -109,4 +109,38 @@ func TestOpusAudioStreamDecoderDecodesOggOpus(t *testing.T) {
 	}
 }
 
+func TestOpusAudioStreamDecoderEmitsBeforeEndInput(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(opusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("DecodeString fixture error = %v", err)
+	}
+	decoder := NewOpusAudioStreamDecoder(48000, 1)
+	decoder.Push(opusData)
+	defer decoder.Close()
+
+	frameCh := make(chan struct {
+		frame any
+		err   error
+	}, 1)
+	go func() {
+		frame, err := decoder.Next()
+		frameCh <- struct {
+			frame any
+			err   error
+		}{frame: frame, err: err}
+	}()
+
+	select {
+	case result := <-frameCh:
+		if result.err != nil {
+			t.Fatalf("Next() error = %v", result.err)
+		}
+		if result.frame == nil {
+			t.Fatal("Next() frame = nil")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() blocked before EndInput, want streaming Opus frame")
+	}
+}
+
 const opusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
