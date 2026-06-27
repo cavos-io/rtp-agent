@@ -326,9 +326,6 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 }
 
 func elevenLabsSTTStatusErrorBody(respBody []byte) (string, any, error) {
-	if len(respBody) == 0 {
-		return "Unknown ElevenLabs error", "", nil
-	}
 	var payload map[string]any
 	if err := json.Unmarshal(respBody, &payload); err != nil {
 		return "", nil, err

@@ -1141,29 +1141,41 @@ func TestElevenLabsSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 }
 
 func TestElevenLabsSTTRecognizeMalformedStatusBodyReturnsAPIConnectionError(t *testing.T) {
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusBadGateway,
-			Body:       io.NopCloser(strings.NewReader(`<html>bad gateway</html>`)),
-			Header:     make(http.Header),
-			Request:    r,
-		}, nil
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
-
-	provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
-
-	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
-	if err == nil {
-		t.Fatal("Recognize error = nil, want APIConnectionError")
+	tests := []struct {
+		name       string
+		body       string
+		wantDetail string
+	}{
+		{name: "html", body: `<html>bad gateway</html>`, wantDetail: "invalid character"},
+		{name: "empty", body: "", wantDetail: "unexpected end of JSON input"},
 	}
-	var connectionErr *llm.APIConnectionError
-	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
-	}
-	if !strings.Contains(err.Error(), "invalid character") {
-		t.Fatalf("Recognize error = %v, want JSON decode detail", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldClient := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusBadGateway,
+					Body:       io.NopCloser(strings.NewReader(tt.body)),
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			})}
+			t.Cleanup(func() { http.DefaultClient = oldClient })
+
+			provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
+
+			_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+			if err == nil {
+				t.Fatal("Recognize error = nil, want APIConnectionError")
+			}
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+			}
+			if !strings.Contains(err.Error(), tt.wantDetail) {
+				t.Fatalf("Recognize error = %v, want JSON decode detail %q", err, tt.wantDetail)
+			}
+		})
 	}
 }
 
