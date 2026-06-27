@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -26,6 +27,7 @@ const (
 	defaultAzureTTSSampleRate   = 24000
 	defaultAzureTTSSampleFormat = "raw-24khz-16bit-mono-pcm"
 	azureSpeechEndpointEnv      = "AZURE_SPEECH_ENDPOINT"
+	azureTTSRequestTimeout      = 30 * time.Second
 )
 
 var azureTTSSampleFormats = map[int]string{
@@ -238,7 +240,7 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
-	streamCtx, cancel := context.WithCancel(ctx)
+	streamCtx, cancel := context.WithTimeout(ctx, azureTTSRequestTimeout)
 	req, err := buildAzureTTSRequest(streamCtx, t, text)
 	if err != nil {
 		cancel()

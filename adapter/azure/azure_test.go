@@ -3211,6 +3211,46 @@ func TestAzureTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestAzureTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	var hasDeadline bool
+	var remaining time.Duration
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			hasDeadline = ok
+			if ok {
+				remaining = time.Until(deadline)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want Azure reference request timeout")
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want bounded by Azure reference 30s timeout", remaining)
+	}
+}
+
 func TestAzureTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
