@@ -498,7 +498,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	s.optionsState = openAIRealtimeOptionEntries(initialSession)
 	if err := s.sendMsg(openAIRealtimeInitialSessionUpdateMessage(initialSession)); err != nil {
 		_ = s.Close()
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to initialize OpenAI realtime session: %v", err))
 	}
 	m.registerSession(s)
 
