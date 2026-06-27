@@ -924,10 +924,9 @@ func elevenLabsSTTSpeechEvent(defaultLanguage string, resp elevenLabsSTTResponse
 		language = defaultLanguage
 	}
 	data := stt.SpeechData{
-		Text:       resp.Text,
-		Language:   language,
-		Confidence: stt.DefaultTranscriptConfidence(resp.Text),
-		Words:      elevenLabsSTTTimedStrings(resp.Words, 0),
+		Text:     resp.Text,
+		Language: language,
+		Words:    elevenLabsSTTTimedStrings(resp.Words, 0),
 	}
 	if len(resp.Words) > 0 {
 		data.SpeakerID = resp.Words[0].SpeakerID
@@ -1015,11 +1014,10 @@ func elevenLabsSTTSpeechDataFromStream(state *elevenLabsSTTStreamState, data map
 	}
 	words := elevenLabsSTTWordsFromAny(data["words"])
 	speechData := stt.SpeechData{
-		Text:       text,
-		Language:   language,
-		Confidence: stt.DefaultTranscriptConfidence(text),
-		StartTime:  state.startTimeOffset,
-		EndTime:    state.startTimeOffset,
+		Text:      text,
+		Language:  language,
+		StartTime: state.startTimeOffset,
+		EndTime:   state.startTimeOffset,
 	}
 	if len(words) > 0 {
 		speechData.StartTime = words[0].Start + state.startTimeOffset

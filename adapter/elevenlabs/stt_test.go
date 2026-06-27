@@ -1330,6 +1330,9 @@ func TestElevenLabsSTTBatchResponseMapsSpeechEvent(t *testing.T) {
 	if alt.SpeakerID != "speaker-1" {
 		t.Fatalf("speaker = %q, want speaker-1", alt.SpeakerID)
 	}
+	if alt.Confidence != 0 {
+		t.Fatalf("confidence = %v, want reference default 0", alt.Confidence)
+	}
 	if len(alt.Words) != 2 || alt.Words[0].Text != "hello" {
 		t.Fatalf("words = %+v, want timed words", alt.Words)
 	}
@@ -1348,6 +1351,9 @@ func TestElevenLabsSTTStreamEventsMapLifecycle(t *testing.T) {
 	}
 	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventStartOfSpeech, "")
 	assertElevenLabsSTTEvent(t, events, 1, stt.SpeechEventInterimTranscript, "hel")
+	if got := events[1].Alternatives[0].Confidence; got != 0 {
+		t.Fatalf("interim confidence = %v, want reference default 0", got)
+	}
 
 	events, err = processElevenLabsSTTStreamEvent(state, map[string]any{
 		"message_type":  "committed_transcript_with_timestamps",
@@ -1361,6 +1367,9 @@ func TestElevenLabsSTTStreamEventsMapLifecycle(t *testing.T) {
 		t.Fatalf("process final: %v", err)
 	}
 	assertElevenLabsSTTEvent(t, events, 0, stt.SpeechEventFinalTranscript, "hello")
+	if got := events[0].Alternatives[0].Confidence; got != 0 {
+		t.Fatalf("final confidence = %v, want reference default 0", got)
+	}
 
 	events, err = processElevenLabsSTTStreamEvent(state, map[string]any{
 		"message_type": "committed_transcript_with_timestamps",
