@@ -2165,8 +2165,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 
 func isEmptyOpenAIStreamChoiceDelta(choice openai.ChatCompletionStreamChoice) bool {
 	delta := choice.Delta
-	return choice.FinishReason == "" &&
-		delta.Role == "" &&
+	return delta.Role == "" &&
 		delta.Content == "" &&
 		delta.Refusal == "" &&
 		delta.ReasoningContent == "" &&
