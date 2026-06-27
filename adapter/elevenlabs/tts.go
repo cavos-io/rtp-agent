@@ -58,6 +58,7 @@ type ElevenLabsTTS struct {
 	applyLanguageTextNormalization *bool
 	preferredAlignment             string
 	streamResponseTimeout          time.Duration
+	streamConnectionRefresh        bool
 	streams                        map[*elevenLabsStream]struct{}
 	currentStreamConn              *elevenLabsTTSConnection
 	closed                         bool
@@ -110,7 +111,7 @@ func WithElevenLabsBaseURL(baseURL string) ElevenLabsTTSOption {
 
 func WithElevenLabsLanguage(language string) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
-		t.language = language
+		t.language = langutil.NormalizeLanguage(language)
 	}
 }
 
@@ -139,6 +140,7 @@ func WithElevenLabsVoiceSettings(settings ElevenLabsVoiceSettings) ElevenLabsTTS
 	return func(t *ElevenLabsTTS) {
 		copied := settings
 		t.voiceSettings = &copied
+		t.streamConnectionRefresh = true
 	}
 }
 
@@ -173,6 +175,7 @@ func WithElevenLabsEnableLogging(enabled bool) ElevenLabsTTSOption {
 func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationDictionaryLocator) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.pronunciationDictionaries = append([]ElevenLabsPronunciationDictionaryLocator(nil), locators...)
+		t.streamConnectionRefresh = true
 	}
 }
 
@@ -234,6 +237,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.streamConnectionRefresh = false
 	if !provider.autoModeExplicit {
 		autoMode := len(provider.chunkLengthSchedule) == 0
 		provider.autoMode = &autoMode
@@ -317,14 +321,21 @@ func (t *ElevenLabsTTS) unregisterStream(stream *elevenLabsStream) {
 
 func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
 	before := t.connectionKey()
+	t.streamConnectionRefresh = false
 	for _, opt := range opts {
 		opt(t)
 	}
 	after := t.connectionKey()
-	if before != after {
+	refresh := t.streamConnectionRefresh
+	t.streamConnectionRefresh = false
+	if refresh || before != after {
 		t.mu.Lock()
+		currentConn := t.currentStreamConn
 		t.currentStreamConn = nil
 		t.mu.Unlock()
+		if currentConn != nil {
+			currentConn.markNonCurrent()
+		}
 	}
 }
 
@@ -457,7 +468,7 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Could not synthesize", -1, "", fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
 	}
 
 	return &elevenLabsChunkedStream{
@@ -873,6 +884,7 @@ type elevenLabsTTSConnection struct {
 	conn    *websocket.Conn
 	streams map[string]*elevenLabsStream
 	closed  bool
+	current bool
 	err     error
 }
 
@@ -887,6 +899,7 @@ func newElevenLabsTTSConnection(provider *ElevenLabsTTS, ctx context.Context, st
 		cancel:    cancel,
 		ready:     make(chan struct{}),
 		streams:   make(map[string]*elevenLabsStream),
+		current:   true,
 	}
 	go c.connect()
 	return c
@@ -936,8 +949,15 @@ func (c *elevenLabsTTSConnection) registerStream(stream *elevenLabsStream) {
 
 func (c *elevenLabsTTSConnection) unregisterStream(stream *elevenLabsStream) {
 	c.mu.Lock()
+	shouldClose := false
 	delete(c.streams, stream.contextID)
+	if !c.current && len(c.streams) == 0 {
+		shouldClose = true
+	}
 	c.mu.Unlock()
+	if shouldClose {
+		_ = c.close()
+	}
 }
 
 func (c *elevenLabsTTSConnection) wait(ctx context.Context) (*websocket.Conn, error) {
@@ -1061,6 +1081,16 @@ func (c *elevenLabsTTSConnection) closeTransport() {
 	c.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
+	}
+}
+
+func (c *elevenLabsTTSConnection) markNonCurrent() {
+	c.mu.Lock()
+	c.current = false
+	shouldClose := len(c.streams) == 0
+	c.mu.Unlock()
+	if shouldClose {
+		_ = c.close()
 	}
 }
 
@@ -2086,8 +2116,10 @@ func (s *elevenLabsStream) waitConnectionLocked() error {
 }
 
 func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
+	err := llm.NewAPIConnectionError("failed to write to elevenlabs")
 	s.closed = true
 	s.inputErr = io.ErrClosedPipe
+	s.sendError(err)
 	s.cancelResponseTimeoutLocked()
 	if s.cancel != nil {
 		s.cancel()
@@ -2099,7 +2131,8 @@ func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 		_ = s.conn.Close()
 	}
 	if s.sharedConn != nil {
-		s.sharedConn.unregisterStream(s)
+		sharedConn := s.sharedConn
+		go sharedConn.fail(err)
 	}
 }
 
@@ -2152,7 +2185,6 @@ func (s *elevenLabsStream) Close() error {
 	if s.closed {
 		return nil
 	}
-	wasFinished := s.finished
 	s.closed = true
 	s.cancelResponseTimeoutLocked()
 	s.cancel()
@@ -2172,10 +2204,6 @@ func (s *elevenLabsStream) Close() error {
 	}
 	s.provider.unregisterStream(s)
 	if s.sharedConn != nil {
-		if !wasFinished {
-			s.sharedConn.unregisterStream(s)
-			return s.sharedConn.close()
-		}
 		s.sharedConn.unregisterStream(s)
 		return nil
 	}

@@ -51,6 +51,7 @@ type ElevenLabsSTT struct {
 	includeTimestamps bool
 	sampleRate        int
 	serverVAD         *ElevenLabsVADOptions
+	serverVADRefresh  bool
 	keyterms          []string
 	mu                sync.Mutex
 	streams           map[*elevenLabsSTTStream]struct{}
@@ -104,12 +105,14 @@ func WithElevenLabsSTTSampleRate(sampleRate int) ElevenLabsSTTOption {
 func WithElevenLabsSTTServerVAD(serverVAD ElevenLabsVADOptions) ElevenLabsSTTOption {
 	return func(s *ElevenLabsSTT) {
 		s.serverVAD = &serverVAD
+		s.serverVADRefresh = true
 	}
 }
 
 func WithElevenLabsSTTServerVADDisabled() ElevenLabsSTTOption {
 	return func(s *ElevenLabsSTT) {
 		s.serverVAD = nil
+		s.serverVADRefresh = true
 	}
 }
 
@@ -130,6 +133,7 @@ func NewElevenLabsSTT(apiKey string, opts ...ElevenLabsSTTOption) *ElevenLabsSTT
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.serverVADRefresh = false
 	return provider
 }
 
@@ -191,6 +195,7 @@ func (s *ElevenLabsSTT) isClosed() bool {
 }
 
 func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
+	s.serverVADRefresh = false
 	oldServerVAD := s.serverVAD
 	for _, opt := range opts {
 		opt(s)
@@ -201,9 +206,11 @@ func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
 		streams = append(streams, stream)
 	}
 	serverVAD := s.serverVAD != nil
+	refreshServerVAD := s.serverVADRefresh
+	s.serverVADRefresh = false
 	s.mu.Unlock()
 	for _, stream := range streams {
-		if !elevenLabsVADOptionsEqual(oldServerVAD, s.serverVAD) {
+		if refreshServerVAD || !elevenLabsVADOptionsEqual(oldServerVAD, s.serverVAD) {
 			stream.reconnect(buildElevenLabsSTTStreamURL(s, stream.language()), buildElevenLabsSTTHeaders(s), serverVAD)
 			continue
 		}
@@ -219,9 +226,6 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 		return nil, err
 	}
 
-	if !elevenLabsSTTIsRealtime(s.modelID) {
-		return nil, fmt.Errorf("elevenlabs streaming stt requires scribe_v2_realtime")
-	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildElevenLabsSTTStreamURL(s, language), buildElevenLabsSTTHeaders(s))
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("Failed to connect to ElevenLabs")
@@ -579,13 +583,17 @@ func (s *elevenLabsSTTStream) Flush() error {
 	if s.audioBuf == nil {
 		return nil
 	}
+	flushed := false
 	for _, chunk := range s.audioBuf.Flush() {
+		flushed = true
 		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 			return err
 		}
 		s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 	}
-	s.emitRecognitionUsageLocked()
+	if flushed {
+		s.emitRecognitionUsageLocked()
+	}
 	return nil
 }
 
@@ -600,14 +608,18 @@ func (s *elevenLabsSTTStream) EndInput() error {
 	}
 	s.inputEnded = true
 	if s.audioBuf != nil {
+		flushed := false
 		for _, chunk := range s.audioBuf.Flush() {
+			flushed = true
 			if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 				return err
 			}
 			s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 		}
+		if flushed {
+			s.emitRecognitionUsageLocked()
+		}
 	}
-	s.emitRecognitionUsageLocked()
 	return nil
 }
 
@@ -663,6 +675,7 @@ func (s *elevenLabsSTTStream) reconnect(streamURL string, headers http.Header, s
 	oldConn := s.conn
 	s.conn = conn
 	s.connVersion++
+	s.audioBuf = nil
 	if s.state != nil {
 		s.state.serverVAD = serverVAD
 	}
@@ -739,15 +752,28 @@ func (s *elevenLabsSTTStream) unregisterFromProvider() {
 
 func (s *elevenLabsSTTStream) writeMessageLocked(message map[string]any) error {
 	if s.writeJSON != nil {
-		return s.writeJSON(message)
+		if err := s.writeJSON(message); err != nil {
+			s.closeAfterWriteFailureLocked(err)
+			return err
+		}
+		return nil
 	}
 	if err := writeElevenLabsSTTMessage(s.conn, message); err != nil {
-		s.closed = true
-		s.cancel()
-		_ = s.conn.Close()
+		s.closeAfterWriteFailureLocked(err)
 		return err
 	}
 	return nil
+}
+
+func (s *elevenLabsSTTStream) closeAfterWriteFailureLocked(err error) {
+	s.closed = true
+	s.sendError(llm.NewAPIConnectionError(fmt.Sprintf("failed to write to ElevenLabs: %v", err)))
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 }
 
 func (s *elevenLabsSTTStream) emitRecognitionUsageLocked() {
