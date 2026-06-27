@@ -6590,6 +6590,26 @@ func TestElevenLabsSTTFallbackPassesReferenceServerVAD(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSFallbackPassesReferenceTextNormalization(t *testing.T) {
+	textNormalization := false
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		ElevenLabsAPIKey:     "test-eleven-key",
+		TTSTextNormalization: &textNormalization,
+	}, providerElevenLabs)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	elevenProvider, ok := provider.(*elevenlabs.ElevenLabsTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *elevenlabs.ElevenLabsTTS", provider)
+	}
+	state := reflect.ValueOf(elevenProvider).Elem()
+	if got := state.FieldByName("applyTextNormalization").String(); got != "off" {
+		t.Fatalf("applyTextNormalization = %q, want off", got)
+	}
+}
+
 func TestGradiumSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		apiKey    string

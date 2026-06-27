@@ -3686,6 +3686,32 @@ func appTTSSpeedConfigured(cfg AppConfig) bool {
 	return cfg.TTSSpeedSet || cfg.TTSSpeed != 0
 }
 
+func elevenLabsTTSOptionsFromConfig(cfg AppConfig) []elevenlabs.ElevenLabsTTSOption {
+	ttsOpts := []elevenlabs.ElevenLabsTTSOption{}
+	if cfg.TTSBaseURL != "" {
+		ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsBaseURL(cfg.TTSBaseURL))
+	}
+	if cfg.TTSLanguage != "" {
+		ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsLanguage(cfg.TTSLanguage))
+	}
+	if cfg.TTSEnableSSMLParsing != nil {
+		ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEnableSSMLParsing(*cfg.TTSEnableSSMLParsing))
+	}
+	if cfg.TTSEncoding != "" {
+		ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
+	} else if cfg.TTSSampleRate != nil {
+		ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(fmt.Sprintf("pcm_%d", *cfg.TTSSampleRate)))
+	}
+	if cfg.TTSTextNormalization != nil {
+		mode := "off"
+		if *cfg.TTSTextNormalization {
+			mode = "on"
+		}
+		ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsApplyTextNormalization(mode))
+	}
+	return ttsOpts
+}
+
 func cavosSTTFromConfig(cfg AppConfig) corestt.STT {
 	sttOpts := []cavos.STTOption{}
 	if cfg.STTBaseURL != "" {
@@ -3945,22 +3971,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return deepgram.NewDeepgramTTS("", cfg.TTSModel, ttsOpts...), nil
 	case providerElevenLabs:
-		ttsOpts := []elevenlabs.ElevenLabsTTSOption{}
-		if cfg.TTSBaseURL != "" {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsBaseURL(cfg.TTSBaseURL))
-		}
-		if cfg.TTSLanguage != "" {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsLanguage(cfg.TTSLanguage))
-		}
-		if cfg.TTSEnableSSMLParsing != nil {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEnableSSMLParsing(*cfg.TTSEnableSSMLParsing))
-		}
-		if cfg.TTSEncoding != "" {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
-		} else if cfg.TTSSampleRate != nil {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(fmt.Sprintf("pcm_%d", *cfg.TTSSampleRate)))
-		}
-		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+		return elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, elevenLabsTTSOptionsFromConfig(cfg)...)
 	case providerFishAudio:
 		ttsOpts := []fishaudio.FishAudioTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -5674,22 +5685,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerElevenLabs:
-		ttsOpts := []elevenlabs.ElevenLabsTTSOption{}
-		if cfg.TTSBaseURL != "" {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsBaseURL(cfg.TTSBaseURL))
-		}
-		if cfg.TTSLanguage != "" {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsLanguage(cfg.TTSLanguage))
-		}
-		if cfg.TTSEnableSSMLParsing != nil {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEnableSSMLParsing(*cfg.TTSEnableSSMLParsing))
-		}
-		if cfg.TTSEncoding != "" {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(cfg.TTSEncoding))
-		} else if cfg.TTSSampleRate != nil {
-			ttsOpts = append(ttsOpts, elevenlabs.WithElevenLabsEncoding(fmt.Sprintf("pcm_%d", *cfg.TTSSampleRate)))
-		}
-		provider, err := elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, ttsOpts...)
+		provider, err := elevenlabs.NewElevenLabsTTS(cfg.ElevenLabsAPIKey, cfg.TTSVoice, cfg.TTSModel, elevenLabsTTSOptionsFromConfig(cfg)...)
 		if err != nil {
 			return nil, err
 		}
