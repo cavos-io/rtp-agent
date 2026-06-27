@@ -1524,12 +1524,13 @@ func (s *elevenLabsStream) flushPendingTextLocked() error {
 }
 
 func elevenLabsInitPayload(contextID string, voiceSettings map[string]interface{}, chunkLengthSchedule []int, dictionaries []ElevenLabsPronunciationDictionaryLocator) map[string]interface{} {
-	if voiceSettings == nil {
-		voiceSettings = map[string]interface{}{}
+	var voiceSettingsValue interface{}
+	if voiceSettings != nil {
+		voiceSettingsValue = voiceSettings
 	}
 	payload := map[string]interface{}{
 		"text":           " ",
-		"voice_settings": voiceSettings,
+		"voice_settings": voiceSettingsValue,
 		"context_id":     contextID,
 	}
 	if len(chunkLengthSchedule) > 0 {

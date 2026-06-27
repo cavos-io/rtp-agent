@@ -1089,12 +1089,11 @@ func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	if init["text"] != " " || init["context_id"] != contextID {
 		t.Fatalf("init payload = %#v, want warmup text with context_id", init)
 	}
-	voiceSettings, ok := init["voice_settings"].(map[string]any)
-	if !ok {
-		t.Fatalf("init voice_settings = %#v, want empty settings object", init["voice_settings"])
+	if _, ok := init["voice_settings"]; !ok {
+		t.Fatalf("init payload = %#v, want explicit voice_settings field", init)
 	}
-	if len(voiceSettings) != 0 {
-		t.Fatalf("init voice_settings = %#v, want empty settings object", voiceSettings)
+	if init["voice_settings"] != nil {
+		t.Fatalf("init voice_settings = %#v, want reference null", init["voice_settings"])
 	}
 	if _, ok := init["generation_config"]; ok {
 		t.Fatalf("init payload = %#v, want no generation_config without configured schedule", init)
@@ -1206,8 +1205,11 @@ func TestElevenLabsTTSStreamStartsContextOnFirstText(t *testing.T) {
 	if contextID == "" {
 		t.Fatalf("init context_id = %#v, want non-empty string", init["context_id"])
 	}
-	if _, ok := init["voice_settings"].(map[string]any); !ok {
-		t.Fatalf("init voice_settings = %#v, want object", init["voice_settings"])
+	if _, ok := init["voice_settings"]; !ok {
+		t.Fatalf("init payload = %#v, want explicit voice_settings field", init)
+	}
+	if init["voice_settings"] != nil {
+		t.Fatalf("init voice_settings = %#v, want reference null", init["voice_settings"])
 	}
 	generationConfig, ok := init["generation_config"].(map[string]any)
 	if !ok {
