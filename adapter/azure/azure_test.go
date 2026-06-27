@@ -769,6 +769,52 @@ func TestAzureSTTStreamSpeechConfigUsesReferenceContinuousLanguageID(t *testing.
 	}
 }
 
+func TestAzureSTTExplicitStreamLanguageOverridesReferenceCandidates(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	audioMessages := make(chan []byte, 1)
+
+	provider, err := NewAzureSTT("key", "eastus",
+		WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"),
+		WithAzureSTTLanguages("en-US", "id-ID"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestDialer(t, requests, configMessages, audioMessages)
+
+	stream, err := provider.Stream(context.Background(), "fr-FR")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	req := receiveAzureTestValue(t, requests, "request")
+	if got := req.URL.Query().Get("language"); got != "fr-FR" {
+		t.Fatalf("stream language = %q, want explicit fr-FR", got)
+	}
+	configMessage := receiveAzureTestValue(t, configMessages, "speech config")
+	_, configBody := splitAzureTestMessage(t, []byte(configMessage))
+	var configPayload struct {
+		Properties map[string]string `json:"properties"`
+	}
+	if err := json.Unmarshal(configBody, &configPayload); err != nil {
+		t.Fatalf("speech config JSON: %v", err)
+	}
+	if got := configPayload.Properties["SpeechServiceConnection_LanguageIdMode"]; got != "" {
+		t.Fatalf("language id mode = %q, want omitted when explicit stream language overrides candidates", got)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	receiveAzureTestValue(t, audioMessages, "audio")
+}
+
 func TestAzureSTTStreamFinalTranscriptMatchesReferenceResultTextAndConfidence(t *testing.T) {
 	event := parseAzureSTTMessage(
 		resolveAzureSTTLanguage("id-ID"),

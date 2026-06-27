@@ -220,12 +220,16 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	if streamLanguage == "" && s.language != beforeLanguage {
 		streamLanguage = s.language
 	}
+	var streamLanguages []string
+	if streamLanguage != "" || activeChanged {
+		streamLanguages = s.streamLanguageCandidates("")
+	}
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
 	s.mu.Unlock()
 	for _, stream := range streams {
-		stream.updateOptions(streamLanguage, activeChanged)
+		stream.updateOptions(streamLanguage, streamLanguages, activeChanged)
 	}
 }
 
@@ -299,9 +303,10 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
-	resolvedLanguage := s.streamLanguage(language)
+	languageCandidates := s.streamLanguageCandidates(language)
+	resolvedLanguage := languageCandidates[0]
 	streamURL := buildAzureSTTStreamURL(s, resolvedLanguage)
-	conn, connectionID, err := openAzureSTTStreamConnection(ctx, s, streamURL)
+	conn, connectionID, err := openAzureSTTStreamConnection(ctx, s, streamURL, languageCandidates)
 	if err != nil {
 		return nil, err
 	}
@@ -316,6 +321,7 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 		connectionID:  connectionID,
 		streamURL:     streamURL,
 		language:      resolvedLanguage,
+		languages:     languageCandidates,
 		sampleRate:    s.InputSampleRate(),
 		events:        make(chan *stt.SpeechEvent, 100),
 		errCh:         make(chan error, 1),
@@ -360,13 +366,13 @@ func (s *AzureSTT) unregisterStream(stream *azureSTTStream) {
 	delete(s.streams, stream)
 }
 
-func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, streamURL string) (*websocket.Conn, string, error) {
+func openAzureSTTStreamConnection(ctx context.Context, provider *AzureSTT, streamURL string, languages []string) (*websocket.Conn, string, error) {
 	connectionID := strings.ReplaceAll(uuid.NewString(), "-", "")
 	conn, _, err := provider.dialWebsocket(ctx, streamURL, buildAzureSTTHeaders(provider, connectionID))
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to dial azure stt websocket: %w", err)
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfig(provider))); err != nil {
+	if err := conn.WriteMessage(websocket.TextMessage, buildAzureSTTMessage("speech.config", connectionID, "application/json", buildAzureSTTSpeechConfigWithLanguages(provider, languages))); err != nil {
 		_ = conn.Close()
 		return nil, "", fmt.Errorf("failed to initialize azure stt websocket: %w", err)
 	}
@@ -556,16 +562,20 @@ func resolveAzureSTTLanguage(language string) string {
 }
 
 func (s *AzureSTT) streamLanguage(language string) string {
+	return s.streamLanguageCandidates(language)[0]
+}
+
+func (s *AzureSTT) streamLanguageCandidates(language string) []string {
 	if language != "" {
-		return language
+		return []string{language}
 	}
 	if s != nil && len(s.languages) > 0 {
-		return s.languages[0]
+		return append([]string(nil), s.languages...)
 	}
 	if s != nil && s.language != "" {
-		return s.language
+		return []string{s.language}
 	}
-	return defaultAzureSTTLanguage
+	return []string{defaultAzureSTTLanguage}
 }
 
 func normalizeAzureSTTLanguages(languages []string) []string {
@@ -591,6 +601,14 @@ func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
 }
 
 func buildAzureSTTSpeechConfig(s *AzureSTT) []byte {
+	var languages []string
+	if s != nil {
+		languages = s.streamLanguageCandidates("")
+	}
+	return buildAzureSTTSpeechConfigWithLanguages(s, languages)
+}
+
+func buildAzureSTTSpeechConfigWithLanguages(s *AzureSTT, languages []string) []byte {
 	payload := map[string]any{
 		"context": map[string]any{
 			"system": map[string]any{
@@ -598,7 +616,7 @@ func buildAzureSTTSpeechConfig(s *AzureSTT) []byte {
 			},
 		},
 	}
-	properties := azureSTTSpeechConfigProperties(s)
+	properties := azureSTTSpeechConfigPropertiesWithLanguages(s, languages)
 	if len(properties) > 0 {
 		payload["properties"] = properties
 	}
@@ -607,6 +625,14 @@ func buildAzureSTTSpeechConfig(s *AzureSTT) []byte {
 }
 
 func azureSTTSpeechConfigProperties(s *AzureSTT) map[string]string {
+	var languages []string
+	if s != nil {
+		languages = s.streamLanguageCandidates("")
+	}
+	return azureSTTSpeechConfigPropertiesWithLanguages(s, languages)
+}
+
+func azureSTTSpeechConfigPropertiesWithLanguages(s *AzureSTT, languages []string) map[string]string {
 	properties := make(map[string]string)
 	if s == nil {
 		return properties
@@ -623,7 +649,7 @@ func azureSTTSpeechConfigProperties(s *AzureSTT) map[string]string {
 	if s.trueTextPostProcessing {
 		properties["SpeechServiceResponse_PostProcessingOption"] = "TrueText"
 	}
-	if len(s.languages) > 1 {
+	if len(languages) > 1 {
 		properties["SpeechServiceConnection_LanguageIdMode"] = "Continuous"
 	}
 	return properties
@@ -672,6 +698,7 @@ type azureSTTStream struct {
 	connectionID    string
 	streamURL       string
 	language        string
+	languages       []string
 	sampleRate      uint32
 	events          chan *stt.SpeechEvent
 	errCh           chan error
@@ -874,7 +901,7 @@ func (s *azureSTTStream) finalizeSessionStopError(err error) error {
 	return err
 }
 
-func (s *azureSTTStream) updateOptions(language string, reconnect bool) {
+func (s *azureSTTStream) updateOptions(language string, languages []string, reconnect bool) {
 	if language == "" && !reconnect {
 		return
 	}
@@ -885,6 +912,9 @@ func (s *azureSTTStream) updateOptions(language string, reconnect bool) {
 	}
 	if language != "" {
 		s.language = language
+	}
+	if len(languages) > 0 {
+		s.languages = append([]string(nil), languages...)
 	}
 	if reconnect {
 		s.streamURL = buildAzureSTTStreamURL(s.provider, s.language)
@@ -901,7 +931,7 @@ func (s *azureSTTStream) reconnectLocked() error {
 	}
 	s.reconnects++
 	oldConn := s.conn
-	conn, connectionID, err := openAzureSTTStreamConnection(s.ctx, s.provider, s.streamURL)
+	conn, connectionID, err := openAzureSTTStreamConnection(s.ctx, s.provider, s.streamURL, s.languages)
 	if err != nil {
 		return err
 	}
