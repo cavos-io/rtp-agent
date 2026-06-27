@@ -245,6 +245,17 @@ func WithOpenAILLMAzureBaseURL(baseURL string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMAzureTimeout(timeout time.Duration) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		connectOptions := llm.DefaultAPIConnectOptions()
+		if l.defaultConnect != nil {
+			connectOptions = *l.defaultConnect
+		}
+		connectOptions.Timeout = timeout
+		l.defaultConnect = &connectOptions
+	}
+}
+
 func withOpenAILLMExtraHeader(key string, value string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		if l.extraHeaders == nil {

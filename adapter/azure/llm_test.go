@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAzureResponsesLLMFallsBackToReferenceEnvironment(t *testing.T) {
@@ -207,5 +208,23 @@ func TestAzureResponsesLLMAcceptsReferenceBaseURLOption(t *testing.T) {
 	}
 	if got := model.Provider(); got != "gateway.openai.azure.test" {
 		t.Fatalf("Provider = %q, want base_url host", got)
+	}
+}
+
+func TestAzureResponsesLLMAcceptsReferenceTimeoutOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMTimeout(75*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
 	}
 }

@@ -517,6 +517,36 @@ func TestNewAzureOpenAILLMUsesReferenceBaseURLOption(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAILLMUsesReferenceTimeoutOption(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMAzureTimeout(75*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext())
+
+	if !capture.hasDeadline {
+		t.Fatal("request context has no deadline, want Azure constructor timeout deadline")
+	}
+	if capture.remaining <= 0 || capture.remaining > 75*time.Millisecond {
+		t.Fatalf("request context deadline remaining = %v, want bounded by Azure constructor timeout", capture.remaining)
+	}
+}
+
 func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
 	t.Setenv(ovhcloudAPIKeyEnv, "env-ovh-key")
 	capture := &captureDeadlineHTTPClient{

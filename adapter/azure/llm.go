@@ -2,6 +2,7 @@ package azure
 
 import (
 	"context"
+	"time"
 
 	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -48,6 +49,10 @@ func WithAzureLLMADTokenProvider(provider func(context.Context) (string, error))
 
 func WithAzureLLMBaseURL(baseURL string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMAzureBaseURL(baseURL)
+}
+
+func WithAzureLLMTimeout(timeout time.Duration) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMAzureTimeout(timeout)
 }
 
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {
