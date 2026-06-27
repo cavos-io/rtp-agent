@@ -447,7 +447,11 @@ func (s *AzureSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, la
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
-	return azureSTTRecognizeSpeechEvent(s.streamLanguage(languageStr), result)
+	event, err := azureSTTRecognizeSpeechEvent(s.streamLanguage(languageStr), result)
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	return event, nil
 }
 
 type azureSTTRecognizeResponse struct {

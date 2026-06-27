@@ -256,6 +256,10 @@ func TestAzureSTTRecognizeReportsRecognitionFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "NoMatch") {
 		t.Fatalf("Recognize error = %v, want recognition status context", err)
 	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
 }
 
 func TestAzureSTTRecognizePreservesExplicitZeroConfidence(t *testing.T) {
