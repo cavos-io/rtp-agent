@@ -2837,6 +2837,21 @@ func TestAzureTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamCloseSuppressesBodyCloseError(t *testing.T) {
+	body := &closeErrorReadCloser{err: errors.New("socket close failed")}
+	stream := &azureTTSChunkedStream{
+		body:       body,
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cancellation", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closed)
+	}
+}
+
 func TestAzureTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	stream := &azureTTSChunkedStream{
 		body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
@@ -3288,6 +3303,20 @@ func (r *countingReadCloser) Close() error {
 		return fmt.Errorf("closed twice")
 	}
 	return nil
+}
+
+type closeErrorReadCloser struct {
+	err    error
+	closed int
+}
+
+func (r *closeErrorReadCloser) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (r *closeErrorReadCloser) Close() error {
+	r.closed++
+	return r.err
 }
 
 type countingErrorReadCloser struct {

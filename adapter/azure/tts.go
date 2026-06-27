@@ -645,9 +645,9 @@ func (s *azureTTSChunkedStream) Close() error {
 	s.body = nil
 	s.carry = 0
 	s.hasCarry = false
-	err := body.Close()
+	_ = body.Close()
 	s.unregister()
-	return err
+	return nil
 }
 
 func (s *azureTTSChunkedStream) unregister() {
