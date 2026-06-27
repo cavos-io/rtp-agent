@@ -240,7 +240,7 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
-	streamCtx, cancel := context.WithTimeout(ctx, azureTTSRequestTimeout)
+	streamCtx, cancel := context.WithCancel(ctx)
 	req, err := buildAzureTTSRequest(streamCtx, t, text)
 	if err != nil {
 		cancel()
@@ -561,6 +561,16 @@ func (s *azureTTSChunkedStream) start() error {
 	req := s.req
 	s.req = nil
 	s.client = nil
+	timeoutCtx, timeoutCancel := context.WithTimeout(req.Context(), azureTTSRequestTimeout)
+	if previousCancel := s.cancel; previousCancel != nil {
+		s.cancel = func() {
+			timeoutCancel()
+			previousCancel()
+		}
+	} else {
+		s.cancel = timeoutCancel
+	}
+	req = req.Clone(timeoutCtx)
 	resp, err := client.Do(req)
 	if err != nil {
 		s.unregister()

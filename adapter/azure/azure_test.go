@@ -3251,6 +3251,27 @@ func TestAzureTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 	}
 }
 
+func TestAzureTTSSynthesizeDefersReferenceTimeoutUntilNext(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	concrete, ok := stream.(*azureTTSChunkedStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *azureTTSChunkedStream", stream)
+	}
+	if _, ok := concrete.req.Context().Deadline(); ok {
+		t.Fatal("pending request context has deadline before Next, want timeout to start with provider request")
+	}
+}
+
 func TestAzureTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
