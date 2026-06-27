@@ -375,7 +375,7 @@ func TestElevenLabsTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
-func TestElevenLabsTTSStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
+func TestElevenLabsTTSStreamNextReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -392,13 +392,22 @@ func TestElevenLabsTTSStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
 	}
 
-	_, err = provider.Stream(context.Background())
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v, want nil", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
 	if err == nil {
-		t.Fatal("Stream error = nil, want APITimeoutError")
+		t.Fatal("Next error = nil, want APITimeoutError")
 	}
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -474,7 +483,7 @@ func TestElevenLabsTTSStreamTimesOutSilentContextLikeReference(t *testing.T) {
 	}
 }
 
-func TestElevenLabsTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
+func TestElevenLabsTTSStreamNextReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -491,13 +500,22 @@ func TestElevenLabsTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T)
 		t.Fatalf("NewElevenLabsTTS() error = %v", err)
 	}
 
-	_, err = provider.Stream(context.Background())
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v, want nil", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
 	if err == nil {
-		t.Fatal("Stream error = nil, want APIConnectionError")
+		t.Fatal("Next error = nil, want APIConnectionError")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
