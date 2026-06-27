@@ -40,6 +40,7 @@ type AzureSTT struct {
 	speechEndpoint         string
 	authToken              string
 	language               string
+	languages              []string
 	sampleRate             int
 	segmentationSilence    int
 	segmentationMaxTime    int
@@ -93,6 +94,17 @@ func WithAzureSTTLanguage(language string) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if language != "" {
 			s.language = language
+			s.languages = []string{language}
+		}
+	}
+}
+
+func WithAzureSTTLanguages(languages ...string) AzureSTTOption {
+	return func(s *AzureSTT) {
+		resolved := normalizeAzureSTTLanguages(languages)
+		if len(resolved) > 0 {
+			s.languages = resolved
+			s.language = resolved[0]
 		}
 	}
 }
@@ -196,6 +208,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	beforeActive := s.activeStreamOptions()
 	if language != "" {
 		s.language = language
+		s.languages = []string{language}
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -218,6 +231,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 
 type azureSTTActiveStreamOptions struct {
 	language               string
+	languages              string
 	speechHost             string
 	speechEndpoint         string
 	authToken              string
@@ -233,6 +247,7 @@ type azureSTTActiveStreamOptions struct {
 func (s *AzureSTT) activeStreamOptions() azureSTTActiveStreamOptions {
 	return azureSTTActiveStreamOptions{
 		language:               s.language,
+		languages:              strings.Join(s.languages, "\x00"),
 		speechHost:             s.speechHost,
 		speechEndpoint:         s.speechEndpoint,
 		authToken:              s.authToken,
@@ -544,10 +559,24 @@ func (s *AzureSTT) streamLanguage(language string) string {
 	if language != "" {
 		return language
 	}
+	if s != nil && len(s.languages) > 0 {
+		return s.languages[0]
+	}
 	if s != nil && s.language != "" {
 		return s.language
 	}
 	return defaultAzureSTTLanguage
+}
+
+func normalizeAzureSTTLanguages(languages []string) []string {
+	resolved := make([]string, 0, len(languages))
+	for _, language := range languages {
+		language = strings.TrimSpace(language)
+		if language != "" {
+			resolved = append(resolved, language)
+		}
+	}
+	return resolved
 }
 
 func buildAzureSTTHeaders(s *AzureSTT, connectionID string) http.Header {
@@ -593,6 +622,9 @@ func azureSTTSpeechConfigProperties(s *AzureSTT) map[string]string {
 	}
 	if s.trueTextPostProcessing {
 		properties["SpeechServiceResponse_PostProcessingOption"] = "TrueText"
+	}
+	if len(s.languages) > 1 {
+		properties["SpeechServiceConnection_LanguageIdMode"] = "Continuous"
 	}
 	return properties
 }
