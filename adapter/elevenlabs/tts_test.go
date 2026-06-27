@@ -1098,7 +1098,7 @@ func TestElevenLabsTTSStreamAutoModeSendsSentencesAndFlushesTailLikeReference(t 
 	}
 }
 
-func TestElevenLabsTTSStreamEndInputSendsReferenceFlushPacket(t *testing.T) {
+func TestElevenLabsTTSStreamEndInputClosesContextLikeReference(t *testing.T) {
 	messages := make(chan map[string]any, 4)
 	serverErr := make(chan error, 1)
 	clientConn, serverConn := net.Pipe()
@@ -1137,6 +1137,26 @@ func TestElevenLabsTTSStreamEndInputSendsReferenceFlushPacket(t *testing.T) {
 	end := readElevenLabsTTSStreamMessage(t, messages)
 	if end["text"] != "" || end["context_id"] != contextID || end["flush"] != true {
 		t.Fatalf("end packet = %#v, want empty flush packet", end)
+	}
+	closeContext := readElevenLabsTTSStreamMessage(t, messages)
+	if closeContext["context_id"] != contextID || closeContext["close_context"] != true {
+		t.Fatalf("close_context packet = %#v, want close for context %q", closeContext, contextID)
+	}
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after EndInput() error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput() error = %v, want nil", err)
+	}
+	if err := endElevenLabsTestInput(stream); err != nil {
+		t.Fatalf("second EndInput() error = %v, want nil", err)
+	}
+	select {
+	case msg := <-messages:
+		t.Fatalf("input after EndInput() sent websocket packet: %#v", msg)
+	case err := <-serverErr:
+		t.Fatalf("test websocket server error: %v", err)
+	case <-time.After(75 * time.Millisecond):
 	}
 }
 

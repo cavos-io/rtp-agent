@@ -633,6 +633,7 @@ type elevenLabsStream struct {
 	closed   bool
 	finished bool
 	inputErr error
+	inputEnd bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -1194,6 +1195,9 @@ func (s *elevenLabsStream) PushText(text string) error {
 	if s.closed {
 		return s.closedInputErrorLocked()
 	}
+	if s.inputEnd {
+		return nil
+	}
 	if text == "" {
 		return nil
 	}
@@ -1239,6 +1243,9 @@ func (s *elevenLabsStream) Flush() error {
 	if s.closed {
 		return s.closedInputErrorLocked()
 	}
+	if s.inputEnd {
+		return nil
+	}
 	return s.flushPendingTextLocked()
 }
 
@@ -1247,6 +1254,9 @@ func (s *elevenLabsStream) EndInput() error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return s.closedInputErrorLocked()
+	}
+	if s.inputEnd {
+		return nil
 	}
 	if err := s.flushPendingTextLocked(); err != nil {
 		return err
@@ -1258,6 +1268,11 @@ func (s *elevenLabsStream) EndInput() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	if err := s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID)); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	s.inputEnd = true
 	return nil
 }
 
@@ -1399,7 +1414,7 @@ func (s *elevenLabsStream) rejectClosedPipe() error {
 		}
 		_ = s.mp3Decoder.Close()
 	}
-	if s.initSent && s.conn != nil {
+	if s.initSent && !s.inputEnd && s.conn != nil {
 		_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
 	}
 	if s.provider != nil {
@@ -1426,7 +1441,7 @@ func (s *elevenLabsStream) Close() error {
 		}
 		_ = s.mp3Decoder.Close()
 	}
-	if s.initSent {
+	if s.initSent && !s.inputEnd {
 		_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
 	}
 	s.provider.unregisterStream(s)
