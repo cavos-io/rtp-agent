@@ -51,6 +51,7 @@ type AzureTTS struct {
 	prosody        AzureTTSProsody
 	prosodySet     bool
 	style          AzureTTSStyle
+	styleSet       bool
 	lexiconURI     string
 	lexiconURISet  bool
 	httpClient     *http.Client
@@ -96,6 +97,7 @@ func WithAzureTTSProsody(prosody AzureTTSProsody) AzureTTSOption {
 func WithAzureTTSStyle(style AzureTTSStyle) AzureTTSOption {
 	return func(t *AzureTTS) {
 		t.style = style
+		t.styleSet = true
 	}
 }
 
@@ -198,6 +200,7 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 		prosody:        t.prosody,
 		prosodySet:     t.prosodySet,
 		style:          t.style,
+		styleSet:       t.styleSet,
 		lexiconURI:     t.lexiconURI,
 		lexiconURISet:  t.lexiconURISet,
 		httpClient:     t.httpClient,
@@ -234,6 +237,7 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	t.prosody = next.prosody
 	t.prosodySet = next.prosodySet
 	t.style = next.style
+	t.styleSet = next.styleSet
 	t.lexiconURI = next.lexiconURI
 	t.lexiconURISet = next.lexiconURISet
 	t.httpClient = next.httpClient
@@ -413,7 +417,7 @@ func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
 	if t.lexiconURISet {
 		b.WriteString(fmt.Sprintf(`<lexicon uri="%s"/>`, t.lexiconURI))
 	}
-	if t.style.Style != "" {
+	if t.styleSet {
 		b.WriteString(fmt.Sprintf(`<mstts:express-as style="%s"`, t.style.Style))
 		if t.style.Degree != 0 {
 			b.WriteString(fmt.Sprintf(` styledegree="%s"`, strconv.FormatFloat(t.style.Degree, 'f', -1, 64)))
@@ -437,7 +441,7 @@ func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
 	} else {
 		b.WriteString(escapedText)
 	}
-	if t.style.Style != "" {
+	if t.styleSet {
 		b.WriteString("</mstts:express-as>")
 	}
 	b.WriteString("</voice></speak>")

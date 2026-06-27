@@ -3245,6 +3245,38 @@ func TestAzureTTSUpdateOptionsPreservesExplicitEmptyReferenceProsody(t *testing.
 	}
 }
 
+func TestAzureTTSUpdateOptionsPreservesExplicitEmptyReferenceStyle(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSStyle(AzureTTSStyle{Style: "cheerful", Degree: 1.5}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	if err := provider.UpdateOptions("", "", WithAzureTTSStyle(AzureTTSStyle{})); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `<mstts:express-as style="">hello</mstts:express-as>`) {
+		t.Fatalf("SSML = %q, want explicit empty reference style wrapper", ssml)
+	}
+	if strings.Contains(ssml, `style="cheerful"`) || strings.Contains(ssml, `styledegree="1.5"`) {
+		t.Fatalf("SSML = %q, want previous style controls cleared", ssml)
+	}
+}
+
 func TestAzureTTSUpdateOptionsRejectsUnsupportedSampleRate(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
