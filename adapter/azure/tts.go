@@ -51,6 +51,7 @@ type AzureTTS struct {
 	prosody        AzureTTSProsody
 	style          AzureTTSStyle
 	lexiconURI     string
+	lexiconURISet  bool
 	httpClient     *http.Client
 	mu             sync.Mutex
 	streams        map[*azureTTSChunkedStream]struct{}
@@ -100,9 +101,8 @@ func WithAzureTTSStyle(style AzureTTSStyle) AzureTTSOption {
 
 func WithAzureTTSLexiconURI(lexiconURI string) AzureTTSOption {
 	return func(t *AzureTTS) {
-		if lexiconURI != "" {
-			t.lexiconURI = lexiconURI
-		}
+		t.lexiconURI = lexiconURI
+		t.lexiconURISet = true
 	}
 }
 
@@ -198,6 +198,7 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 		prosody:        t.prosody,
 		style:          t.style,
 		lexiconURI:     t.lexiconURI,
+		lexiconURISet:  t.lexiconURISet,
 		httpClient:     t.httpClient,
 	}
 	if voice != "" {
@@ -232,6 +233,7 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	t.prosody = next.prosody
 	t.style = next.style
 	t.lexiconURI = next.lexiconURI
+	t.lexiconURISet = next.lexiconURISet
 	t.httpClient = next.httpClient
 	return nil
 }
@@ -406,7 +408,7 @@ func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
 	escapedText := azureTTSEscapeText(text)
 	b.WriteString(fmt.Sprintf(`<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="%s">`, language))
 	b.WriteString(fmt.Sprintf(`<voice name="%s">`, t.voice))
-	if t.lexiconURI != "" {
+	if t.lexiconURISet {
 		b.WriteString(fmt.Sprintf(`<lexicon uri="%s"/>`, t.lexiconURI))
 	}
 	if t.style.Style != "" {

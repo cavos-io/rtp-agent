@@ -3149,6 +3149,38 @@ func TestAzureTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAzureTTSUpdateOptionsPreservesExplicitEmptyReferenceLexicon(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSLexiconURI("https://example.com/runtime-lexicon.xml"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	if err := provider.UpdateOptions("", "", WithAzureTTSLexiconURI("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `<lexicon uri=""/>`) {
+		t.Fatalf("SSML = %q, want explicit empty lexicon tag like reference NotGiven handling", ssml)
+	}
+	if strings.Contains(ssml, "runtime-lexicon.xml") {
+		t.Fatalf("SSML = %q, want previous lexicon replaced by explicit empty lexicon", ssml)
+	}
+}
+
 func TestAzureTTSUpdateOptionsRejectsUnsupportedSampleRate(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
