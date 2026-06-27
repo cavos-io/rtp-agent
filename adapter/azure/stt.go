@@ -29,6 +29,7 @@ const (
 	defaultAzureSTTLanguage   = "en-US"
 	defaultAzureSTTSampleRate = 16000
 	defaultAzureSTTRetries    = 3
+	azureSTTFlushSilenceMS    = 200
 )
 
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
@@ -828,7 +829,22 @@ func (s *azureSTTStream) Flush() error {
 		s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 		return io.ErrClosedPipe
 	}
-	return nil
+	if s.reconnectNext {
+		if err := s.reconnectLocked(); err != nil {
+			s.finishWithErrorLocked(err)
+			return err
+		}
+		s.reconnectNext = false
+	}
+	silence := azureSTTPendingAudio{
+		contentType: s.audioContentType(),
+		data:        make([]byte, int(s.sampleRate)*2*azureSTTFlushSilenceMS/1000),
+	}
+	if !s.sessionStarted {
+		s.pendingAudio = append(s.pendingAudio, silence)
+		return nil
+	}
+	return s.writeAudioLocked(silence)
 }
 
 func (s *azureSTTStream) Close() error {

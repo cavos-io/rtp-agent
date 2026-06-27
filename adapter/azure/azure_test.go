@@ -2228,6 +2228,47 @@ func TestAzureSTTUpdateOptionsReconnectsActiveStreamBeforeNextAudio(t *testing.T
 	receiveAzureTestSignal(t, serverClosed, "first server close after update")
 }
 
+func TestAzureSTTFlushSendsReferenceSilenceFrame(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	audioMessages := make(chan []byte, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestSessionStartedAudioDialer(t, requests, configMessages, audioMessages)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+	azureTestWaitForSessionStarted(t, stream)
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audioMessage := receiveAzureTestValue(t, audioMessages, "flush silence audio")
+	audioHeaders, audioPayload := splitAzureTestBinaryMessage(t, audioMessage)
+	if audioHeaders["Path"] != "audio" {
+		t.Fatalf("flush audio Path = %q, want audio", audioHeaders["Path"])
+	}
+	if audioHeaders["Content-Type"] != "audio/x-wav;codec=audio/pcm;samplerate=16000" {
+		t.Fatalf("flush audio Content-Type = %q, want Azure raw PCM stream format", audioHeaders["Content-Type"])
+	}
+	if len(audioPayload) != 6400 {
+		t.Fatalf("flush audio payload length = %d, want 200ms 16-bit mono silence", len(audioPayload))
+	}
+	if !bytes.Equal(audioPayload, make([]byte, len(audioPayload))) {
+		t.Fatal("flush audio payload is not silence")
+	}
+}
+
 func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 	t.Setenv(azureSpeechKeyEnv, "env-key")
 	t.Setenv(azureSpeechRegionEnv, "westus")
@@ -3828,6 +3869,49 @@ func azureTestSessionStartedHoldOpenDialer(
 	}
 }
 
+func azureTestSessionStartedAudioDialer(
+	t *testing.T,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	audioMessages chan<- []byte,
+) azureSTTWebsocketDialer {
+	t.Helper()
+	return func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		errCh := make(chan error, 1)
+		go runAzureTestSessionStartedAudioWebsocketServer(serverConn, requests, configMessages, audioMessages, errCh)
+
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		dialer := websocket.Dialer{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 8192,
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+			Proxy: nil,
+		}
+		conn, resp, err := dialer.DialContext(ctx, parsed.String(), headers)
+		if err != nil {
+			clientConn.Close()
+			select {
+			case serverErr := <-errCh:
+				return nil, resp, fmt.Errorf("%w; server: %v", err, serverErr)
+			default:
+				return nil, resp, err
+			}
+		}
+		go func() {
+			if serverErr := <-errCh; serverErr != nil && !isAzureTestWebsocketCleanupError(serverErr) {
+				t.Errorf("test session-started audio websocket server: %v", serverErr)
+			}
+		}()
+		return conn, resp, nil
+	}
+}
+
 func runAzureTestHoldOpenWebsocketServer(
 	conn net.Conn,
 	requests chan<- *http.Request,
@@ -3862,6 +3946,51 @@ func runAzureTestHoldOpenWebsocketServer(
 		if _, _, err := readAzureTestWebsocketFrame(reader); err != nil {
 			errCh <- nil
 			return
+		}
+	}
+}
+
+func runAzureTestSessionStartedAudioWebsocketServer(
+	conn net.Conn,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	audioMessages chan<- []byte,
+	errCh chan<- error,
+) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	requests <- req
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", azureTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readAzureTestWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage {
+		errCh <- fmt.Errorf("speech config opcode = %d, want text", opcode)
+		return
+	}
+	configMessages <- string(payload)
+	if err := writeAzureTestWebsocketFrame(conn, websocket.TextMessage, []byte("Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}")); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		opcode, payload, err := readAzureTestWebsocketFrame(reader)
+		if err != nil {
+			errCh <- nil
+			return
+		}
+		if opcode == websocket.BinaryMessage {
+			audioMessages <- payload
 		}
 	}
 }
