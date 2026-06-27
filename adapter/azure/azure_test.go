@@ -2740,6 +2740,61 @@ func TestAzureTTSChunkedStreamCloseCancelsInFlightRequest(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamCloseDropsLateResponse(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	body := &bytesThenErrorReadCloser{data: []byte{0x01, 0x02}, err: io.EOF}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			close(entered)
+			<-release
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       body,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	nextDone := make(chan struct{})
+	var nextAudio *tts.SynthesizedAudio
+	var nextErr error
+	go func() {
+		nextAudio, nextErr = stream.Next()
+		close(nextDone)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start Azure TTS request")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(release)
+	select {
+	case <-nextDone:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not return after late Azure TTS response")
+	}
+	if nextAudio != nil || nextErr != io.EOF {
+		t.Fatalf("Next after Close late response = (%#v, %v), want nil, io.EOF", nextAudio, nextErr)
+	}
+	if body.closed != 1 {
+		t.Fatalf("late response body Close calls = %d, want 1", body.closed)
+	}
+}
+
 func TestAzureTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {

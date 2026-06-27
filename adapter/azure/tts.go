@@ -551,6 +551,11 @@ func (s *azureTTSChunkedStream) start() error {
 		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
+	if s.closed.Load() {
+		resp.Body.Close()
+		s.unregister()
+		return io.EOF
+	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
