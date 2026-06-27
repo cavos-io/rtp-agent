@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/core/vad"
+	logutil "github.com/cavos-io/rtp-agent/library/logger"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 )
 
@@ -2527,6 +2528,23 @@ func TestPipelineAgentEmitsErrorEventForSTTStreamError(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentLogsSTTErrorWithStructuredFields(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &recordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("stt websocket closed")
+	source := &fakePipelineSTT{provider: "test-stt-provider"}
+	agent := NewPipelineAgent(nil, source, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.sttLoop(&fakePipelineRecognizeStream{err: cause})
+
+	assertStructuredErrorLog(t, recorder, "STT stream error", cause, "*agent.fakePipelineSTT", "test-stt-provider", "stt_stream")
+}
+
 func TestPipelineAgentIgnoresCanceledSTTStreamOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	errorEvents := session.ErrorEvents()
@@ -2893,6 +2911,45 @@ func TestPipelineAgentIgnoresCanceledVADStreamStartOnShutdown(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentLogsVADErrorWithStructuredFields(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &recordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("vad inference failed")
+	source := &fakePipelineVAD{}
+	agent := NewPipelineAgent(source, nil, nil, nil, llm.NewChatContext())
+	agent.session = session
+
+	agent.vadLoop(&fakePipelineVADStream{err: cause})
+
+	assertStructuredErrorLog(t, recorder, "VAD stream error", cause, "*agent.fakePipelineVAD", "fake", "vad_stream")
+}
+
+func assertStructuredErrorLog(t *testing.T, recorder *recordingLogger, message string, cause error, source, provider, stage string) {
+	t.Helper()
+	if !recorder.hasError(message) {
+		t.Fatalf("error messages = %#v, want %s", recorder.errorMessages, message)
+	}
+	if got := recorder.errorValue(message, "error"); got != cause.Error() {
+		t.Fatalf("logged error field = %#v, want %q", got, cause.Error())
+	}
+	if got := recorder.errorValue(message, "error_type"); got != "*errors.errorString" {
+		t.Fatalf("logged error_type field = %#v, want concrete error type", got)
+	}
+	if got := recorder.errorValue(message, "source"); got != source {
+		t.Fatalf("logged source field = %#v, want %s", got, source)
+	}
+	if got := recorder.errorValue(message, "provider"); got != provider {
+		t.Fatalf("logged provider field = %#v, want %s", got, provider)
+	}
+	if got := recorder.errorValue(message, "stage"); got != stage {
+		t.Fatalf("logged stage field = %#v, want %s", got, stage)
+	}
+}
+
 func TestPipelineAgentIgnoresCanceledVADStreamOnShutdown(t *testing.T) {
 	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
 	errorEvents := session.ErrorEvents()
@@ -3239,6 +3296,28 @@ func TestPipelineAgentGeneratedReplyInterruptSuppressesCanceledLLMStreamError(t 
 	}
 }
 
+func TestPipelineAgentLogsLLMErrorWithStructuredFields(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &recordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("llm rate limited")
+	l := &failingPipelineLLM{
+		label:    "test.LLM",
+		provider: "test-llm-provider",
+		err:      cause,
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	assertStructuredErrorLog(t, recorder, "LLM inference failed", cause, "*agent.failingPipelineLLM", "test-llm-provider", "llm_inference")
+}
+
 func TestPipelineAgentPreemptiveInterruptSuppressesCanceledTTSStartupError(t *testing.T) {
 	l := &fakeGenerationLLM{
 		stream: &fakeGenerationLLMStream{
@@ -3357,6 +3436,28 @@ func TestPipelineAgentEmitsTTSErrorEventForSpeechSynthesisFailure(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("ErrorEvents did not receive TTS error")
 	}
+}
+
+func TestPipelineAgentLogsTTSErrorWithStructuredFields(t *testing.T) {
+	oldLogger := logutil.Logger
+	recorder := &recordingLogger{}
+	logutil.SetLogger(recorder)
+	t.Cleanup(func() { logutil.SetLogger(oldLogger) })
+
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	cause := errors.New("provider quota exceeded")
+	ttsSource := &fakePipelineTTS{
+		provider:  "test-provider",
+		streamErr: cause,
+	}
+	agent := NewPipelineAgent(nil, nil, nil, ttsSource, llm.NewChatContext())
+	agent.session = session
+	speech := NewSpeechHandle(false, DefaultInputDetails())
+	speech.Generation.Text = "hello"
+
+	agent.OnSpeechScheduled(context.Background(), speech)
+
+	assertStructuredErrorLog(t, recorder, "TTS inference failed", cause, "*agent.fakePipelineTTS", "test-provider", "tts_inference")
 }
 
 func TestPipelineAgentEmitsTTSErrorEventForSpeechStreamFailure(t *testing.T) {
@@ -5466,8 +5567,9 @@ func (f *fakePipelineTTS) Stream(context.Context) (tts.SynthesizeStream, error) 
 }
 
 type failingPipelineLLM struct {
-	label string
-	err   error
+	label    string
+	provider string
+	err      error
 }
 
 func (f *failingPipelineLLM) Chat(context.Context, *llm.ChatContext, ...llm.ChatOption) (llm.LLMStream, error) {
@@ -5475,6 +5577,8 @@ func (f *failingPipelineLLM) Chat(context.Context, *llm.ChatContext, ...llm.Chat
 }
 
 func (f *failingPipelineLLM) Label() string { return f.label }
+
+func (f *failingPipelineLLM) Provider() string { return f.provider }
 
 type blockingCanceledPipelineLLM struct {
 	started chan struct{}
@@ -5871,11 +5975,17 @@ type fakePipelineSTT struct {
 	stt.MetricsEmitter
 	stt.ErrorEmitter
 
+	model     string
+	provider  string
 	stream    *fakePipelineRecognizeStream
 	streamErr error
 }
 
 func (f *fakePipelineSTT) Label() string { return "fake-stt" }
+
+func (f *fakePipelineSTT) Model() string { return f.model }
+
+func (f *fakePipelineSTT) Provider() string { return f.provider }
 
 func (f *fakePipelineSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true}

@@ -6912,6 +6912,7 @@ type recordingLogger struct {
 	warnMessages  []string
 	errorMessages []string
 	infoFields    map[string]map[string]any
+	errorFields   map[string]map[string]any
 }
 
 func (l *recordingLogger) Debugw(msg string, keysAndValues ...any) {}
@@ -6935,6 +6936,18 @@ func (l *recordingLogger) Warnw(msg string, err error, keysAndValues ...any) {
 }
 func (l *recordingLogger) Errorw(msg string, err error, keysAndValues ...any) {
 	l.errorMessages = append(l.errorMessages, msg)
+	if l.errorFields == nil {
+		l.errorFields = make(map[string]map[string]any)
+	}
+	fields := make(map[string]any)
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			continue
+		}
+		fields[key] = keysAndValues[i+1]
+	}
+	l.errorFields[msg] = fields
 }
 func (l *recordingLogger) WithValues(keysAndValues ...any) livekitlogger.Logger {
 	return l
@@ -6984,6 +6997,13 @@ func (l *recordingLogger) infoValue(msg, key string) any {
 		return nil
 	}
 	return l.infoFields[msg][key]
+}
+
+func (l *recordingLogger) errorValue(msg, key string) any {
+	if l.errorFields == nil {
+		return nil
+	}
+	return l.errorFields[msg][key]
 }
 
 type fakeAvatarProvider struct {

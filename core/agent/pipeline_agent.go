@@ -215,7 +215,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		stream, err := va.vad.Stream(ctx)
 		if err != nil {
 			if !isSpeechStreamShutdownError(err) {
-				logger.Logger.Errorw("failed to start VAD stream", err)
+				va.logVADError("failed to start VAD stream", err, va.vad, "vad_stream_start")
 				va.emitError(err, va.vad)
 			}
 			return
@@ -227,7 +227,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		va.mu.Unlock()
 		defer func() {
 			if err := vadStream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
-				logger.Logger.Errorw("failed to close VAD stream", err)
+				va.logVADError("failed to close VAD stream", err, va.vad, "vad_stream_close")
 				va.emitError(err, va.vad)
 			}
 			va.mu.Lock()
@@ -245,7 +245,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		sttObj, err := streamableSTT(va.stt, va.vad)
 		if err != nil {
 			if !isSpeechStreamShutdownError(err) {
-				logger.Logger.Errorw("failed to prepare STT stream", err)
+				va.logSTTError("failed to prepare STT stream", err, va.stt, "stt_stream_prepare")
 				label := "stt"
 				if va.stt != nil {
 					label = va.stt.Label()
@@ -257,7 +257,7 @@ func (va *PipelineAgent) run(ctx context.Context) {
 		stream, err := sttObj.Stream(ctx, "")
 		if err != nil {
 			if !isSpeechStreamShutdownError(err) {
-				logger.Logger.Errorw("failed to start STT stream", err)
+				va.logSTTError("failed to start STT stream", err, va.stt, "stt_stream_start")
 				label := "stt"
 				if va.stt != nil {
 					label = va.stt.Label()
@@ -289,14 +289,14 @@ func (va *PipelineAgent) run(ctx context.Context) {
 			if vadStream != nil {
 				if err := vadStream.PushFrame(frame); err != nil {
 					if !isSpeechStreamShutdownError(err) {
-						logger.Logger.Errorw("VAD push frame failed", err)
+						va.logVADError("VAD push frame failed", err, va.vad, "vad_push_frame")
 						va.emitError(err, va.vad)
 					}
 				}
 			}
 			if err := va.pushSTTFrame(frame); err != nil {
 				if !isSpeechStreamShutdownError(err) {
-					logger.Logger.Errorw("STT push frame failed", err)
+					va.logSTTError("STT push frame failed", err, va.stt, "stt_push_frame")
 					label := "stt"
 					if va.stt != nil {
 						label = va.stt.Label()
@@ -353,7 +353,7 @@ func (va *PipelineAgent) closeInputTranscriptionStream() {
 		return
 	}
 	if err := stream.Close(); err != nil && !isSpeechStreamShutdownError(err) {
-		logger.Logger.Errorw("failed to close STT stream", err)
+		va.logSTTError("failed to close STT stream", err, sttObj, "stt_stream_close")
 		label := "stt"
 		if sttObj != nil {
 			label = sttObj.Label()
@@ -368,7 +368,7 @@ func (va *PipelineAgent) vadLoop(stream vad.VADStream) {
 		ev, err := stream.Next()
 		if err != nil {
 			if !isSpeechStreamShutdownError(err) {
-				logger.Logger.Errorw("VAD stream error", err)
+				va.logVADError("VAD stream error", err, va.vad, "vad_stream")
 				va.emitError(err, va.vad)
 			}
 			return
@@ -435,7 +435,7 @@ func (va *PipelineAgent) sttLoop(stream stt.RecognizeStream) {
 		ev, err := stream.Next()
 		if err != nil {
 			if !isSpeechStreamShutdownError(err) {
-				logger.Logger.Errorw("STT stream error", err)
+				va.logSTTError("STT stream error", err, va.stt, "stt_stream")
 				label := "stt"
 				if va.stt != nil {
 					label = va.stt.Label()
@@ -652,7 +652,7 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 	if err != nil {
 		cancel()
 		if !suppressContextCanceledError(precomputeCtx, speech, err) {
-			logger.Logger.Errorw("preemptive LLM inference failed", err)
+			va.logLLMError("preemptive LLM inference failed", err, "llm_inference")
 			va.emitLLMError(session, err)
 		}
 		return
@@ -671,7 +671,7 @@ func (va *PipelineAgent) OnSpeechPreemptive(ctx context.Context, speech *SpeechH
 		if err != nil {
 			cancel()
 			if !suppressContextCanceledError(precomputeCtx, speech, err) {
-				logger.Logger.Errorw("preemptive TTS inference failed", err)
+				va.logTTSError("preemptive TTS inference failed", err)
 				va.emitTTSError(session, err)
 			}
 			return
@@ -708,7 +708,7 @@ func (va *PipelineAgent) OnSpeechScheduled(ctx context.Context, speech *SpeechHa
 		ttsGen, err := va.synthesizeSpeech(speechCtx, session, singleTextChannel(speech.Generation.Text), speech)
 		speechCancel()
 		if err != nil && !errors.Is(err, context.Canceled) {
-			logger.Logger.Errorw("TTS inference failed", err)
+			va.logTTSError("TTS inference failed", err)
 			va.emitTTSError(session, err)
 		}
 		playoutOK := true
@@ -885,7 +885,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 			genData, err = PerformLLMInferenceWithTextEvents(ctx, va.LLM, inferenceCtx, selectedTools, chatOptions...)
 			if err != nil {
 				if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
-					logger.Logger.Errorw("LLM inference failed", err)
+					va.logLLMError("LLM inference failed", err, "llm_inference")
 					if opts.SpeechHandle != nil {
 						opts.SpeechHandle.SetRunFinalOutput(err)
 					}
@@ -931,7 +931,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 				return
 			}
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, err) {
-				logger.Logger.Errorw("TTS inference failed", err)
+				va.logTTSError("TTS inference failed", err)
 				va.emitTTSError(session, err)
 				closeReplyDone()
 				session.UpdateAgentState(AgentStateListening)
@@ -941,7 +941,7 @@ func (va *PipelineAgent) generateReplyWithOptions(opts pipelineReplyOptions) {
 		waitForLLMGenerationDone(genData)
 		if genData.StreamErr != nil {
 			if !suppressContextCanceledError(ctx, opts.SpeechHandle, genData.StreamErr) {
-				logger.Logger.Errorw("LLM stream failed", genData.StreamErr)
+				va.logLLMError("LLM stream failed", genData.StreamErr, "llm_stream")
 				if opts.SpeechHandle != nil {
 					opts.SpeechHandle.SetRunFinalOutput(genData.StreamErr)
 				}
@@ -1626,6 +1626,44 @@ func (va *PipelineAgent) emitTTSError(session *AgentSession, err error) {
 		return
 	}
 	session.EmitError(ErrorEvent{Error: ttsErr, Source: va.tts})
+}
+
+func (va *PipelineAgent) logTTSError(message string, err error) {
+	va.logProviderError(message, err, va.tts, tts.Provider(va.tts), "tts_inference")
+}
+
+func (va *PipelineAgent) logSTTError(message string, err error, source stt.STT, stage string) {
+	va.logProviderError(message, err, source, stt.Provider(source), stage)
+}
+
+func (va *PipelineAgent) logLLMError(message string, err error, stage string) {
+	va.logProviderError(message, err, va.LLM, llm.Provider(va.LLM), stage)
+}
+
+func (va *PipelineAgent) logVADError(message string, err error, source vad.VAD, stage string) {
+	provider := "unknown"
+	if source != nil && source.Provider() != "" {
+		provider = source.Provider()
+	}
+	va.logProviderError(message, err, source, provider, stage)
+}
+
+func (va *PipelineAgent) logProviderError(message string, err error, source any, provider string, stage string) {
+	if err == nil {
+		return
+	}
+	if provider == "" {
+		provider = "unknown"
+	}
+	logger.Logger.Errorw(
+		message,
+		err,
+		"error", err.Error(),
+		"error_type", fmt.Sprintf("%T", err),
+		"source", fmt.Sprintf("%T", source),
+		"provider", provider,
+		"stage", stage,
+	)
 }
 
 func llmCachedPromptTokens(usage *llm.CompletionUsage) int {
