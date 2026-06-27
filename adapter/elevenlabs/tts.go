@@ -782,7 +782,7 @@ func (s *elevenLabsStream) readLoop() {
 			logger.Logger.Warnw("Failed to unmarshal ElevenLabs response", err, "payload", string(message))
 			continue
 		}
-		if respContextID := resp.contextID(); respContextID != "" && respContextID != s.contextID {
+		if respContextID := resp.contextID(); respContextID == "" || respContextID != s.contextID {
 			continue
 		}
 
