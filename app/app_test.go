@@ -6200,8 +6200,11 @@ func TestDefaultConfigFromEnvWrapsSTTFallbackProviders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if app.Session.STT == nil {
+		t.Fatal("STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -6245,8 +6248,11 @@ func TestDefaultConfigFromEnvAcceptsAzureSTTFallbackProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp() error = %v", err)
 	}
-	if got := app.Session.STT.Label(); got != "FallbackAdapter(deepgram.STT)" {
-		t.Fatalf("STT label = %q, want fallback adapter around primary deepgram STT", got)
+	if app.Session.STT == nil {
+		t.Fatal("STT is nil")
+	}
+	if got := app.Session.STT.Label(); got != "stt.FallbackAdapter" {
+		t.Fatalf("STT label = %q, want core fallback adapter wrapping primary deepgram STT", got)
 	}
 }
 
@@ -12623,8 +12629,8 @@ func TestDefaultConfigFromEnvSelectsAzureSpeechProviders(t *testing.T) {
 	if got := app.Session.STT.Label(); got != "azure.STT" {
 		t.Fatalf("STT label = %q, want azure.STT", got)
 	}
-	if got := app.Session.TTS.Label(); got != "StreamAdapter(azure.TTS)" {
-		t.Fatalf("TTS label = %q, want Azure TTS wrapped by core stream adapter", got)
+	if got := app.Session.TTS.Label(); got != "tts.StreamAdapter" {
+		t.Fatalf("TTS label = %q, want core stream adapter wrapping Azure TTS", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 24000 {
 		t.Fatalf("TTS sample rate = %d, want 24000", got)
