@@ -706,6 +706,42 @@ func TestElevenLabsTTSReadErrorIncludesProviderOperationContext(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSPCMReadDeadlineReturnsAPITimeoutError(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: elevenLabsErrReader{err: context.DeadlineExceeded}},
+		encoding:   "pcm_8000",
+		sampleRate: 8000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestElevenLabsTTSMP3ReadDeadlineReturnsAPITimeoutError(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: elevenLabsErrReader{err: context.DeadlineExceeded}},
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestElevenLabsTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &elevenLabsCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &elevenLabsChunkedStream{

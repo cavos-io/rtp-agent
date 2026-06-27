@@ -457,6 +457,9 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			return nil, io.EOF
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked pcm response read %s: %v", s.audioByteState(), err))
+		}
 		return nil, fmt.Errorf("elevenlabs TTS chunked pcm response read %s: %w", s.audioByteState(), err)
 	}
 
@@ -495,6 +498,9 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 		}
 		s.mu.Unlock()
 		if readErr != nil {
+			if errors.Is(readErr, context.DeadlineExceeded) {
+				return nil, llm.NewAPITimeoutError(fmt.Sprintf("elevenlabs TTS chunked mp3 response read %s: %v", s.audioByteState(), readErr))
+			}
 			return nil, fmt.Errorf("elevenlabs TTS chunked mp3 response read %s: %w", s.audioByteState(), readErr)
 		}
 		if readLen == 0 && !finalSent {
