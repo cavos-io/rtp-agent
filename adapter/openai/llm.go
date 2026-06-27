@@ -224,6 +224,23 @@ func WithOpenAILLMUser(user string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMOrganization(organization string) OpenAILLMOption {
+	return withOpenAILLMExtraHeader("OpenAI-Organization", organization)
+}
+
+func WithOpenAILLMProject(project string) OpenAILLMOption {
+	return withOpenAILLMExtraHeader("OpenAI-Project", project)
+}
+
+func withOpenAILLMExtraHeader(key string, value string) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraHeaders == nil {
+			l.extraHeaders = map[string]string{}
+		}
+		l.extraHeaders[key] = value
+	}
+}
+
 func WithOpenAILLMMetadata(metadata map[string]string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		if l.extraParams == nil {

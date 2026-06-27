@@ -345,6 +345,39 @@ func TestNewAzureOpenAILLMFallsBackToReferenceOrganizationProjectEnvironment(t *
 	}
 }
 
+func TestNewAzureOpenAILLMUsesExplicitOrganizationProjectOptions(t *testing.T) {
+	t.Setenv("OPENAI_ORG_ID", "env-org")
+	t.Setenv("OPENAI_PROJECT_ID", "env-project")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"https://resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMOrganization("explicit-org"),
+		WithOpenAILLMProject("explicit-project"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := capture.header.Get("OpenAI-Organization"); got != "explicit-org" {
+		t.Fatalf("OpenAI-Organization header = %q, want explicit organization", got)
+	}
+	if got := capture.header.Get("OpenAI-Project"); got != "explicit-project" {
+		t.Fatalf("OpenAI-Project header = %q, want explicit project", got)
+	}
+}
+
 func TestNewAzureOpenAILLMDoesNotRetryByDefault(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusTooManyRequests, `{"error":{"message":"rate limit","type":"rate_limit","code":"rate_limit"}}`),

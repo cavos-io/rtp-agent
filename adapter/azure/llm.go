@@ -32,6 +32,14 @@ func WithAzureLLMUser(user string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMUser(user)
 }
 
+func WithAzureLLMOrganization(organization string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMOrganization(organization)
+}
+
+func WithAzureLLMProject(project string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMProject(project)
+}
+
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {
 	return adapteropenai.NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken, opts...)
 }
