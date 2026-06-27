@@ -2346,6 +2346,43 @@ func TestAzureTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T)
 	}
 }
 
+func TestAzureTTSChunkedStreamKeepsAudioBeforeReferenceReadFailure(t *testing.T) {
+	body := &bytesThenErrorReadCloser{
+		data: []byte{0x01, 0x02},
+		err:  errors.New("socket closed"),
+	}
+	stream := &azureTTSChunkedStream{
+		body:       body,
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want audio before read failure", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first Next = %#v, want audio frame", audio)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("audio data = %v, want provider bytes before read failure", audio.Frame.Data)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("second Next error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after read failure", body.closed)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("third Next = (%#v, %v), want nil, io.EOF", audio, err)
+	}
+}
+
 func TestAzureTTSChunkedStreamReadFailureClosesReferenceStream(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
@@ -2667,6 +2704,26 @@ func (r errorReadCloser) Read([]byte) (int, error) {
 }
 
 func (r errorReadCloser) Close() error {
+	return nil
+}
+
+type bytesThenErrorReadCloser struct {
+	data   []byte
+	err    error
+	closed int
+	done   bool
+}
+
+func (r *bytesThenErrorReadCloser) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), r.err
+}
+
+func (r *bytesThenErrorReadCloser) Close() error {
+	r.closed++
 	return nil
 }
 
