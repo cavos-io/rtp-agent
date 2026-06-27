@@ -1296,12 +1296,10 @@ func (s *elevenLabsStream) sendCompleteWordsLocked() error {
 	if len(tokens) <= 1 {
 		return nil
 	}
-	words := make([]string, 0, len(tokens)-1)
 	for _, token := range tokens[:len(tokens)-1] {
-		words = append(words, token.Token)
-	}
-	if err := s.sendTextLocked(strings.Join(words, " "), false); err != nil {
-		return err
+		if err := s.sendTextLocked(token.Token, false); err != nil {
+			return err
+		}
 	}
 	lastStart := tokens[len(tokens)-1].Start
 	runes := []rune(s.pendingText)

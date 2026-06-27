@@ -1290,6 +1290,67 @@ func TestElevenLabsTTSStreamWordTokenizerHoldsTailUntilFlushLikeReference(t *tes
 	}
 }
 
+func TestElevenLabsTTSStreamWordTokenizerSendsCompleteWordsIndividuallyLikeReference(t *testing.T) {
+	messages := make(chan map[string]any, 5)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSWebsocketServer(messages, serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsChunkLengthSchedule([]int{80, 120, 200}),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("one two three"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	init := readElevenLabsTTSStreamMessage(t, messages)
+	contextID, _ := init["context_id"].(string)
+	if init["text"] != " " || contextID == "" {
+		t.Fatalf("init packet = %#v, want warmup packet with context_id", init)
+	}
+	first := readElevenLabsTTSStreamMessage(t, messages)
+	if first["text"] != "one " || first["context_id"] != contextID {
+		t.Fatalf("first text packet = %#v, want first complete word for context %q", first, contextID)
+	}
+	second := readElevenLabsTTSStreamMessage(t, messages)
+	if second["text"] != "two " || second["context_id"] != contextID {
+		t.Fatalf("second text packet = %#v, want second complete word for context %q", second, contextID)
+	}
+	select {
+	case msg := <-messages:
+		t.Fatalf("final incomplete word sent before Flush: %#v", msg)
+	default:
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	tail := readElevenLabsTTSStreamMessage(t, messages)
+	if tail["text"] != "three " || tail["context_id"] != contextID {
+		t.Fatalf("tail text packet = %#v, want flushed final word for context %q", tail, contextID)
+	}
+}
+
 func TestElevenLabsTTSStreamEndInputClosesContextLikeReference(t *testing.T) {
 	messages := make(chan map[string]any, 4)
 	serverErr := make(chan error, 1)
