@@ -2183,8 +2183,10 @@ func TestAzureTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAzureTTS error = %v", err)
 	}
+	requests := 0
 	provider.httpClient = &http.Client{
 		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Body:       body,
@@ -2202,8 +2204,11 @@ func TestAzureTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if body.closed != 1 {
-		t.Fatalf("body Close calls = %d, want 1", body.closed)
+	if requests != 0 {
+		t.Fatalf("requests after provider Close before Next = %d, want none", requests)
+	}
+	if body.closed != 0 {
+		t.Fatalf("body Close calls = %d, want no unopened body close", body.closed)
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after provider Close error = %v, want io.EOF", err)
@@ -2211,8 +2216,8 @@ func TestAzureTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("second Close error = %v", err)
 	}
-	if body.closed != 1 {
-		t.Fatalf("body Close calls after second Close = %d, want 1", body.closed)
+	if body.closed != 0 {
+		t.Fatalf("body Close calls after second Close = %d, want no unopened body close", body.closed)
 	}
 }
 
@@ -2278,6 +2283,39 @@ func TestAzureTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	}
 }
 
+func TestAzureTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	requests := 0
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want deferred request", requests)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after Close before Next = %d, want none", requests)
+	}
+}
+
 func TestAzureTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {
@@ -2295,13 +2333,17 @@ func TestAzureTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want APIStatusError")
+		t.Fatal("Next error = nil, want APIStatusError")
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -2320,13 +2362,17 @@ func TestAzureTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want APITimeoutError")
+		t.Fatal("Next error = nil, want APITimeoutError")
 	}
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -2342,17 +2388,21 @@ func TestAzureTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want APIConnectionError")
+		t.Fatal("Next error = nil, want APIConnectionError")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 	var timeoutErr *llm.APITimeoutError
 	if errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want non-timeout APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want non-timeout APIConnectionError", err, err)
 	}
 }
 
