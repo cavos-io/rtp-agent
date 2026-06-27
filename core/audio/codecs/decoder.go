@@ -141,25 +141,21 @@ func (d *MP3AudioStreamDecoder) processLoop() {
 }
 
 type OpusAudioStreamDecoder struct {
-	pipeReader *io.PipeReader
-	pipeWriter *io.PipeWriter
-
 	sampleRate  int
 	numChannels int
 
+	buffer   bytes.Buffer
 	outputCh chan *model.AudioFrame
 	errCh    chan error
 
 	mu     sync.Mutex
 	closed bool
 	ended  bool
+	once   sync.Once
 }
 
 func NewOpusAudioStreamDecoder(sampleRate int, numChannels int) AudioStreamDecoder {
-	pr, pw := io.Pipe()
 	d := &OpusAudioStreamDecoder{
-		pipeReader:  pr,
-		pipeWriter:  pw,
 		sampleRate:  sampleRate,
 		numChannels: numChannels,
 		outputCh:    make(chan *model.AudioFrame, 100),
@@ -172,23 +168,16 @@ func NewOpusAudioStreamDecoder(sampleRate int, numChannels int) AudioStreamDecod
 
 func (d *OpusAudioStreamDecoder) Push(data []byte) {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 	if d.closed || d.ended {
-		d.mu.Unlock()
 		return
 	}
-	d.mu.Unlock()
-
-	if _, err := d.pipeWriter.Write(data); err != nil {
-		logger.Logger.Errorw("failed to write to opus decoder pipe", err)
-	}
+	d.buffer.Write(data)
 }
 
 func (d *OpusAudioStreamDecoder) EndInput() {
 	d.mu.Lock()
-	if !d.ended {
-		d.ended = true
-		d.pipeWriter.Close()
-	}
+	d.ended = true
 	d.mu.Unlock()
 }
 
@@ -206,19 +195,35 @@ func (d *OpusAudioStreamDecoder) Next() (*model.AudioFrame, error) {
 
 func (d *OpusAudioStreamDecoder) Close() error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if !d.closed {
-		d.closed = true
-		d.pipeReader.Close()
-		d.pipeWriter.Close()
+	if d.closed {
+		d.mu.Unlock()
+		return nil
 	}
+	d.closed = true
+	d.mu.Unlock()
 	return nil
 }
 
 func (d *OpusAudioStreamDecoder) processLoop() {
-	defer close(d.outputCh)
+	defer d.closeOutput()
 
-	stream, err := opus.NewStream(d.pipeReader)
+	var data []byte
+	for {
+		d.mu.Lock()
+		if d.closed {
+			d.mu.Unlock()
+			return
+		}
+		if d.ended {
+			data = append([]byte(nil), d.buffer.Bytes()...)
+			d.mu.Unlock()
+			break
+		}
+		d.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	stream, err := opus.NewStream(bytes.NewReader(data))
 	if err != nil {
 		d.errCh <- fmt.Errorf("failed to initialize opus decoder: %w", err)
 		return
@@ -248,6 +253,12 @@ func (d *OpusAudioStreamDecoder) processLoop() {
 			break
 		}
 	}
+}
+
+func (d *OpusAudioStreamDecoder) closeOutput() {
+	d.once.Do(func() {
+		close(d.outputCh)
+	})
 }
 
 func DecodeOpusAudio(data []byte, sampleRate int, numChannels int) (*model.AudioFrame, error) {

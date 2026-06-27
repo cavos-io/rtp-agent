@@ -2756,6 +2756,70 @@ func TestElevenLabsTTSWebsocketMP3DecodesSplitProviderAudio(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSWebsocketOpusDecodesSplitProviderAudio(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(elevenLabsOpusFixtureBase64)
+	if err != nil {
+		t.Fatalf("DecodeString fixture error = %v", err)
+	}
+	splitAt := len(opusData) / 2
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &elevenLabsStream{
+		audio:      make(chan *tts.SynthesizedAudio, 100),
+		errCh:      make(chan error, 1),
+		ctx:        ctx,
+		cancel:     cancel,
+		encoding:   "opus_48000_64",
+		sampleRate: 48000,
+	}
+	if err := stream.pushCompressedAudio(base64.StdEncoding.EncodeToString(opusData[:splitAt]), "", nil); err != nil {
+		t.Fatalf("push first split Opus chunk: %v", err)
+	}
+	if err := stream.pushCompressedAudio(base64.StdEncoding.EncodeToString(opusData[splitAt:]), "", nil); err != nil {
+		t.Fatalf("push second split Opus chunk: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		stream.closeMP3Decoder(true)
+		close(stream.audio)
+		close(done)
+	}()
+
+	decodedFrames := 0
+	for range 5000 {
+		var audio *tts.SynthesizedAudio
+		select {
+		case err := <-stream.errCh:
+			t.Fatalf("split Opus decode error = %v", err)
+		case audio = <-stream.audio:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for split Opus decoded audio")
+		}
+		if audio.IsFinal {
+			if decodedFrames == 0 {
+				t.Fatal("final marker arrived before decoded split Opus audio")
+			}
+			break
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("decoded audio = %#v, want PCM frame", audio)
+		}
+		if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 1 {
+			t.Fatalf("decoded frame format = %d Hz/%d ch, want 48000 Hz mono", audio.Frame.SampleRate, audio.Frame.NumChannels)
+		}
+		decodedFrames++
+	}
+	if decodedFrames == 0 {
+		t.Fatal("decoded split Opus frames = 0")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Opus decoder close")
+	}
+}
+
 func TestElevenLabsTTSWebsocketMP3CarriesReferenceAlignmentMetadata(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
