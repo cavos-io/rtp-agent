@@ -443,6 +443,10 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}, nil
 		}
 		if err == io.EOF {
+			if s.emitted && !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		return nil, fmt.Errorf("elevenlabs TTS chunked pcm response read %s: %w", s.audioByteState(), err)

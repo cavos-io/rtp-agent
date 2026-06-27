@@ -511,6 +511,43 @@ func TestElevenLabsTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 	t.Fatalf("stream did not emit final marker after %d frames", frames)
 }
 
+func TestElevenLabsTTSChunkedStreamEmitsReferencePCMFinalMarker(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{1, 0, 2, 0}))},
+		encoding:   "pcm_8000",
+		sampleRate: 8000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first Next audio = %#v, want PCM frame", audio)
+	}
+	if audio.IsFinal {
+		t.Fatal("first PCM frame IsFinal = true, want separate final marker after provider EOF")
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker", err)
+	}
+	if final == nil {
+		t.Fatal("second Next audio = nil, want final marker")
+	}
+	if !final.IsFinal {
+		t.Fatal("second Next IsFinal = false, want reference final marker")
+	}
+	if final.Frame != nil {
+		t.Fatalf("final marker frame = %#v, want nil marker", final.Frame)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
 func TestElevenLabsTTSReadErrorIncludesProviderOperationContext(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
