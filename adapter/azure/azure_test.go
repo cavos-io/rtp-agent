@@ -1636,6 +1636,97 @@ func TestAzureSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	receiveAzureTestSignal(t, serverClosed, "server close")
 }
 
+func TestAzureSTTStreamContextDeadlineClosesReferenceStream(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{})
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestHoldOpenDialer(t, requests, configMessages, serverClosed)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	stream, err := provider.Stream(ctx, "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+
+	_, err = stream.Next()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Next error = %v, want context deadline exceeded", err)
+	}
+	receiveAzureTestSignal(t, serverClosed, "server close after context deadline")
+
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after context deadline = %d, want stream unregistered", active)
+	}
+}
+
+func TestAzureSTTStreamContextCancelClosesWithoutNext(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{})
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestHoldOpenDialer(t, requests, configMessages, serverClosed)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	stream, err := provider.Stream(ctx, "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+
+	cancel()
+	receiveAzureTestSignal(t, serverClosed, "server close after context cancel")
+
+	provider.mu.Lock()
+	active := len(provider.streams)
+	provider.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active streams after context cancel = %d, want stream unregistered", active)
+	}
+	if _, err := stream.Next(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next after context cancel cleanup = %v, want context canceled", err)
+	}
+}
+
+func TestAzureSTTStreamRejectsAudioAfterContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &azureSTTStream{
+		ctx:    ctx,
+		cancel: func() {},
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after context cancel error = %v, want io.ErrClosedPipe", err)
+	}
+	if len(stream.pendingAudio) != 0 {
+		t.Fatalf("pending audio after context cancel = %d frames, want none", len(stream.pendingAudio))
+	}
+}
+
 func TestAzureSTTClosedStreamRejectsFlush(t *testing.T) {
 	stream := &azureSTTStream{closed: true}
 
@@ -2096,6 +2187,88 @@ func TestAzureSTTUpdateOptionsPropagatesSegmentationToActiveStream(t *testing.T)
 	receiveAzureTestValue(t, audioMessages, "audio after update reconnect")
 }
 
+func TestAzureSTTUpdateOptionsReconnectsActiveStreamBeforeNextAudio(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	serverClosed := make(chan struct{}, 2)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestSessionStartedHoldOpenDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "first request")
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	azureTestWaitForSessionStarted(t, stream)
+
+	provider.UpdateOptions("id-ID", WithAzureSTTSegmentationSilenceTimeout(650))
+
+	secondReq := receiveAzureTestValue(t, requests, "second request after update")
+	if got := secondReq.URL.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("second stream language = %q, want updated language id-ID", got)
+	}
+	secondConfig := receiveAzureTestValue(t, configMessages, "second speech config after update")
+	_, configBody := splitAzureTestMessage(t, []byte(secondConfig))
+	var configPayload struct {
+		Properties map[string]string `json:"properties"`
+	}
+	if err := json.Unmarshal(configBody, &configPayload); err != nil {
+		t.Fatalf("speech config JSON: %v", err)
+	}
+	if got := configPayload.Properties["Speech_SegmentationSilenceTimeoutMs"]; got != "650" {
+		t.Fatalf("segmentation silence timeout = %q, want 650", got)
+	}
+	receiveAzureTestSignal(t, serverClosed, "first server close after update")
+}
+
+func TestAzureSTTFlushSendsReferenceSilenceFrame(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	audioMessages := make(chan []byte, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestSessionStartedAudioDialer(t, requests, configMessages, audioMessages)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+	azureTestWaitForSessionStarted(t, stream)
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audioMessage := receiveAzureTestValue(t, audioMessages, "flush silence audio")
+	audioHeaders, audioPayload := splitAzureTestBinaryMessage(t, audioMessage)
+	if audioHeaders["Path"] != "audio" {
+		t.Fatalf("flush audio Path = %q, want audio", audioHeaders["Path"])
+	}
+	if audioHeaders["Content-Type"] != "audio/x-wav;codec=audio/pcm;samplerate=16000" {
+		t.Fatalf("flush audio Content-Type = %q, want Azure raw PCM stream format", audioHeaders["Content-Type"])
+	}
+	if len(audioPayload) != 6400 {
+		t.Fatalf("flush audio payload length = %d, want 200ms 16-bit mono silence", len(audioPayload))
+	}
+	if !bytes.Equal(audioPayload, make([]byte, len(audioPayload))) {
+		t.Fatal("flush audio payload is not silence")
+	}
+}
+
 func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 	t.Setenv(azureSpeechKeyEnv, "env-key")
 	t.Setenv(azureSpeechRegionEnv, "westus")
@@ -2296,6 +2469,30 @@ func TestAzureTTSBuildsRequestWithReferenceSSMLOptions(t *testing.T) {
 	want := `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US"><voice name="en-US-AvaNeural"><lexicon uri="https://example.com/lexicon.xml"/><mstts:express-as style="cheerful" styledegree="1.5"><prosody rate="fast" volume="loud" pitch="high">hello</prosody></mstts:express-as></voice></speak>`
 	if string(body) != want {
 		t.Fatalf("SSML = %q, want %q", string(body), want)
+	}
+}
+
+func TestAzureTTSRequestEscapesTextForReferenceSSML(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "en-US-AvaNeural")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "one < two & three")
+	if err != nil {
+		t.Fatalf("buildAzureTTSRequest error = %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	bodyText := string(body)
+
+	if strings.Contains(bodyText, "one < two & three") {
+		t.Fatalf("SSML body = %s, want escaped text content", bodyText)
+	}
+	if !strings.Contains(bodyText, "one &lt; two &amp; three") {
+		t.Fatalf("SSML body = %s, want escaped text content", bodyText)
 	}
 }
 
@@ -2640,6 +2837,21 @@ func TestAzureTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamCloseSuppressesBodyCloseError(t *testing.T) {
+	body := &closeErrorReadCloser{err: errors.New("socket close failed")}
+	stream := &azureTTSChunkedStream{
+		body:       body,
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cancellation", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closed)
+	}
+}
+
 func TestAzureTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	stream := &azureTTSChunkedStream{
 		body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
@@ -2695,6 +2907,151 @@ func TestAzureTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if body.closed != 0 {
 		t.Fatalf("body Close calls after second Close = %d, want no unopened body close", body.closed)
+	}
+}
+
+func TestAzureTTSChunkedStreamCloseCancelsInFlightRequest(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	entered := make(chan struct{})
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			close(entered)
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	nextErr := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextErr <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start Azure TTS request")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextErr:
+		if err != io.EOF {
+			t.Fatalf("Next after in-flight Close error = %v, want io.EOF", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Next did not return after Close canceled in-flight request")
+	}
+}
+
+func TestAzureTTSChunkedStreamCloseDropsLateResponse(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	body := &bytesThenErrorReadCloser{data: []byte{0x01, 0x02}, err: io.EOF}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			close(entered)
+			<-release
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       body,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	nextDone := make(chan struct{})
+	var nextAudio *tts.SynthesizedAudio
+	var nextErr error
+	go func() {
+		nextAudio, nextErr = stream.Next()
+		close(nextDone)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start Azure TTS request")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(release)
+	select {
+	case <-nextDone:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not return after late Azure TTS response")
+	}
+	if nextAudio != nil || nextErr != io.EOF {
+		t.Fatalf("Next after Close late response = (%#v, %v), want nil, io.EOF", nextAudio, nextErr)
+	}
+	if body.closed != 1 {
+		t.Fatalf("late response body Close calls = %d, want 1", body.closed)
+	}
+}
+
+func TestAzureTTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	body := newBlockingCloseReadCloser()
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       body,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	nextErr := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextErr <- err
+	}()
+
+	select {
+	case <-body.entered:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start reading Azure TTS response")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextErr:
+		if err != io.EOF {
+			t.Fatalf("Next after Close during read error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not return after Close during read")
+	}
+	if body.closed != 1 {
+		t.Fatalf("response body Close calls = %d, want 1", body.closed)
 	}
 }
 
@@ -2948,6 +3305,20 @@ func (r *countingReadCloser) Close() error {
 	return nil
 }
 
+type closeErrorReadCloser struct {
+	err    error
+	closed int
+}
+
+func (r *closeErrorReadCloser) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (r *closeErrorReadCloser) Close() error {
+	r.closed++
+	return r.err
+}
+
 type countingErrorReadCloser struct {
 	err    error
 	closed int
@@ -2962,6 +3333,31 @@ func (r *countingErrorReadCloser) Close() error {
 	return nil
 }
 
+type blockingCloseReadCloser struct {
+	entered chan struct{}
+	closedC chan struct{}
+	closed  int
+}
+
+func newBlockingCloseReadCloser() *blockingCloseReadCloser {
+	return &blockingCloseReadCloser{
+		entered: make(chan struct{}),
+		closedC: make(chan struct{}),
+	}
+}
+
+func (r *blockingCloseReadCloser) Read([]byte) (int, error) {
+	close(r.entered)
+	<-r.closedC
+	return 0, io.ErrClosedPipe
+}
+
+func (r *blockingCloseReadCloser) Close() error {
+	r.closed++
+	close(r.closedC)
+	return nil
+}
+
 func receiveAzureTestValue[T any](t *testing.T, ch <-chan T, name string) T {
 	t.Helper()
 	select {
@@ -2971,6 +3367,29 @@ func receiveAzureTestValue[T any](t *testing.T, ch <-chan T, name string) T {
 		var zero T
 		t.Fatalf("timed out waiting for %s", name)
 		return zero
+	}
+}
+
+func azureTestWaitForSessionStarted(t *testing.T, stream stt.RecognizeStream) {
+	t.Helper()
+	concrete, ok := stream.(*azureSTTStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *azureSTTStream", stream)
+	}
+	deadline := time.After(time.Second)
+	for {
+		concrete.mu.Lock()
+		started := concrete.sessionStarted
+		concrete.mu.Unlock()
+		if started {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Azure STT session start")
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
@@ -3460,6 +3879,92 @@ func azureTestTurnEndHoldOpenDialer(
 	}
 }
 
+func azureTestSessionStartedHoldOpenDialer(
+	t *testing.T,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	serverClosed chan<- struct{},
+) azureSTTWebsocketDialer {
+	t.Helper()
+	return func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		errCh := make(chan error, 1)
+		go runAzureTestSessionStartedHoldOpenWebsocketServer(serverConn, requests, configMessages, serverClosed, errCh)
+
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		dialer := websocket.Dialer{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+			Proxy: nil,
+		}
+		conn, resp, err := dialer.DialContext(ctx, parsed.String(), headers)
+		if err != nil {
+			clientConn.Close()
+			select {
+			case serverErr := <-errCh:
+				return nil, resp, fmt.Errorf("%w; server: %v", err, serverErr)
+			default:
+				return nil, resp, err
+			}
+		}
+		go func() {
+			if serverErr := <-errCh; serverErr != nil && !isAzureTestWebsocketCleanupError(serverErr) {
+				t.Errorf("test session-started hold-open websocket server: %v", serverErr)
+			}
+		}()
+		return conn, resp, nil
+	}
+}
+
+func azureTestSessionStartedAudioDialer(
+	t *testing.T,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	audioMessages chan<- []byte,
+) azureSTTWebsocketDialer {
+	t.Helper()
+	return func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		errCh := make(chan error, 1)
+		go runAzureTestSessionStartedAudioWebsocketServer(serverConn, requests, configMessages, audioMessages, errCh)
+
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		dialer := websocket.Dialer{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 8192,
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+			Proxy: nil,
+		}
+		conn, resp, err := dialer.DialContext(ctx, parsed.String(), headers)
+		if err != nil {
+			clientConn.Close()
+			select {
+			case serverErr := <-errCh:
+				return nil, resp, fmt.Errorf("%w; server: %v", err, serverErr)
+			default:
+				return nil, resp, err
+			}
+		}
+		go func() {
+			if serverErr := <-errCh; serverErr != nil && !isAzureTestWebsocketCleanupError(serverErr) {
+				t.Errorf("test session-started audio websocket server: %v", serverErr)
+			}
+		}()
+		return conn, resp, nil
+	}
+}
+
 func runAzureTestHoldOpenWebsocketServer(
 	conn net.Conn,
 	requests chan<- *http.Request,
@@ -3490,6 +3995,93 @@ func runAzureTestHoldOpenWebsocketServer(
 		return
 	}
 	configMessages <- string(payload)
+	for {
+		if _, _, err := readAzureTestWebsocketFrame(reader); err != nil {
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func runAzureTestSessionStartedAudioWebsocketServer(
+	conn net.Conn,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	audioMessages chan<- []byte,
+	errCh chan<- error,
+) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	requests <- req
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", azureTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readAzureTestWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage {
+		errCh <- fmt.Errorf("speech config opcode = %d, want text", opcode)
+		return
+	}
+	configMessages <- string(payload)
+	if err := writeAzureTestWebsocketFrame(conn, websocket.TextMessage, []byte("Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}")); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		opcode, payload, err := readAzureTestWebsocketFrame(reader)
+		if err != nil {
+			errCh <- nil
+			return
+		}
+		if opcode == websocket.BinaryMessage {
+			audioMessages <- payload
+		}
+	}
+}
+
+func runAzureTestSessionStartedHoldOpenWebsocketServer(
+	conn net.Conn,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	serverClosed chan<- struct{},
+	errCh chan<- error,
+) {
+	defer conn.Close()
+	defer func() { serverClosed <- struct{}{} }()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	requests <- req
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", azureTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readAzureTestWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage {
+		errCh <- fmt.Errorf("speech config opcode = %d, want text", opcode)
+		return
+	}
+	configMessages <- string(payload)
+	if err := writeAzureTestWebsocketFrame(conn, websocket.TextMessage, []byte("Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}")); err != nil {
+		errCh <- err
+		return
+	}
 	for {
 		if _, _, err := readAzureTestWebsocketFrame(reader); err != nil {
 			errCh <- nil

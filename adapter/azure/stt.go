@@ -29,6 +29,7 @@ const (
 	defaultAzureSTTLanguage   = "en-US"
 	defaultAzureSTTSampleRate = 16000
 	defaultAzureSTTRetries    = 3
+	azureSTTFlushSilenceMS    = 200
 )
 
 type azureSTTWebsocketDialer func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error)
@@ -353,6 +354,7 @@ func (s *AzureSTT) Stream(ctx context.Context, language string) (stt.RecognizeSt
 		conn.Close()
 		return nil, io.ErrClosedPipe
 	}
+	go stream.watchContext()
 	go stream.readLoop(conn)
 	return stream, nil
 }
@@ -724,6 +726,7 @@ type azureSTTStream struct {
 	mu              sync.Mutex
 	closed          bool
 	closedWithError bool
+	terminalErr     error
 	audioWritten    bool
 	sessionStarted  bool
 	pendingAudio    []azureSTTPendingAudio
@@ -752,6 +755,10 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.ctx != nil && s.ctx.Err() != nil {
+		s.finishWithErrorLocked(s.ctx.Err())
 		return io.ErrClosedPipe
 	}
 	if s.sessionStopped && !s.reconnectNext {
@@ -814,11 +821,30 @@ func (s *azureSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.ctx != nil && s.ctx.Err() != nil {
+		s.finishWithErrorLocked(s.ctx.Err())
+		return io.ErrClosedPipe
+	}
 	if s.sessionStopped && !s.reconnectNext {
 		s.finishWithErrorLocked(llm.NewAPIConnectionError("SpeechRecognition session stopped"))
 		return io.ErrClosedPipe
 	}
-	return nil
+	if s.reconnectNext {
+		if err := s.reconnectLocked(); err != nil {
+			s.finishWithErrorLocked(err)
+			return err
+		}
+		s.reconnectNext = false
+	}
+	silence := azureSTTPendingAudio{
+		contentType: s.audioContentType(),
+		data:        make([]byte, int(s.sampleRate)*2*azureSTTFlushSilenceMS/1000),
+	}
+	if !s.sessionStarted {
+		s.pendingAudio = append(s.pendingAudio, silence)
+		return nil
+	}
+	return s.writeAudioLocked(silence)
 }
 
 func (s *azureSTTStream) Close() error {
@@ -852,6 +878,15 @@ func (s *azureSTTStream) hasClosedWithError() bool {
 	return s.closed && s.closedWithError
 }
 
+func (s *azureSTTStream) closedError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed && s.closedWithError {
+		return s.terminalErr
+	}
+	return nil
+}
+
 func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
 		if s.hasClosedWithError() {
@@ -866,6 +901,9 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 			case err := <-s.errCh:
 				return nil, s.finalizeSessionStopError(err)
 			default:
+			}
+			if err := s.closedError(); err != nil {
+				return nil, err
 			}
 		}
 		return nil, io.EOF
@@ -916,9 +954,22 @@ func (s *azureSTTStream) Next() (*stt.SpeechEvent, error) {
 		return nil, s.finalizeSessionStopError(err)
 	case <-s.ctx.Done():
 		if s.isClosed() {
+			if err := s.closedError(); err != nil {
+				return nil, err
+			}
 			return nil, io.EOF
 		}
-		return nil, s.ctx.Err()
+		err := s.ctx.Err()
+		s.mu.Lock()
+		if !s.closed {
+			s.finishWithErrorLocked(err)
+			select {
+			case <-s.errCh:
+			default:
+			}
+		}
+		s.mu.Unlock()
+		return nil, err
 	}
 }
 
@@ -952,6 +1003,14 @@ func (s *azureSTTStream) updateOptions(language string, languages []string, reco
 	}
 	if reconnect {
 		s.streamURL = buildAzureSTTStreamURL(s.provider, s.language)
+		if s.sessionStarted {
+			if err := s.reconnectLocked(); err != nil {
+				s.finishWithErrorLocked(err)
+				return
+			}
+			s.reconnectNext = false
+			return
+		}
 		s.reconnectNext = true
 	}
 }
@@ -991,6 +1050,7 @@ func (s *azureSTTStream) finishWithErrorLocked(err error) {
 	}
 	s.closed = true
 	s.closedWithError = true
+	s.terminalErr = err
 	if s.errCh != nil {
 		select {
 		case s.errCh <- err:
@@ -1006,6 +1066,16 @@ func (s *azureSTTStream) finishWithErrorLocked(err error) {
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
+}
+
+func (s *azureSTTStream) watchContext() {
+	<-s.ctx.Done()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.finishWithErrorLocked(s.ctx.Err())
 }
 
 func (s *azureSTTStream) readLoop(conn *websocket.Conn) {
