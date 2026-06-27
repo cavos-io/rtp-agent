@@ -316,8 +316,64 @@ func (t *ElevenLabsTTS) unregisterStream(stream *elevenLabsStream) {
 }
 
 func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
+	before := t.connectionKey()
 	for _, opt := range opts {
 		opt(t)
+	}
+	after := t.connectionKey()
+	if before != after {
+		t.mu.Lock()
+		t.currentStreamConn = nil
+		t.mu.Unlock()
+	}
+}
+
+type elevenLabsTTSConnectionKey struct {
+	baseURL                   string
+	voiceID                   string
+	modelID                   string
+	language                  string
+	enableSSMLParsing         bool
+	inactivityTimeout         int
+	enableLogging             bool
+	autoMode                  string
+	syncAlignment             bool
+	textNormalization         string
+	languageTextNormalization string
+	preferredAlignment        string
+	voiceSettings             string
+	dictionaries              string
+	chunkSchedule             string
+}
+
+func (t *ElevenLabsTTS) connectionKey() elevenLabsTTSConnectionKey {
+	if t == nil {
+		return elevenLabsTTSConnectionKey{}
+	}
+	autoMode := "<nil>"
+	if t.autoMode != nil {
+		autoMode = strconv.FormatBool(*t.autoMode)
+	}
+	languageTextNormalization := "<nil>"
+	if t.applyLanguageTextNormalization != nil {
+		languageTextNormalization = strconv.FormatBool(*t.applyLanguageTextNormalization)
+	}
+	return elevenLabsTTSConnectionKey{
+		baseURL:                   t.baseURL,
+		voiceID:                   t.voiceID,
+		modelID:                   t.modelID,
+		language:                  t.language,
+		enableSSMLParsing:         t.enableSSMLParsing,
+		inactivityTimeout:         t.inactivityTimeout,
+		enableLogging:             t.enableLogging,
+		autoMode:                  autoMode,
+		syncAlignment:             t.syncAlignment,
+		textNormalization:         t.applyTextNormalization,
+		languageTextNormalization: languageTextNormalization,
+		preferredAlignment:        t.preferredAlignment,
+		voiceSettings:             fmt.Sprintf("%#v", t.voiceSettings),
+		dictionaries:              fmt.Sprintf("%#v", t.pronunciationDictionaries),
+		chunkSchedule:             fmt.Sprint(t.chunkLengthSchedule),
 	}
 }
 
