@@ -312,6 +312,39 @@ func TestNewAzureOpenAILLMFallsBackToReferenceEnvironment(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAILLMFallsBackToReferenceOrganizationProjectEnvironment(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
+	t.Setenv("OPENAI_ORG_ID", "org-123")
+	t.Setenv("OPENAI_PROJECT_ID", "proj-456")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"",
+		"",
+		"",
+		"",
+		"",
+		withOpenAILLMHTTPClient(capture),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if got := capture.header.Get("OpenAI-Organization"); got != "org-123" {
+		t.Fatalf("OpenAI-Organization header = %q, want env organization", got)
+	}
+	if got := capture.header.Get("OpenAI-Project"); got != "proj-456" {
+		t.Fatalf("OpenAI-Project header = %q, want env project", got)
+	}
+}
+
 func TestNewAzureOpenAILLMRequiresEndpoint(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
 	t.Setenv("AZURE_OPENAI_API_KEY", "key")

@@ -41,6 +41,8 @@ const (
 	azureOpenAIAPIKeyEnv   = "AZURE_OPENAI_API_KEY"
 	azureOpenAIADTokenEnv  = "AZURE_OPENAI_AD_TOKEN"
 	openAIAPIVersionEnv    = "OPENAI_API_VERSION"
+	openAIOrgIDEnv         = "OPENAI_ORG_ID"
+	openAIProjectIDEnv     = "OPENAI_PROJECT_ID"
 	openRouterAPIKeyEnv    = "OPENROUTER_API_KEY"
 	deepSeekAPIKeyEnv      = "DEEPSEEK_API_KEY"
 	fireworksAPIKeyEnv     = "FIREWORKS_API_KEY"
@@ -381,6 +383,17 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	if apiVersion != "" {
 		config.APIVersion = apiVersion
+	}
+	if orgID := os.Getenv(openAIOrgIDEnv); orgID != "" {
+		config.OrgID = orgID
+	}
+	if projectID := os.Getenv(openAIProjectIDEnv); projectID != "" {
+		if provider.extraHeaders == nil {
+			provider.extraHeaders = map[string]string{}
+		}
+		if _, ok := provider.extraHeaders["OpenAI-Project"]; !ok {
+			provider.extraHeaders["OpenAI-Project"] = projectID
+		}
 	}
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
