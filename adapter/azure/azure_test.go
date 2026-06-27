@@ -197,6 +197,42 @@ func TestAzureSTTRecognizeUsesRESTRequestAndMapsDetailedResult(t *testing.T) {
 	}
 }
 
+func TestAzureSTTRecognizeUsesReferenceAuthToken(t *testing.T) {
+	provider, err := NewAzureSTT("", "eastus", WithAzureSTTAuthToken("token-123"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if got := req.Header.Get("Authorization"); got != "Bearer token-123" {
+				t.Fatalf("Authorization = %q, want bearer token", got)
+			}
+			if got := req.Header.Get("Ocp-Apim-Subscription-Key"); got != "" {
+				t.Fatalf("subscription header = %q, want omitted for auth token", got)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"RecognitionStatus":"Success","DisplayText":"token final"}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if got := event.Alternatives[0].Text; got != "token final" {
+		t.Fatalf("recognized text = %q, want token final", got)
+	}
+}
+
 func TestAzureSTTRecognizeUsesConfiguredSpeechHost(t *testing.T) {
 	provider, err := NewAzureSTT("", "", WithAzureSTTSpeechHost("https://speech.container.test"))
 	if err != nil {

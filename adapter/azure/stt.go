@@ -514,7 +514,11 @@ func buildAzureSTTRecognizeRequest(ctx context.Context, s *AzureSTT, frames []*m
 		return nil, err
 	}
 	req.Header.Set("Content-Type", fmt.Sprintf("audio/wav; codecs=audio/pcm; samplerate=%d", sampleRate))
-	req.Header.Set("Ocp-Apim-Subscription-Key", s.apiKey)
+	if s.authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+s.authToken)
+	} else if s.apiKey != "" {
+		req.Header.Set("Ocp-Apim-Subscription-Key", s.apiKey)
+	}
 	return req, nil
 }
 
