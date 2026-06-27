@@ -968,6 +968,9 @@ func processElevenLabsSTTStreamEvent(state *elevenLabsSTTStreamState, data map[s
 		return nil, nil
 	case "auth_error", "quota_exceeded", "transcriber_error", "input_error", "error":
 		msg, _ := data["message"].(string)
+		if msg == "" {
+			msg = "Unknown error"
+		}
 		details, _ := data["details"].(string)
 		if details != "" {
 			msg += " - " + details

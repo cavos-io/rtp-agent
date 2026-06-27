@@ -1507,6 +1507,16 @@ func TestElevenLabsSTTStreamEventReportsReferenceErrorTypes(t *testing.T) {
 			if !strings.Contains(err.Error(), messageType+": provider failed - turn stopped") {
 				t.Fatalf("error = %v, want message type and details", err)
 			}
+
+			_, err = processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
+				"message_type": messageType,
+			})
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("default error = %T %v, want APIConnectionError", err, err)
+			}
+			if !strings.Contains(err.Error(), messageType+": Unknown error") {
+				t.Fatalf("default error = %v, want reference default message", err)
+			}
 		})
 	}
 }
