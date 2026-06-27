@@ -1555,6 +1555,90 @@ func TestElevenLabsTTSUpdateOptionsInvalidatesReferenceWebsocketConnection(t *te
 	}
 }
 
+func TestElevenLabsTTSSequentialStreamsReuseReferenceWebsocketConnection(t *testing.T) {
+	serverErr := make(chan error, 1)
+	dialCount := make(chan struct{}, 2)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSSequentialContextWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			select {
+			case dialCount <- struct{}{}:
+			default:
+			}
+			if len(dialCount) > 1 {
+				return nil, errors.New("unexpected second websocket dial")
+			}
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsEncoding("pcm_16000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	first, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("first Stream error = %v", err)
+	}
+	if err := first.PushText("alpha beta"); err != nil {
+		t.Fatalf("first PushText error = %v", err)
+	}
+	if err := first.Flush(); err != nil {
+		t.Fatalf("first Flush error = %v", err)
+	}
+	firstAudio, err := first.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if got := firstAudio.Frame.Data; !bytes.Equal(got, []byte{1, 0, 2, 0}) {
+		t.Fatalf("first audio = %v, want first context audio", got)
+	}
+	if _, err := first.Next(); err != nil {
+		t.Fatalf("first final Next error = %v", err)
+	}
+	if next, err := first.Next(); next != nil || err != io.EOF {
+		t.Fatalf("first third Next = (%#v, %v), want EOF", next, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close error = %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	second, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("second Stream error = %v", err)
+	}
+	defer second.Close()
+	if err := second.PushText("bravo charlie"); err != nil {
+		t.Fatalf("second PushText error = %v", err)
+	}
+	if err := second.Flush(); err != nil {
+		t.Fatalf("second Flush error = %v", err)
+	}
+	secondAudio, err := second.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if got := secondAudio.Frame.Data; !bytes.Equal(got, []byte{3, 0, 4, 0}) {
+		t.Fatalf("second audio = %v, want second context audio", got)
+	}
+	if got := len(dialCount); got != 1 {
+		t.Fatalf("websocket dials = %d, want one reusable connection", got)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error = %v", err)
+	}
+}
+
 func TestElevenLabsTTSStreamAutoModeSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
 	messages := make(chan map[string]any, 4)
 	serverErr := make(chan error, 1)
@@ -3547,6 +3631,63 @@ func runElevenLabsTTSOneContextWebsocketServer(conn net.Conn, audio []byte, errC
 	}
 	_ = readElevenLabsClientWebsocketFrame(reader)
 	errCh <- nil
+}
+
+func runElevenLabsTTSSequentialContextWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := runElevenLabsTTSOneContextOnReader(conn, reader, []byte{1, 0, 2, 0}); err != nil {
+		errCh <- err
+		return
+	}
+	if err := runElevenLabsTTSOneContextOnReader(conn, reader, []byte{3, 0, 4, 0}); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
+func runElevenLabsTTSOneContextOnReader(conn net.Conn, reader *bufio.Reader, audio []byte) error {
+	var init map[string]any
+	for {
+		msg, err := readElevenLabsClientWebsocketJSONFrame(reader)
+		if err != nil {
+			return err
+		}
+		if msg["close_context"] == true {
+			continue
+		}
+		init = msg
+		break
+	}
+	text, err := readElevenLabsClientWebsocketJSONFrame(reader)
+	if err != nil {
+		return err
+	}
+	contextID, _ := init["context_id"].(string)
+	if textContextID, _ := text["context_id"].(string); textContextID != "" {
+		contextID = textContextID
+	}
+	if contextID == "" {
+		return errors.New("missing context_id in client packets")
+	}
+	if err := writeElevenLabsServerWebsocketJSONFrame(conn, map[string]any{
+		"context_id": contextID,
+		"audio":      base64.StdEncoding.EncodeToString(audio),
+		"isFinal":    true,
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func runElevenLabsClosingWebsocketServerAfterFrame(conn net.Conn, closed chan<- struct{}, errCh chan<- error) {

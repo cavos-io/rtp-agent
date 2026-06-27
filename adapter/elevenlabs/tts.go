@@ -940,7 +940,7 @@ func (c *elevenLabsTTSConnection) unregisterStream(stream *elevenLabsStream) {
 	empty := len(c.streams) == 0
 	c.mu.Unlock()
 	if empty {
-		time.AfterFunc(10*time.Millisecond, c.closeIfIdle)
+		time.AfterFunc(200*time.Millisecond, c.closeIfIdle)
 	}
 }
 
@@ -1059,21 +1059,21 @@ func (c *elevenLabsTTSConnection) fail(err error) {
 	time.AfterFunc(10*time.Millisecond, c.closeTransport)
 }
 
-func (c *elevenLabsTTSConnection) closeIfIdle() {
-	c.mu.Lock()
-	idle := len(c.streams) == 0
-	c.mu.Unlock()
-	if idle {
-		_ = c.close()
-	}
-}
-
 func (c *elevenLabsTTSConnection) closeTransport() {
 	c.mu.Lock()
 	conn := c.conn
 	c.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
+	}
+}
+
+func (c *elevenLabsTTSConnection) closeIfIdle() {
+	c.mu.Lock()
+	idle := len(c.streams) == 0
+	c.mu.Unlock()
+	if idle {
+		_ = c.close()
 	}
 }
 
@@ -2165,6 +2165,7 @@ func (s *elevenLabsStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	wasFinished := s.finished
 	s.closed = true
 	s.cancelResponseTimeoutLocked()
 	s.cancel()
@@ -2184,6 +2185,10 @@ func (s *elevenLabsStream) Close() error {
 	}
 	s.provider.unregisterStream(s)
 	if s.sharedConn != nil {
+		if !wasFinished {
+			s.sharedConn.unregisterStream(s)
+			return s.sharedConn.close()
+		}
 		s.sharedConn.unregisterStream(s)
 		return nil
 	}
