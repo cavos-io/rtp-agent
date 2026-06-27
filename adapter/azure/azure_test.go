@@ -2698,6 +2698,48 @@ func TestAzureTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestAzureTTSChunkedStreamCloseCancelsInFlightRequest(t *testing.T) {
+	provider, err := NewAzureTTS("key", "eastus", "")
+	if err != nil {
+		t.Fatalf("NewAzureTTS error = %v", err)
+	}
+	entered := make(chan struct{})
+	provider.httpClient = &http.Client{
+		Transport: azureRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			close(entered)
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	nextErr := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextErr <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start Azure TTS request")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextErr:
+		if err != io.EOF {
+			t.Fatalf("Next after in-flight Close error = %v, want io.EOF", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Next did not return after Close canceled in-flight request")
+	}
+}
+
 func TestAzureTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {

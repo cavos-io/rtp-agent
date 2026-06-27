@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -236,8 +237,10 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
-	req, err := buildAzureTTSRequest(ctx, t, text)
+	streamCtx, cancel := context.WithCancel(ctx)
+	req, err := buildAzureTTSRequest(streamCtx, t, text)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 
@@ -248,6 +251,7 @@ func (t *AzureTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStre
 	stream := &azureTTSChunkedStream{
 		req:        req,
 		client:     client,
+		cancel:     cancel,
 		sampleRate: t.sampleRate,
 		provider:   t,
 	}
@@ -440,18 +444,19 @@ type azureTTSChunkedStream struct {
 	body       io.ReadCloser
 	req        *http.Request
 	client     *http.Client
+	cancel     context.CancelFunc
 	sampleRate int
 	carry      byte
 	hasCarry   bool
 	pendingEOF bool
 	pendingErr error
 	finalSent  bool
-	closed     bool
+	closed     atomic.Bool
 	provider   *AzureTTS
 }
 
 func (s *azureTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.closed {
+	if s.closed.Load() {
 		return nil, io.EOF
 	}
 	if s.body == nil && s.req != nil {
@@ -538,6 +543,9 @@ func (s *azureTTSChunkedStream) start() error {
 	resp, err := client.Do(req)
 	if err != nil {
 		s.unregister()
+		if errors.Is(err, context.Canceled) && s.closed.Load() {
+			return io.EOF
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
@@ -558,7 +566,11 @@ func (s *azureTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 	s.finalSent = true
-	s.closed = true
+	s.closed.Store(true)
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	if s.body != nil {
 		body := s.body
 		s.body = nil
@@ -571,8 +583,12 @@ func (s *azureTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *azureTTSChunkedStream) failRead(err error) error {
-	s.closed = true
+	s.closed.Store(true)
 	s.finalSent = true
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	if s.body != nil {
 		body := s.body
 		s.body = nil
@@ -585,12 +601,16 @@ func (s *azureTTSChunkedStream) failRead(err error) error {
 }
 
 func (s *azureTTSChunkedStream) Close() error {
-	if s.closed {
+	if s.closed.Load() {
 		s.unregister()
 		return nil
 	}
-	s.closed = true
+	s.closed.Store(true)
 	s.finalSent = true
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	s.req = nil
 	s.client = nil
 	if s.body == nil {
