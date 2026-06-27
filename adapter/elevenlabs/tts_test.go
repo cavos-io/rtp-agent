@@ -1611,7 +1611,7 @@ func TestElevenLabsTTSSequentialStreamsReuseReferenceWebsocketConnection(t *test
 	if err := first.Close(); err != nil {
 		t.Fatalf("first Close error = %v", err)
 	}
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(250 * time.Millisecond)
 
 	second, err := provider.Stream(context.Background())
 	if err != nil {
@@ -2684,8 +2684,8 @@ func TestElevenLabsTTSWebsocketIgnoresWrongContextErrorLikeReference(t *testing.
 	if final == nil || !final.IsFinal {
 		t.Fatalf("final Next audio = %#v, want final marker", final)
 	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 	select {
 	case err := <-serverErr:
@@ -2736,8 +2736,8 @@ func TestElevenLabsTTSWebsocketIgnoresContextlessErrorLikeReference(t *testing.T
 	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{3, 0, 4, 0}) {
 		t.Fatalf("Next audio = %#v, want current context PCM frame", audio)
 	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 	select {
 	case err := <-serverErr:
@@ -2789,8 +2789,8 @@ func TestElevenLabsTTSWebsocketMalformedAudioReturnsAPIStatusError(t *testing.T)
 	if !strings.Contains(statusErr.Error(), "Could not synthesize") {
 		t.Fatalf("Next error = %v, want reference synthesis failure", statusErr)
 	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 	select {
 	case err := <-serverErr:
@@ -2841,8 +2841,8 @@ func TestElevenLabsTTSWebsocketMalformedMP3ReturnsAPIStatusError(t *testing.T) {
 	if !strings.Contains(statusErr.Error(), "Could not synthesize") {
 		t.Fatalf("Next error = %v, want reference synthesis failure", statusErr)
 	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 	select {
 	case err := <-serverErr:
@@ -3019,6 +3019,9 @@ func TestElevenLabsTTSWebsocketPCMFinalAudioEmitsReferenceFinalMarker(t *testing
 		t.Fatalf("third Next = (%#v, %v), want nil EOF", next, err)
 	}
 
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
 	select {
 	case err := <-serverErr:
 		if err != nil {
@@ -3026,6 +3029,9 @@ func TestElevenLabsTTSWebsocketPCMFinalAudioEmitsReferenceFinalMarker(t *testing
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for final PCM websocket server")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 }
 
@@ -3080,6 +3086,9 @@ func TestElevenLabsTTSWebsocketMP3FinalAlignmentWithoutAudioEmitsFinalMarker(t *
 		t.Fatalf("final TimedTranscript[0] = %#v, want hello timing", got)
 	}
 
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
 	select {
 	case err := <-serverErr:
 		if err != nil {
@@ -3087,6 +3096,9 @@ func TestElevenLabsTTSWebsocketMP3FinalAlignmentWithoutAudioEmitsFinalMarker(t *
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for final alignment websocket server")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 }
 
@@ -3406,8 +3418,8 @@ func TestElevenLabsTTSWebsocketMP3BuffersAlignmentUntilAudioLikeReference(t *tes
 	if !seenMetadata {
 		t.Fatal("decoded MP3 audio did not carry buffered alignment metadata")
 	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 	select {
 	case err := <-serverErr:
@@ -3473,8 +3485,8 @@ func TestElevenLabsTTSWebsocketPCMBuffersAlignmentUntilAudioLikeReference(t *tes
 	if !bytes.Equal(audio.Frame.Data, []byte{7, 0, 8, 0}) {
 		t.Fatalf("PCM frame = %#v, want provider audio", audio.Frame.Data)
 	}
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 	select {
 	case err := <-serverErr:

@@ -937,11 +937,7 @@ func (c *elevenLabsTTSConnection) registerStream(stream *elevenLabsStream) {
 func (c *elevenLabsTTSConnection) unregisterStream(stream *elevenLabsStream) {
 	c.mu.Lock()
 	delete(c.streams, stream.contextID)
-	empty := len(c.streams) == 0
 	c.mu.Unlock()
-	if empty {
-		time.AfterFunc(200*time.Millisecond, c.closeIfIdle)
-	}
 }
 
 func (c *elevenLabsTTSConnection) wait(ctx context.Context) (*websocket.Conn, error) {
@@ -1065,15 +1061,6 @@ func (c *elevenLabsTTSConnection) closeTransport() {
 	c.mu.Unlock()
 	if conn != nil {
 		_ = conn.Close()
-	}
-}
-
-func (c *elevenLabsTTSConnection) closeIfIdle() {
-	c.mu.Lock()
-	idle := len(c.streams) == 0
-	c.mu.Unlock()
-	if idle {
-		_ = c.close()
 	}
 }
 
