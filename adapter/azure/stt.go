@@ -716,6 +716,7 @@ type azureSTTStream struct {
 	startTimeOffset float64
 	startTime       float64
 	speaking        bool
+	pushedChannels  uint32
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -739,6 +740,12 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return fmt.Errorf("azure stt input sample rate changed from %d to %d", s.pushedSR, frame.SampleRate)
 		}
 		s.pushedSR = frame.SampleRate
+	}
+	if frame.NumChannels != 0 {
+		if s.pushedChannels != 0 && s.pushedChannels != frame.NumChannels {
+			return fmt.Errorf("azure stt input channel count changed from %d to %d", s.pushedChannels, frame.NumChannels)
+		}
+		s.pushedChannels = frame.NumChannels
 	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
