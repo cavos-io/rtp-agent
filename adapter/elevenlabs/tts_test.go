@@ -785,6 +785,27 @@ func TestElevenLabsTTSMP3ReadErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSChunkedMP3DecodeErrorReturnsAPIConnectionError(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(strings.NewReader("not an mp3 frame"))},
+		encoding:   "mp3_22050_32",
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "chunked mp3 decode") || !strings.Contains(err.Error(), "before audio bytes") {
+		t.Fatalf("Next error = %v, want decode and byte-state context", err)
+	}
+}
+
 func TestElevenLabsTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &elevenLabsCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &elevenLabsChunkedStream{

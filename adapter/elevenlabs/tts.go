@@ -518,11 +518,11 @@ func (s *elevenLabsChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 			}
 			return nil, io.EOF
 		}
-		return nil, fmt.Errorf("elevenlabs TTS chunked mp3 decode %s: %w", s.audioByteState(), err)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked mp3 decode %s: %v", s.audioByteState(), err))
 	}
 	frame, err = normalizeElevenLabsMP3Frame(frame, s.sampleRate)
 	if err != nil {
-		return nil, fmt.Errorf("elevenlabs TTS chunked mp3 resample %s: %w", s.audioByteState(), err)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs TTS chunked mp3 resample %s: %v", s.audioByteState(), err))
 	}
 	s.mu.Lock()
 	s.emitted = true
