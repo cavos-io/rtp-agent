@@ -548,6 +548,35 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeSessionDialFailureReturnsAPIConnectionError(t *testing.T) {
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		WithOpenAIRealtimeWebsocketDialer(func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.New("dial refused")
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+
+	_, err = realtimeModel.Session()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "failed to connect to OpenAI realtime") ||
+		!strings.Contains(connectionErr.Error(), "dial refused") {
+		t.Fatalf("APIConnectionError = %q, want realtime dial failure context", connectionErr.Error())
+	}
+}
+
 func TestAzureOpenAIRealtimeNormalizesAssistantTextForLegacyAPI(t *testing.T) {
 	messages := make(chan string, 2)
 	releaseServer := make(chan struct{})

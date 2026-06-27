@@ -464,7 +464,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 
 	conn, err := m.dialRealtimeWebsocket(context.Background(), wsURL, header)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to OpenAI realtime: %w", err)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to connect to OpenAI realtime: %v", err))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
