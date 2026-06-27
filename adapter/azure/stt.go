@@ -215,13 +215,15 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 			opt(s)
 		}
 	}
-	activeChanged := beforeActive != s.activeStreamOptions()
+	afterActive := s.activeStreamOptions()
+	activeChanged := beforeActive != afterActive
+	languageCandidatesChanged := beforeActive.language != afterActive.language || beforeActive.languages != afterActive.languages
 	streamLanguage := language
 	if streamLanguage == "" && s.language != beforeLanguage {
 		streamLanguage = s.language
 	}
 	var streamLanguages []string
-	if streamLanguage != "" || activeChanged {
+	if streamLanguage != "" || languageCandidatesChanged {
 		streamLanguages = s.streamLanguageCandidates("")
 	}
 	for stream := range s.streams {
