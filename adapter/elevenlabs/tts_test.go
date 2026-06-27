@@ -2081,6 +2081,20 @@ func TestElevenLabsSynthesizedAudioDecodesReferenceMP3WebsocketAudio(t *testing.
 	}
 }
 
+func TestElevenLabsSynthesizedAudioRejectsUnsupportedOpusEncoding(t *testing.T) {
+	resp := elWSResponse{
+		Audio: base64.StdEncoding.EncodeToString([]byte{0x4f, 0x70, 0x75, 0x73}),
+	}
+
+	audio, err := elevenLabsSynthesizedAudio(resp, 48000, "opus_48000_64")
+	if err == nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() audio = %#v, want unsupported opus error", audio)
+	}
+	if !strings.Contains(err.Error(), "unsupported elevenlabs TTS encoding") || !strings.Contains(err.Error(), "opus_48000_64") {
+		t.Fatalf("error = %v, want unsupported opus encoding context", err)
+	}
+}
+
 type elevenLabsRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f elevenLabsRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
