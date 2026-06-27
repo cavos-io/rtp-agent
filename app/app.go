@@ -3300,6 +3300,18 @@ var newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 
 func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 	llmOpts := []azure.AzureLLMOption{}
+	if maxOutputTokens := modelOptionInt(cfg.LLMModelOptions, "max_output_tokens"); maxOutputTokens > 0 {
+		llmOpts = append(llmOpts, azure.WithAzureLLMMaxOutputTokens(maxOutputTokens))
+	}
+	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
+		llmOpts = append(llmOpts, azure.WithAzureLLMTemperature(*temperature))
+	}
+	if parallelToolCalls := modelOptionBool(cfg.LLMModelOptions, "parallel_tool_calls"); parallelToolCalls != nil {
+		llmOpts = append(llmOpts, azure.WithAzureLLMParallelToolCalls(*parallelToolCalls))
+	}
+	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMToolChoice(toolChoice))
+	}
 	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
 		llmOpts = append(llmOpts, azure.WithAzureLLMTopP(*topP))
 	}
