@@ -1,6 +1,9 @@
 package azure
 
-import adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
+import (
+	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
+	"github.com/cavos-io/rtp-agent/core/llm"
+)
 
 // AzureLLMOption forwards provider options to the OpenAI-compatible Azure responses implementation.
 type AzureLLMOption = adapteropenai.OpenAILLMOption
@@ -15,6 +18,10 @@ func WithAzureLLMTemperature(temperature float64) AzureLLMOption {
 
 func WithAzureLLMParallelToolCalls(parallelToolCalls bool) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMParallelToolCalls(parallelToolCalls)
+}
+
+func WithAzureLLMToolChoice(toolChoice llm.ToolChoice) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMToolChoice(toolChoice)
 }
 
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {
