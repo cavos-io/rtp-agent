@@ -478,6 +478,9 @@ func TestElevenLabsTTSStreamTimesOutSilentContextLikeReference(t *testing.T) {
 	if !strings.Contains(err.Error(), "11labs tts timed out after") {
 		t.Fatalf("Next error = %v, want reference timeout message", err)
 	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("server error = %v", err)
 	}
@@ -1457,6 +1460,88 @@ func TestElevenLabsTTSStreamsShareReferenceWebsocketConnection(t *testing.T) {
 	}
 	if err := streamB.Close(); err != nil {
 		t.Fatalf("Close B error = %v", err)
+	}
+
+	if got := len(dialCount); got != 1 {
+		t.Fatalf("websocket dials = %d, want 1", got)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error = %v", err)
+	}
+}
+
+func TestElevenLabsTTSClosingOneSharedStreamKeepsOtherContextLikeReference(t *testing.T) {
+	serverErr := make(chan error, 1)
+	dialCount := make(chan struct{}, 2)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSCloseOneContextWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			select {
+			case dialCount <- struct{}{}:
+			default:
+			}
+			if len(dialCount) > 1 {
+				return nil, errors.New("unexpected second websocket dial")
+			}
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsEncoding("pcm_16000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	streamA, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream A error = %v", err)
+	}
+	defer streamA.Close()
+	streamB, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream B error = %v", err)
+	}
+	defer streamB.Close()
+
+	if err := streamA.PushText("alpha beta"); err != nil {
+		t.Fatalf("PushText A error = %v", err)
+	}
+	if err := streamA.Flush(); err != nil {
+		t.Fatalf("Flush A error = %v", err)
+	}
+	if err := streamB.PushText("bravo charlie"); err != nil {
+		t.Fatalf("PushText B error = %v", err)
+	}
+	if err := streamB.Flush(); err != nil {
+		t.Fatalf("Flush B error = %v", err)
+	}
+	if err := streamA.Close(); err != nil {
+		t.Fatalf("Close A error = %v", err)
+	}
+
+	audioB, err := streamB.Next()
+	if err != nil {
+		t.Fatalf("Next B error = %v, want other shared context to survive canceled stream", err)
+	}
+	if got := audioB.Frame.Data; !bytes.Equal(got, []byte{3, 0, 4, 0}) {
+		t.Fatalf("B audio = %v, want second context audio", got)
+	}
+	finalB, err := streamB.Next()
+	if err != nil {
+		t.Fatalf("Next B final error = %v", err)
+	}
+	if finalB == nil || !finalB.IsFinal {
+		t.Fatalf("B final = %#v, want final marker", finalB)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
 	}
 
 	if got := len(dialCount); got != 1 {
@@ -3587,6 +3672,58 @@ func runElevenLabsTTSSharedContextWebsocketServer(conn net.Conn, errCh chan<- er
 	}); err != nil {
 		errCh <- err
 		return
+	}
+	if err := writeElevenLabsServerWebsocketJSONFrame(conn, map[string]any{
+		"context_id": secondContext,
+		"audio":      base64.StdEncoding.EncodeToString([]byte{3, 0, 4, 0}),
+		"isFinal":    true,
+	}); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
+func runElevenLabsTTSCloseOneContextWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	contexts := make([]string, 0, 2)
+	seenText := make(map[string]struct{})
+	for len(contexts) < 2 || len(seenText) < 2 {
+		msg, err := readElevenLabsClientWebsocketJSONFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		contextID, _ := msg["context_id"].(string)
+		if msg["text"] == " " && contextID != "" {
+			contexts = append(contexts, contextID)
+			continue
+		}
+		if contextID != "" && msg["text"] != "" {
+			seenText[contextID] = struct{}{}
+		}
+	}
+	firstContext, secondContext := contexts[0], contexts[1]
+	for {
+		msg, err := readElevenLabsClientWebsocketJSONFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if msg["context_id"] == firstContext && msg["close_context"] == true {
+			break
+		}
 	}
 	if err := writeElevenLabsServerWebsocketJSONFrame(conn, map[string]any{
 		"context_id": secondContext,

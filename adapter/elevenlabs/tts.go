@@ -2152,7 +2152,6 @@ func (s *elevenLabsStream) Close() error {
 	if s.closed {
 		return nil
 	}
-	wasFinished := s.finished
 	s.closed = true
 	s.cancelResponseTimeoutLocked()
 	s.cancel()
@@ -2172,10 +2171,6 @@ func (s *elevenLabsStream) Close() error {
 	}
 	s.provider.unregisterStream(s)
 	if s.sharedConn != nil {
-		if !wasFinished {
-			s.sharedConn.unregisterStream(s)
-			return s.sharedConn.close()
-		}
 		s.sharedConn.unregisterStream(s)
 		return nil
 	}
