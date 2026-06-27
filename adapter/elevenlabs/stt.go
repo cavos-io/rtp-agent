@@ -30,6 +30,7 @@ const (
 	defaultElevenLabsSTTModel      = "scribe_v1"
 	defaultElevenLabsSTTSampleRate = 16000
 	elevenLabsSTTAuthHeader        = "xi-api-key"
+	elevenLabsSTTUsageInterval     = 5 * time.Second
 )
 
 type ElevenLabsVADOptions struct {
@@ -229,12 +230,14 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &elevenLabsSTTStream{
-		conn:       conn,
-		events:     make(chan *stt.SpeechEvent, 100),
-		errCh:      make(chan error, 1),
-		ctx:        streamCtx,
-		cancel:     cancel,
-		sampleRate: s.sampleRate,
+		conn:               conn,
+		events:             make(chan *stt.SpeechEvent, 100),
+		errCh:              make(chan error, 1),
+		ctx:                streamCtx,
+		cancel:             cancel,
+		sampleRate:         s.sampleRate,
+		usageLastFlush:     time.Now(),
+		usageFlushInterval: elevenLabsSTTUsageInterval,
 		state: &elevenLabsSTTStreamState{
 			language:          resolveElevenLabsSTTLanguage(s, language),
 			includeTimestamps: s.includeTimestamps,
@@ -509,23 +512,25 @@ func elevenLabsIntPtrEqual(a, b *int) bool {
 }
 
 type elevenLabsSTTStream struct {
-	conn        *websocket.Conn
-	connVersion int64
-	events      chan *stt.SpeechEvent
-	errCh       chan error
-	mu          sync.Mutex
-	closed      bool
-	inputEnded  bool
-	ctx         context.Context
-	cancel      context.CancelFunc
-	sampleRate  int
-	audioBuf    *audio.AudioByteStream
-	audioDur    float64
-	state       *elevenLabsSTTStreamState
-	rateGuard   stt.SampleRateGuard
-	writeJSON   func(map[string]any) error
-	unregister  func(*elevenLabsSTTStream)
-	unregOnce   sync.Once
+	conn               *websocket.Conn
+	connVersion        int64
+	events             chan *stt.SpeechEvent
+	errCh              chan error
+	mu                 sync.Mutex
+	closed             bool
+	inputEnded         bool
+	ctx                context.Context
+	cancel             context.CancelFunc
+	sampleRate         int
+	audioBuf           *audio.AudioByteStream
+	audioDur           float64
+	usageLastFlush     time.Time
+	usageFlushInterval time.Duration
+	state              *elevenLabsSTTStreamState
+	rateGuard          stt.SampleRateGuard
+	writeJSON          func(map[string]any) error
+	unregister         func(*elevenLabsSTTStream)
+	unregOnce          sync.Once
 }
 
 func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -550,7 +555,7 @@ func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 			return err
 		}
-		s.audioDur += audio.CalculateFrameDuration(chunk)
+		s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 	}
 	return nil
 }
@@ -571,7 +576,7 @@ func (s *elevenLabsSTTStream) Flush() error {
 		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 			return err
 		}
-		s.audioDur += audio.CalculateFrameDuration(chunk)
+		s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 	}
 	s.emitRecognitionUsageLocked()
 	return nil
@@ -592,7 +597,7 @@ func (s *elevenLabsSTTStream) EndInput() error {
 			if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 				return err
 			}
-			s.audioDur += audio.CalculateFrameDuration(chunk)
+			s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 		}
 	}
 	s.emitRecognitionUsageLocked()
@@ -747,6 +752,21 @@ func (s *elevenLabsSTTStream) emitRecognitionUsageLocked() {
 	s.events <- &stt.SpeechEvent{
 		Type:             stt.SpeechEventRecognitionUsage,
 		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
+	}
+	s.usageLastFlush = time.Now()
+}
+
+func (s *elevenLabsSTTStream) addAudioDurationLocked(duration float64) {
+	s.audioDur += duration
+	if s.usageFlushInterval <= 0 {
+		s.usageFlushInterval = elevenLabsSTTUsageInterval
+	}
+	if s.usageLastFlush.IsZero() {
+		s.usageLastFlush = time.Now()
+		return
+	}
+	if time.Since(s.usageLastFlush) >= s.usageFlushInterval {
+		s.emitRecognitionUsageLocked()
 	}
 }
 

@@ -400,6 +400,46 @@ func TestElevenLabsSTTStreamFlushReportsReferenceUsage(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamPushFrameReportsPeriodicReferenceUsage(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:             make(chan *stt.SpeechEvent, 1),
+		sampleRate:         16000,
+		state:              &elevenLabsSTTStreamState{language: "en"},
+		usageFlushInterval: 5 * time.Second,
+		usageLastFlush:     time.Now().Add(-5 * time.Second),
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after PushFrame = %d, want one 50ms chunk", len(messages))
+	}
+	assertElevenLabsSTTAudioMessage(t, messages[0], 1600, false)
+	select {
+	case usage := <-stream.events:
+		if usage.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %v, want recognition_usage", usage.Type)
+		}
+		if usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.05 {
+			t.Fatalf("recognition usage = %#v, want 0.05 audio duration", usage.RecognitionUsage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for periodic recognition_usage")
+	}
+}
+
 func TestElevenLabsSTTStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	var messages []map[string]any
 	stream := &elevenLabsSTTStream{
