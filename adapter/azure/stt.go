@@ -1338,7 +1338,7 @@ func parseAzureSTTMessageWithOffset(language string, payload []byte, startTimeOf
 		if err := json.Unmarshal(body, &message); err != nil {
 			return nil
 		}
-		if message.RecognitionStatus != "" && message.RecognitionStatus != "Success" {
+		if message.RecognitionStatus != "" && !strings.EqualFold(message.RecognitionStatus, "Success") {
 			return nil
 		}
 		text := message.DisplayText

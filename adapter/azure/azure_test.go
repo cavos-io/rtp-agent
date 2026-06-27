@@ -1094,6 +1094,22 @@ func TestAzureSTTStreamFinalTranscriptMatchesReferenceResultTextAndConfidence(t 
 	}
 }
 
+func TestAzureSTTStreamFinalTranscriptAcceptsCaseInsensitiveSuccess(t *testing.T) {
+	event := parseAzureSTTMessage(
+		resolveAzureSTTLanguage("id-ID"),
+		[]byte("Path: speech.phrase\r\nContent-Type: application/json\r\n\r\n{\"RecognitionStatus\":\"success\",\"DisplayText\":\"display text\"}"),
+	)
+	if event == nil {
+		t.Fatal("event = nil, want final transcript for case-insensitive success status")
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event Type = %s, want final_transcript", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "display text" {
+		t.Fatalf("text = %q, want display text", got)
+	}
+}
+
 func TestAzureSTTStreamIgnoresNonSuccessFinalPhrase(t *testing.T) {
 	event := parseAzureSTTMessage(
 		resolveAzureSTTLanguage("id-ID"),
