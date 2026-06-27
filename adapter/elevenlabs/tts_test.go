@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -2951,6 +2952,55 @@ func TestElevenLabsTTSWebsocketMP3CarriesReferenceAlignmentMetadata(t *testing.T
 	}
 }
 
+func TestElevenLabsTTSWebsocketCompressedFinalMarkerCarriesBufferedAlignment(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	decoder := newElevenLabsOneFrameDecoder()
+	stream := &elevenLabsStream{
+		audio:         make(chan *tts.SynthesizedAudio, 4),
+		errCh:         make(chan error, 1),
+		ctx:           ctx,
+		cancel:        cancel,
+		encoding:      "mp3_22050_32",
+		sampleRate:    22050,
+		mp3Decoder:    decoder,
+		mp3Input:      make(chan []byte, 1),
+		mp3DecodeDone: make(chan struct{}),
+	}
+	go stream.mp3DecodeLoop(decoder, stream.mp3Input, stream.mp3DecodeDone)
+
+	stream.bufferMP3Metadata("hello ", []tts.TimedString{{Text: "hello ", StartTime: 0, EndTime: 0.06}})
+	stream.mp3Input <- []byte{0x01}
+
+	audio := readElevenLabsTTSTestAudio(t, stream.audio, stream.errCh)
+	if audio.Frame == nil || audio.DeltaText != "hello " || len(audio.TimedTranscript) != 1 {
+		t.Fatalf("decoded audio = %#v, want first metadata on audio frame", audio)
+	}
+
+	stream.bufferMP3Metadata("tail", []tts.TimedString{{Text: "tail", StartTime: 0.06, EndTime: 0.1}})
+	done := make(chan struct{})
+	go func() {
+		stream.closeMP3Decoder(true)
+		close(done)
+	}()
+
+	final := readElevenLabsTTSTestAudio(t, stream.audio, stream.errCh)
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("final audio = %#v, want boundary-only final marker", final)
+	}
+	if final.DeltaText != "tail" {
+		t.Fatalf("final DeltaText = %q, want buffered tail alignment", final.DeltaText)
+	}
+	if len(final.TimedTranscript) != 1 || final.TimedTranscript[0].Text != "tail" {
+		t.Fatalf("final TimedTranscript = %#v, want buffered tail timing", final.TimedTranscript)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for compressed decoder close")
+	}
+}
+
 func TestElevenLabsTTSWebsocketMP3BuffersAlignmentUntilAudioLikeReference(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -4078,6 +4128,54 @@ func TestElevenLabsChunkedStreamDecodesReferenceOpusResponse(t *testing.T) {
 }
 
 const elevenLabsOpusFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
+
+func readElevenLabsTTSTestAudio(t *testing.T, audioCh <-chan *tts.SynthesizedAudio, errCh <-chan error) *tts.SynthesizedAudio {
+	t.Helper()
+	select {
+	case err := <-errCh:
+		t.Fatalf("stream error = %v", err)
+	case audio := <-audioCh:
+		return audio
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for synthesized audio")
+	}
+	return nil
+}
+
+type elevenLabsOneFrameDecoder struct {
+	frameSent bool
+	ended     chan struct{}
+	once      sync.Once
+}
+
+func newElevenLabsOneFrameDecoder() *elevenLabsOneFrameDecoder {
+	return &elevenLabsOneFrameDecoder{ended: make(chan struct{})}
+}
+
+func (d *elevenLabsOneFrameDecoder) Push([]byte) {}
+
+func (d *elevenLabsOneFrameDecoder) EndInput() {
+	d.once.Do(func() { close(d.ended) })
+}
+
+func (d *elevenLabsOneFrameDecoder) Next() (*model.AudioFrame, error) {
+	if !d.frameSent {
+		d.frameSent = true
+		return &model.AudioFrame{
+			Data:              []byte{0x01, 0x00},
+			SampleRate:        22050,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}, nil
+	}
+	<-d.ended
+	return nil, errors.New("decoder closed")
+}
+
+func (d *elevenLabsOneFrameDecoder) Close() error {
+	d.EndInput()
+	return nil
+}
 
 type elevenLabsRoundTripFunc func(*http.Request) (*http.Response, error)
 

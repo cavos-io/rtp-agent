@@ -1022,7 +1022,12 @@ func (s *elevenLabsStream) mp3DecodeLoop(decoder codecs.AudioStreamDecoder, inpu
 			if strings.Contains(err.Error(), "decoder closed") {
 				<-writerDone
 				if emitted && s.isMP3Finalizing() {
-					s.sendAudio(&tts.SynthesizedAudio{IsFinal: true})
+					deltaText, timedTranscript := s.takeMP3Metadata()
+					s.sendAudio(&tts.SynthesizedAudio{
+						IsFinal:         true,
+						DeltaText:       deltaText,
+						TimedTranscript: timedTranscript,
+					})
 				}
 				return
 			}
