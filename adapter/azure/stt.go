@@ -1028,6 +1028,7 @@ func (s *azureSTTStream) parseMessage(payload []byte) *stt.SpeechEvent {
 		s.markSessionStarted()
 		return nil
 	case "turn.end":
+		s.markSessionStopped()
 		return nil
 	}
 	event := parseAzureSTTMessageWithOffset(s.language, payload, s.StartTimeOffset())
@@ -1069,6 +1070,21 @@ func (s *azureSTTStream) markSessionStarted() {
 		if !s.sessionStarted {
 			s.pendingAudio = append(s.pendingAudio, pending[i+1:]...)
 			return
+		}
+	}
+}
+
+func (s *azureSTTStream) markSessionStopped() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.sessionStopped {
+		return
+	}
+	s.sessionStopped = true
+	if s.errCh != nil {
+		select {
+		case s.errCh <- llm.NewAPIConnectionError("SpeechRecognition session stopped"):
+		default:
 		}
 	}
 }

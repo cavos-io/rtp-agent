@@ -1086,6 +1086,45 @@ func TestAzureSTTStreamIgnoresReferenceSessionTurnEvents(t *testing.T) {
 	}
 }
 
+func TestAzureSTTStreamTurnEndReturnsAPIConnectionError(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	serverClosed := make(chan struct{})
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestTurnEndHoldOpenDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, nextErr := stream.Next()
+		errCh <- nextErr
+	}()
+
+	select {
+	case err := <-errCh:
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(err, &connectionErr) {
+			t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+		}
+	case <-time.After(time.Second):
+		_ = stream.Close()
+		<-serverClosed
+		t.Fatal("Next timed out after Azure turn.end, want APIConnectionError")
+	}
+}
+
 func TestAzureSTTStreamBuffersAudioUntilSessionStarted(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	configMessages := make(chan string, 1)
@@ -3022,6 +3061,49 @@ func azureTestHoldOpenDialer(
 	}
 }
 
+func azureTestTurnEndHoldOpenDialer(
+	t *testing.T,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	serverClosed chan<- struct{},
+) azureSTTWebsocketDialer {
+	t.Helper()
+	return func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		errCh := make(chan error, 1)
+		go runAzureTestTurnEndHoldOpenWebsocketServer(serverConn, requests, configMessages, serverClosed, errCh)
+
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		dialer := websocket.Dialer{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+			Proxy: nil,
+		}
+		conn, resp, err := dialer.DialContext(ctx, parsed.String(), headers)
+		if err != nil {
+			clientConn.Close()
+			select {
+			case serverErr := <-errCh:
+				return nil, resp, fmt.Errorf("%w; server: %v", err, serverErr)
+			default:
+				return nil, resp, err
+			}
+		}
+		go func() {
+			if serverErr := <-errCh; serverErr != nil && !isAzureTestWebsocketCleanupError(serverErr) {
+				t.Errorf("test turn-end websocket server: %v", serverErr)
+			}
+		}()
+		return conn, resp, nil
+	}
+}
+
 func runAzureTestHoldOpenWebsocketServer(
 	conn net.Conn,
 	requests chan<- *http.Request,
@@ -3052,6 +3134,52 @@ func runAzureTestHoldOpenWebsocketServer(
 		return
 	}
 	configMessages <- string(payload)
+	for {
+		if _, _, err := readAzureTestWebsocketFrame(reader); err != nil {
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func runAzureTestTurnEndHoldOpenWebsocketServer(
+	conn net.Conn,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	serverClosed chan<- struct{},
+	errCh chan<- error,
+) {
+	defer conn.Close()
+	defer close(serverClosed)
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	requests <- req
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", azureTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readAzureTestWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage {
+		errCh <- fmt.Errorf("speech config opcode = %d, want text", opcode)
+		return
+	}
+	configMessages <- string(payload)
+	if err := writeAzureTestWebsocketFrame(conn, websocket.TextMessage, []byte("Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}")); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeAzureTestWebsocketFrame(conn, websocket.TextMessage, []byte("Path: turn.end\r\nContent-Type: application/json\r\n\r\n{}")); err != nil {
+		errCh <- err
+		return
+	}
 	for {
 		if _, _, err := readAzureTestWebsocketFrame(reader); err != nil {
 			errCh <- nil
