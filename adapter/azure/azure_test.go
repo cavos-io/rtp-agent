@@ -3213,6 +3213,38 @@ func TestAzureTTSUpdateOptionsClearsLanguageToReferenceDefault(t *testing.T) {
 	}
 }
 
+func TestAzureTTSUpdateOptionsPreservesExplicitEmptyReferenceProsody(t *testing.T) {
+	provider, err := NewAzureTTSWithOptions(
+		"key",
+		"eastus",
+		"en-US-AvaNeural",
+		WithAzureTTSProsody(AzureTTSProsody{Rate: "slow"}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureTTSWithOptions error = %v", err)
+	}
+
+	if err := provider.UpdateOptions("", "", WithAzureTTSProsody(AzureTTSProsody{})); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildAzureTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	ssml := string(body)
+	if !strings.Contains(ssml, `<prosody>hello</prosody>`) {
+		t.Fatalf("SSML = %q, want explicit empty reference prosody wrapper", ssml)
+	}
+	if strings.Contains(ssml, `rate="slow"`) {
+		t.Fatalf("SSML = %q, want previous prosody rate cleared", ssml)
+	}
+}
+
 func TestAzureTTSUpdateOptionsRejectsUnsupportedSampleRate(t *testing.T) {
 	provider, err := NewAzureTTS("key", "eastus", "")
 	if err != nil {

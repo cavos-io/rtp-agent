@@ -49,6 +49,7 @@ type AzureTTS struct {
 	deploymentID   string
 	authToken      string
 	prosody        AzureTTSProsody
+	prosodySet     bool
 	style          AzureTTSStyle
 	lexiconURI     string
 	lexiconURISet  bool
@@ -88,6 +89,7 @@ func WithAzureTTSSampleRate(sampleRate int) AzureTTSOption {
 func WithAzureTTSProsody(prosody AzureTTSProsody) AzureTTSOption {
 	return func(t *AzureTTS) {
 		t.prosody = prosody
+		t.prosodySet = true
 	}
 }
 
@@ -194,6 +196,7 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 		deploymentID:   t.deploymentID,
 		authToken:      t.authToken,
 		prosody:        t.prosody,
+		prosodySet:     t.prosodySet,
 		style:          t.style,
 		lexiconURI:     t.lexiconURI,
 		lexiconURISet:  t.lexiconURISet,
@@ -229,6 +232,7 @@ func (t *AzureTTS) UpdateOptions(voice string, language string, opts ...AzureTTS
 	t.deploymentID = next.deploymentID
 	t.authToken = next.authToken
 	t.prosody = next.prosody
+	t.prosodySet = next.prosodySet
 	t.style = next.style
 	t.lexiconURI = next.lexiconURI
 	t.lexiconURISet = next.lexiconURISet
@@ -416,7 +420,7 @@ func buildAzureTTSSSML(t *AzureTTS, language string, text string) string {
 		}
 		b.WriteString(">")
 	}
-	if t.prosody.Rate != "" || t.prosody.Volume != "" || t.prosody.Pitch != "" {
+	if t.prosodySet {
 		b.WriteString("<prosody")
 		if t.prosody.Rate != "" {
 			b.WriteString(fmt.Sprintf(` rate="%s"`, t.prosody.Rate))
