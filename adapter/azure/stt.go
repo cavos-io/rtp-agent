@@ -55,6 +55,7 @@ type AzureSTT struct {
 	mu                     sync.Mutex
 	streams                map[*azureSTTStream]struct{}
 	closed                 bool
+	reconnectOnUpdate      bool
 }
 
 type AzureSTTOption func(*AzureSTT)
@@ -96,6 +97,7 @@ func WithAzureSTTLanguage(language string) AzureSTTOption {
 		if language != "" {
 			s.language = language
 			s.languages = []string{language}
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -106,6 +108,7 @@ func WithAzureSTTLanguages(languages ...string) AzureSTTOption {
 		if len(resolved) > 0 {
 			s.languages = resolved
 			s.language = resolved[0]
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -122,6 +125,7 @@ func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if timeoutMS > 0 {
 			s.segmentationSilence = timeoutMS
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -130,6 +134,7 @@ func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if maxTimeMS > 0 {
 			s.segmentationMaxTime = maxTimeMS
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -138,6 +143,7 @@ func WithAzureSTTSegmentationStrategy(strategy string) AzureSTTOption {
 	return func(s *AzureSTT) {
 		if strategy != "" {
 			s.segmentationStrategy = strategy
+			s.reconnectOnUpdate = true
 		}
 	}
 }
@@ -182,6 +188,7 @@ func NewAzureSTT(apiKey string, region string, opts ...AzureSTTOption) (*AzureST
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.reconnectOnUpdate = false
 	if provider.speechEndpoint != "" && provider.region != "" {
 		provider.region = ""
 	}
@@ -216,6 +223,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	beforeExplicitPunctuation := s.explicitPunctuation
 	beforeProfanity := s.profanity
 	beforeActive := s.activeStreamOptions()
+	s.reconnectOnUpdate = language != ""
 	if language != "" {
 		s.language = language
 		s.languages = []string{language}
@@ -233,8 +241,10 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	s.trueTextPostProcessing = beforeTrueTextPostProcessing
 	s.explicitPunctuation = beforeExplicitPunctuation
 	s.profanity = beforeProfanity
+	reconnectRequested := s.reconnectOnUpdate
+	s.reconnectOnUpdate = false
 	afterActive := s.activeStreamOptions()
-	activeChanged := beforeActive != afterActive
+	activeChanged := beforeActive != afterActive || reconnectRequested
 	languageCandidatesChanged := beforeActive.language != afterActive.language || beforeActive.languages != afterActive.languages
 	streamLanguage := language
 	if streamLanguage == "" && s.language != beforeLanguage {

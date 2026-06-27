@@ -2228,6 +2228,43 @@ func TestAzureSTTUpdateOptionsReconnectsActiveStreamBeforeNextAudio(t *testing.T
 	receiveAzureTestSignal(t, serverClosed, "first server close after update")
 }
 
+func TestAzureSTTUpdateOptionsReconnectsActiveStreamForSameSegmentationValue(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	serverClosed := make(chan struct{}, 2)
+
+	provider, err := NewAzureSTT(
+		"key",
+		"eastus",
+		WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"),
+		WithAzureSTTSegmentationSilenceTimeout(650),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestSessionStartedHoldOpenDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "first request")
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	azureTestWaitForSessionStarted(t, stream)
+
+	provider.UpdateOptions("", WithAzureSTTSegmentationSilenceTimeout(650))
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reconnect after same segmentation update")
+	}
+	receiveAzureTestValue(t, configMessages, "second speech config")
+	receiveAzureTestSignal(t, serverClosed, "first server close after same segmentation update")
+}
+
 func TestAzureSTTUpdateOptionsReconnectsBeforeFlushingQueuedAudio(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)
