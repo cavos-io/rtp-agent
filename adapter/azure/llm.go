@@ -27,6 +27,14 @@ func WithAzureLLMServiceTier(serviceTier string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMServiceTier(serviceTier)
 }
 
+func WithAzureLLMPromptCacheKey(promptCacheKey string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMPromptCacheKey(promptCacheKey)
+}
+
+func WithAzureLLMPromptCacheRetention(promptCacheRetention string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMPromptCacheRetention(promptCacheRetention)
+}
+
 func WithAzureLLMParallelToolCalls(parallelToolCalls bool) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMParallelToolCalls(parallelToolCalls)
 }
