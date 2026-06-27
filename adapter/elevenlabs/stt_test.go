@@ -400,6 +400,62 @@ func TestElevenLabsSTTStreamFlushReportsReferenceUsage(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:     make(chan *stt.SpeechEvent, 1),
+		sampleRate: 16000,
+		state:      &elevenLabsSTTStreamState{language: "en"},
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+	ending, ok := any(stream).(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 2000),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages after EndInput = %d, want full chunk and flushed remainder", len(messages))
+	}
+	assertElevenLabsSTTAudioMessage(t, messages[0], 1600, false)
+	assertElevenLabsSTTAudioMessage(t, messages[1], 400, false)
+	select {
+	case usage := <-stream.events:
+		if usage.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %v, want recognition_usage", usage.Type)
+		}
+		if usage.RecognitionUsage == nil || usage.RecognitionUsage.AudioDuration != 0.0625 {
+			t.Fatalf("recognition usage = %#v, want 0.0625 audio duration", usage.RecognitionUsage)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recognition_usage after EndInput")
+	}
+
+	if err := stream.PushFrame(frame); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("PushFrame after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	}
+	if err := ending.EndInput(); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("second EndInput error = %v, want stream input ended", err)
+	}
+}
+
 func TestElevenLabsSTTUpdateOptionsMatchesReference(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTModel("scribe_v2_realtime"),
@@ -614,6 +670,26 @@ func TestElevenLabsSTTClosedStreamNextReturnsEOF(t *testing.T) {
 		t.Fatal(err)
 	case <-time.After(time.Second):
 		t.Fatal("stream Close did not close active websocket stream")
+	}
+}
+
+func TestElevenLabsSTTStreamNextReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	stream := &elevenLabsSTTStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    ctx,
+		cancel: cancel,
+	}
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 

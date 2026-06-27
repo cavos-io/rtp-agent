@@ -500,6 +500,7 @@ type elevenLabsSTTStream struct {
 	errCh       chan error
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 	ctx         context.Context
 	cancel      context.CancelFunc
 	sampleRate  int
@@ -514,6 +515,9 @@ type elevenLabsSTTStream struct {
 func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -535,6 +539,9 @@ func (s *elevenLabsSTTStream) PushFrame(frame *model.AudioFrame) error {
 func (s *elevenLabsSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -546,6 +553,28 @@ func (s *elevenLabsSTTStream) Flush() error {
 			return err
 		}
 		s.audioDur += audio.CalculateFrameDuration(chunk)
+	}
+	s.emitRecognitionUsageLocked()
+	return nil
+}
+
+func (s *elevenLabsSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	s.inputEnded = true
+	if s.audioBuf != nil {
+		for _, chunk := range s.audioBuf.Flush() {
+			if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
+				return err
+			}
+			s.audioDur += audio.CalculateFrameDuration(chunk)
+		}
 	}
 	s.emitRecognitionUsageLocked()
 	return nil
@@ -729,6 +758,9 @@ func (s *elevenLabsSTTStream) Next() (*stt.SpeechEvent, error) {
 	case <-s.ctx.Done():
 		if s.isClosed() {
 			return nil, io.EOF
+		}
+		if errors.Is(s.ctx.Err(), context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(s.ctx.Err().Error())
 		}
 		return nil, s.ctx.Err()
 	}
