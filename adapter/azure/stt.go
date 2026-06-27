@@ -987,6 +987,14 @@ func (s *azureSTTStream) updateOptions(language string, languages []string, reco
 	}
 	if reconnect {
 		s.streamURL = buildAzureSTTStreamURL(s.provider, s.language)
+		if s.sessionStarted {
+			if err := s.reconnectLocked(); err != nil {
+				s.finishWithErrorLocked(err)
+				return
+			}
+			s.reconnectNext = false
+			return
+		}
 		s.reconnectNext = true
 	}
 }

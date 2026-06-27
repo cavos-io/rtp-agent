@@ -2187,6 +2187,47 @@ func TestAzureSTTUpdateOptionsPropagatesSegmentationToActiveStream(t *testing.T)
 	receiveAzureTestValue(t, audioMessages, "audio after update reconnect")
 }
 
+func TestAzureSTTUpdateOptionsReconnectsActiveStreamBeforeNextAudio(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	serverClosed := make(chan struct{}, 2)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestSessionStartedHoldOpenDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "first request")
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	azureTestWaitForSessionStarted(t, stream)
+
+	provider.UpdateOptions("id-ID", WithAzureSTTSegmentationSilenceTimeout(650))
+
+	secondReq := receiveAzureTestValue(t, requests, "second request after update")
+	if got := secondReq.URL.Query().Get("language"); got != "id-ID" {
+		t.Fatalf("second stream language = %q, want updated language id-ID", got)
+	}
+	secondConfig := receiveAzureTestValue(t, configMessages, "second speech config after update")
+	_, configBody := splitAzureTestMessage(t, []byte(secondConfig))
+	var configPayload struct {
+		Properties map[string]string `json:"properties"`
+	}
+	if err := json.Unmarshal(configBody, &configPayload); err != nil {
+		t.Fatalf("speech config JSON: %v", err)
+	}
+	if got := configPayload.Properties["Speech_SegmentationSilenceTimeoutMs"]; got != "650" {
+		t.Fatalf("segmentation silence timeout = %q, want 650", got)
+	}
+	receiveAzureTestSignal(t, serverClosed, "first server close after update")
+}
+
 func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 	t.Setenv(azureSpeechKeyEnv, "env-key")
 	t.Setenv(azureSpeechRegionEnv, "westus")
@@ -3235,6 +3276,29 @@ func receiveAzureTestValue[T any](t *testing.T, ch <-chan T, name string) T {
 	}
 }
 
+func azureTestWaitForSessionStarted(t *testing.T, stream stt.RecognizeStream) {
+	t.Helper()
+	concrete, ok := stream.(*azureSTTStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *azureSTTStream", stream)
+	}
+	deadline := time.After(time.Second)
+	for {
+		concrete.mu.Lock()
+		started := concrete.sessionStarted
+		concrete.mu.Unlock()
+		if started {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for Azure STT session start")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func receiveAzureTestSignal(t *testing.T, ch <-chan struct{}, name string) {
 	t.Helper()
 	select {
@@ -3721,6 +3785,49 @@ func azureTestTurnEndHoldOpenDialer(
 	}
 }
 
+func azureTestSessionStartedHoldOpenDialer(
+	t *testing.T,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	serverClosed chan<- struct{},
+) azureSTTWebsocketDialer {
+	t.Helper()
+	return func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		clientConn, serverConn := net.Pipe()
+		errCh := make(chan error, 1)
+		go runAzureTestSessionStartedHoldOpenWebsocketServer(serverConn, requests, configMessages, serverClosed, errCh)
+
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, nil, err
+		}
+		dialer := websocket.Dialer{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 1024,
+			NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+				return clientConn, nil
+			},
+			Proxy: nil,
+		}
+		conn, resp, err := dialer.DialContext(ctx, parsed.String(), headers)
+		if err != nil {
+			clientConn.Close()
+			select {
+			case serverErr := <-errCh:
+				return nil, resp, fmt.Errorf("%w; server: %v", err, serverErr)
+			default:
+				return nil, resp, err
+			}
+		}
+		go func() {
+			if serverErr := <-errCh; serverErr != nil && !isAzureTestWebsocketCleanupError(serverErr) {
+				t.Errorf("test session-started hold-open websocket server: %v", serverErr)
+			}
+		}()
+		return conn, resp, nil
+	}
+}
+
 func runAzureTestHoldOpenWebsocketServer(
 	conn net.Conn,
 	requests chan<- *http.Request,
@@ -3751,6 +3858,48 @@ func runAzureTestHoldOpenWebsocketServer(
 		return
 	}
 	configMessages <- string(payload)
+	for {
+		if _, _, err := readAzureTestWebsocketFrame(reader); err != nil {
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func runAzureTestSessionStartedHoldOpenWebsocketServer(
+	conn net.Conn,
+	requests chan<- *http.Request,
+	configMessages chan<- string,
+	serverClosed chan<- struct{},
+	errCh chan<- error,
+) {
+	defer conn.Close()
+	defer func() { serverClosed <- struct{}{} }()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	requests <- req
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", azureTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readAzureTestWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage {
+		errCh <- fmt.Errorf("speech config opcode = %d, want text", opcode)
+		return
+	}
+	configMessages <- string(payload)
+	if err := writeAzureTestWebsocketFrame(conn, websocket.TextMessage, []byte("Path: turn.start\r\nContent-Type: application/json\r\n\r\n{}")); err != nil {
+		errCh <- err
+		return
+	}
 	for {
 		if _, _, err := readAzureTestWebsocketFrame(reader); err != nil {
 			errCh <- nil
