@@ -1955,6 +1955,22 @@ func TestAzureSTTUpdateOptionsKeepsActiveStreamSampleRate(t *testing.T) {
 	}
 }
 
+func TestAzureSTTUpdateOptionsIgnoresReferenceImmutableSampleRate(t *testing.T) {
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTSampleRate(16000))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+
+	provider.UpdateOptions("", WithAzureSTTSampleRate(8000))
+
+	if got := provider.InputSampleRate(); got != 16000 {
+		t.Fatalf("InputSampleRate after update = %d, want original 16000", got)
+	}
+	if got := azureSTTStreamAudioContentType(provider, nil); got != "audio/x-wav;codec=audio/pcm;samplerate=16000" {
+		t.Fatalf("future stream audio content type = %q, want original sample rate", got)
+	}
+}
+
 func TestAzureSTTUpdateOptionsPropagatesSegmentationToActiveStream(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)

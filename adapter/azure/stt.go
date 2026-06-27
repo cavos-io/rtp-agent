@@ -206,6 +206,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 	var streams []*azureSTTStream
 	s.mu.Lock()
 	beforeLanguage := s.language
+	beforeSampleRate := s.sampleRate
 	beforeActive := s.activeStreamOptions()
 	if language != "" {
 		s.language = language
@@ -216,6 +217,7 @@ func (s *AzureSTT) UpdateOptions(language string, opts ...AzureSTTOption) {
 			opt(s)
 		}
 	}
+	s.sampleRate = beforeSampleRate
 	afterActive := s.activeStreamOptions()
 	activeChanged := beforeActive != afterActive
 	languageCandidatesChanged := beforeActive.language != afterActive.language || beforeActive.languages != afterActive.languages
