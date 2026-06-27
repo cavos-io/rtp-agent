@@ -782,7 +782,8 @@ func (s *elevenLabsStream) readLoop() {
 		var resp elWSResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
 			logger.Logger.Warnw("Failed to unmarshal ElevenLabs response", err, "payload", string(message))
-			continue
+			s.sendError(elevenLabsTTSSynthesisStatusError(fmt.Errorf("elevenlabs TTS websocket response JSON: %w", err)))
+			return
 		}
 		if respContextID := resp.contextID(); respContextID == "" || respContextID != s.contextID {
 			continue

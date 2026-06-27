@@ -2185,6 +2185,62 @@ func TestElevenLabsTTSWebsocketMalformedMP3ReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSWebsocketMalformedJSONReturnsAPIStatusErrorLikeReference(t *testing.T) {
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runElevenLabsTTSMalformedJSONWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsEncoding("pcm_8000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello there dear friend. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if !strings.Contains(statusErr.Error(), "Could not synthesize") {
+		t.Fatalf("Next error = %v, want reference synthesis failure", statusErr)
+	}
+	if !strings.Contains(statusErr.Error(), "invalid character") {
+		t.Fatalf("Next error = %v, want JSON parse detail", statusErr)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for test websocket server")
+	}
+}
+
 func TestElevenLabsTTSWebsocketPCMFinalAudioEmitsReferenceFinalMarker(t *testing.T) {
 	serverErr := make(chan error, 1)
 	clientConn, serverConn := net.Pipe()
@@ -2906,6 +2962,38 @@ func runElevenLabsTTSInvalidMP3WebsocketServer(conn net.Conn, errCh chan<- error
 	runElevenLabsTTSAudioPayloadWebsocketServer(conn, base64.StdEncoding.EncodeToString([]byte("not an mp3 frame")), true, errCh)
 }
 
+func runElevenLabsTTSMalformedJSONWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := readElevenLabsClientWebsocketJSONFrame(reader); err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := readElevenLabsClientWebsocketJSONFrame(reader); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeElevenLabsServerWebsocketTextFrame(conn, []byte("{not-json")); err != nil {
+		errCh <- err
+		return
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		errCh <- err
+		return
+	}
+	_ = readElevenLabsClientWebsocketFrame(reader)
+	errCh <- nil
+}
+
 func runElevenLabsTTSAudioPayloadWebsocketServer(conn net.Conn, audio string, waitForClientClose bool, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -3005,6 +3093,10 @@ func writeElevenLabsServerWebsocketJSONFrame(w io.Writer, msg map[string]any) er
 	if err != nil {
 		return err
 	}
+	return writeElevenLabsServerWebsocketTextFrame(w, payload)
+}
+
+func writeElevenLabsServerWebsocketTextFrame(w io.Writer, payload []byte) error {
 	header := []byte{0x81}
 	switch length := len(payload); {
 	case length < 126:
@@ -3017,7 +3109,7 @@ func writeElevenLabsServerWebsocketJSONFrame(w io.Writer, msg map[string]any) er
 	if _, err := w.Write(header); err != nil {
 		return err
 	}
-	_, err = w.Write(payload)
+	_, err := w.Write(payload)
 	return err
 }
 
