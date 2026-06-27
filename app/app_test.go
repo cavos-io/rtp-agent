@@ -9526,6 +9526,8 @@ func TestAzureTTSFallbackMapsBundleSettingEndpoint(t *testing.T) {
 			"setting": map[string]any{
 				"azure_endpoint": "https://southindia.tts.speech.microsoft.com/cognitiveservices/v1",
 				"deployment_id":  "voice-deployment",
+				"language":       "id-ID",
+				"sample_rate":    "16000",
 			},
 		},
 	}, providerAzure)
@@ -9543,6 +9545,12 @@ func TestAzureTTSFallbackMapsBundleSettingEndpoint(t *testing.T) {
 	}
 	if got, want := state.FieldByName("deploymentID").String(), "voice-deployment"; got != want {
 		t.Fatalf("deploymentID = %q, want %q", got, want)
+	}
+	if got, want := azureProvider.Language(), "id-ID"; got != want {
+		t.Fatalf("Language() = %q, want %q", got, want)
+	}
+	if got, want := azureProvider.SampleRate(), 16000; got != want {
+		t.Fatalf("SampleRate() = %d, want %d", got, want)
 	}
 }
 
