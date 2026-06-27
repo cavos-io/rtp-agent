@@ -133,3 +133,21 @@ func TestAzureResponsesLLMAcceptsReferenceReasoningEffortOption(t *testing.T) {
 		t.Fatal("NewAzureLLM returned nil model")
 	}
 }
+
+func TestAzureResponsesLLMAcceptsReferenceUserOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-4o",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMUser("caller-123"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}

@@ -28,6 +28,10 @@ func WithAzureLLMReasoningEffort(reasoningEffort string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMReasoningEffort(reasoningEffort)
 }
 
+func WithAzureLLMUser(user string) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMUser(user)
+}
+
 func NewAzureLLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...AzureLLMOption) (*adapteropenai.OpenAILLM, error) {
 	return adapteropenai.NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken, opts...)
 }
