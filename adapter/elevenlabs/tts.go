@@ -1484,6 +1484,24 @@ func (s *elevenLabsStream) flushPendingTextLocked() error {
 	if s.pendingText == "" {
 		return nil
 	}
+	if s.enableSSMLParsing && !s.autoMode {
+		tokens := tokenize.SplitWords(s.pendingText, false, false, false)
+		if len(tokens) == 0 {
+			s.pendingText = ""
+			return nil
+		}
+		cutoff, err := s.sendSSMLWordTokensLocked(tokens, len([]rune(s.pendingText)))
+		if err != nil {
+			return err
+		}
+		runes := []rune(s.pendingText)
+		if cutoff < 0 || cutoff > len(runes) {
+			s.pendingText = ""
+			return nil
+		}
+		s.pendingText = strings.TrimLeftFunc(string(runes[cutoff:]), unicode.IsSpace)
+		return nil
+	}
 	var text string
 	if s.autoMode {
 		text = strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
