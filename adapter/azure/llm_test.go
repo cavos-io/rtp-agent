@@ -136,6 +136,27 @@ func TestAzureResponsesLLMAcceptsReferenceReasoningEffortOption(t *testing.T) {
 	}
 }
 
+func TestAzureResponsesLLMAcceptsReferenceReasoningOption(t *testing.T) {
+	model, err := NewAzureLLM(
+		"gpt-5",
+		"https://voice-resource.openai.azure.com",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithAzureLLMReasoning(map[string]any{
+			"effort":  "low",
+			"summary": "auto",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureLLM error = %v", err)
+	}
+	if model == nil {
+		t.Fatal("NewAzureLLM returned nil model")
+	}
+}
+
 func TestAzureResponsesLLMAcceptsReferenceUserOption(t *testing.T) {
 	model, err := NewAzureLLM(
 		"gpt-4o",

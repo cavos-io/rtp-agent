@@ -283,6 +283,15 @@ func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMReasoning(reasoning map[string]any) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if l.extraBody == nil {
+			l.extraBody = map[string]any{}
+		}
+		l.extraBody["reasoning"] = cloneOpenAIAnyMap(reasoning)
+	}
+}
+
 func WithOpenAILLMReasoningEffort(reasoningEffort string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		if l.extraParams == nil {

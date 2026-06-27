@@ -31,6 +31,10 @@ func WithAzureLLMReasoningEffort(reasoningEffort string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMReasoningEffort(reasoningEffort)
 }
 
+func WithAzureLLMReasoning(reasoning map[string]any) AzureLLMOption {
+	return adapteropenai.WithOpenAILLMReasoning(reasoning)
+}
+
 func WithAzureLLMUser(user string) AzureLLMOption {
 	return adapteropenai.WithOpenAILLMUser(user)
 }
