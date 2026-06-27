@@ -2603,6 +2603,61 @@ func TestAzureSTTUpdateOptionsReconnectsActiveStreamForSameSegmentationValue(t *
 	receiveAzureTestSignal(t, serverClosed, "first server close after same segmentation update")
 }
 
+func TestAzureSTTUpdateOptionsClearsReferenceSegmentation(t *testing.T) {
+	requests := make(chan *http.Request, 2)
+	configMessages := make(chan string, 2)
+	serverClosed := make(chan struct{}, 2)
+
+	provider, err := NewAzureSTT(
+		"key",
+		"eastus",
+		WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"),
+		WithAzureSTTSegmentationSilenceTimeout(650),
+		WithAzureSTTSegmentationMaxTime(5000),
+		WithAzureSTTSegmentationStrategy("Time"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestSessionStartedHoldOpenDialer(t, requests, configMessages, serverClosed)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "first request")
+	receiveAzureTestValue(t, configMessages, "first speech config")
+	azureTestWaitForSessionStarted(t, stream)
+
+	provider.UpdateOptions("",
+		WithAzureSTTSegmentationSilenceTimeout(0),
+		WithAzureSTTSegmentationMaxTime(0),
+		WithAzureSTTSegmentationStrategy(""),
+	)
+
+	receiveAzureTestValue(t, requests, "second request after clearing segmentation")
+	secondConfig := receiveAzureTestValue(t, configMessages, "second speech config after clearing segmentation")
+	_, configBody := splitAzureTestMessage(t, []byte(secondConfig))
+	var configPayload struct {
+		Properties map[string]string `json:"properties"`
+	}
+	if err := json.Unmarshal(configBody, &configPayload); err != nil {
+		t.Fatalf("speech config JSON: %v", err)
+	}
+	if got := configPayload.Properties["Speech_SegmentationSilenceTimeoutMs"]; got != "" {
+		t.Fatalf("segmentation silence timeout = %q, want cleared", got)
+	}
+	if got := configPayload.Properties["Speech_SegmentationMaximumTimeMs"]; got != "" {
+		t.Fatalf("segmentation max time = %q, want cleared", got)
+	}
+	if got := configPayload.Properties["Speech_SegmentationStrategy"]; got != "" {
+		t.Fatalf("segmentation strategy = %q, want cleared", got)
+	}
+	receiveAzureTestSignal(t, serverClosed, "first server close after clearing segmentation")
+}
+
 func TestAzureSTTUpdateOptionsReconnectsBeforeFlushingQueuedAudio(t *testing.T) {
 	requests := make(chan *http.Request, 2)
 	configMessages := make(chan string, 2)

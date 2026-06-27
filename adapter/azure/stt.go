@@ -123,7 +123,7 @@ func WithAzureSTTSampleRate(sampleRate int) AzureSTTOption {
 
 func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
-		if timeoutMS > 0 {
+		if timeoutMS >= 0 {
 			s.segmentationSilence = timeoutMS
 			s.reconnectOnUpdate = true
 		}
@@ -132,7 +132,7 @@ func WithAzureSTTSegmentationSilenceTimeout(timeoutMS int) AzureSTTOption {
 
 func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
 	return func(s *AzureSTT) {
-		if maxTimeMS > 0 {
+		if maxTimeMS >= 0 {
 			s.segmentationMaxTime = maxTimeMS
 			s.reconnectOnUpdate = true
 		}
@@ -141,10 +141,8 @@ func WithAzureSTTSegmentationMaxTime(maxTimeMS int) AzureSTTOption {
 
 func WithAzureSTTSegmentationStrategy(strategy string) AzureSTTOption {
 	return func(s *AzureSTT) {
-		if strategy != "" {
-			s.segmentationStrategy = strategy
-			s.reconnectOnUpdate = true
-		}
+		s.segmentationStrategy = strategy
+		s.reconnectOnUpdate = true
 	}
 }
 
