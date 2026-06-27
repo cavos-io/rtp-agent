@@ -765,6 +765,7 @@ type azureSTTStream struct {
 	startTime       float64
 	speaking        bool
 	pushedChannels  uint32
+	inputEnded      bool
 	ctx             context.Context
 	cancel          context.CancelFunc
 }
@@ -781,6 +782,9 @@ func (s *azureSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil && s.ctx.Err() != nil {
@@ -844,7 +848,14 @@ func (s *azureSTTStream) audioContentType() string {
 func (s *azureSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.flushLocked()
+}
+
+func (s *azureSTTStream) flushLocked() error {
 	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
 		return io.ErrClosedPipe
 	}
 	if s.ctx != nil && s.ctx.Err() != nil {
@@ -871,6 +882,16 @@ func (s *azureSTTStream) Flush() error {
 		return nil
 	}
 	return s.writeAudioLocked(silence)
+}
+
+func (s *azureSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.flushLocked(); err != nil {
+		return err
+	}
+	s.inputEnded = true
+	return nil
 }
 
 func (s *azureSTTStream) Close() error {

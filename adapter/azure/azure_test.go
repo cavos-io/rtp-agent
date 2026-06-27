@@ -2689,6 +2689,51 @@ func TestAzureSTTFlushSendsReferenceSilenceFrame(t *testing.T) {
 	}
 }
 
+func TestAzureSTTEndInputFlushesAndRejectsMoreInput(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	configMessages := make(chan string, 1)
+	audioMessages := make(chan []byte, 1)
+
+	provider, err := NewAzureSTT("key", "eastus", WithAzureSTTWebsocketURL("ws://azure.test/speech/recognition/conversation/cognitiveservices/v1"))
+	if err != nil {
+		t.Fatalf("NewAzureSTT error = %v", err)
+	}
+	provider.dialWebsocket = azureTestSessionStartedAudioDialer(t, requests, configMessages, audioMessages)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	receiveAzureTestValue(t, requests, "request")
+	receiveAzureTestValue(t, configMessages, "speech config")
+	azureTestWaitForSessionStarted(t, stream)
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	audioMessage := receiveAzureTestValue(t, audioMessages, "end-input silence audio")
+	_, audioPayload := splitAzureTestBinaryMessage(t, audioMessage)
+	if len(audioPayload) != 6400 {
+		t.Fatalf("end-input flush payload length = %d, want 200ms 16-bit mono silence", len(audioPayload))
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil {
+		t.Fatal("PushFrame after EndInput error = nil, want closed-pipe error")
+	}
+	if err := stream.Flush(); err == nil {
+		t.Fatal("Flush after EndInput error = nil, want closed-pipe error")
+	}
+	if err := ending.EndInput(); err == nil {
+		t.Fatal("second EndInput error = nil, want closed-pipe error")
+	}
+}
+
 func TestAzureTTSDefaultsAndEnvironmentMatchReference(t *testing.T) {
 	t.Setenv(azureSpeechKeyEnv, "env-key")
 	t.Setenv(azureSpeechRegionEnv, "westus")
