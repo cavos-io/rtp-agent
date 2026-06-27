@@ -22,6 +22,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	langutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/gorilla/websocket"
 )
 
@@ -76,7 +77,7 @@ func WithElevenLabsSTTModel(modelID string) ElevenLabsSTTOption {
 
 func WithElevenLabsSTTLanguage(languageCode string) ElevenLabsSTTOption {
 	return func(s *ElevenLabsSTT) {
-		s.languageCode = languageCode
+		s.languageCode = langutil.NormalizeLanguage(languageCode)
 	}
 }
 
@@ -290,7 +291,7 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	}
 	if language != "" {
 		s.mu.Lock()
-		s.languageCode = language
+		s.languageCode = langutil.NormalizeLanguage(language)
 		s.mu.Unlock()
 	}
 
@@ -396,7 +397,11 @@ func buildElevenLabsSTTRecognizeRequest(ctx context.Context, s *ElevenLabsSTT, a
 	if err := writer.WriteField("tag_audio_events", strconv.FormatBool(s.tagAudioEvents)); err != nil {
 		return nil, err
 	}
-	if requestLanguage := resolveElevenLabsSTTLanguage(s, language); requestLanguage != "" {
+	requestLanguage := s.languageCode
+	if language != "" {
+		requestLanguage = langutil.NormalizeLanguage(language)
+	}
+	if requestLanguage != "" {
 		if err := writer.WriteField("language_code", requestLanguage); err != nil {
 			return nil, err
 		}
@@ -929,6 +934,7 @@ func elevenLabsSTTSpeechEvent(defaultLanguage string, resp elevenLabsSTTResponse
 	if language == "" {
 		language = defaultLanguage
 	}
+	language = elevenLabsNormalizeSTTLanguage(language)
 	data := stt.SpeechData{
 		Text:     resp.Text,
 		Language: language,
@@ -1021,6 +1027,7 @@ func elevenLabsSTTSpeechDataFromStream(state *elevenLabsSTTStreamState, data map
 	if language == "" {
 		language = "en"
 	}
+	language = elevenLabsNormalizeSTTLanguage(language)
 	words := elevenLabsSTTWordsFromAny(data["words"])
 	speechData := stt.SpeechData{
 		Text:      text,
@@ -1034,6 +1041,13 @@ func elevenLabsSTTSpeechDataFromStream(state *elevenLabsSTTStreamState, data map
 		speechData.Words = elevenLabsSTTTimedStrings(words, state.startTimeOffset)
 	}
 	return speechData
+}
+
+func elevenLabsNormalizeSTTLanguage(language string) string {
+	if normalized := langutil.NormalizeLanguage(language); normalized != "" {
+		return normalized
+	}
+	return language
 }
 
 func elevenLabsSTTWordsFromAny(raw any) []elevenLabsSTTWord {

@@ -131,7 +131,7 @@ func TestElevenLabsSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T)
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTBaseURL("https://eleven.example/v1"),
 		WithElevenLabsSTTModel("scribe_v2"),
-		WithElevenLabsSTTLanguage("en"),
+		WithElevenLabsSTTLanguage("english"),
 		WithElevenLabsSTTTagAudioEvents(false),
 		WithElevenLabsSTTKeyterms([]string{"LiveKit", "Cavos"}),
 	)
@@ -142,7 +142,7 @@ func TestElevenLabsSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T)
 		NumChannels:       1,
 		SamplesPerChannel: 1,
 	}}, uint32(provider.sampleRate), 1)
-	req, err := buildElevenLabsSTTRecognizeRequest(context.Background(), provider, audio, "fr")
+	req, err := buildElevenLabsSTTRecognizeRequest(context.Background(), provider, audio, "fr_ca")
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestElevenLabsSTTRecognizeRequestUsesReferenceMultipartFields(t *testing.T)
 	fields, files := readElevenLabsMultipartRequest(t, req)
 	assertElevenLabsFormField(t, fields, "model_id", "scribe_v2")
 	assertElevenLabsFormField(t, fields, "tag_audio_events", "false")
-	assertElevenLabsFormField(t, fields, "language_code", "fr")
+	assertElevenLabsFormField(t, fields, "language_code", "fr-CA")
 	if got := fields["keyterms"]; got != "LiveKit,Cavos" {
 		t.Fatalf("keyterms = %q, want joined keyterms", got)
 	}
@@ -192,8 +192,8 @@ func TestElevenLabsSTTRecognizeLanguageOverridePersistsLikeReference(t *testing.
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		fields, _ := readElevenLabsMultipartRequest(t, r)
-		if fields["language_code"] != "fr" {
-			t.Fatalf("recognize language_code = %q, want fr", fields["language_code"])
+		if fields["language_code"] != "fr-CA" {
+			t.Fatalf("recognize language_code = %q, want fr-CA", fields["language_code"])
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -212,11 +212,11 @@ func TestElevenLabsSTTRecognizeLanguageOverridePersistsLikeReference(t *testing.
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 1,
-	}}, "fr"); err != nil {
+	}}, "fr_ca"); err != nil {
 		t.Fatalf("Recognize() error = %v", err)
 	}
-	if provider.languageCode != "fr" {
-		t.Fatalf("languageCode = %q, want fr persisted for later calls", provider.languageCode)
+	if provider.languageCode != "fr-CA" {
+		t.Fatalf("languageCode = %q, want fr-CA persisted for later calls", provider.languageCode)
 	}
 
 	req, err := buildElevenLabsSTTRecognizeRequest(context.Background(), provider, []byte("wav"), "")
@@ -224,8 +224,8 @@ func TestElevenLabsSTTRecognizeLanguageOverridePersistsLikeReference(t *testing.
 		t.Fatalf("build request: %v", err)
 	}
 	fields, _ := readElevenLabsMultipartRequest(t, req)
-	if fields["language_code"] != "fr" {
-		t.Fatalf("later language_code = %q, want persisted fr", fields["language_code"])
+	if fields["language_code"] != "fr-CA" {
+		t.Fatalf("later language_code = %q, want persisted fr-CA", fields["language_code"])
 	}
 }
 
@@ -1465,6 +1465,18 @@ func TestElevenLabsSTTStreamEventDefaultsLanguageToEnglish(t *testing.T) {
 	assertElevenLabsSTTEvent(t, events, 1, stt.SpeechEventFinalTranscript, "hello")
 	if got := events[1].Alternatives[0].Language; got != "en" {
 		t.Fatalf("language = %q, want reference default en", got)
+	}
+
+	events, err = processElevenLabsSTTStreamEvent(&elevenLabsSTTStreamState{}, map[string]any{
+		"message_type":  "committed_transcript",
+		"text":          "bonjour",
+		"language_code": "fr_ca",
+	})
+	if err != nil {
+		t.Fatalf("process regional final: %v", err)
+	}
+	if got := events[1].Alternatives[0].Language; got != "fr-CA" {
+		t.Fatalf("regional language = %q, want normalized fr-CA", got)
 	}
 }
 
