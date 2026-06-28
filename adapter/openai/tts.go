@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -456,7 +457,13 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 				s.startErr = io.EOF
 				return
 			}
-			s.startErr = mapOpenAIError(err)
+			mapped := mapOpenAIError(err)
+			var statusErr *llm.APIStatusError
+			if errors.As(mapped, &statusErr) && statusErr.StatusCode == 499 {
+				s.startErr = io.EOF
+				return
+			}
+			s.startErr = mapped
 			return
 		}
 		if s.closed || s.provider.isClosed() {
