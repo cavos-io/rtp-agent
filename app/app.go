@@ -3302,6 +3302,15 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	if strategy := azureSTTModelOption(cfg.STTModelOptions, "segmentation_strategy"); strategy != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationStrategy(strategy))
 	}
+	if trueText := azureSTTBoolModelOption(cfg.STTModelOptions, "true_text_post_processing"); trueText != nil {
+		sttOpts = append(sttOpts, azure.WithAzureSTTTrueTextPostProcessing(*trueText))
+	}
+	if explicitPunctuation := azureSTTBoolModelOption(cfg.STTModelOptions, "explicit_punctuation"); explicitPunctuation != nil {
+		sttOpts = append(sttOpts, azure.WithAzureSTTExplicitPunctuation(*explicitPunctuation))
+	}
+	if profanity := azureSTTModelOption(cfg.STTModelOptions, "profanity"); profanity != "" {
+		sttOpts = append(sttOpts, azure.WithAzureSTTProfanity(profanity))
+	}
 	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
 }
 
@@ -3383,6 +3392,17 @@ func azureSTTIntModelOption(options map[string]any, key string) int {
 		return 0
 	}
 	return modelOptionInt(setting, key)
+}
+
+func azureSTTBoolModelOption(options map[string]any, key string) *bool {
+	if value := modelOptionBool(options, key); value != nil {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return modelOptionBool(setting, key)
 }
 
 func azureSTTModelOption(options map[string]any, key string) string {

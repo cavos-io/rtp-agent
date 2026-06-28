@@ -12789,6 +12789,32 @@ func TestDefaultConfigFromEnvMapsAzureSTTSegmentationOptions(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureSTTTranscriptOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "true_text_post_processing=true,explicit_punctuation=true,profanity=raw")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if !state.FieldByName("trueTextPostProcessing").Bool() {
+		t.Fatal("Azure STT trueTextPostProcessing = false, want true")
+	}
+	if !state.FieldByName("explicitPunctuation").Bool() {
+		t.Fatal("Azure STT explicitPunctuation = false, want true")
+	}
+	if got, want := state.FieldByName("profanity").String(), "raw"; got != want {
+		t.Fatalf("Azure STT profanity = %q, want %q", got, want)
+	}
+}
+
 func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
 	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
 	cfg := AppConfig{
