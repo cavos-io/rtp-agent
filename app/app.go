@@ -2405,7 +2405,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerGroq:
-		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
+		return groqLLMFromConfig(cfg), nil
 	case providerXAI:
 		return xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel), nil
 	case providerTogether:
@@ -3408,13 +3408,6 @@ func azureSTTSpeechEndpointFromConfig(cfg AppConfig) string {
 	return azureSTTModelOption(cfg.STTModelOptions, "speech_endpoint")
 }
 
-func azureSTTLanguageFromConfig(cfg AppConfig) string {
-	if strings.TrimSpace(cfg.STTLanguage) != "" {
-		return strings.TrimSpace(cfg.STTLanguage)
-	}
-	return azureSTTModelOption(cfg.STTModelOptions, "language")
-}
-
 func azureSTTIntModelOption(options map[string]any, key string) int {
 	if value := modelOptionInt(options, key); value > 0 {
 		return value
@@ -3646,6 +3639,14 @@ func groqSTTFromConfig(cfg AppConfig) (*groq.GroqSTT, error) {
 		sttOpts = append(sttOpts, groq.WithGroqSTTPrompt(cfg.STTPrompt))
 	}
 	return groq.NewGroqSTT(cfg.GroqAPIKey, cfg.STTModel, sttOpts...)
+}
+
+func groqLLMFromConfig(cfg AppConfig) *groq.GroqLLM {
+	llmOpts := []groq.GroqLLMOption{}
+	if cfg.LLMBaseURL != "" {
+		llmOpts = append(llmOpts, groq.WithGroqLLMBaseURL(cfg.LLMBaseURL))
+	}
+	return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel, llmOpts...)
 }
 
 func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
@@ -4625,7 +4626,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerGroq:
-		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
+		a.LLM = groqLLMFromConfig(cfg)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
 	case providerMistralAI:

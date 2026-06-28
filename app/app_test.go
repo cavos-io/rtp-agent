@@ -13296,6 +13296,7 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "test-groq-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://groq.example/openai/v1")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "groq")
 	t.Setenv("RTP_AGENT_STT_MODEL", "whisper-large-v3")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
@@ -13313,8 +13314,16 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if got := llm.Provider(app.Session.LLM); got != "api.groq.com" {
-		t.Fatalf("LLM provider = %q, want api.groq.com", got)
+	if got := llm.Provider(app.Session.LLM); got != "groq.example" {
+		t.Fatalf("LLM provider = %q, want configured Groq OpenAI-compatible host", got)
+	}
+	groqLLM, ok := app.Session.LLM.(*groq.GroqLLM)
+	if !ok {
+		t.Fatalf("LLM provider type = %T, want *groq.GroqLLM", app.Session.LLM)
+	}
+	llmState := reflect.ValueOf(groqLLM).Elem()
+	if got := llmState.FieldByName("baseURL").String(); got != "https://groq.example/openai/v1" {
+		t.Fatalf("LLM baseURL = %q, want configured Groq OpenAI-compatible URL", got)
 	}
 	if got := llm.Model(app.Session.LLM); got != "llama3-70b-8192" {
 		t.Fatalf("LLM model = %q, want llama3-70b-8192", got)
