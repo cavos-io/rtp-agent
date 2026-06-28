@@ -2531,6 +2531,52 @@ func TestElevenLabsTTSSharedWriteFailureClosesSiblingContextsLikeReference(t *te
 	}
 }
 
+func TestElevenLabsTTSWriteFailureSurfacesProviderErrorBeforeEOF(t *testing.T) {
+	provider := &ElevenLabsTTS{streams: make(map[*elevenLabsStream]struct{})}
+	connCtx, connCancel := context.WithCancel(context.Background())
+	defer connCancel()
+	shared := &elevenLabsTTSConnection{
+		provider: provider,
+		ctx:      connCtx,
+		cancel:   connCancel,
+		ready:    make(chan struct{}),
+		streams:  make(map[string]*elevenLabsStream),
+		current:  true,
+	}
+	close(shared.ready)
+
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+	stream := &elevenLabsStream{
+		provider:   provider,
+		audio:      make(chan *tts.SynthesizedAudio),
+		errCh:      make(chan error, 1),
+		ctx:        streamCtx,
+		cancel:     streamCancel,
+		contextID:  "ctx-a",
+		inputErr:   io.ErrClosedPipe,
+		sharedConn: shared,
+		connReady:  make(chan struct{}),
+		sampleRate: 16000,
+		encoding:   "pcm_16000",
+	}
+	provider.streams[stream] = struct{}{}
+	shared.registerStream(stream)
+
+	stream.mu.Lock()
+	stream.closeAfterWriteFailureLocked()
+	stream.mu.Unlock()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil after write failure, want provider error")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestElevenLabsTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	handlerDone := make(chan struct{})

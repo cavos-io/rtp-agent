@@ -2109,8 +2109,10 @@ func (s *elevenLabsStream) waitConnectionLocked() error {
 }
 
 func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
+	err := llm.NewAPIConnectionError("failed to write to elevenlabs")
 	s.closed = true
 	s.inputErr = io.ErrClosedPipe
+	s.sendError(err)
 	s.cancelResponseTimeoutLocked()
 	if s.cancel != nil {
 		s.cancel()
@@ -2123,7 +2125,7 @@ func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 	}
 	if s.sharedConn != nil {
 		sharedConn := s.sharedConn
-		go sharedConn.fail(llm.NewAPIConnectionError("failed to write to elevenlabs"))
+		go sharedConn.fail(err)
 	}
 }
 
