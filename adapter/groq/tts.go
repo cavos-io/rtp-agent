@@ -167,7 +167,12 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		return nil, llm.NewAPIError("Groq returned non-audio data", string(respBody), true)
 	}
 
-	stream := &groqTTSChunkedStream{resp: resp, sampleRate: t.sampleRate, provider: t}
+	stream := &groqTTSChunkedStream{
+		resp:       resp,
+		sampleRate: t.sampleRate,
+		provider:   t,
+		requestID:  fmt.Sprintf("groq-tts-%d", requestID),
+	}
 	if !t.registerStream(stream) {
 		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
 	}
@@ -308,6 +313,7 @@ type groqTTSChunkedStream struct {
 	resp             *http.Response
 	sampleRate       int
 	provider         *GroqTTS
+	requestID        string
 	started          bool
 	finalSent        bool
 	pendingFinal     bool
@@ -327,14 +333,16 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
-		return &tts.SynthesizedAudio{IsFinal: true}, nil
+		_ = s.Close()
+		return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 	}
 
 	if !s.started {
 		if err := s.startWAV(); err != nil {
 			if errors.Is(err, io.EOF) {
 				s.finalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				_ = s.Close()
+				return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 			}
 			return nil, s.fail(err)
 		}
@@ -342,7 +350,8 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.remainingData == 0 {
 		s.finalSent = true
-		return &tts.SynthesizedAudio{IsFinal: true}, nil
+		_ = s.Close()
+		return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 	}
 
 	data, err := s.readPCMChunk()
@@ -363,7 +372,8 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	return &tts.SynthesizedAudio{
-		Frame: frame,
+		Frame:     frame,
+		RequestID: s.requestID,
 	}, nil
 }
 

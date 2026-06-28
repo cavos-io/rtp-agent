@@ -112,7 +112,7 @@ func NewGroqSTT(apiKey string, model string, opts ...GroqSTTOption) (*GroqSTT, e
 
 func (s *GroqSTT) Label() string { return "groq.STT" }
 func (s *GroqSTT) Provider() string {
-	return "groq"
+	return groqProviderHost(s.baseURL, "groq")
 }
 func (s *GroqSTT) Model() string { return s.model }
 func (s *GroqSTT) Capabilities() stt.STTCapabilities {

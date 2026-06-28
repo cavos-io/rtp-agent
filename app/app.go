@@ -2405,7 +2405,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerTelnyx:
 		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
 	case providerGroq:
-		return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel), nil
+		return groqLLMFromConfig(cfg), nil
 	case providerXAI:
 		return xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel), nil
 	case providerTogether:
@@ -3408,13 +3408,6 @@ func azureSTTSpeechEndpointFromConfig(cfg AppConfig) string {
 	return azureSTTModelOption(cfg.STTModelOptions, "speech_endpoint")
 }
 
-func azureSTTLanguageFromConfig(cfg AppConfig) string {
-	if strings.TrimSpace(cfg.STTLanguage) != "" {
-		return strings.TrimSpace(cfg.STTLanguage)
-	}
-	return azureSTTModelOption(cfg.STTModelOptions, "language")
-}
-
 func azureSTTIntModelOption(options map[string]any, key string) int {
 	if value := modelOptionInt(options, key); value > 0 {
 		return value
@@ -3646,6 +3639,61 @@ func groqSTTFromConfig(cfg AppConfig) (*groq.GroqSTT, error) {
 		sttOpts = append(sttOpts, groq.WithGroqSTTPrompt(cfg.STTPrompt))
 	}
 	return groq.NewGroqSTT(cfg.GroqAPIKey, cfg.STTModel, sttOpts...)
+}
+
+func groqLLMFromConfig(cfg AppConfig) *groq.GroqLLM {
+	llmOpts := []groq.GroqLLMOption{}
+	if cfg.LLMBaseURL != "" {
+		llmOpts = append(llmOpts, groq.WithGroqLLMBaseURL(cfg.LLMBaseURL))
+	}
+	if timeoutMS := modelOptionInt(cfg.LLMModelOptions, "timeout_ms"); timeoutMS > 0 {
+		llmOpts = append(llmOpts, groq.WithGroqLLMTimeout(time.Duration(timeoutMS)*time.Millisecond))
+	}
+	if openAIOpts := groqOpenAILLMOptionsFromConfig(cfg); len(openAIOpts) > 0 {
+		llmOpts = append(llmOpts, groq.WithGroqLLMOptions(openAIOpts...))
+	}
+	return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel, llmOpts...)
+}
+
+func groqOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
+	opts := []openai.OpenAILLMOption{}
+	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
+		opts = append(opts, openai.WithOpenAILLMTemperature(*temperature))
+	}
+	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
+		opts = append(opts, openai.WithOpenAILLMTopP(*topP))
+	}
+	if maxCompletionTokens := modelOptionInt(cfg.LLMModelOptions, "max_completion_tokens"); maxCompletionTokens > 0 {
+		opts = append(opts, openai.WithOpenAILLMMaxCompletionTokens(maxCompletionTokens))
+	}
+	if parallelToolCalls := modelOptionBool(cfg.LLMModelOptions, "parallel_tool_calls"); parallelToolCalls != nil {
+		opts = append(opts, openai.WithOpenAILLMParallelToolCalls(*parallelToolCalls))
+	}
+	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
+		opts = append(opts, openai.WithOpenAILLMToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	if promptCacheKey := modelOptionString(cfg.LLMModelOptions, "prompt_cache_key"); promptCacheKey != "" {
+		opts = append(opts, openai.WithOpenAILLMPromptCacheKey(promptCacheKey))
+	}
+	if promptCacheRetention := modelOptionString(cfg.LLMModelOptions, "prompt_cache_retention"); promptCacheRetention != "" {
+		opts = append(opts, openai.WithOpenAILLMPromptCacheRetention(promptCacheRetention))
+	}
+	if metadata := modelOptionStringMap(cfg.LLMModelOptions, "metadata"); len(metadata) > 0 {
+		opts = append(opts, openai.WithOpenAILLMMetadata(metadata))
+	}
+	if reasoningEffort := modelOptionString(cfg.LLMModelOptions, "reasoning_effort"); reasoningEffort != "" {
+		opts = append(opts, openai.WithOpenAILLMReasoningEffort(reasoningEffort))
+	}
+	if serviceTier := modelOptionString(cfg.LLMModelOptions, "service_tier"); serviceTier != "" {
+		opts = append(opts, openai.WithOpenAILLMServiceTier(serviceTier))
+	}
+	if user := modelOptionString(cfg.LLMModelOptions, "user"); user != "" {
+		opts = append(opts, openai.WithOpenAILLMUser(user))
+	}
+	if safetyIdentifier := modelOptionString(cfg.LLMModelOptions, "safety_identifier"); safetyIdentifier != "" {
+		opts = append(opts, openai.WithOpenAILLMSafetyIdentifier(safetyIdentifier))
+	}
+	return opts
 }
 
 func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
@@ -4625,7 +4673,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerGroq:
-		a.LLM = groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel)
+		a.LLM = groqLLMFromConfig(cfg)
 	case providerLangChain:
 		a.LLM = langchain.NewLangchainLLM(cfg.LangChainAPIKey, cfg.LLMModel)
 	case providerMistralAI:
@@ -6826,6 +6874,42 @@ func modelOptionString(options map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+func modelOptionStringMap(options map[string]any, key string) map[string]string {
+	value, ok := options[key]
+	if !ok {
+		return nil
+	}
+	values := map[string]string{}
+	switch typed := value.(type) {
+	case map[string]string:
+		for k, v := range typed {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if k != "" && v != "" {
+				values[k] = v
+			}
+		}
+	case map[string]any:
+		for k, v := range typed {
+			text, ok := v.(string)
+			if !ok {
+				continue
+			}
+			k = strings.TrimSpace(k)
+			text = strings.TrimSpace(text)
+			if k != "" && text != "" {
+				values[k] = text
+			}
+		}
+	default:
+		return nil
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }
 
 func modelOptionBool(options map[string]any, key string) *bool {

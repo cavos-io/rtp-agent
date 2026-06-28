@@ -13271,7 +13271,7 @@ func TestGroqSTTFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := stt.Model(provider), "whisper-large-v3"; got != want {
 		t.Fatalf("stt.Model() = %q, want %q", got, want)
 	}
-	if got, want := stt.Provider(provider), "groq"; got != want {
+	if got, want := stt.Provider(provider), "groq.example"; got != want {
 		t.Fatalf("stt.Provider() = %q, want %q", got, want)
 	}
 	state := reflect.ValueOf(groqProvider).Elem()
@@ -13296,6 +13296,7 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "test-groq-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://groq.example/openai/v1")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "groq")
 	t.Setenv("RTP_AGENT_STT_MODEL", "whisper-large-v3")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id")
@@ -13313,8 +13314,16 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if got := llm.Provider(app.Session.LLM); got != "groq" {
-		t.Fatalf("LLM provider = %q, want groq", got)
+	if got := llm.Provider(app.Session.LLM); got != "groq.example" {
+		t.Fatalf("LLM provider = %q, want configured Groq OpenAI-compatible host", got)
+	}
+	groqLLM, ok := app.Session.LLM.(*groq.GroqLLM)
+	if !ok {
+		t.Fatalf("LLM provider type = %T, want *groq.GroqLLM", app.Session.LLM)
+	}
+	llmState := reflect.ValueOf(groqLLM).Elem()
+	if got := llmState.FieldByName("baseURL").String(); got != "https://groq.example/openai/v1" {
+		t.Fatalf("LLM baseURL = %q, want configured Groq OpenAI-compatible URL", got)
 	}
 	if got := llm.Model(app.Session.LLM); got != "llama3-70b-8192" {
 		t.Fatalf("LLM model = %q, want llama3-70b-8192", got)
@@ -13322,8 +13331,8 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if got := app.Session.STT.Label(); got != "groq.STT" {
 		t.Fatalf("STT label = %q, want groq.STT", got)
 	}
-	if got := stt.Provider(app.Session.STT); got != "groq" {
-		t.Fatalf("STT provider = %q, want groq", got)
+	if got := stt.Provider(app.Session.STT); got != "groq.example" {
+		t.Fatalf("STT provider = %q, want groq.example", got)
 	}
 	if got := stt.Model(app.Session.STT); got != "whisper-large-v3" {
 		t.Fatalf("STT model = %q, want whisper-large-v3", got)
@@ -13341,11 +13350,14 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
 		t.Fatalf("STT capabilities = %+v, want reference offline-only Groq STT", caps)
 	}
-	if got := app.Session.TTS.Label(); got != "StreamAdapter(groq.TTS)" {
-		t.Fatalf("TTS label = %q, want StreamAdapter(groq.TTS)", got)
+	if got := app.Session.TTS.Label(); got != "tts.StreamAdapter" {
+		t.Fatalf("TTS label = %q, want tts.StreamAdapter", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 48000 {
 		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if got := app.Session.TTS.NumChannels(); got != 1 {
+		t.Fatalf("TTS channels = %d, want reference mono output", got)
 	}
 	if got := tts.Provider(app.Session.TTS); got != "Groq" {
 		t.Fatalf("TTS provider = %q, want StreamAdapter to forward Groq provider metadata", got)
@@ -13356,6 +13368,135 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || !caps.AlignedTranscript {
 		t.Fatalf("TTS capabilities = %+v, want stream adapter capabilities", caps)
 	}
+}
+
+func TestDefaultConfigFromEnvMapsGroqLLMOptions(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode Groq request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"stop","type":"invalid_request_error","code":"bad_request"}}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", server.URL)
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "temperature=0.2,top_p=0.8,max_completion_tokens=128,parallel_tool_calls=false,tool_choice=none,service_tier=priority")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	stream, _ := app.Session.LLM.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if stream != nil {
+		_ = stream.Close()
+	}
+
+	if requestBody["temperature"] != 0.2 {
+		t.Fatalf("temperature = %#v, want 0.2 in Groq request body %#v", requestBody["temperature"], requestBody)
+	}
+	if requestBody["top_p"] != 0.8 {
+		t.Fatalf("top_p = %#v, want 0.8 in Groq request body %#v", requestBody["top_p"], requestBody)
+	}
+	if requestBody["max_completion_tokens"] != float64(128) {
+		t.Fatalf("max_completion_tokens = %#v, want 128 in Groq request body %#v", requestBody["max_completion_tokens"], requestBody)
+	}
+	if requestBody["parallel_tool_calls"] != false {
+		t.Fatalf("parallel_tool_calls = %#v, want false in Groq request body %#v", requestBody["parallel_tool_calls"], requestBody)
+	}
+	if requestBody["tool_choice"] != "none" {
+		t.Fatalf("tool_choice = %#v, want none in Groq request body %#v", requestBody["tool_choice"], requestBody)
+	}
+	if requestBody["service_tier"] != "priority" {
+		t.Fatalf("service_tier = %#v, want priority in Groq request body %#v", requestBody["service_tier"], requestBody)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsGroqLLMMetadata(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode Groq request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"stop","type":"invalid_request_error","code":"bad_request"}}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", server.URL)
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `metadata={"trace":"room-123","turn":"5"}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	stream, _ := app.Session.LLM.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if stream != nil {
+		_ = stream.Close()
+	}
+
+	metadata, ok := requestBody["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata = %#v, want Groq request metadata object in body %#v", requestBody["metadata"], requestBody)
+	}
+	if metadata["trace"] != "room-123" || metadata["turn"] != "5" {
+		t.Fatalf("metadata = %#v, want trace and turn tags", metadata)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsGroqLLMTimeoutOption(t *testing.T) {
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "timeout_ms=750")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	groqLLM, ok := app.Session.LLM.(*groq.GroqLLM)
+	if !ok {
+		t.Fatalf("LLM provider type = %T, want *groq.GroqLLM", app.Session.LLM)
+	}
+	if got := groqLLMDefaultConnectDuration(t, groqLLM, "Timeout"); got != 750*time.Millisecond {
+		t.Fatalf("Groq LLM default timeout = %v, want 750ms from model options", got)
+	}
+}
+
+func groqLLMDefaultConnectDuration(t *testing.T, provider *groq.GroqLLM, field string) time.Duration {
+	t.Helper()
+
+	state := reflect.ValueOf(provider).Elem()
+	inner := state.FieldByName("inner")
+	if inner.IsNil() {
+		t.Fatal("Groq LLM inner OpenAI provider is nil")
+	}
+	connect := inner.Elem().FieldByName("defaultConnect")
+	if connect.IsNil() {
+		t.Fatal("Groq LLM default connect options are nil")
+	}
+	value := connect.Elem().FieldByName(field)
+	if !value.IsValid() {
+		t.Fatalf("Groq LLM default connect field %q is invalid", field)
+	}
+	return time.Duration(value.Int())
 }
 
 func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {

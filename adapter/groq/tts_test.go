@@ -181,6 +181,35 @@ func TestGroqTTSRejectsNonAudioResponse(t *testing.T) {
 	}
 }
 
+func TestGroqTTSAcceptsReferenceAudioPrefixContentType(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audioevil"}},
+			Body:       io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error = %v, want reference audio prefix accepted", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error = %v, want decoded WAV audio", err)
+	}
+	if audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("audio = %#v, want decoded non-final frame", audio)
+	}
+}
+
 func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -565,6 +594,82 @@ func TestGroqTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
+func TestGroqTTSSynthesizeSetsStableRequestID(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error = %v", err)
+	}
+	if audio.RequestID == "" {
+		t.Fatal("audio RequestID is empty, want reference stable request id")
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if final.RequestID != audio.RequestID {
+		t.Fatalf("final RequestID = %q, want stable request id %q", final.RequestID, audio.RequestID)
+	}
+}
+
+func TestGroqTTSChunkedStreamClosesBodyAfterFinal(t *testing.T) {
+	body := &groqCloseCountBody{Reader: bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))}
+	stream := &groqTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 48000,
+		requestID:  "req-1",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error = %v", err)
+	}
+	if audio == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want decoded audio", audio)
+	}
+	if body.closeCount != 0 {
+		t.Fatalf("body Close() calls after audio = %d, want 0", body.closeCount)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls after final = %d, want 1", body.closeCount)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after final returned error = %v", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls after idempotent Close = %d, want 1", body.closeCount)
 	}
 }
 

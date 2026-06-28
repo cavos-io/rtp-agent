@@ -249,12 +249,30 @@ func WithOpenAILLMAzureBaseURL(baseURL string) OpenAILLMOption {
 }
 
 func WithOpenAILLMAzureTimeout(timeout time.Duration) OpenAILLMOption {
+	return WithOpenAILLMTimeout(timeout)
+}
+
+func WithOpenAILLMTimeout(timeout time.Duration) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		connectOptions := llm.DefaultAPIConnectOptions()
 		if l.defaultConnect != nil {
 			connectOptions = *l.defaultConnect
 		}
 		connectOptions.Timeout = timeout
+		l.defaultConnect = &connectOptions
+	}
+}
+
+func WithOpenAILLMMaxRetries(maxRetries int) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if maxRetries < 0 {
+			return
+		}
+		connectOptions := llm.DefaultAPIConnectOptions()
+		if l.defaultConnect != nil {
+			connectOptions = *l.defaultConnect
+		}
+		connectOptions.MaxRetry = maxRetries
 		l.defaultConnect = &connectOptions
 	}
 }
