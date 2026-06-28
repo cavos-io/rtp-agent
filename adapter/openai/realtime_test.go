@@ -6542,6 +6542,55 @@ func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionPreservesQueuedEvents(t *testing.T) {
+	const eventCount = 128
+	serverWroteEvents := make(chan struct{})
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		for i := 0; i < eventCount; i++ {
+			eventType := "input_audio_buffer.speech_started"
+			if i%2 == 1 {
+				eventType = "input_audio_buffer.speech_stopped"
+			}
+			if err := conn.WriteJSON(map[string]any{"type": eventType}); err != nil {
+				t.Errorf("Write realtime event %d error = %v", i, err)
+				return
+			}
+		}
+		close(serverWroteEvents)
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer close(releaseServer)
+	defer session.Close()
+
+	select {
+	case <-serverWroteEvents:
+	case <-time.After(time.Second):
+		t.Fatal("server blocked writing queued realtime events")
+	}
+
+	for i := 0; i < eventCount; i++ {
+		want := llm.RealtimeEventTypeSpeechStarted
+		if i%2 == 1 {
+			want = llm.RealtimeEventTypeSpeechStopped
+		}
+		assertRealtimeEventType(t, session.EventCh(), want)
+	}
+}
+
 func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",

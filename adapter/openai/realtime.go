@@ -392,6 +392,7 @@ type realtimeSession struct {
 	chatContextMu         sync.Mutex
 	toolsMu               sync.Mutex
 	eventCh               chan llm.RealtimeEvent
+	eventStream           *openAIRealtimeQueuedStream[llm.RealtimeEvent]
 	remote                *llm.RemoteChatContext
 	inputTranscripts      *utils.BoundedDict[inputTranscriptKey, realtimeInputTranscript]
 	generation            *realtimeGeneration
@@ -574,12 +575,14 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	if m.isAzure && !initialOptions.InputAudioNoiseReductionSet && initialOptions.InputAudioNoiseReduction == nil {
 		openAIRealtimeRemoveInputNoiseReduction(initialSession)
 	}
+	eventStream := newOpenAIRealtimeQueuedStream[llm.RealtimeEvent]()
 	s := &realtimeSession{
 		model:            m,
 		conn:             conn,
 		ctx:              ctx,
 		cancel:           cancel,
-		eventCh:          make(chan llm.RealtimeEvent, 100),
+		eventCh:          eventStream.rawChan(),
+		eventStream:      eventStream,
 		remote:           llm.NewRemoteChatContext(),
 		pendingResponses: make(map[string]struct{}),
 		audioBStream:     newOpenAIRealtimeAudioByteStream(),
@@ -831,7 +834,37 @@ func openAIRealtimeInitialSessionUpdateMessage(session map[string]any) map[strin
 }
 
 func (s *realtimeSession) EventCh() <-chan llm.RealtimeEvent {
+	if s.eventStream != nil {
+		return s.eventStream.Chan()
+	}
 	return s.eventCh
+}
+
+func (s *realtimeSession) sendRealtimeEvent(ev llm.RealtimeEvent) bool {
+	if s == nil {
+		return false
+	}
+	if s.eventStream != nil {
+		return s.eventStream.Send(ev)
+	}
+	if s.eventCh == nil {
+		return false
+	}
+	s.eventCh <- ev
+	return true
+}
+
+func (s *realtimeSession) closeRealtimeEventStream() {
+	if s == nil {
+		return
+	}
+	if s.eventStream != nil {
+		s.eventStream.Close()
+		return
+	}
+	if s.eventCh != nil {
+		close(s.eventCh)
+	}
 }
 
 func (s *realtimeSession) UpdateInstructions(instructions string) error {
@@ -1936,11 +1969,7 @@ func (s *realtimeSession) emitSessionCloseMetrics() {
 	if metrics == nil {
 		return
 	}
-	select {
-	case s.eventCh <- llm.RealtimeEvent{Type: llm.RealtimeEventTypeMetricsCollected, Metrics: metrics}:
-	default:
-		logger.Logger.Warnw("dropping OpenAI realtime close metrics for full event channel", nil)
-	}
+	s.sendRealtimeEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeMetricsCollected, Metrics: metrics})
 }
 
 func (s *realtimeSession) sendMsg(msg any) error {
@@ -2122,7 +2151,7 @@ func openAIRealtimeLegacyAzureModalities(value any) []string {
 }
 
 func (s *realtimeSession) eventLoop() {
-	defer close(s.eventCh)
+	defer s.closeRealtimeEventStream()
 	defer s.closeRealtimeGeneration()
 	for {
 		select {
@@ -2164,7 +2193,7 @@ func (s *realtimeSession) eventLoop() {
 			realtimeEvent, ok := openAIRealtimeEvent(ev)
 			if !ok {
 				if trackedOK {
-					s.eventCh <- trackedEvent
+					s.sendRealtimeEvent(trackedEvent)
 				}
 				continue
 			}
@@ -2185,9 +2214,9 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 			realtimeEvent = s.trackRealtimeEvent(realtimeEvent)
-			s.eventCh <- realtimeEvent
+			s.sendRealtimeEvent(realtimeEvent)
 			if trackedOK {
-				s.eventCh <- trackedEvent
+				s.sendRealtimeEvent(trackedEvent)
 			}
 		}
 	}
@@ -2322,10 +2351,10 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 
 	_ = oldConn.Close()
 	s.closeRealtimeGeneration()
-	s.eventCh <- llm.RealtimeEvent{
+	s.sendRealtimeEvent(llm.RealtimeEvent{
 		Type:      llm.RealtimeEventTypeSessionReconnected,
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
-	}
+	})
 	return nil
 }
 
