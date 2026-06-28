@@ -432,6 +432,28 @@ func TestNewAzureOpenAISTTUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeWhisperUsesDefaultSileroVAD(t *testing.T) {
+	provider, err := NewAzureOpenAISTT(
+		"gpt-realtime-whisper",
+		"https://resource.openai.azure.com",
+		"realtime-whisper-deployment",
+		"2025-04-01-preview",
+		"azure-key",
+		"",
+		WithOpenAISTTRealtime(true),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if provider.vad == nil {
+		t.Fatal("vad = nil, want default local VAD for realtime whisper endpointing")
+	}
+	if label := provider.vad.Label(); label != "silero.VAD" {
+		t.Fatalf("vad label = %q, want reference Silero VAD", label)
+	}
+}
+
 func TestNewOVHCloudOpenAISTTDefaultsMatchReference(t *testing.T) {
 	t.Setenv("OVHCLOUD_API_KEY", "env-ovh-key")
 	var gotAuth string
