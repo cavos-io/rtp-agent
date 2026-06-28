@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -91,6 +92,41 @@ func TestGroqLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "GROQ_API_KEY") {
 		t.Fatalf("Chat error = %q, want GROQ_API_KEY guidance", err)
+	}
+}
+
+func TestGroqLLMForwardsReferenceOpenAIOptions(t *testing.T) {
+	var requestBody string
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		requestBody = string(body)
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Status:     http.StatusText(http.StatusBadRequest),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+		WithGroqLLMOptions(
+			openai.WithOpenAILLMParallelToolCalls(false),
+			openai.WithOpenAILLMToolChoice("none"),
+		),
+	)
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(requestBody, `"parallel_tool_calls":false`) {
+		t.Fatalf("request body = %s, want provider parallel_tool_calls false", requestBody)
+	}
+	if !strings.Contains(requestBody, `"tool_choice":"none"`) {
+		t.Fatalf("request body = %s, want provider tool_choice none", requestBody)
 	}
 }
 

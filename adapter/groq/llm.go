@@ -21,6 +21,7 @@ type GroqLLM struct {
 	apiKey          string
 	baseURL         string
 	reasoningEffort string
+	llmOptions      []openai.OpenAILLMOption
 	httpClient      interface {
 		Do(*http.Request) (*http.Response, error)
 	}
@@ -39,6 +40,12 @@ func WithGroqLLMBaseURL(baseURL string) GroqLLMOption {
 func WithGroqLLMReasoningEffort(reasoningEffort string) GroqLLMOption {
 	return func(l *GroqLLM) {
 		l.reasoningEffort = reasoningEffort
+	}
+}
+
+func WithGroqLLMOptions(opts ...openai.OpenAILLMOption) GroqLLMOption {
+	return func(l *GroqLLM) {
+		l.llmOptions = append(l.llmOptions, opts...)
 	}
 }
 
@@ -69,6 +76,7 @@ func NewGroqLLM(apiKey string, model string, opts ...GroqLLMOption) *GroqLLM {
 	if provider.reasoningEffort != "" {
 		openAIOpts = append(openAIOpts, openai.WithOpenAILLMReasoningEffort(provider.reasoningEffort))
 	}
+	openAIOpts = append(openAIOpts, provider.llmOptions...)
 	provider.inner = openai.NewOpenAILLMWithBaseURLAndHTTPClient(resolvedAPIKey, model, provider.baseURL, provider.httpClient, openAIOpts...)
 	return provider
 }
