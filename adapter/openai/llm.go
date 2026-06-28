@@ -1078,6 +1078,11 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 			return nil, context.Canceled
 		}
 		lastErr = mapOpenAIError(err)
+		var statusErr *llm.APIStatusError
+		if errors.As(lastErr, &statusErr) && statusErr.StatusCode == 499 {
+			cleanupRequest()
+			return openAIEOFStream{}, nil
+		}
 		if attempt == connectOptions.MaxRetry || !openAIShouldRetryError(lastErr) {
 			cleanupRequest()
 			return nil, lastErr
@@ -1090,6 +1095,16 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	cleanupRequest()
 	return nil, lastErr
+}
+
+type openAIEOFStream struct{}
+
+func (openAIEOFStream) Next() (*llm.ChatChunk, error) {
+	return nil, io.EOF
+}
+
+func (openAIEOFStream) Close() error {
+	return nil
 }
 
 func (l *OpenAILLM) effectiveConnectOptions(options *llm.ChatOptions) (llm.APIConnectOptions, error) {

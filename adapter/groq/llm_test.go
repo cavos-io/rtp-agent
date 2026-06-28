@@ -271,6 +271,36 @@ func TestGroqLLMChatCallerCancelReturnsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestGroqLLMChatClientClosedStatusReturnsEOF(t *testing.T) {
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Status:     "499 Client Closed Request",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"client closed","type":"client_closed","code":"client_closed"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+
+	stream, err := provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want EOF stream for reference client-closed status", err)
+	}
+	defer stream.Close()
+
+	if chunk, err := stream.Next(); chunk != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next = (%#v, %v), want nil, io.EOF for reference client-closed status", chunk, err)
+	}
+}
+
 type groqLLMHTTPDoer func(*http.Request) (*http.Response, error)
 
 func (f groqLLMHTTPDoer) Do(req *http.Request) (*http.Response, error) {
