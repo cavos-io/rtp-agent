@@ -124,7 +124,12 @@ func TestGroqLLMForwardsReferenceOpenAIOptions(t *testing.T) {
 		),
 	)
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	stream, err := provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	defer stream.Close()
+	_, _ = stream.Next()
 
 	if !strings.Contains(requestBody, `"parallel_tool_calls":false`) {
 		t.Fatalf("request body = %s, want provider parallel_tool_calls false", requestBody)
@@ -157,7 +162,12 @@ func TestGroqLLMAppliesReferenceTimeoutOption(t *testing.T) {
 		WithGroqLLMTimeout(75*time.Millisecond),
 	)
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext())
+	stream, err := provider.Chat(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	defer stream.Close()
+	_, _ = stream.Next()
 
 	if !hasDeadline {
 		t.Fatal("request context has no deadline, want Groq LLM timeout option applied")
@@ -232,11 +242,13 @@ func TestNewGroqLLMDoesNotRetryByDefault(t *testing.T) {
 	)
 
 	stream, err := provider.Chat(context.Background(), llm.NewChatContext())
-	if stream != nil {
-		_ = stream.Close()
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Chat error is nil, want first provider failure returned without default retry")
+		t.Fatal("Next error is nil, want first provider failure returned without default retry")
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want no default provider retry", attempts)
@@ -273,6 +285,9 @@ func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
 		t.Fatalf("Chat() error = %v", err)
 	}
 	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v, want active provider stream", err)
+	}
 
 	if err := llm.Close(provider); err != nil {
 		t.Fatalf("llm.Close error = %v", err)
@@ -294,6 +309,44 @@ func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGroqLLMChatDefersReferenceRequestUntilNext(t *testing.T) {
+	requests := 0
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"id":"chatcmpl-groq","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}` + "\n\n" +
+					"data: [DONE]\n\n")),
+			Request: r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+
+	stream, err := provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after Chat = %d, want deferred request", requests)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after Close before Next = %d, want no provider request", requests)
+	}
+}
+
 func TestGroqLLMProviderCloseCancelsPendingChat(t *testing.T) {
 	requests := make(chan *http.Request, 1)
 	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
@@ -305,16 +358,17 @@ func TestGroqLLMProviderCloseCancelsPendingChat(t *testing.T) {
 		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
 		withGroqLLMHTTPClient(client),
 	)
+	stream, err := provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		stream, err := provider.Chat(
-			context.Background(),
-			llm.NewChatContext(),
-			llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
-		)
-		if stream != nil {
-			_ = stream.Close()
-		}
+		_, err := stream.Next()
 		errCh <- err
 	}()
 
@@ -329,11 +383,11 @@ func TestGroqLLMProviderCloseCancelsPendingChat(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		if !errors.Is(err, io.ErrClosedPipe) {
-			t.Fatalf("Chat after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+		if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Next after provider Close error = %T %v, want EOF or io.ErrClosedPipe", err, err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Chat remained blocked after provider Close")
+		t.Fatal("Next remained blocked after provider Close")
 	}
 }
 
@@ -349,16 +403,17 @@ func TestGroqLLMChatCallerCancelReturnsContextCanceled(t *testing.T) {
 		withGroqLLMHTTPClient(client),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Chat(
+		ctx,
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		stream, err := provider.Chat(
-			ctx,
-			llm.NewChatContext(),
-			llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
-		)
-		if stream != nil {
-			_ = stream.Close()
-		}
+		_, err := stream.Next()
 		errCh <- err
 	}()
 
@@ -372,14 +427,14 @@ func TestGroqLLMChatCallerCancelReturnsContextCanceled(t *testing.T) {
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Chat canceled error = %T %v, want context.Canceled", err, err)
+			t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
 		}
 		var connectionErr *llm.APIConnectionError
 		if errors.As(err, &connectionErr) {
-			t.Fatalf("Chat canceled error = %T, want raw context cancellation", err)
+			t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Chat remained blocked after caller cancellation")
+		t.Fatal("Next remained blocked after caller cancellation")
 	}
 }
 
