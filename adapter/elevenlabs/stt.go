@@ -579,13 +579,17 @@ func (s *elevenLabsSTTStream) Flush() error {
 	if s.audioBuf == nil {
 		return nil
 	}
+	flushed := false
 	for _, chunk := range s.audioBuf.Flush() {
+		flushed = true
 		if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 			return err
 		}
 		s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 	}
-	s.emitRecognitionUsageLocked()
+	if flushed {
+		s.emitRecognitionUsageLocked()
+	}
 	return nil
 }
 
@@ -600,14 +604,18 @@ func (s *elevenLabsSTTStream) EndInput() error {
 	}
 	s.inputEnded = true
 	if s.audioBuf != nil {
+		flushed := false
 		for _, chunk := range s.audioBuf.Flush() {
+			flushed = true
 			if err := s.writeMessageLocked(buildElevenLabsSTTAudioChunkMessage(chunk.Data, s.sampleRate, false)); err != nil {
 				return err
 			}
 			s.addAudioDurationLocked(audio.CalculateFrameDuration(chunk))
 		}
+		if flushed {
+			s.emitRecognitionUsageLocked()
+		}
 	}
-	s.emitRecognitionUsageLocked()
 	return nil
 }
 

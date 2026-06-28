@@ -522,6 +522,43 @@ func TestElevenLabsSTTStreamFlushReportsReferenceUsage(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTStreamFlushWithoutBufferedFrameDoesNotReportUsage(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:     make(chan *stt.SpeechEvent, 1),
+		sampleRate: 16000,
+		state:      &elevenLabsSTTStreamState{language: "en"},
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after PushFrame = %d, want one full 50ms chunk", len(messages))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after empty Flush = %d, want no extra message", len(messages))
+	}
+	select {
+	case usage := <-stream.events:
+		t.Fatalf("usage event after empty Flush = %#v, want none", usage)
+	default:
+	}
+}
+
 func TestElevenLabsSTTStreamPushFrameReportsPeriodicReferenceUsage(t *testing.T) {
 	var messages []map[string]any
 	stream := &elevenLabsSTTStream{
@@ -640,6 +677,44 @@ func TestElevenLabsSTTStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
 	}
 	if err := ending.EndInput(); err == nil || err.Error() != "stream input ended" {
 		t.Fatalf("second EndInput error = %v, want stream input ended", err)
+	}
+}
+
+func TestElevenLabsSTTStreamEndInputWithoutBufferedFrameDoesNotReportUsage(t *testing.T) {
+	var messages []map[string]any
+	stream := &elevenLabsSTTStream{
+		events:     make(chan *stt.SpeechEvent, 1),
+		sampleRate: 16000,
+		state:      &elevenLabsSTTStreamState{language: "en"},
+		writeJSON: func(message map[string]any) error {
+			messages = append(messages, message)
+			return nil
+		},
+	}
+	ending, ok := any(stream).(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("messages after exact-frame EndInput = %d, want no extra message", len(messages))
+	}
+	select {
+	case usage := <-stream.events:
+		t.Fatalf("usage event after exact-frame EndInput = %#v, want none", usage)
+	default:
 	}
 }
 
