@@ -529,6 +529,11 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
 		if data == "[DONE]" {
+			s.sseDone = true
+			if s.sseSawAudio && !s.sseFinalSent {
+				s.sseFinalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		var event map[string]any
