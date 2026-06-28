@@ -242,6 +242,12 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 	for _, opt := range opts {
 		opt(provider)
 	}
+	sampleRate, err := parseElevenLabsSampleRate(provider.encoding)
+	if err != nil {
+		streamConnCancel()
+		return nil, err
+	}
+	provider.sampleRate = sampleRate
 	provider.streamConnectionRefresh = false
 	if !provider.autoModeExplicit {
 		autoMode := len(provider.chunkLengthSchedule) == 0
@@ -784,14 +790,22 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 }
 
 func elevenLabsSampleRate(encoding string) int {
+	sampleRate, err := parseElevenLabsSampleRate(encoding)
+	if err != nil {
+		return 0
+	}
+	return sampleRate
+}
+
+func parseElevenLabsSampleRate(encoding string) (int, error) {
 	parts := strings.Split(encoding, "_")
 	if len(parts) >= 2 {
 		var sampleRate int
 		if _, err := fmt.Sscanf(parts[1], "%d", &sampleRate); err == nil && sampleRate > 0 {
-			return sampleRate
+			return sampleRate, nil
 		}
 	}
-	return 22050
+	return 0, fmt.Errorf("invalid ElevenLabs TTS encoding %q: expected output_format sample rate", encoding)
 }
 
 type elevenLabsStream struct {

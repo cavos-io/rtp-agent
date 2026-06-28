@@ -52,6 +52,20 @@ func TestElevenLabsTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSRejectsMalformedEncodingSampleRateLikeReference(t *testing.T) {
+	for _, encoding := range []string{"mp3", "pcm_fast"} {
+		t.Run(encoding, func(t *testing.T) {
+			provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsEncoding(encoding))
+			if err == nil {
+				t.Fatalf("NewElevenLabsTTS() error = nil, want invalid encoding sample-rate error with provider %#v", provider)
+			}
+			if !strings.Contains(err.Error(), "invalid ElevenLabs TTS encoding") {
+				t.Fatalf("NewElevenLabsTTS() error = %v, want invalid ElevenLabs TTS encoding", err)
+			}
+		})
+	}
+}
+
 func TestNewElevenLabsTTSUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("ELEVENLABS_API_KEY", "env-key")
 	t.Setenv("ELEVEN_API_KEY", "fallback-env-key")
