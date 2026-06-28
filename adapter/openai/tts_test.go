@@ -788,6 +788,38 @@ func TestOpenAITTSCompressedFormatsDecodeReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSCompressedEmptyStreamsReturnEOF(t *testing.T) {
+	cases := []struct {
+		name   string
+		format goopenai.SpeechResponseFormat
+		body   string
+		stream string
+	}{
+		{name: "audio-aac", format: goopenai.SpeechResponseFormatAac, stream: openAITTSStreamFormatAudio},
+		{name: "audio-flac", format: goopenai.SpeechResponseFormatFlac, stream: openAITTSStreamFormatAudio},
+		{name: "sse-aac-done", format: goopenai.SpeechResponseFormatAac, body: "data: [DONE]\n\n", stream: openAITTSStreamFormatSSE},
+		{name: "sse-flac-done", format: goopenai.SpeechResponseFormatFlac, body: "data: [DONE]\n\n", stream: openAITTSStreamFormatSSE},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := &openaiTTSChunkedStream{
+				resp:           io.NopCloser(strings.NewReader(tc.body)),
+				responseFormat: tc.format,
+				streamFormat:   tc.stream,
+			}
+			defer stream.Close()
+
+			audio, err := stream.Next()
+			if err != io.EOF {
+				t.Fatalf("Next error = %v, audio = %#v; want EOF for empty reference stream", err, audio)
+			}
+			if audio != nil {
+				t.Fatalf("audio = %#v, want nil for empty reference stream", audio)
+			}
+		})
+	}
+}
+
 func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	wantAudio := []byte(strings.Repeat("x", 70*1024))
 	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +

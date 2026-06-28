@@ -507,6 +507,9 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 		if readErr := s.decodeReadError(); readErr != nil {
 			return nil, readErr
 		}
+		if !s.audioSawAudio && openAITTSEmptyDecodeEOF(err) {
+			return nil, io.EOF
+		}
 		if openAITTSDecodeEOF(err) {
 			if s.audioSawAudio && !s.audioFinalSent {
 				s.audioFinalSent = true
@@ -631,6 +634,9 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 		if readErr := s.decodeReadError(); readErr != nil {
 			return nil, readErr
 		}
+		if !s.sseSawAudio && openAITTSEmptyDecodeEOF(err) {
+			return nil, io.EOF
+		}
 		if openAITTSDecodeEOF(err) {
 			if s.sseDone && s.sseSawAudio && !s.sseFinalSent {
 				s.sseFinalSent = true
@@ -717,6 +723,15 @@ func openAITTSDecodeEOF(err error) bool {
 	return strings.Contains(msg, "decoder closed") ||
 		strings.Contains(msg, "failed to initialize mp3 decoder: EOF") ||
 		strings.Contains(msg, "failed to initialize opus decoder: EOF")
+}
+
+func openAITTSEmptyDecodeEOF(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "End of file") ||
+		strings.Contains(msg, "does not contain any stream")
 }
 
 func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.SynthesizedAudio, error) {
