@@ -462,6 +462,9 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 			}
 		}
 		if err != nil {
+			if s.closed {
+				return nil, io.EOF
+			}
 			if err == io.EOF {
 				if s.audioSawAudio && !s.audioFinalSent {
 					s.audioFinalSent = true
@@ -504,6 +507,9 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 
 	frame, err := s.decoder.Next()
 	if err != nil {
+		if s.closed {
+			return nil, io.EOF
+		}
 		if readErr := s.decodeReadError(); readErr != nil {
 			return nil, readErr
 		}
@@ -612,6 +618,9 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
+		if s.closed {
+			return nil, io.EOF
+		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	s.sseDone = true
@@ -631,6 +640,9 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 	}
 	frame, err := s.decoder.Next()
 	if err != nil {
+		if s.closed {
+			return nil, io.EOF
+		}
 		if readErr := s.decodeReadError(); readErr != nil {
 			return nil, readErr
 		}

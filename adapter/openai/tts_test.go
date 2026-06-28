@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1441,6 +1442,34 @@ func TestOpenAITTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	body := newBlockingReadErrorAfterClose()
+	stream := &openaiTTSChunkedStream{resp: body}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case <-body.reading:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked TTS read")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close during read error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Next to unblock after Close")
+	}
+}
+
 func TestOpenAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	body := &countingOpenAIReadCloser{}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
@@ -1577,6 +1606,34 @@ func (r *readErrorAfterClose) Read([]byte) (int, error) {
 
 func (r *readErrorAfterClose) Close() error {
 	r.closed = true
+	return nil
+}
+
+type blockingReadErrorAfterClose struct {
+	reading chan struct{}
+	closed  chan struct{}
+	once    sync.Once
+}
+
+func newBlockingReadErrorAfterClose() *blockingReadErrorAfterClose {
+	return &blockingReadErrorAfterClose{
+		reading: make(chan struct{}),
+		closed:  make(chan struct{}),
+	}
+}
+
+func (r *blockingReadErrorAfterClose) Read([]byte) (int, error) {
+	r.once.Do(func() { close(r.reading) })
+	<-r.closed
+	return 0, errors.New("read after close")
+}
+
+func (r *blockingReadErrorAfterClose) Close() error {
+	select {
+	case <-r.closed:
+	default:
+		close(r.closed)
+	}
 	return nil
 }
 
