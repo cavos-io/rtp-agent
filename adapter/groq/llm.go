@@ -3,6 +3,7 @@ package groq
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -20,6 +21,10 @@ type GroqLLM struct {
 	apiKey          string
 	baseURL         string
 	reasoningEffort string
+	llmOptions      []openai.OpenAILLMOption
+	httpClient      interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 }
 
 type GroqLLMOption func(*GroqLLM)
@@ -35,6 +40,20 @@ func WithGroqLLMBaseURL(baseURL string) GroqLLMOption {
 func WithGroqLLMReasoningEffort(reasoningEffort string) GroqLLMOption {
 	return func(l *GroqLLM) {
 		l.reasoningEffort = reasoningEffort
+	}
+}
+
+func WithGroqLLMOptions(opts ...openai.OpenAILLMOption) GroqLLMOption {
+	return func(l *GroqLLM) {
+		l.llmOptions = append(l.llmOptions, opts...)
+	}
+}
+
+func withGroqLLMHTTPClient(client interface {
+	Do(*http.Request) (*http.Response, error)
+}) GroqLLMOption {
+	return func(l *GroqLLM) {
+		l.httpClient = client
 	}
 }
 
@@ -57,7 +76,8 @@ func NewGroqLLM(apiKey string, model string, opts ...GroqLLMOption) *GroqLLM {
 	if provider.reasoningEffort != "" {
 		openAIOpts = append(openAIOpts, openai.WithOpenAILLMReasoningEffort(provider.reasoningEffort))
 	}
-	provider.inner = openai.NewOpenAILLMWithBaseURL(resolvedAPIKey, model, provider.baseURL, openAIOpts...)
+	openAIOpts = append(openAIOpts, provider.llmOptions...)
+	provider.inner = openai.NewOpenAILLMWithBaseURLAndHTTPClient(resolvedAPIKey, model, provider.baseURL, provider.httpClient, openAIOpts...)
 	return provider
 }
 
@@ -89,4 +109,11 @@ func (l *GroqLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...ll
 		return nil, fmt.Errorf("groq API key is required, either as argument or set GROQ_API_KEY environmental variable")
 	}
 	return l.inner.Chat(ctx, chatCtx, opts...)
+}
+
+func (l *GroqLLM) Close() error {
+	if l == nil || l.inner == nil {
+		return nil
+	}
+	return l.inner.Close()
 }

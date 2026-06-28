@@ -94,6 +94,8 @@ type OpenAILLM struct {
 	mu                   sync.Mutex
 	closed               bool
 	streams              map[*openaiStream]struct{}
+	nextRequestID        uint64
+	requestCancels       map[uint64]context.CancelFunc
 }
 
 type OpenAILLMOption func(*OpenAILLM)
@@ -932,8 +934,16 @@ func (l *OpenAILLM) Close() error {
 		streams = append(streams, stream)
 	}
 	l.streams = make(map[*openaiStream]struct{})
+	requestCancels := make([]context.CancelFunc, 0, len(l.requestCancels))
+	for _, cancel := range l.requestCancels {
+		requestCancels = append(requestCancels, cancel)
+	}
+	l.requestCancels = make(map[uint64]context.CancelFunc)
 	l.mu.Unlock()
 
+	for _, cancel := range requestCancels {
+		cancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
@@ -956,6 +966,27 @@ func (l *OpenAILLM) registerStream(stream *openaiStream) bool {
 	l.streams[stream] = struct{}{}
 	l.mu.Unlock()
 	return true
+}
+
+func (l *OpenAILLM) registerRequest(cancel context.CancelFunc) (uint64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return 0, false
+	}
+	if l.requestCancels == nil {
+		l.requestCancels = make(map[uint64]context.CancelFunc)
+	}
+	l.nextRequestID++
+	id := l.nextRequestID
+	l.requestCancels[id] = cancel
+	return id, true
+}
+
+func (l *OpenAILLM) unregisterRequest(id uint64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.requestCancels, id)
 }
 
 func (l *OpenAILLM) unregisterStream(stream *openaiStream) {
@@ -981,6 +1012,17 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	var cancel context.CancelFunc
 	if connectOptions.Timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	requestID, ok := l.registerRequest(cancel)
+	if !ok {
+		cancel()
+		return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+	}
+	cleanupRequest := func() {
+		l.unregisterRequest(requestID)
+		cancel()
 	}
 
 	effectiveOptions := options
@@ -1010,11 +1052,10 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
 		stream, err := client.CreateChatCompletionStream(ctx, req)
 		if err == nil {
+			l.unregisterRequest(requestID)
 			if l.isClosed() {
 				stream.Close()
-				if cancel != nil {
-					cancel()
-				}
+				cancel()
 				return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
 			}
 			wrapped := &openaiStream{
@@ -1023,32 +1064,47 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 				provider: l,
 			}
 			if !l.registerStream(wrapped) {
-				if cancel != nil {
-					cancel()
-				}
+				cancel()
 				return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
 			}
 			return wrapped, nil
 		}
+		if l.isClosed() && errors.Is(ctx.Err(), context.Canceled) {
+			cleanupRequest()
+			return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			cleanupRequest()
+			return nil, context.Canceled
+		}
 		lastErr = mapOpenAIError(err)
+		var statusErr *llm.APIStatusError
+		if errors.As(lastErr, &statusErr) && statusErr.StatusCode == 499 {
+			cleanupRequest()
+			return openAIEOFStream{}, nil
+		}
 		if attempt == connectOptions.MaxRetry || !openAIShouldRetryError(lastErr) {
-			if cancel != nil {
-				cancel()
-			}
+			cleanupRequest()
 			return nil, lastErr
 		}
 		if err := waitOpenAIRetryInterval(ctx, connectOptions.IntervalForRetry(attempt)); err != nil {
-			if cancel != nil {
-				cancel()
-			}
+			cleanupRequest()
 			return nil, err
 		}
 	}
 
-	if cancel != nil {
-		cancel()
-	}
+	cleanupRequest()
 	return nil, lastErr
+}
+
+type openAIEOFStream struct{}
+
+func (openAIEOFStream) Next() (*llm.ChatChunk, error) {
+	return nil, io.EOF
+}
+
+func (openAIEOFStream) Close() error {
+	return nil
 }
 
 func (l *OpenAILLM) effectiveConnectOptions(options *llm.ChatOptions) (llm.APIConnectOptions, error) {

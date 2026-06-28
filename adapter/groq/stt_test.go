@@ -2,8 +2,12 @@ package groq
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
@@ -102,4 +106,115 @@ func TestGroqSTTStreamUnsupportedLikeReferenceOfflineMode(t *testing.T) {
 	if !strings.Contains(err.Error(), "realtime stt is not enabled") {
 		t.Fatalf("Stream error = %q, want offline-mode guidance", err)
 	}
+}
+
+func TestGroqSTTRecognizeAfterCloseIsRejected(t *testing.T) {
+	provider, err := NewGroqSTT("test-key", "", WithGroqSTTBaseURL("://bad-url"))
+	if err != nil {
+		t.Fatalf("NewGroqSTT error = %v", err)
+	}
+	if err := stt.Close(provider); err != nil {
+		t.Fatalf("stt.Close error = %v", err)
+	}
+
+	event, err := provider.Recognize(context.Background(), nil, "en")
+	if event != nil {
+		t.Fatalf("Recognize returned event %+v, want closed error", event)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Recognize after Close error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+}
+
+func TestGroqSTTProviderCloseCancelsPendingRecognize(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	client := groqSTTHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+
+	provider, err := NewGroqSTT("test-key", "",
+		WithGroqSTTBaseURL("https://groq.example/openai/v1"),
+		withGroqSTTHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewGroqSTT error = %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		event, err := provider.Recognize(context.Background(), nil, "en")
+		if event != nil {
+			errCh <- errors.New("Recognize returned event after provider Close")
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Recognize did not start provider request")
+	}
+	if err := stt.Close(provider); err != nil {
+		t.Fatalf("stt.Close error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Recognize after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recognize remained blocked after provider Close")
+	}
+}
+
+func TestGroqSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	client := groqSTTHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+
+	provider, err := NewGroqSTT("test-key", "",
+		WithGroqSTTBaseURL("https://groq.example/openai/v1"),
+		withGroqSTTHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewGroqSTT error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		event, err := provider.Recognize(ctx, nil, "en")
+		if event != nil {
+			errCh <- errors.New("Recognize returned event after caller cancellation")
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Recognize did not start provider request")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Recognize canceled error = %T %v, want context.Canceled", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recognize remained blocked after caller cancellation")
+	}
+}
+
+type groqSTTHTTPDoer func(*http.Request) (*http.Response, error)
+
+func (f groqSTTHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

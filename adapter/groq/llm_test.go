@@ -2,9 +2,14 @@ package groq
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -89,4 +94,215 @@ func TestGroqLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
 	if !strings.Contains(err.Error(), "GROQ_API_KEY") {
 		t.Fatalf("Chat error = %q, want GROQ_API_KEY guidance", err)
 	}
+}
+
+func TestGroqLLMForwardsReferenceOpenAIOptions(t *testing.T) {
+	var requestBody string
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		requestBody = string(body)
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Status:     http.StatusText(http.StatusBadRequest),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+		WithGroqLLMOptions(
+			openai.WithOpenAILLMParallelToolCalls(false),
+			openai.WithOpenAILLMToolChoice("none"),
+		),
+	)
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.Contains(requestBody, `"parallel_tool_calls":false`) {
+		t.Fatalf("request body = %s, want provider parallel_tool_calls false", requestBody)
+	}
+	if !strings.Contains(requestBody, `"tool_choice":"none"`) {
+		t.Fatalf("request body = %s, want provider tool_choice none", requestBody)
+	}
+}
+
+func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
+	calls := 0
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		calls++
+		body := io.NopCloser(strings.NewReader(
+			`data: {"id":"chatcmpl-groq","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}` + "\n\n" +
+				"data: [DONE]\n\n"))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+
+	stream, err := provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := llm.Close(provider); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after provider Close error = %T %v, want EOF", err, err)
+	}
+
+	_, err = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Chat() after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls = %d, want no request after provider Close", calls)
+	}
+}
+
+func TestGroqLLMProviderCloseCancelsPendingChat(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+	errCh := make(chan error, 1)
+	go func() {
+		stream, err := provider.Chat(
+			context.Background(),
+			llm.NewChatContext(),
+			llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		)
+		if stream != nil {
+			_ = stream.Close()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Chat did not start provider request")
+	}
+	if err := llm.Close(provider); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Chat after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Chat remained blocked after provider Close")
+	}
+}
+
+func TestGroqLLMChatCallerCancelReturnsContextCanceled(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		stream, err := provider.Chat(
+			ctx,
+			llm.NewChatContext(),
+			llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		)
+		if stream != nil {
+			_ = stream.Close()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Chat did not start provider request")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Chat canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Chat canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Chat remained blocked after caller cancellation")
+	}
+}
+
+func TestGroqLLMChatClientClosedStatusReturnsEOF(t *testing.T) {
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Status:     "499 Client Closed Request",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"client closed","type":"client_closed","code":"client_closed"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+
+	stream, err := provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want EOF stream for reference client-closed status", err)
+	}
+	defer stream.Close()
+
+	if chunk, err := stream.Next(); chunk != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next = (%#v, %v), want nil, io.EOF for reference client-closed status", chunk, err)
+	}
+}
+
+type groqLLMHTTPDoer func(*http.Request) (*http.Response, error)
+
+func (f groqLLMHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
