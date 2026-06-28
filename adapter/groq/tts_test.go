@@ -213,7 +213,9 @@ func TestGroqTTSAcceptsReferenceAudioPrefixContentType(t *testing.T) {
 func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
+	var requestContext context.Context
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requestContext = r.Context()
 		return &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -235,6 +237,14 @@ func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if requestContext == nil {
+		t.Fatal("request context was not captured")
+	}
+	select {
+	case <-requestContext.Done():
+	default:
+		t.Fatal("request context still active after status error, want cleanup after response close")
 	}
 }
 
