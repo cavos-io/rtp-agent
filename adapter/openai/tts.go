@@ -978,11 +978,11 @@ func (s *openaiTTSChunkedStream) Close() error {
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}
-	err := s.resp.Close()
+	_ = s.resp.Close()
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
-	return err
+	return nil
 }
 
 type openAITTSStreamFormatHTTPClient struct {
