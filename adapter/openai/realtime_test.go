@@ -1208,12 +1208,18 @@ func TestRealtimeInitialSessionUsesDefaultInputAudioOptions(t *testing.T) {
 	if turnDetection["interrupt_response"] != true {
 		t.Fatalf("turn_detection interrupt_response = %#v, want true", turnDetection["interrupt_response"])
 	}
-	noiseReduction, ok := input["noise_reduction"].(map[string]any)
-	if !ok {
-		t.Fatalf("noise_reduction = %#v, want default near_field config", input["noise_reduction"])
+	if _, ok := input["noise_reduction"]; ok {
+		t.Fatalf("noise_reduction = %#v, want omitted by reference default", input["noise_reduction"])
 	}
-	if noiseReduction["type"] != "near_field" {
-		t.Fatalf("noise_reduction type = %#v, want near_field", noiseReduction["type"])
+}
+
+func TestRealtimeInitialSessionOmitsDefaultInputAudioNoiseReduction(t *testing.T) {
+	session := openAIRealtimeInitialSession("gpt-realtime")
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+
+	if value, ok := input["noise_reduction"]; ok {
+		t.Fatalf("noise_reduction = %#v, want omitted unless configured", value)
 	}
 }
 
