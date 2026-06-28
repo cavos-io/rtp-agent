@@ -446,6 +446,7 @@ type realtimeGeneration struct {
 
 type realtimeMessageGeneration struct {
 	textCh        chan string
+	timedTextCh   chan llm.RealtimeTimedText
 	audioCh       chan *model.AudioFrame
 	modalitiesCh  chan []string
 	modalities    []string
@@ -2268,6 +2269,7 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}
 		msg := &realtimeMessageGeneration{
 			textCh:       make(chan string, 100),
+			timedTextCh:  make(chan llm.RealtimeTimedText, 100),
 			audioCh:      make(chan *model.AudioFrame, 100),
 			modalitiesCh: make(chan []string, 1),
 		}
@@ -2280,6 +2282,7 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		message := llm.MessageGeneration{
 			MessageID:    itemID,
 			TextCh:       msg.textCh,
+			TimedTextCh:  msg.timedTextCh,
 			AudioCh:      msg.audioCh,
 			ModalitiesCh: msg.modalitiesCh,
 		}
@@ -2512,6 +2515,14 @@ func (s *realtimeSession) trackRealtimeText(ev llm.RealtimeEvent) {
 	default:
 		logger.Logger.Warnw("dropping OpenAI realtime text delta for full message stream", nil, "item_id", ev.ItemID)
 	}
+	if ev.TimedText == nil {
+		return
+	}
+	select {
+	case msg.timedTextCh <- *ev.TimedText:
+	default:
+		logger.Logger.Warnw("dropping OpenAI realtime timed text delta for full message stream", nil, "item_id", ev.ItemID)
+	}
 }
 
 func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
@@ -2614,6 +2625,7 @@ func (s *realtimeSession) closeRealtimeMessageStreams(msg *realtimeMessageGenera
 		return
 	}
 	close(msg.textCh)
+	close(msg.timedTextCh)
 	s.closeRealtimeMessageAudioStream(msg)
 	msg.streamsClosed = true
 }
@@ -2731,12 +2743,19 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		itemID, hasItemID := ev["item_id"].(string)
 		if delta, ok := ev["delta"].(string); ok && hasItemID {
-			return llm.RealtimeEvent{
+			event := llm.RealtimeEvent{
 				Type:         llm.RealtimeEventTypeText,
 				ItemID:       itemID,
 				ContentIndex: openAIRealtimeInt(ev["content_index"]),
 				Text:         delta,
-			}, true
+			}
+			if startTime, ok := openAIRealtimeOptionalFloat(ev["start_time"]); ok {
+				event.TimedText = &llm.RealtimeTimedText{
+					Text:      delta,
+					StartTime: startTime,
+				}
+			}
+			return event, true
 		}
 	case "response.output_audio.delta", "response.audio.delta":
 		itemID, hasItemID := ev["item_id"].(string)
@@ -3045,6 +3064,24 @@ func openAIRealtimeFloat(v any) float64 {
 		return f
 	default:
 		return 0
+	}
+}
+
+func openAIRealtimeOptionalFloat(v any) (float64, bool) {
+	switch value := v.(type) {
+	case float64:
+		return value, true
+	case float32:
+		return float64(value), true
+	case int:
+		return float64(value), true
+	case int64:
+		return float64(value), true
+	case json.Number:
+		f, err := value.Float64()
+		return f, err == nil
+	default:
+		return 0, false
 	}
 }
 

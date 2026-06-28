@@ -777,7 +777,8 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 	startedSpeaking := false
 	publishedAudio := false
 	modalitiesCh := message.ModalitiesCh
-	for message.TextCh != nil || message.AudioCh != nil || modalitiesCh != nil {
+	timedTextCh := message.TimedTextCh
+	for message.TextCh != nil || timedTextCh != nil || message.AudioCh != nil || modalitiesCh != nil {
 		select {
 		case <-ctx.Done():
 			return false
@@ -793,6 +794,11 @@ func (ma *MultimodalAgent) consumeRealtimeMessage(ctx context.Context, speech *S
 				continue
 			}
 			text += delta
+		case _, ok := <-timedTextCh:
+			if !ok {
+				timedTextCh = nil
+				continue
+			}
 		case frame, ok := <-message.AudioCh:
 			if !ok {
 				message.AudioCh = nil
