@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -1758,6 +1759,75 @@ func TestOpenAIRealtimeSTTClosedStreamNextDrainsQueuedEvent(t *testing.T) {
 	}
 	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
 		t.Fatalf("second Next after Close = (%#v, %v), want nil EOF", event, err)
+	}
+}
+
+func TestOpenAIRealtimeSTTPreservesQueuedEvents(t *testing.T) {
+	const transcriptCount = 80
+	serverWroteEvents := make(chan struct{})
+	releaseServer := make(chan struct{})
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("session update read error = %v", err)
+			return
+		}
+		for i := 0; i < transcriptCount; i++ {
+			if err := conn.WriteJSON(map[string]any{
+				"type":       "conversation.item.input_audio_transcription.completed",
+				"item_id":    fmt.Sprintf("item-%03d", i),
+				"transcript": fmt.Sprintf("final-%03d", i),
+				"usage":      map[string]any{"input_tokens": i + 1},
+			}); err != nil {
+				t.Errorf("write final transcript %d: %v", i, err)
+				return
+			}
+		}
+		close(serverWroteEvents)
+		<-releaseServer
+	})
+	provider.dialWebsocket = func(_ context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	defer close(releaseServer)
+
+	select {
+	case <-serverWroteEvents:
+	case <-time.After(time.Second):
+		t.Fatal("server blocked writing queued realtime STT events")
+	}
+
+	for i := 0; i < transcriptCount; i++ {
+		finalEvent, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next final event %d error = %v", i, err)
+		}
+		if finalEvent.Type != stt.SpeechEventFinalTranscript {
+			t.Fatalf("event %d type = %v, want FINAL_TRANSCRIPT", i*2, finalEvent.Type)
+		}
+		if got, want := finalEvent.RequestID, fmt.Sprintf("item-%03d", i); got != want {
+			t.Fatalf("final event %d request id = %q, want %q", i, got, want)
+		}
+		if got, want := finalEvent.Alternatives[0].Text, fmt.Sprintf("final-%03d", i); got != want {
+			t.Fatalf("final event %d text = %q, want %q", i, got, want)
+		}
+
+		usageEvent, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next usage event %d error = %v", i, err)
+		}
+		if usageEvent.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event %d type = %v, want RECOGNITION_USAGE", i*2+1, usageEvent.Type)
+		}
 	}
 }
 
