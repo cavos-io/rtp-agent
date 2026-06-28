@@ -115,6 +115,9 @@ func TestNewAzureOpenAITTSRoutesDeploymentAndKeepsModelMetadata(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
 
 	if provider.model != goopenai.TTSModelGPT4oMini {
 		t.Fatalf("model = %q, want reference model metadata", provider.model)
@@ -166,6 +169,9 @@ func TestNewAzureOpenAITTSFallsBackToReferenceEnvironment(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
 
 	if provider.model != goopenai.TTSModelGPT4oMini {
 		t.Fatalf("model = %q, want default model", provider.model)
@@ -225,6 +231,9 @@ func TestNewAzureOpenAITTSUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
 
 	if gotAPIKey != "" {
 		t.Fatalf("api-key header = %q, want removed for Entra token auth", gotAPIKey)
@@ -544,6 +553,38 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	requests := 0
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+	provider, err := NewOpenAITTS("test-key", "", "", withOpenAITTSHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want deferred request", requests)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after Close before Next = %d, want none", requests)
+	}
+}
+
 func TestOpenAITTSSynthesizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -559,10 +600,15 @@ func TestOpenAITTSSynthesizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 		t.Fatalf("NewOpenAITTS error = %v", err)
 	}
 
-	_, err = provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("StatusCode = %d, want 429", statusErr.StatusCode)
@@ -1471,7 +1517,7 @@ func TestOpenAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
 }
 
 func TestOpenAITTSProviderCloseClosesActiveStreams(t *testing.T) {
-	body := &countingOpenAIReadCloser{}
+	body := newBlockingReadErrorAfterClose()
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -1491,20 +1537,30 @@ func TestOpenAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case <-body.reading:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for active stream read")
+	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if body.closed != 1 {
-		t.Fatalf("body Close calls = %d, want 1", body.closed)
-	}
-	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for active stream close")
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("second Close error = %v", err)
-	}
-	if body.closed != 1 {
-		t.Fatalf("body Close calls after second Close = %d, want 1", body.closed)
 	}
 }
 
@@ -1540,8 +1596,8 @@ func TestOpenAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("Synthesize after Close error = %T %v, want io.ErrClosedPipe", err, err)
 	}
-	if calls != 1 {
-		t.Fatalf("HTTP calls after Synthesize post-close = %d, want only initial request", calls)
+	if calls != 0 {
+		t.Fatalf("HTTP calls after Synthesize post-close = %d, want none before first Next", calls)
 	}
 }
 

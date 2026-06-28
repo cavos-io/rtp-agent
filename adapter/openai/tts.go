@@ -243,18 +243,9 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 
 	req := buildOpenAITTSSpeechRequest(t, text)
-
-	resp, err := t.client.CreateSpeech(ctx, req)
-	if err != nil {
-		return nil, mapOpenAIError(err)
-	}
-	if t.isClosed() {
-		_ = resp.Close()
-		return nil, fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
-	}
-
 	stream := &openaiTTSChunkedStream{
-		resp:           resp,
+		ctx:            ctx,
+		request:        req,
 		responseFormat: t.responseFormat,
 		streamFormat:   openAITTSStreamFormatForModel(t.model),
 		provider:       t,
@@ -400,11 +391,15 @@ func (t *OpenAITTS) isClosed() bool {
 }
 
 type openaiTTSChunkedStream struct {
+	ctx            context.Context
+	request        openai.CreateSpeechRequest
 	resp           io.ReadCloser
 	responseFormat openai.SpeechResponseFormat
 	streamFormat   string
 	provider       *OpenAITTS
 	inputText      string
+	startOnce      sync.Once
+	startErr       error
 	scanner        *bufio.Scanner
 	decoder        codecs.AudioStreamDecoder
 	decodeStarted  bool
@@ -429,10 +424,41 @@ func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed {
 		return nil, io.EOF
 	}
+	if err := s.ensureStarted(); err != nil {
+		return nil, err
+	}
 	if s.streamFormat == openAITTSStreamFormatSSE {
 		return s.nextSSE()
 	}
 	return s.nextAudio()
+}
+
+func (s *openaiTTSChunkedStream) ensureStarted() error {
+	if s.resp != nil || s.provider == nil {
+		return nil
+	}
+	s.startOnce.Do(func() {
+		if s.closed {
+			s.startErr = io.EOF
+			return
+		}
+		if s.provider.isClosed() {
+			s.startErr = fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
+			return
+		}
+		resp, err := s.provider.client.CreateSpeech(s.ctx, s.request)
+		if err != nil {
+			s.startErr = mapOpenAIError(err)
+			return
+		}
+		if s.closed || s.provider.isClosed() {
+			_ = resp.Close()
+			s.startErr = io.EOF
+			return
+		}
+		s.resp = resp
+	})
+	return s.startErr
 }
 
 func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
@@ -990,7 +1016,9 @@ func (s *openaiTTSChunkedStream) Close() error {
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}
-	_ = s.resp.Close()
+	if s.resp != nil {
+		_ = s.resp.Close()
+	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
