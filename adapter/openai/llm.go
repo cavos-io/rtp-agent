@@ -2274,6 +2274,7 @@ type openaiStream struct {
 	toolCallType    string
 	toolCallName    string
 	toolCallRawArgs string
+	thinking        bool
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
@@ -2323,11 +2324,28 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 			}
 			continue
 		}
+		content := choice.Delta.Content
+		if content != "" {
+			var ok bool
+			content, ok = llm.StripThinkingTokens(content, &s.thinking)
+			if !ok {
+				if resp.Usage != nil {
+					return openAIUsageChunk(resp.ID, resp.Usage), nil
+				}
+				continue
+			}
+		}
+		if content == "" {
+			if resp.Usage != nil {
+				return openAIUsageChunk(resp.ID, resp.Usage), nil
+			}
+			continue
+		}
 		chunk := &llm.ChatChunk{
 			ID: resp.ID,
 			Delta: &llm.ChoiceDelta{
 				Role:    llm.ChatRole(choice.Delta.Role),
-				Content: choice.Delta.Content,
+				Content: content,
 			},
 		}
 

@@ -2488,6 +2488,41 @@ func TestOpenAIStreamSplitsUsageAfterToolCallFinish(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamSuppressesReferenceThinkingText(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-think","choices":[{"index":0,"delta":{"role":"assistant","content":"<think>"}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-think","choices":[{"index":0,"delta":{"role":"assistant","content":"hidden reasoning"}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-think","choices":[{"index":0,"delta":{"role":"assistant","content":"</think>visible"}}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "visible" {
+		t.Fatalf("chunk = %#v, want visible content after thinking block", chunk)
+	}
+
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after visible content = %v, want EOF", err)
+	}
+}
+
 func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
 	err := openAIStreamRecvError(llm.NewAPIStatusError("client closed", 499, "req_499", nil))
 	if !errors.Is(err, io.EOF) {
