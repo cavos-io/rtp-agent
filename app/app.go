@@ -3357,6 +3357,9 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 	if verbosity := modelOptionString(cfg.LLMModelOptions, "verbosity"); verbosity != "" {
 		llmOpts = append(llmOpts, azure.WithAzureLLMVerbosity(verbosity))
 	}
+	if timeoutMS := modelOptionInt(cfg.LLMModelOptions, "timeout_ms"); timeoutMS > 0 {
+		llmOpts = append(llmOpts, azure.WithAzureLLMTimeout(time.Duration(timeoutMS)*time.Millisecond))
+	}
 	return newAzureLLM(
 		cfg.LLMModel,
 		cfg.LLMBaseURL,
