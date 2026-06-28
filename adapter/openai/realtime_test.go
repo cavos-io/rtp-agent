@@ -2896,6 +2896,25 @@ func TestRealtimeEventMapsOutputAudioTranscriptDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventMapsOutputAudioTranscriptStartTime(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":          "response.output_audio_transcript.delta",
+		"item_id":       "msg_123",
+		"content_index": 2,
+		"delta":         "hello",
+		"start_time":    1.25,
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want text event")
+	}
+	if ev.TimedText == nil {
+		t.Fatalf("TimedText = nil, want reference audio transcript timing: %#v", ev)
+	}
+	if ev.TimedText.Text != "hello" || ev.TimedText.StartTime != 1.25 {
+		t.Fatalf("TimedText = %#v, want hello at 1.25", ev.TimedText)
+	}
+}
+
 func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 	textEvent, ok := openAIRealtimeEvent(map[string]any{
 		"type":          "response.output_text.delta",
@@ -3443,6 +3462,19 @@ func TestRealtimeSessionClosesOutputMessageStreamsWhenItemDone(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for audio stream close")
+	}
+	select {
+	case <-msg.ModalitiesCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for default modalities")
+	}
+	select {
+	case _, ok := <-msg.ModalitiesCh:
+		if ok {
+			t.Fatal("ModalitiesCh still open after default modalities, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for modalities stream close")
 	}
 }
 
@@ -4623,6 +4655,96 @@ func TestRealtimeSessionPersistsAudioTranscriptOnResponseDone(t *testing.T) {
 	}
 	if got := msg.TextContent(); got != "hello world" {
 		t.Fatalf("remote text content = %q, want accumulated audio transcript", got)
+	}
+}
+
+func TestRealtimeSessionRoutesTimedAudioTranscriptDelta(t *testing.T) {
+	session := &realtimeSession{}
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-session.generation.messageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("message generation not routed")
+	}
+
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":       "response.output_audio_transcript.delta",
+		"item_id":    "msg_123",
+		"delta":      "hello",
+		"start_time": 1.25,
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want text event")
+	}
+	session.trackRealtimeEvent(ev)
+
+	select {
+	case got := <-msg.TextCh:
+		if got != "hello" {
+			t.Fatalf("TextCh delta = %q, want hello", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("TextCh did not receive audio transcript delta")
+	}
+	select {
+	case got := <-msg.TimedTextCh:
+		if got.Text != "hello" || got.StartTime != 1.25 {
+			t.Fatalf("TimedTextCh delta = %#v, want hello at 1.25", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("TimedTextCh did not receive audio transcript timing")
+	}
+}
+
+func TestRealtimeSessionPreservesQueuedTextDeltas(t *testing.T) {
+	session := &realtimeSession{}
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-session.generation.messageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("message generation not routed")
+	}
+
+	const total = 150
+	for i := 0; i < total; i++ {
+		session.trackRealtimeEvent(llm.RealtimeEvent{
+			Type:   llm.RealtimeEventTypeText,
+			ItemID: "msg_123",
+			Text:   "x",
+		})
+	}
+	session.closeRealtimeMessageStreams(session.generation.messages["msg_123"])
+
+	got := 0
+	for range msg.TextCh {
+		got++
+	}
+	if got != total {
+		t.Fatalf("queued text deltas = %d, want %d", got, total)
 	}
 }
 
@@ -6355,8 +6477,9 @@ func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
 		Generation: &llm.GenerationCreatedEvent{},
 	})
 	session.generation.messages["item_123"] = &realtimeMessageGeneration{
-		textCh:       make(chan string, 1),
-		audioCh:      make(chan *audiomodel.AudioFrame, 1),
+		textStream:   newOpenAIRealtimeQueuedStream[string](),
+		timedText:    newOpenAIRealtimeQueuedStream[llm.RealtimeTimedText](),
+		audioStream:  newOpenAIRealtimeQueuedStream[*audiomodel.AudioFrame](),
 		modalitiesCh: make(chan []string, 1),
 	}
 

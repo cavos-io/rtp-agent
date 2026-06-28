@@ -1579,8 +1579,14 @@ type GenerationCreatedEvent struct {
 type MessageGeneration struct {
 	MessageID    string
 	TextCh       <-chan string
+	TimedTextCh  <-chan RealtimeTimedText
 	AudioCh      <-chan *model.AudioFrame
 	ModalitiesCh <-chan []string
+}
+
+type RealtimeTimedText struct {
+	Text      string
+	StartTime float64
 }
 
 type RemoteItemAddedEvent struct {
@@ -1608,6 +1614,7 @@ type RealtimeEvent struct {
 	ContentIndex       int
 	Data               []byte // For audio frames
 	Text               string // For text deltas
+	TimedText          *RealtimeTimedText
 	Function           *FunctionToolCall
 	Generation         *GenerationCreatedEvent
 	RemoteItem         *RemoteItemAddedEvent
