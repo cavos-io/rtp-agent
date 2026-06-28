@@ -1204,6 +1204,32 @@ func TestElevenLabsTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSUpdateOptionsKeepsNormalizedSameLanguageCurrentLikeReference(t *testing.T) {
+	provider, err := NewElevenLabsTTS("test-key", "", "", WithElevenLabsLanguage("fr_ca"))
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+	before := provider.connectionKey()
+
+	provider.UpdateOptions(WithElevenLabsLanguage("fr-CA"))
+	after := provider.connectionKey()
+
+	if before != after {
+		t.Fatalf("connection key changed from %#v to %#v, want normalized same language stable", before, after)
+	}
+	if provider.language != "fr-CA" {
+		t.Fatalf("language = %q, want normalized fr-CA", provider.language)
+	}
+	streamURL := buildElevenLabsStreamURL(provider)
+	parsed, err := url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url: %v", err)
+	}
+	if parsed.Query().Get("language_code") != "fr" {
+		t.Fatalf("language_code = %q, want reference base fr", parsed.Query().Get("language_code"))
+	}
+}
+
 func TestElevenLabsStreamPayloadsUseReferenceContextProtocol(t *testing.T) {
 	const contextID = "ctx_test"
 

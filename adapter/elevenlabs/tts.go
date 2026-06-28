@@ -111,7 +111,7 @@ func WithElevenLabsBaseURL(baseURL string) ElevenLabsTTSOption {
 
 func WithElevenLabsLanguage(language string) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
-		t.language = language
+		t.language = langutil.NormalizeLanguage(language)
 	}
 }
 
