@@ -2,6 +2,6 @@ package groq
 
 const (
 	PluginTitle   = "rtp-agent.plugins.groq"
-	PluginVersion = "v0.1.1"
+	PluginVersion = "v0.1.2"
 	PluginPackage = "rtp-agent.plugins.groq"
 )
