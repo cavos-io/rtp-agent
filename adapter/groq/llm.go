@@ -90,7 +90,7 @@ func resolveGroqAPIKey(apiKey string) string {
 
 func (l *GroqLLM) Model() string { return l.inner.Model() }
 func (l *GroqLLM) Provider() string {
-	return "groq"
+	return groqProviderHost(l.baseURL, "groq")
 }
 
 func defaultGroqLLMReasoningEffort(model string) string {

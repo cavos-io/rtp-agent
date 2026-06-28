@@ -38,8 +38,8 @@ func TestNewGroqSTTDefaultsMatchReference(t *testing.T) {
 	if provider.Label() != "groq.STT" {
 		t.Fatalf("label = %q, want groq.STT", provider.Label())
 	}
-	if stt.Provider(provider) != "groq" {
-		t.Fatalf("provider = %q, want groq", stt.Provider(provider))
+	if stt.Provider(provider) != "api.groq.com" {
+		t.Fatalf("provider = %q, want reference base URL host", stt.Provider(provider))
 	}
 	if stt.Model(provider) != "whisper-large-v3-turbo" {
 		t.Fatalf("stt model = %q, want whisper-large-v3-turbo", stt.Model(provider))
@@ -81,6 +81,9 @@ func TestGroqSTTOptionsMatchReference(t *testing.T) {
 	}
 	if provider.baseURL != "https://groq.example/openai/v1" {
 		t.Fatalf("baseURL = %q, want trimmed custom endpoint", provider.baseURL)
+	}
+	if stt.Provider(provider) != "groq.example" {
+		t.Fatalf("provider = %q, want configured base URL host", stt.Provider(provider))
 	}
 	if provider.language != "" {
 		t.Fatalf("language = %q, want empty when detect language is enabled", provider.language)

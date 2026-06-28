@@ -38,8 +38,8 @@ func TestNewGroqLLMDefaultsMatchReference(t *testing.T) {
 	if provider.baseURL != "https://api.groq.com/openai/v1" {
 		t.Fatalf("base URL = %q, want reference base URL", provider.baseURL)
 	}
-	if provider.Provider() != "groq" {
-		t.Fatalf("provider = %q, want groq", provider.Provider())
+	if provider.Provider() != "api.groq.com" {
+		t.Fatalf("provider = %q, want reference base URL host", provider.Provider())
 	}
 }
 
@@ -56,6 +56,9 @@ func TestNewGroqLLMOptionsMatchReference(t *testing.T) {
 	}
 	if provider.baseURL != "https://groq.example/openai/v1" {
 		t.Fatalf("base URL = %q, want trimmed configured base URL", provider.baseURL)
+	}
+	if provider.Provider() != "groq.example" {
+		t.Fatalf("provider = %q, want configured base URL host", provider.Provider())
 	}
 	if provider.reasoningEffort != "low" {
 		t.Fatalf("reasoning effort = %q, want reference default low", provider.reasoningEffort)

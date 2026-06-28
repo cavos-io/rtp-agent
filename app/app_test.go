@@ -13271,7 +13271,7 @@ func TestGroqSTTFallbackPassesReferenceOptions(t *testing.T) {
 	if got, want := stt.Model(provider), "whisper-large-v3"; got != want {
 		t.Fatalf("stt.Model() = %q, want %q", got, want)
 	}
-	if got, want := stt.Provider(provider), "groq"; got != want {
+	if got, want := stt.Provider(provider), "groq.example"; got != want {
 		t.Fatalf("stt.Provider() = %q, want %q", got, want)
 	}
 	state := reflect.ValueOf(groqProvider).Elem()
@@ -13313,8 +13313,8 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if app.Session == nil {
 		t.Fatal("Session is nil")
 	}
-	if got := llm.Provider(app.Session.LLM); got != "groq" {
-		t.Fatalf("LLM provider = %q, want groq", got)
+	if got := llm.Provider(app.Session.LLM); got != "api.groq.com" {
+		t.Fatalf("LLM provider = %q, want api.groq.com", got)
 	}
 	if got := llm.Model(app.Session.LLM); got != "llama3-70b-8192" {
 		t.Fatalf("LLM model = %q, want llama3-70b-8192", got)
@@ -13322,8 +13322,8 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if got := app.Session.STT.Label(); got != "groq.STT" {
 		t.Fatalf("STT label = %q, want groq.STT", got)
 	}
-	if got := stt.Provider(app.Session.STT); got != "groq" {
-		t.Fatalf("STT provider = %q, want groq", got)
+	if got := stt.Provider(app.Session.STT); got != "groq.example" {
+		t.Fatalf("STT provider = %q, want groq.example", got)
 	}
 	if got := stt.Model(app.Session.STT); got != "whisper-large-v3" {
 		t.Fatalf("STT model = %q, want whisper-large-v3", got)
@@ -13341,11 +13341,14 @@ func TestDefaultConfigFromEnvSelectsGroqProviders(t *testing.T) {
 	if caps := app.Session.STT.Capabilities(); caps.Streaming || !caps.OfflineRecognize {
 		t.Fatalf("STT capabilities = %+v, want reference offline-only Groq STT", caps)
 	}
-	if got := app.Session.TTS.Label(); got != "StreamAdapter(groq.TTS)" {
-		t.Fatalf("TTS label = %q, want StreamAdapter(groq.TTS)", got)
+	if got := app.Session.TTS.Label(); got != "tts.StreamAdapter" {
+		t.Fatalf("TTS label = %q, want tts.StreamAdapter", got)
 	}
 	if got := app.Session.TTS.SampleRate(); got != 48000 {
 		t.Fatalf("TTS sample rate = %d, want 48000", got)
+	}
+	if got := app.Session.TTS.NumChannels(); got != 1 {
+		t.Fatalf("TTS channels = %d, want reference mono output", got)
 	}
 	if got := tts.Provider(app.Session.TTS); got != "Groq" {
 		t.Fatalf("TTS provider = %q, want StreamAdapter to forward Groq provider metadata", got)
