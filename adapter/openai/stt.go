@@ -747,6 +747,7 @@ type openAIRealtimeSTTStream struct {
 	closed     bool
 	inputEnded bool
 	committed  bool
+	hasAudio   bool
 	pushedSR   uint32
 	audio      *audio.AudioByteStream
 	state      *openAIRealtimeSTTMessageState
@@ -794,6 +795,7 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 			s.mu.Unlock()
 			return err
 		}
+		s.hasAudio = true
 		s.committed = false
 	}
 	s.mu.Unlock()
@@ -857,6 +859,7 @@ func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
 				s.closeAfterWriteFailureLocked()
 				return err
 			}
+			s.hasAudio = true
 			s.committed = false
 		}
 	}
@@ -864,7 +867,7 @@ func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
 }
 
 func (s *openAIRealtimeSTTStream) commitAudioLocked() error {
-	if s.committed {
+	if s.committed || !s.hasAudio {
 		return nil
 	}
 	message, err := buildOpenAIRealtimeSTTCommitMessage()
