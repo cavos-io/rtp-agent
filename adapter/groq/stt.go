@@ -3,6 +3,7 @@ package groq
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -24,6 +25,9 @@ type GroqSTT struct {
 	language       string
 	detectLanguage bool
 	prompt         string
+	httpClient     interface {
+		Do(*http.Request) (*http.Response, error)
+	}
 }
 
 type GroqSTTOption func(*GroqSTT)
@@ -57,6 +61,14 @@ func WithGroqSTTPrompt(prompt string) GroqSTTOption {
 	}
 }
 
+func withGroqSTTHTTPClient(client interface {
+	Do(*http.Request) (*http.Response, error)
+}) GroqSTTOption {
+	return func(s *GroqSTT) {
+		s.httpClient = client
+	}
+}
+
 func NewGroqSTT(apiKey string, model string, opts ...GroqSTTOption) (*GroqSTT, error) {
 	apiKey = resolveGroqAPIKey(apiKey)
 	if apiKey == "" {
@@ -86,6 +98,9 @@ func NewGroqSTT(apiKey string, model string, opts ...GroqSTTOption) (*GroqSTT, e
 	}
 	if provider.prompt != "" {
 		openAIOpts = append(openAIOpts, openai.WithOpenAISTTPrompt(provider.prompt))
+	}
+	if provider.httpClient != nil {
+		openAIOpts = append(openAIOpts, openai.WithOpenAISTTHTTPClient(provider.httpClient))
 	}
 	inner, err := openai.NewOpenAISTT(provider.apiKey, provider.model, openAIOpts...)
 	if err != nil {

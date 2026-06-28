@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,6 +61,8 @@ type OpenAISTT struct {
 	vad             vad.VAD
 	streamsMu       sync.Mutex
 	streams         map[*openAIRealtimeSTTStream]struct{}
+	nextRequestID   uint64
+	requestCancels  map[uint64]context.CancelFunc
 	closed          bool
 }
 
@@ -142,6 +145,10 @@ func WithOpenAISTTBaseURL(baseURL string) OpenAISTTOption {
 			s.baseURL = strings.TrimRight(baseURL, "/")
 		}
 	}
+}
+
+func WithOpenAISTTHTTPClient(client openai.HTTPDoer) OpenAISTTOption {
+	return withOpenAISTTHTTPClient(client)
 }
 
 func withOpenAISTTHTTPClient(client openai.HTTPDoer) OpenAISTTOption {
@@ -281,8 +288,16 @@ func (s *OpenAISTT) Close() error {
 		streams = append(streams, stream)
 	}
 	s.streams = make(map[*openAIRealtimeSTTStream]struct{})
+	requestCancels := make([]context.CancelFunc, 0, len(s.requestCancels))
+	for _, cancel := range s.requestCancels {
+		requestCancels = append(requestCancels, cancel)
+	}
+	s.requestCancels = make(map[uint64]context.CancelFunc)
 	s.streamsMu.Unlock()
 
+	for _, cancel := range requestCancels {
+		cancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
@@ -333,6 +348,27 @@ func (s *OpenAISTT) registerRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
 		s.streams = map[*openAIRealtimeSTTStream]struct{}{}
 	}
 	s.streams[stream] = struct{}{}
+}
+
+func (s *OpenAISTT) registerRequest(cancel context.CancelFunc) (uint64, bool) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if s.closed {
+		return 0, false
+	}
+	if s.requestCancels == nil {
+		s.requestCancels = make(map[uint64]context.CancelFunc)
+	}
+	s.nextRequestID++
+	id := s.nextRequestID
+	s.requestCancels[id] = cancel
+	return id, true
+}
+
+func (s *OpenAISTT) unregisterRequest(id uint64) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	delete(s.requestCancels, id)
 }
 
 func (s *OpenAISTT) unregisterRealtimeSTTStream(stream *openAIRealtimeSTTStream) {
@@ -549,6 +585,16 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if s.isClosed() {
 		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	requestID, ok := s.registerRequest(cancel)
+	if !ok {
+		cancel()
+		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
+	}
+	cleanupRequest := func() {
+		s.unregisterRequest(requestID)
+		cancel()
+	}
 	if language != "" {
 		s.language = language
 	}
@@ -557,7 +603,16 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	resp, err := s.client.CreateTranscription(ctx, req)
 	if err != nil {
+		if s.isClosed() && errors.Is(ctx.Err(), context.Canceled) {
+			cleanupRequest()
+			return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
+		}
+		cleanupRequest()
 		return nil, mapOpenAIError(err)
+	}
+	cleanupRequest()
+	if s.isClosed() {
+		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 	}
 
 	return openAISpeechEvent(resp, req.Language), nil
