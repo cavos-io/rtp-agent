@@ -66,6 +66,27 @@ func TestElevenLabsTTSRejectsMalformedEncodingSampleRateLikeReference(t *testing
 	}
 }
 
+func TestElevenLabsTTSChunkedUnsupportedEncodingReturnsAPIConnectionErrorLikeReference(t *testing.T) {
+	stream := &elevenLabsChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0, 1, 2, 3}))},
+		encoding:   "ulaw_8000",
+		sampleRate: 8000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "unsupported elevenlabs TTS encoding") {
+		t.Fatalf("Next error = %v, want unsupported encoding context", err)
+	}
+}
+
 func TestNewElevenLabsTTSUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("ELEVENLABS_API_KEY", "env-key")
 	t.Setenv("ELEVEN_API_KEY", "fallback-env-key")

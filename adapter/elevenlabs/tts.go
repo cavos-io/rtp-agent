@@ -537,7 +537,7 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	defer s.mu.Unlock()
 	if !strings.HasPrefix(s.encoding, "pcm") {
-		return nil, fmt.Errorf("unsupported elevenlabs TTS encoding %q: no decoder available", s.encoding)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("unsupported elevenlabs TTS encoding %q: no decoder available", s.encoding))
 	}
 
 	// Read PCM audio in chunks from the HTTP response

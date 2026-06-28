@@ -1076,15 +1076,18 @@ func TestElevenLabsSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
-
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
 	concrete, ok := stream.(*elevenLabsSTTStream)
 	if !ok {
 		t.Fatalf("Stream() type = %T, want *elevenLabsSTTStream", stream)
 	}
 	concrete.events <- &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
+	if got := len(concrete.events); got != 1 {
+		t.Fatalf("queued events before Close = %d, want 1", got)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
 	event, err := stream.Next()
 	if event != nil {
 		t.Fatalf("Next event after Close = %#v, want nil", event)
