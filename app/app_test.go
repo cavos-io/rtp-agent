@@ -13475,12 +13475,50 @@ func TestDefaultConfigFromEnvMapsGroqLLMTimeoutOption(t *testing.T) {
 	if !ok {
 		t.Fatalf("LLM provider type = %T, want *groq.GroqLLM", app.Session.LLM)
 	}
-	if got := groqLLMDefaultConnectDuration(t, groqLLM, "Timeout"); got != 750*time.Millisecond {
+	if got := time.Duration(groqLLMDefaultConnectInt64(t, groqLLM, "Timeout")); got != 750*time.Millisecond {
 		t.Fatalf("Groq LLM default timeout = %v, want 750ms from model options", got)
 	}
 }
 
-func groqLLMDefaultConnectDuration(t *testing.T, provider *groq.GroqLLM, field string) time.Duration {
+func TestDefaultConfigFromEnvMapsGroqLLMMaxRetriesOption(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts <= 2 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"try again","type":"server_error","code":"server_error"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", server.URL)
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "max_retries=1")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	stream, err := app.Session.LLM.Chat(context.Background(), llm.NewChatContext())
+	if stream != nil {
+		_ = stream.Close()
+	}
+	if err == nil {
+		t.Fatal("Chat error is nil, want failures to stop after configured one retry")
+	}
+	if attempts != 2 {
+		t.Fatalf("Groq LLM startup attempts = %d, want initial request plus one configured retry", attempts)
+	}
+}
+
+func groqLLMDefaultConnectInt64(t *testing.T, provider *groq.GroqLLM, field string) int64 {
 	t.Helper()
 
 	state := reflect.ValueOf(provider).Elem()
@@ -13496,7 +13534,7 @@ func groqLLMDefaultConnectDuration(t *testing.T, provider *groq.GroqLLM, field s
 	if !value.IsValid() {
 		t.Fatalf("Groq LLM default connect field %q is invalid", field)
 	}
-	return time.Duration(value.Int())
+	return value.Int()
 }
 
 func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
