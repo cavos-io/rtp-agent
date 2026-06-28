@@ -2296,8 +2296,11 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		if len(resp.Choices) == 0 {
+			if resp.Usage == nil {
+				continue
+			}
 			s.markEmitted()
-			return &llm.ChatChunk{ID: resp.ID, Usage: openAICompletionUsage(resp.Usage)}, nil
+			return openAIUsageChunk(resp.ID, resp.Usage), nil
 		}
 
 		chunks := make([]*llm.ChatChunk, 0, len(resp.Choices)+1)
