@@ -481,6 +481,9 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 			openAIRealtimeMergeSessionPayload(initialSession, session)
 		}
 	}
+	if m.isAzure && !initialOptions.InputAudioNoiseReductionSet && initialOptions.InputAudioNoiseReduction == nil {
+		openAIRealtimeRemoveInputNoiseReduction(initialSession)
+	}
 	s := &realtimeSession{
 		model:            m,
 		conn:             conn,
@@ -710,6 +713,9 @@ func openAIRealtimeInitialSession(model string, modalities ...[]string) map[stri
 				"format": audioFormat,
 				"transcription": map[string]any{
 					"model": "gpt-4o-mini-transcribe",
+				},
+				"noise_reduction": map[string]any{
+					"type": "near_field",
 				},
 				"turn_detection": map[string]any{
 					"type":               "semantic_vad",
@@ -1355,6 +1361,12 @@ func openAIRealtimeMergeSessionPayload(dst map[string]any, src map[string]any) {
 	}
 }
 
+func openAIRealtimeRemoveInputNoiseReduction(session map[string]any) {
+	audio, _ := session["audio"].(map[string]any)
+	input, _ := audio["input"].(map[string]any)
+	delete(input, "noise_reduction")
+}
+
 func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 	entries := make(map[string]any)
 	if value, ok := session["tool_choice"]; ok {
@@ -1455,7 +1467,9 @@ func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
 
 func (s *realtimeSession) Interrupt() error {
 	s.mu.Lock()
-	active := s.generation != nil || len(s.pendingResponses) > 0
+	hasGeneration := s.generation != nil
+	hasPendingResponse := len(s.pendingResponses) > 0
+	active := hasGeneration || hasPendingResponse
 	s.mu.Unlock()
 	if !active {
 		return nil
@@ -1463,7 +1477,13 @@ func (s *realtimeSession) Interrupt() error {
 	msg := map[string]any{
 		"type": "response.cancel",
 	}
-	return s.sendMsg(msg)
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	if !hasGeneration && hasPendingResponse {
+		s.clearAllPendingRealtimeResponses()
+	}
+	return nil
 }
 
 func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
@@ -1639,6 +1659,14 @@ func (s *realtimeSession) clearPendingRealtimeResponse(eventID string) {
 	for pendingID := range s.pendingResponses {
 		delete(s.pendingResponses, pendingID)
 		return
+	}
+}
+
+func (s *realtimeSession) clearAllPendingRealtimeResponses() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for pendingID := range s.pendingResponses {
+		delete(s.pendingResponses, pendingID)
 	}
 }
 
@@ -2130,6 +2158,11 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 
 	initialSession := openAIRealtimeInitialSession(s.model.model, s.model.modalities)
 	openAIRealtimeMergeSessionPayload(initialSession, openAIRealtimeSessionFromOptionEntries(optionsState))
+	if s.model.isAzure {
+		if _, ok := optionsState["audio.input.noise_reduction"]; !ok {
+			openAIRealtimeRemoveInputNoiseReduction(initialSession)
+		}
+	}
 	if instructions != "" {
 		initialSession["instructions"] = instructions
 	}
@@ -2378,6 +2411,9 @@ func (s *realtimeSession) persistRealtimeAudioTranscripts() {
 	for itemID, generation := range s.generation.messages {
 		msg, ok := s.remote.Get(itemID).(*llm.ChatMessage)
 		if !ok {
+			continue
+		}
+		if generation.transcript == "" || msg.TextContent() == generation.transcript {
 			continue
 		}
 		msg.Content = append(msg.Content, llm.ChatContent{Text: generation.transcript})

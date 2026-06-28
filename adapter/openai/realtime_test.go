@@ -533,6 +533,9 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	if transcription["model"] != "whisper-1" {
 		t.Fatalf("input_audio_transcription = %#v, want Azure whisper-1 default", transcription)
 	}
+	if _, ok := sessionPayload["input_audio_noise_reduction"]; ok {
+		t.Fatalf("input_audio_noise_reduction = %#v, want omitted by Azure default", sessionPayload["input_audio_noise_reduction"])
+	}
 	turnDetection := sessionPayload["turn_detection"].(map[string]any)
 	if turnDetection["type"] != "server_vad" {
 		t.Fatalf("turn_detection = %#v, want Azure server_vad default", turnDetection)
@@ -1205,6 +1208,13 @@ func TestRealtimeInitialSessionUsesDefaultInputAudioOptions(t *testing.T) {
 	if turnDetection["interrupt_response"] != true {
 		t.Fatalf("turn_detection interrupt_response = %#v, want true", turnDetection["interrupt_response"])
 	}
+	noiseReduction, ok := input["noise_reduction"].(map[string]any)
+	if !ok {
+		t.Fatalf("noise_reduction = %#v, want default near_field config", input["noise_reduction"])
+	}
+	if noiseReduction["type"] != "near_field" {
+		t.Fatalf("noise_reduction type = %#v, want near_field", noiseReduction["type"])
+	}
 }
 
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
@@ -1772,6 +1782,45 @@ func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for response.cancel for later pending response")
 	}
+}
+
+func TestRealtimeInterruptClearsPendingResponseBeforeCreated(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, <-messages, "session.update", "gpt-realtime")
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "start"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "start")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.cancel", "")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("second Interrupt error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "second interrupt after pending response cancel should be silent")
 }
 
 func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *testing.T) {
@@ -4518,6 +4567,57 @@ func TestRealtimeSessionPersistsTextDeltaOnResponseDone(t *testing.T) {
 	}
 	if got := msg.TextContent(); got != "text alias" {
 		t.Fatalf("remote text content = %q, want accumulated text delta", got)
+	}
+}
+
+func TestRealtimeSessionDoesNotDuplicateExistingRemoteOutputTranscript(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "msg_text",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "already spoken"}},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_text",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_text.delta",
+		"item_id": "msg_text",
+		"delta":   "already ",
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_text.delta",
+		"item_id": "msg_text",
+		"delta":   "spoken",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_text", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("msg_text").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote item = %T, want *llm.ChatMessage", session.remote.Get("msg_text"))
+	}
+	if got := msg.TextContent(); got != "already spoken" {
+		t.Fatalf("remote text content = %q, want no duplicate output transcript", got)
+	}
+	if len(msg.Content) != 1 {
+		t.Fatalf("remote content parts = %#v, want existing content only", msg.Content)
 	}
 }
 

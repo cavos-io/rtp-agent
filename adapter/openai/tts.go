@@ -452,7 +452,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 		}
 		if err != nil {
 			if err == io.EOF {
-				if !s.audioFinalSent {
+				if s.audioSawAudio && !s.audioFinalSent {
 					s.audioFinalSent = true
 					return &tts.SynthesizedAudio{IsFinal: true}, nil
 				}
@@ -529,6 +529,11 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
 		if data == "[DONE]" {
+			s.sseDone = true
+			if s.sseSawAudio && !s.sseFinalSent {
+				s.sseFinalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			return nil, io.EOF
 		}
 		var event map[string]any
@@ -570,6 +575,11 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 	}
 	if err := s.scanner.Err(); err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	s.sseDone = true
+	if s.sseSawAudio && !s.sseFinalSent {
+		s.sseFinalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
 	return nil, io.EOF
 }
