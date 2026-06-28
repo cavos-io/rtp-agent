@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -26,6 +27,7 @@ const (
 	defaultGroqTTSVoice          = "autumn"
 	defaultGroqTTSResponseFormat = "wav"
 	defaultGroqTTSSampleRate     = 48000
+	defaultGroqTTSTotalTimeout   = 30 * time.Second
 )
 
 type GroqTTS struct {
@@ -116,7 +118,7 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
 	}
 
-	reqCtx, cancel := context.WithCancel(ctx)
+	reqCtx, cancel := context.WithTimeout(ctx, defaultGroqTTSTotalTimeout)
 	requestID, ok := t.registerRequest(cancel)
 	if !ok {
 		cancel()

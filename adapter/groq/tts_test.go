@@ -318,6 +318,42 @@ func TestGroqTTSSynthesizeTransportErrorsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGroqTTSSynthesizeAppliesReferenceTotalTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		_ = stream.Close()
+	}
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want provider error after request capture")
+	}
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want reference total timeout")
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want bounded by 30s total timeout", remaining)
+	}
+}
+
 func TestGroqTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	body := &groqCloseCountBody{Reader: bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))}
 	originalClient := http.DefaultClient
