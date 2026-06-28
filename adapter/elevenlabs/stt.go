@@ -51,6 +51,7 @@ type ElevenLabsSTT struct {
 	includeTimestamps bool
 	sampleRate        int
 	serverVAD         *ElevenLabsVADOptions
+	serverVADRefresh  bool
 	keyterms          []string
 	mu                sync.Mutex
 	streams           map[*elevenLabsSTTStream]struct{}
@@ -104,12 +105,14 @@ func WithElevenLabsSTTSampleRate(sampleRate int) ElevenLabsSTTOption {
 func WithElevenLabsSTTServerVAD(serverVAD ElevenLabsVADOptions) ElevenLabsSTTOption {
 	return func(s *ElevenLabsSTT) {
 		s.serverVAD = &serverVAD
+		s.serverVADRefresh = true
 	}
 }
 
 func WithElevenLabsSTTServerVADDisabled() ElevenLabsSTTOption {
 	return func(s *ElevenLabsSTT) {
 		s.serverVAD = nil
+		s.serverVADRefresh = true
 	}
 }
 
@@ -130,6 +133,7 @@ func NewElevenLabsSTT(apiKey string, opts ...ElevenLabsSTTOption) *ElevenLabsSTT
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.serverVADRefresh = false
 	return provider
 }
 
@@ -191,6 +195,7 @@ func (s *ElevenLabsSTT) isClosed() bool {
 }
 
 func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
+	s.serverVADRefresh = false
 	oldServerVAD := s.serverVAD
 	for _, opt := range opts {
 		opt(s)
@@ -201,9 +206,11 @@ func (s *ElevenLabsSTT) UpdateOptions(opts ...ElevenLabsSTTOption) {
 		streams = append(streams, stream)
 	}
 	serverVAD := s.serverVAD != nil
+	refreshServerVAD := s.serverVADRefresh
+	s.serverVADRefresh = false
 	s.mu.Unlock()
 	for _, stream := range streams {
-		if !elevenLabsVADOptionsEqual(oldServerVAD, s.serverVAD) {
+		if refreshServerVAD || !elevenLabsVADOptionsEqual(oldServerVAD, s.serverVAD) {
 			stream.reconnect(buildElevenLabsSTTStreamURL(s, stream.language()), buildElevenLabsSTTHeaders(s), serverVAD)
 			continue
 		}

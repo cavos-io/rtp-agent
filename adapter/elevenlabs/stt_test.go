@@ -1205,6 +1205,81 @@ func TestElevenLabsSTTUpdateOptionsReconnectsActiveStreamForServerVAD(t *testing
 	}
 }
 
+func TestElevenLabsSTTUpdateOptionsExplicitSameServerVADReconnectsLikeReference(t *testing.T) {
+	clientOne, serverOne := net.Pipe()
+	clientTwo, serverTwo := net.Pipe()
+	queries := make(chan url.Values, 2)
+	serverErr := make(chan error, 2)
+	releaseServer := make(chan struct{})
+	releaseClosed := false
+	defer func() {
+		if !releaseClosed {
+			close(releaseServer)
+		}
+	}()
+	go runElevenLabsSTTHandshakeRecorder(serverOne, queries, releaseServer, serverErr)
+	go runElevenLabsSTTHandshakeRecorder(serverTwo, queries, releaseServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	dials := []net.Conn{clientOne, clientTwo}
+	dialCount := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			if dialCount >= len(dials) {
+				return nil, errors.New("unexpected extra dial")
+			}
+			conn := dials[dialCount]
+			dialCount++
+			return conn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+		WithElevenLabsSTTServerVAD(ElevenLabsVADOptions{VADThreshold: floatPtr(0.5)}),
+	)
+	active, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer active.Close()
+
+	first := readElevenLabsSTTHandshakeQuery(t, queries)
+	assertElevenLabsQuery(t, first, "commit_strategy", "vad")
+	assertElevenLabsQuery(t, first, "vad_threshold", "0.5")
+
+	provider.UpdateOptions(WithElevenLabsSTTServerVAD(ElevenLabsVADOptions{
+		VADThreshold: floatPtr(0.5),
+	}))
+
+	second := readElevenLabsSTTHandshakeQuery(t, queries)
+	assertElevenLabsQuery(t, second, "commit_strategy", "vad")
+	assertElevenLabsQuery(t, second, "vad_threshold", "0.5")
+	if dialCount != 2 {
+		t.Fatalf("dial count = %d, want reconnect dial for explicit same server_vad", dialCount)
+	}
+
+	close(releaseServer)
+	releaseClosed = true
+	if err := active.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	for range 2 {
+		select {
+		case err := <-serverErr:
+			if err != nil {
+				t.Fatalf("test websocket server error: %v", err)
+			}
+		default:
+		}
+	}
+}
+
 func TestElevenLabsSTTStreamURLConvertsHTTPBaseURLToWebsocket(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTBaseURL("http://eleven.example/v1"),
