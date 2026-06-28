@@ -856,6 +856,23 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 }
 
 func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
+	if tail := s.normalizer.flush(); tail != nil {
+		if s.audio == nil {
+			s.audio = newOpenAIRealtimeSTTAudioByteStream()
+		}
+		for _, chunk := range s.audio.Push(tail.Data) {
+			message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
+			if err != nil {
+				return err
+			}
+			if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+			s.hasAudio = true
+			s.committed = false
+		}
+	}
 	if s.audio != nil {
 		for _, chunk := range s.audio.Flush() {
 			message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)

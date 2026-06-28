@@ -1638,6 +1638,8 @@ type openAIRealtimeInputAudioNormalizer struct {
 	sampleRate  uint32
 	numChannels uint32
 	remainder   uint64
+	lastSample  int16
+	hasTail     bool
 }
 
 func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) (*model.AudioFrame, error) {
@@ -1680,6 +1682,7 @@ func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) 
 	n.remainder = scaledSamples % uint64(frame.SampleRate)
 	out := make([]byte, int(outSamples*openAIRealtimeInputNumChannels*2))
 	channelCount := int(frame.NumChannels)
+	n.hasTail = false
 	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
 		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(openAIRealtimeInputSampleRate))
 		if srcIdx >= samplesPerChannel {
@@ -1693,6 +1696,16 @@ func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) 
 		sample := sum / int32(channelCount)
 		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(int16(sample)))
 	}
+	if n.remainder > 0 {
+		srcIdx := samplesPerChannel - 1
+		var sum int32
+		for ch := 0; ch < channelCount; ch++ {
+			offset := (int(srcIdx)*channelCount + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		n.lastSample = int16(sum / int32(channelCount))
+		n.hasTail = true
+	}
 
 	return &model.AudioFrame{
 		Data:              out,
@@ -1702,10 +1715,28 @@ func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) 
 	}, nil
 }
 
+func (n *openAIRealtimeInputAudioNormalizer) flush() *model.AudioFrame {
+	if n == nil || n.remainder == 0 || !n.hasTail || n.sampleRate == 0 {
+		return nil
+	}
+	out := make([]byte, openAIRealtimeInputNumChannels*2)
+	binary.LittleEndian.PutUint16(out, uint16(n.lastSample))
+	n.remainder = 0
+	n.hasTail = false
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        openAIRealtimeInputSampleRate,
+		NumChannels:       openAIRealtimeInputNumChannels,
+		SamplesPerChannel: 1,
+	}
+}
+
 func (n *openAIRealtimeInputAudioNormalizer) reset() {
 	n.sampleRate = 0
 	n.numChannels = 0
 	n.remainder = 0
+	n.lastSample = 0
+	n.hasTail = false
 }
 
 func newOpenAIRealtimeAudioByteStream() *audio.AudioByteStream {

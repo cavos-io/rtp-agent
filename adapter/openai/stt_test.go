@@ -1253,6 +1253,81 @@ func TestOpenAIRealtimeSTTStreamResamplesInputAudioWithReferenceTiming(t *testin
 	}
 }
 
+func TestOpenAIRealtimeSTTFlushEmitsResamplerTail(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	frame := make([]byte, 2)
+	binary.LittleEndian.PutUint16(frame, 7)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame single sample error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "single sample should wait for resampler flush")
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	var raw string
+	select {
+	case raw = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for flushed resampler tail")
+	}
+	chunk := assertOpenAIRealtimeSTTAudioAppend(t, raw)
+	if len(chunk) != 2 {
+		t.Fatalf("flushed resampler tail bytes = %d, want one 16-bit PCM sample", len(chunk))
+	}
+	if got := int16(binary.LittleEndian.Uint16(chunk)); got != 7 {
+		t.Fatalf("flushed resampler tail sample = %d, want 7", got)
+	}
+	assertNoRealtimeMessage(t, messages, "Flush should not commit audio buffer")
+}
+
 func TestOpenAIRealtimeSTTStreamRejectsSampleRateChange(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
