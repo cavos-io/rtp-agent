@@ -3463,6 +3463,19 @@ func TestRealtimeSessionClosesOutputMessageStreamsWhenItemDone(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for audio stream close")
 	}
+	select {
+	case <-msg.ModalitiesCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for default modalities")
+	}
+	select {
+	case _, ok := <-msg.ModalitiesCh:
+		if ok {
+			t.Fatal("ModalitiesCh still open after default modalities, want closed")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for modalities stream close")
+	}
 }
 
 func TestRealtimeSessionResolvesDefaultModalitiesWhenItemDone(t *testing.T) {

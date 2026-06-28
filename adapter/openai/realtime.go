@@ -2581,7 +2581,7 @@ func (s *realtimeSession) setRealtimeMessageModalities(itemID string, modalities
 		return
 	}
 	msg := s.generation.messages[itemID]
-	if msg == nil || msg.modalities != nil {
+	if msg == nil || msg.streamsClosed || msg.modalities != nil {
 		return
 	}
 	msg.modalities = append([]string(nil), modalities...)
@@ -2605,15 +2605,7 @@ func (s *realtimeSession) closeRealtimeGeneration() {
 	}
 	s.lastGeneration = s.generation.timing
 	for _, msg := range s.generation.messages {
-		if msg.modalities == nil {
-			msg.modalities = s.defaultRealtimeMessageModalities()
-			select {
-			case msg.modalitiesCh <- msg.modalities:
-			default:
-			}
-		}
 		s.closeRealtimeMessageStreams(msg)
-		close(msg.modalitiesCh)
 	}
 	close(s.generation.messageCh)
 	close(s.generation.functionCh)
@@ -2624,9 +2616,17 @@ func (s *realtimeSession) closeRealtimeMessageStreams(msg *realtimeMessageGenera
 	if msg == nil || msg.streamsClosed {
 		return
 	}
+	if msg.modalities == nil {
+		msg.modalities = s.defaultRealtimeMessageModalities()
+		select {
+		case msg.modalitiesCh <- msg.modalities:
+		default:
+		}
+	}
 	close(msg.textCh)
 	close(msg.timedTextCh)
 	s.closeRealtimeMessageAudioStream(msg)
+	close(msg.modalitiesCh)
 	msg.streamsClosed = true
 }
 
