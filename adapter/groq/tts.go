@@ -333,6 +333,7 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
+		_ = s.Close()
 		return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 	}
 
@@ -340,6 +341,7 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err := s.startWAV(); err != nil {
 			if errors.Is(err, io.EOF) {
 				s.finalSent = true
+				_ = s.Close()
 				return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 			}
 			return nil, s.fail(err)
@@ -348,6 +350,7 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.remainingData == 0 {
 		s.finalSent = true
+		_ = s.Close()
 		return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 	}
 

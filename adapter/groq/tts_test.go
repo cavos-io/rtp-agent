@@ -636,6 +636,43 @@ func TestGroqTTSSynthesizeSetsStableRequestID(t *testing.T) {
 	}
 }
 
+func TestGroqTTSChunkedStreamClosesBodyAfterFinal(t *testing.T) {
+	body := &groqCloseCountBody{Reader: bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))}
+	stream := &groqTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 48000,
+		requestID:  "req-1",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error = %v", err)
+	}
+	if audio == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want decoded audio", audio)
+	}
+	if body.closeCount != 0 {
+		t.Fatalf("body Close() calls after audio = %d, want 0", body.closeCount)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls after final = %d, want 1", body.closeCount)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after final returned error = %v", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls after idempotent Close = %d, want 1", body.closeCount)
+	}
+}
+
 func TestGroqTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
 	stream := &groqTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(nil))},
