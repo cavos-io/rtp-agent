@@ -2344,7 +2344,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		chunk := &llm.ChatChunk{
 			ID: resp.ID,
 			Delta: &llm.ChoiceDelta{
-				Role:    llm.ChatRole(choice.Delta.Role),
+				Role:    llm.ChatRoleAssistant,
 				Content: content,
 			},
 		}

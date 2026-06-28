@@ -2365,6 +2365,38 @@ func TestOpenAIStreamSkipsAzureNullDeltaWithFinishReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamContentDeltaDefaultsAssistantRole(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-role","choices":[{"index":0,"delta":{"content":"hello"}}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want content chunk", err)
+	}
+	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("chunk = %#v, want content chunk", chunk)
+	}
+	if chunk.Delta.Role != llm.ChatRoleAssistant {
+		t.Fatalf("content chunk role = %q, want assistant", chunk.Delta.Role)
+	}
+}
+
 func TestOpenAIStreamPreservesAzureUsageOnlyChunk(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
