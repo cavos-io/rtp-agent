@@ -3646,7 +3646,48 @@ func groqLLMFromConfig(cfg AppConfig) *groq.GroqLLM {
 	if cfg.LLMBaseURL != "" {
 		llmOpts = append(llmOpts, groq.WithGroqLLMBaseURL(cfg.LLMBaseURL))
 	}
+	if openAIOpts := groqOpenAILLMOptionsFromConfig(cfg); len(openAIOpts) > 0 {
+		llmOpts = append(llmOpts, groq.WithGroqLLMOptions(openAIOpts...))
+	}
 	return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel, llmOpts...)
+}
+
+func groqOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
+	opts := []openai.OpenAILLMOption{}
+	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
+		opts = append(opts, openai.WithOpenAILLMTemperature(*temperature))
+	}
+	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
+		opts = append(opts, openai.WithOpenAILLMTopP(*topP))
+	}
+	if maxCompletionTokens := modelOptionInt(cfg.LLMModelOptions, "max_completion_tokens"); maxCompletionTokens > 0 {
+		opts = append(opts, openai.WithOpenAILLMMaxCompletionTokens(maxCompletionTokens))
+	}
+	if parallelToolCalls := modelOptionBool(cfg.LLMModelOptions, "parallel_tool_calls"); parallelToolCalls != nil {
+		opts = append(opts, openai.WithOpenAILLMParallelToolCalls(*parallelToolCalls))
+	}
+	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
+		opts = append(opts, openai.WithOpenAILLMToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	if promptCacheKey := modelOptionString(cfg.LLMModelOptions, "prompt_cache_key"); promptCacheKey != "" {
+		opts = append(opts, openai.WithOpenAILLMPromptCacheKey(promptCacheKey))
+	}
+	if promptCacheRetention := modelOptionString(cfg.LLMModelOptions, "prompt_cache_retention"); promptCacheRetention != "" {
+		opts = append(opts, openai.WithOpenAILLMPromptCacheRetention(promptCacheRetention))
+	}
+	if reasoningEffort := modelOptionString(cfg.LLMModelOptions, "reasoning_effort"); reasoningEffort != "" {
+		opts = append(opts, openai.WithOpenAILLMReasoningEffort(reasoningEffort))
+	}
+	if serviceTier := modelOptionString(cfg.LLMModelOptions, "service_tier"); serviceTier != "" {
+		opts = append(opts, openai.WithOpenAILLMServiceTier(serviceTier))
+	}
+	if user := modelOptionString(cfg.LLMModelOptions, "user"); user != "" {
+		opts = append(opts, openai.WithOpenAILLMUser(user))
+	}
+	if safetyIdentifier := modelOptionString(cfg.LLMModelOptions, "safety_identifier"); safetyIdentifier != "" {
+		opts = append(opts, openai.WithOpenAILLMSafetyIdentifier(safetyIdentifier))
+	}
+	return opts
 }
 
 func configureTTSFallbacks(cfg AppConfig, a *agent.Agent) error {
