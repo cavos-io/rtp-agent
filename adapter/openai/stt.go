@@ -1166,6 +1166,9 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 		return mapOpenAIError(err)
 	}
 	s.conn = conn
+	s.audio = nil
+	s.hasAudio = false
+	s.committed = false
 	return nil
 }
 

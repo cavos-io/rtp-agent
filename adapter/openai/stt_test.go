@@ -2588,6 +2588,80 @@ func TestOpenAISTTUpdateOptionsReconnectsActiveStreamLikeReference(t *testing.T)
 	}
 }
 
+func TestOpenAISTTUpdateOptionsReconnectDropsBufferedPartialAudioLikeReference(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	var dialCount atomic.Int32
+	firstConnected := make(chan struct{})
+	secondConnected := make(chan struct{})
+	messages := make(chan string, 10)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if attempt == 1 {
+				close(firstConnected)
+			} else {
+				close(secondConnected)
+			}
+			for {
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-firstConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x01}, 1200))); err != nil {
+		t.Fatalf("PushFrame first partial error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "first 25ms partial frame should stay buffered")
+
+	provider.UpdateOptions(WithOpenAISTTLanguage("id"))
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not reconnect after language update")
+	}
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x02}, 1200))); err != nil {
+		t.Fatalf("PushFrame post-reconnect partial error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "post-reconnect 25ms partial frame should start a fresh buffer")
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x03}, 1200))); err != nil {
+		t.Fatalf("PushFrame post-reconnect second partial error = %v", err)
+	}
+	chunk := assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	if len(chunk) != openAIRealtimeSTTChunkBytes() {
+		t.Fatalf("audio chunk bytes = %d, want %d", len(chunk), openAIRealtimeSTTChunkBytes())
+	}
+	if chunk[0] != 0x02 {
+		t.Fatalf("audio chunk first byte = %#x, want first post-reconnect audio byte", chunk[0])
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want one reconnect", got)
+	}
+}
+
 func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	now := time.Unix(100, 0)
 	state := &openAIRealtimeSTTMessageState{
