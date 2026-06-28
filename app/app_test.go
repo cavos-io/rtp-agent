@@ -9693,6 +9693,34 @@ func TestAzureTTSFallbackPassesReferenceVoiceControls(t *testing.T) {
 	}
 }
 
+func TestAzureTTSFallbackPassesReferenceNumericProsody(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSVoice: "en-US-JennyNeural",
+		TTSModelOptions: map[string]any{
+			"prosody_rate":   1.2,
+			"prosody_volume": 75.0,
+		},
+	}, providerAzure)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	azureProvider, ok := provider.(*azure.AzureTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+	}
+	prosody := reflect.ValueOf(azureProvider).Elem().FieldByName("prosody")
+	if got, want := prosody.FieldByName("Rate").String(), "1.2"; got != want {
+		t.Fatalf("prosody rate = %q, want %q", got, want)
+	}
+	if got, want := prosody.FieldByName("Volume").String(), "75"; got != want {
+		t.Fatalf("prosody volume = %q, want %q", got, want)
+	}
+}
+
 func TestBasetenTTSFallbackPassesReferenceOptions(t *testing.T) {
 	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
 	temperature := 0.72

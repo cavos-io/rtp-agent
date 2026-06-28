@@ -3470,8 +3470,8 @@ func azureTTSOptionsFromConfig(cfg AppConfig) []azure.AzureTTSOption {
 		ttsOpts = append(ttsOpts, azure.WithAzureTTSStyle(style))
 	}
 	prosody := azure.AzureTTSProsody{
-		Rate:   azureTTSModelOption(cfg.TTSModelOptions, "prosody_rate"),
-		Volume: azureTTSModelOption(cfg.TTSModelOptions, "prosody_volume"),
+		Rate:   azureTTSScalarModelOption(cfg.TTSModelOptions, "prosody_rate"),
+		Volume: azureTTSScalarModelOption(cfg.TTSModelOptions, "prosody_volume"),
 		Pitch:  azureTTSModelOption(cfg.TTSModelOptions, "prosody_pitch"),
 	}
 	if prosody.Rate != "" || prosody.Volume != "" || prosody.Pitch != "" {
@@ -3507,6 +3507,16 @@ func azureTTSFloatModelOption(options map[string]any, key string) *float64 {
 		return nil
 	}
 	return modelOptionFloat(setting, key)
+}
+
+func azureTTSScalarModelOption(options map[string]any, key string) string {
+	if value := azureTTSModelOption(options, key); value != "" {
+		return value
+	}
+	if value := azureTTSFloatModelOption(options, key); value != nil {
+		return strconv.FormatFloat(*value, 'f', -1, 64)
+	}
+	return ""
 }
 
 func azureTTSModelOption(options map[string]any, key string) string {
