@@ -735,6 +735,7 @@ type openAIRealtimeSTTStream struct {
 	mu         sync.Mutex
 	closed     bool
 	inputEnded bool
+	committed  bool
 	pushedSR   uint32
 	audio      *audio.AudioByteStream
 	state      *openAIRealtimeSTTMessageState
@@ -782,6 +783,7 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 			s.mu.Unlock()
 			return err
 		}
+		s.committed = false
 	}
 	s.mu.Unlock()
 	if vadStream != nil {
@@ -823,18 +825,14 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 		return err
 	}
 	s.inputEnded = true
+	var vadErr error
 	if s.vadStream != nil {
-		return s.vadStream.EndInput()
+		vadErr = s.vadStream.EndInput()
 	}
-	message, err := buildOpenAIRealtimeSTTCommitMessage()
-	if err != nil {
+	if err := s.commitAudioLocked(); err != nil {
 		return err
 	}
-	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-		s.closeAfterWriteFailureLocked()
-		return err
-	}
-	return nil
+	return vadErr
 }
 
 func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
@@ -848,8 +846,25 @@ func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
 				s.closeAfterWriteFailureLocked()
 				return err
 			}
+			s.committed = false
 		}
 	}
+	return nil
+}
+
+func (s *openAIRealtimeSTTStream) commitAudioLocked() error {
+	if s.committed {
+		return nil
+	}
+	message, err := buildOpenAIRealtimeSTTCommitMessage()
+	if err != nil {
+		return err
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	s.committed = true
 	return nil
 }
 
@@ -1052,11 +1067,8 @@ func (s *openAIRealtimeSTTStream) vadLoop() {
 		}
 		s.mu.Lock()
 		if !s.closed {
-			message, msgErr := buildOpenAIRealtimeSTTCommitMessage()
-			if msgErr != nil {
+			if msgErr := s.commitAudioLocked(); msgErr != nil {
 				s.sendErrorLocked(msgErr)
-			} else if msgErr = s.conn.WriteMessage(websocket.TextMessage, message); msgErr != nil {
-				s.closeAfterWriteFailureLocked()
 			}
 		}
 		s.mu.Unlock()
