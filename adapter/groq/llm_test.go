@@ -167,6 +167,53 @@ func TestGroqLLMAppliesReferenceTimeoutOption(t *testing.T) {
 	}
 }
 
+func TestGroqLLMAppliesReferenceMaxRetriesOption(t *testing.T) {
+	attempts := 0
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		if attempts == 1 {
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Status:     http.StatusText(http.StatusInternalServerError),
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"try again","type":"server_error","code":"server_error"}}`)),
+				Request:    r,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"id":"chatcmpl-retry","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]}` + "\n\n" +
+					"data: [DONE]\n\n")),
+			Request: r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+		WithGroqLLMMaxRetries(1),
+	)
+
+	stream, err := provider.Chat(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat returned error = %v, want retry success", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error = %v, want retried content", err)
+	}
+	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "ok" {
+		t.Fatalf("chunk = %#v, want retried content ok", chunk)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want first failure plus one retry", attempts)
+	}
+}
+
 func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
 	calls := 0
 	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {

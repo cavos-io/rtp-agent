@@ -52,6 +52,14 @@ func WithGroqLLMTimeout(timeout time.Duration) GroqLLMOption {
 	}
 }
 
+func WithGroqLLMMaxRetries(maxRetries int) GroqLLMOption {
+	return func(l *GroqLLM) {
+		if maxRetries >= 0 {
+			l.llmOptions = append(l.llmOptions, openai.WithOpenAILLMMaxRetries(maxRetries))
+		}
+	}
+}
+
 func WithGroqLLMOptions(opts ...openai.OpenAILLMOption) GroqLLMOption {
 	return func(l *GroqLLM) {
 		l.llmOptions = append(l.llmOptions, opts...)

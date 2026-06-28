@@ -263,6 +263,20 @@ func WithOpenAILLMTimeout(timeout time.Duration) OpenAILLMOption {
 	}
 }
 
+func WithOpenAILLMMaxRetries(maxRetries int) OpenAILLMOption {
+	return func(l *OpenAILLM) {
+		if maxRetries < 0 {
+			return
+		}
+		connectOptions := llm.DefaultAPIConnectOptions()
+		if l.defaultConnect != nil {
+			connectOptions = *l.defaultConnect
+		}
+		connectOptions.MaxRetry = maxRetries
+		l.defaultConnect = &connectOptions
+	}
+}
+
 func withOpenAILLMExtraHeader(key string, value string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
 		if l.extraHeaders == nil {
