@@ -225,6 +225,52 @@ func TestGroqLLMProviderCloseCancelsPendingChat(t *testing.T) {
 	}
 }
 
+func TestGroqLLMChatCallerCancelReturnsContextCanceled(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		stream, err := provider.Chat(
+			ctx,
+			llm.NewChatContext(),
+			llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		)
+		if stream != nil {
+			_ = stream.Close()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Chat did not start provider request")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Chat canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Chat canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Chat remained blocked after caller cancellation")
+	}
+}
+
 type groqLLMHTTPDoer func(*http.Request) (*http.Response, error)
 
 func (f groqLLMHTTPDoer) Do(req *http.Request) (*http.Response, error) {

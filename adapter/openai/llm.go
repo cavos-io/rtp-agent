@@ -1073,6 +1073,10 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 			cleanupRequest()
 			return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
 		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			cleanupRequest()
+			return nil, context.Canceled
+		}
 		lastErr = mapOpenAIError(err)
 		if attempt == connectOptions.MaxRetry || !openAIShouldRetryError(lastErr) {
 			cleanupRequest()
