@@ -13421,6 +13421,46 @@ func TestDefaultConfigFromEnvMapsGroqLLMOptions(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsGroqLLMMetadata(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode Groq request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"stop","type":"invalid_request_error","code":"bad_request"}}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", server.URL)
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `metadata={"trace":"room-123","turn":"5"}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	stream, _ := app.Session.LLM.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if stream != nil {
+		_ = stream.Close()
+	}
+
+	metadata, ok := requestBody["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata = %#v, want Groq request metadata object in body %#v", requestBody["metadata"], requestBody)
+	}
+	if metadata["trace"] != "room-123" || metadata["turn"] != "5" {
+		t.Fatalf("metadata = %#v, want trace and turn tags", metadata)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "cavos")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://steno.example/v1")

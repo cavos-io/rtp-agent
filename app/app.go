@@ -3675,6 +3675,9 @@ func groqOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
 	if promptCacheRetention := modelOptionString(cfg.LLMModelOptions, "prompt_cache_retention"); promptCacheRetention != "" {
 		opts = append(opts, openai.WithOpenAILLMPromptCacheRetention(promptCacheRetention))
 	}
+	if metadata := modelOptionStringMap(cfg.LLMModelOptions, "metadata"); len(metadata) > 0 {
+		opts = append(opts, openai.WithOpenAILLMMetadata(metadata))
+	}
 	if reasoningEffort := modelOptionString(cfg.LLMModelOptions, "reasoning_effort"); reasoningEffort != "" {
 		opts = append(opts, openai.WithOpenAILLMReasoningEffort(reasoningEffort))
 	}
@@ -6868,6 +6871,42 @@ func modelOptionString(options map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+func modelOptionStringMap(options map[string]any, key string) map[string]string {
+	value, ok := options[key]
+	if !ok {
+		return nil
+	}
+	values := map[string]string{}
+	switch typed := value.(type) {
+	case map[string]string:
+		for k, v := range typed {
+			k = strings.TrimSpace(k)
+			v = strings.TrimSpace(v)
+			if k != "" && v != "" {
+				values[k] = v
+			}
+		}
+	case map[string]any:
+		for k, v := range typed {
+			text, ok := v.(string)
+			if !ok {
+				continue
+			}
+			k = strings.TrimSpace(k)
+			text = strings.TrimSpace(text)
+			if k != "" && text != "" {
+				values[k] = text
+			}
+		}
+	default:
+		return nil
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return values
 }
 
 func modelOptionBool(options map[string]any, key string) *bool {
