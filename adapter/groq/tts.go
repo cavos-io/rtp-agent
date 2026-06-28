@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -188,6 +189,12 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	frame, err := decodeGroqWAVPCM16(data)
 	if err != nil {
 		return nil, err
+	}
+	if s.sampleRate > 0 && frame.SampleRate != uint32(s.sampleRate) {
+		frame, err = audio.ResampleAudioFrame(frame, uint32(s.sampleRate))
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &tts.SynthesizedAudio{
 		Frame: frame,

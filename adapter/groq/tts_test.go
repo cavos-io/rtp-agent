@@ -200,7 +200,7 @@ func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 
 func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &groqTTSChunkedStream{
-		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x02}, 48000, 1)))},
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00, 0x02, 0x00}, 24000, 1)))},
 		sampleRate: 48000,
 	}
 
@@ -210,6 +210,9 @@ func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 48000 {
 		t.Fatalf("sample rate = %d, want configured sample rate", audio.Frame.SampleRate)
+	}
+	if audio.Frame.SamplesPerChannel != 4 {
+		t.Fatalf("samples per channel = %d, want resampled 48 kHz duration", audio.Frame.SamplesPerChannel)
 	}
 }
 
