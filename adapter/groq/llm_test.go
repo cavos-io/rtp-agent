@@ -134,6 +134,39 @@ func TestGroqLLMForwardsReferenceOpenAIOptions(t *testing.T) {
 	}
 }
 
+func TestGroqLLMAppliesReferenceTimeoutOption(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Status:     http.StatusText(http.StatusBadRequest),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+		WithGroqLLMTimeout(75*time.Millisecond),
+	)
+
+	_, _ = provider.Chat(context.Background(), llm.NewChatContext())
+
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want Groq LLM timeout option applied")
+	}
+	if remaining <= 0 || remaining > 75*time.Millisecond {
+		t.Fatalf("request context deadline remaining = %v, want bounded by configured timeout", remaining)
+	}
+}
+
 func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
 	calls := 0
 	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {

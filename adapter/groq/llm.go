@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -40,6 +41,14 @@ func WithGroqLLMBaseURL(baseURL string) GroqLLMOption {
 func WithGroqLLMReasoningEffort(reasoningEffort string) GroqLLMOption {
 	return func(l *GroqLLM) {
 		l.reasoningEffort = reasoningEffort
+	}
+}
+
+func WithGroqLLMTimeout(timeout time.Duration) GroqLLMOption {
+	return func(l *GroqLLM) {
+		if timeout > 0 {
+			l.llmOptions = append(l.llmOptions, openai.WithOpenAILLMTimeout(timeout))
+		}
 	}
 }
 
