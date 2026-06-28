@@ -1337,6 +1337,97 @@ func TestElevenLabsSTTUpdateOptionsExplicitSameServerVADReconnectsLikeReference(
 	}
 }
 
+func TestElevenLabsSTTReconnectDropsBufferedPartialAudioLikeReference(t *testing.T) {
+	clientOne, serverOne := net.Pipe()
+	clientTwo, serverTwo := net.Pipe()
+	queries := make(chan url.Values, 2)
+	firstMessages := make(chan map[string]any, 1)
+	secondMessages := make(chan map[string]any, 1)
+	serverErr := make(chan error, 2)
+	releaseServer := make(chan struct{})
+	releaseClosed := false
+	defer func() {
+		if !releaseClosed {
+			close(releaseServer)
+		}
+	}()
+	go runElevenLabsSTTMessageRecorder(serverOne, queries, firstMessages, releaseServer, serverErr)
+	go runElevenLabsSTTMessageRecorder(serverTwo, queries, secondMessages, releaseServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	dials := []net.Conn{clientOne, clientTwo}
+	dialCount := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			if dialCount >= len(dials) {
+				return nil, errors.New("unexpected extra dial")
+			}
+			conn := dials[dialCount]
+			dialCount++
+			return conn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	active, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer active.Close()
+	readElevenLabsSTTHandshakeQuery(t, queries)
+
+	partial := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}
+	if err := active.PushFrame(partial); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+	select {
+	case msg := <-firstMessages:
+		t.Fatalf("first websocket message = %#v, want no provider audio before full 50ms frame", msg)
+	default:
+	}
+
+	provider.UpdateOptions(WithElevenLabsSTTServerVAD(ElevenLabsVADOptions{
+		VADThreshold: floatPtr(0.5),
+	}))
+	readElevenLabsSTTHandshakeQuery(t, queries)
+
+	if err := active.PushFrame(partial); err != nil {
+		t.Fatalf("second PushFrame() error = %v", err)
+	}
+	select {
+	case msg := <-secondMessages:
+		t.Fatalf("second websocket message = %#v, want partial audio buffer dropped across reconnect", msg)
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	close(releaseServer)
+	releaseClosed = true
+	if err := active.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	for range 2 {
+		select {
+		case err := <-serverErr:
+			if err != nil {
+				t.Fatalf("test websocket server error: %v", err)
+			}
+		default:
+		}
+	}
+}
+
 func TestElevenLabsSTTStreamURLConvertsHTTPBaseURLToWebsocket(t *testing.T) {
 	provider := NewElevenLabsSTT("test-key",
 		WithElevenLabsSTTBaseURL("http://eleven.example/v1"),
@@ -2232,6 +2323,49 @@ func runElevenLabsSTTHandshakeRecorder(conn net.Conn, queries chan<- url.Values,
 	}
 	<-release
 	errCh <- nil
+}
+
+func runElevenLabsSTTMessageRecorder(conn net.Conn, queries chan<- url.Values, messages chan<- map[string]any, release <-chan struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	queries <- req.URL.Query()
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", elevenLabsTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-release:
+			_ = conn.SetReadDeadline(time.Now())
+		case <-done:
+		}
+	}()
+	defer close(done)
+
+	for {
+		msg, err := readElevenLabsClientWebsocketJSONFrame(reader)
+		if err != nil {
+			select {
+			case <-release:
+				errCh <- nil
+			default:
+				if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed pipe") || strings.Contains(err.Error(), "i/o timeout") {
+					errCh <- nil
+				} else {
+					errCh <- err
+				}
+			}
+			return
+		}
+		messages <- msg
+	}
 }
 
 func readElevenLabsSTTHandshakeQuery(t *testing.T, queries <-chan url.Values) url.Values {

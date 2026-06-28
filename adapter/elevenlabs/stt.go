@@ -675,6 +675,7 @@ func (s *elevenLabsSTTStream) reconnect(streamURL string, headers http.Header, s
 	oldConn := s.conn
 	s.conn = conn
 	s.connVersion++
+	s.audioBuf = nil
 	if s.state != nil {
 		s.state.serverVAD = serverVAD
 	}
