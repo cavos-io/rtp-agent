@@ -2122,7 +2122,8 @@ func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 		_ = s.conn.Close()
 	}
 	if s.sharedConn != nil {
-		s.sharedConn.unregisterStream(s)
+		sharedConn := s.sharedConn
+		go sharedConn.fail(llm.NewAPIConnectionError("failed to write to elevenlabs"))
 	}
 }
 

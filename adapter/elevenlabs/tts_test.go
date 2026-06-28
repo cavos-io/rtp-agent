@@ -2460,6 +2460,77 @@ func TestElevenLabsTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	}
 }
 
+func TestElevenLabsTTSSharedWriteFailureClosesSiblingContextsLikeReference(t *testing.T) {
+	provider := &ElevenLabsTTS{streams: make(map[*elevenLabsStream]struct{})}
+	connCtx, connCancel := context.WithCancel(context.Background())
+	defer connCancel()
+	shared := &elevenLabsTTSConnection{
+		provider: provider,
+		ctx:      connCtx,
+		cancel:   connCancel,
+		ready:    make(chan struct{}),
+		streams:  make(map[string]*elevenLabsStream),
+		current:  true,
+	}
+	close(shared.ready)
+
+	streamACtx, streamACancel := context.WithCancel(context.Background())
+	defer streamACancel()
+	streamA := &elevenLabsStream{
+		provider:   provider,
+		audio:      make(chan *tts.SynthesizedAudio),
+		errCh:      make(chan error, 1),
+		ctx:        streamACtx,
+		cancel:     streamACancel,
+		contextID:  "ctx-a",
+		inputErr:   io.ErrClosedPipe,
+		sharedConn: shared,
+		connReady:  make(chan struct{}),
+		sampleRate: 16000,
+		encoding:   "pcm_16000",
+	}
+	streamBCtx, streamBCancel := context.WithCancel(context.Background())
+	defer streamBCancel()
+	streamB := &elevenLabsStream{
+		provider:   provider,
+		audio:      make(chan *tts.SynthesizedAudio),
+		errCh:      make(chan error, 1),
+		ctx:        streamBCtx,
+		cancel:     streamBCancel,
+		contextID:  "ctx-b",
+		sharedConn: shared,
+		connReady:  make(chan struct{}),
+		sampleRate: 16000,
+		encoding:   "pcm_16000",
+	}
+	provider.streams[streamA] = struct{}{}
+	provider.streams[streamB] = struct{}{}
+	shared.registerStream(streamA)
+	shared.registerStream(streamB)
+
+	streamA.mu.Lock()
+	streamA.closeAfterWriteFailureLocked()
+	streamA.mu.Unlock()
+
+	deadline := time.After(time.Second)
+	for {
+		streamB.mu.Lock()
+		closed := streamB.closed
+		streamB.mu.Unlock()
+		if closed {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("sibling stream closed = false after shared write failure, want connection-wide close")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if _, err := streamB.Next(); err == nil {
+		t.Fatal("sibling Next error = nil after shared write failure, want provider error")
+	}
+}
+
 func TestElevenLabsTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	handlerDone := make(chan struct{})
