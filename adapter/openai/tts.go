@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -435,8 +436,8 @@ func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
-	if s.responseFormat == openai.SpeechResponseFormatMp3 {
-		return s.nextMP3Audio()
+	if openAITTSUsesStreamDecoder(s.responseFormat) {
+		return s.nextDecodedAudio()
 	}
 	if s.audioReadErr != nil {
 		err := s.audioReadErr
@@ -473,12 +474,23 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 	}
 }
 
-func (s *openaiTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
+func openAITTSUsesStreamDecoder(format openai.SpeechResponseFormat) bool {
+	return format == openai.SpeechResponseFormatMp3 || format == openai.SpeechResponseFormatOpus
+}
+
+func openAITTSStreamDecoder(format openai.SpeechResponseFormat) codecs.AudioStreamDecoder {
+	if format == openai.SpeechResponseFormatOpus {
+		return codecs.NewOpusAudioStreamDecoder(48000, 1)
+	}
+	return codecs.NewMP3AudioStreamDecoder()
+}
+
+func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, error) {
 	if !s.decodeStarted {
 		s.decodeStarted = true
-		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		s.decoder = openAITTSStreamDecoder(s.responseFormat)
 		s.decodeErrCh = make(chan error, 1)
-		go s.feedMP3Audio()
+		go s.feedDecodedAudio()
 	}
 
 	frame, err := s.decoder.Next()
@@ -486,7 +498,7 @@ func (s *openaiTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
 		if readErr := s.decodeReadError(); readErr != nil {
 			return nil, readErr
 		}
-		if openAITTSMP3DecodeEOF(err) {
+		if openAITTSDecodeEOF(err) {
 			if s.audioSawAudio && !s.audioFinalSent {
 				s.audioFinalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
@@ -495,10 +507,14 @@ func (s *openaiTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	frame, err = s.decodedAudioFrame(frame)
+	if err != nil {
+		return nil, err
+	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
-func (s *openaiTTSChunkedStream) feedMP3Audio() {
+func (s *openaiTTSChunkedStream) feedDecodedAudio() {
 	defer s.decoder.EndInput()
 	buf := make([]byte, 4096)
 	for {
@@ -522,8 +538,8 @@ func (s *openaiTTSChunkedStream) feedMP3Audio() {
 }
 
 func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
-	if s.responseFormat == openai.SpeechResponseFormatMp3 {
-		return s.nextSSEMP3Audio()
+	if openAITTSUsesStreamDecoder(s.responseFormat) {
+		return s.nextSSEDecodedAudio()
 	}
 	if s.sseDone {
 		return nil, io.EOF
@@ -594,19 +610,19 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 	return nil, io.EOF
 }
 
-func (s *openaiTTSChunkedStream) nextSSEMP3Audio() (*tts.SynthesizedAudio, error) {
+func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, error) {
 	if !s.decodeStarted {
 		s.decodeStarted = true
-		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		s.decoder = openAITTSStreamDecoder(s.responseFormat)
 		s.decodeErrCh = make(chan error, 1)
-		go s.feedSSEMP3Audio()
+		go s.feedSSEDecodedAudio()
 	}
 	frame, err := s.decoder.Next()
 	if err != nil {
 		if readErr := s.decodeReadError(); readErr != nil {
 			return nil, readErr
 		}
-		if openAITTSMP3DecodeEOF(err) {
+		if openAITTSDecodeEOF(err) {
 			if s.sseDone && s.sseSawAudio && !s.sseFinalSent {
 				s.sseFinalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
@@ -615,15 +631,83 @@ func (s *openaiTTSChunkedStream) nextSSEMP3Audio() (*tts.SynthesizedAudio, error
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	frame, err = s.decodedAudioFrame(frame)
+	if err != nil {
+		return nil, err
+	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
-func openAITTSMP3DecodeEOF(err error) bool {
+func (s *openaiTTSChunkedStream) decodedAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	resampled, err := coreaudio.ResampleAudioFrame(frame, s.targetSampleRate())
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	normalized, err := openAITTSConvertChannels(resampled, s.targetChannels())
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	return normalized, nil
+}
+
+func (s *openaiTTSChunkedStream) targetSampleRate() uint32 {
+	if s.provider != nil && s.provider.SampleRate() > 0 {
+		return uint32(s.provider.SampleRate())
+	}
+	return 24000
+}
+
+func (s *openaiTTSChunkedStream) targetChannels() uint32 {
+	if s.provider != nil && s.provider.NumChannels() > 0 {
+		return uint32(s.provider.NumChannels())
+	}
+	return 1
+}
+
+func openAITTSConvertChannels(frame *model.AudioFrame, targetChannels uint32) (*model.AudioFrame, error) {
+	if frame == nil || targetChannels == 0 || frame.NumChannels == targetChannels {
+		return frame, nil
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot convert audio with zero channels")
+	}
+	if targetChannels != 1 {
+		return nil, fmt.Errorf("unsupported openai tts target channel count: %d", targetChannels)
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot convert non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	out := make([]byte, int(frame.SamplesPerChannel*targetChannels*2))
+	sourceChannels := int(frame.NumChannels)
+	for sample := 0; sample < int(frame.SamplesPerChannel); sample++ {
+		var sum int32
+		for ch := 0; ch < sourceChannels; ch++ {
+			offset := (sample*sourceChannels + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		binary.LittleEndian.PutUint16(out[sample*2:sample*2+2], uint16(int16(sum/int32(sourceChannels))))
+	}
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       targetChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
+}
+
+func openAITTSDecodeEOF(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "decoder closed") || strings.Contains(msg, "failed to initialize mp3 decoder: EOF")
+	return strings.Contains(msg, "decoder closed") ||
+		strings.Contains(msg, "failed to initialize mp3 decoder: EOF") ||
+		strings.Contains(msg, "failed to initialize opus decoder: EOF")
 }
 
 func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.SynthesizedAudio, error) {
@@ -641,6 +725,10 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 		if ok {
+			frame, err = s.decodedAudioFrame(frame)
+			if err != nil {
+				return nil, err
+			}
 			return &tts.SynthesizedAudio{Frame: frame}, nil
 		}
 		return nil, nil
@@ -759,7 +847,7 @@ func (s *openaiTTSChunkedStream) parseWAVHeader() (bool, error) {
 	return false, nil
 }
 
-func (s *openaiTTSChunkedStream) feedSSEMP3Audio() {
+func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 	defer s.decoder.EndInput()
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.resp)

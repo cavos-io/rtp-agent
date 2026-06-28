@@ -2305,6 +2305,44 @@ func TestOpenAIStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamErrorAfterChunkIsNonRetryable(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-partial","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}`+"\n\n"+
+				`data: {"error":{"message":"stream failed after partial","type":"server_error","code":"server_error"}}`+"\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want content chunk", err)
+	}
+	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("first chunk = %#v, want hello content", chunk)
+	}
+
+	_, err = stream.Next()
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("second Next error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Retryable {
+		t.Fatal("Retryable = true after emitted chunk, want false like reference")
+	}
+}
+
 func TestOpenAIStreamSkipsAzureNullDelta(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
@@ -2474,6 +2512,36 @@ func TestOpenAIStreamPreservesAzureUsageOnlyChunk(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamSkipsEmptyChoicesWithoutUsage(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-empty","choices":[]}`+"\n\n"+
+				`data: {"id":"chatcmpl-empty","choices":[{"index":0,"delta":{"content":"next"}}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want next content chunk after empty choices", err)
+	}
+	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "next" {
+		t.Fatalf("chunk = %#v, want next content chunk after skipped empty choices", chunk)
+	}
+}
+
 func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
@@ -2597,13 +2665,13 @@ func TestOpenAIStreamSuppressesReferenceThinkingText(t *testing.T) {
 }
 
 func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
-	err := openAIStreamRecvError(llm.NewAPIStatusError("client closed", 499, "req_499", nil))
+	err := openAIStreamRecvError(llm.NewAPIStatusError("client closed", 499, "req_499", nil), true)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("openAIStreamRecvError(499) = %v, want EOF", err)
 	}
 
 	statusErr := llm.NewAPIStatusError("rate limited", http.StatusTooManyRequests, "req_429", nil)
-	err = openAIStreamRecvError(statusErr)
+	err = openAIStreamRecvError(statusErr, true)
 	var gotStatusErr *llm.APIStatusError
 	if !errors.As(err, &gotStatusErr) || gotStatusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("openAIStreamRecvError(429) = %T %v, want APIStatusError 429", err, err)

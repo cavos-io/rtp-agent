@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -60,6 +61,7 @@ type OpenAISTT struct {
 	maxSession       time.Duration
 	dialWebsocket    openAIRealtimeSTTWebsocketDialer
 	vad              vad.VAD
+	vadSet           bool
 	streamsMu        sync.Mutex
 	streams          map[*openAIRealtimeSTTStream]struct{}
 	nextRequestID    uint64
@@ -131,6 +133,7 @@ func WithOpenAISTTRealtime(useRealtime bool) OpenAISTTOption {
 
 func WithOpenAISTTVAD(v vad.VAD) OpenAISTTOption {
 	return func(s *OpenAISTT) {
+		s.vadSet = true
 		s.vad = v
 	}
 }
@@ -183,6 +186,9 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	for _, opt := range opts {
 		opt(provider)
 	}
+	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
+		provider.vad = silero.NewSileroVAD()
+	}
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = provider.baseURL
 	if provider.httpClient != nil {
@@ -229,6 +235,9 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
+		provider.vad = silero.NewSileroVAD()
 	}
 
 	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
@@ -738,6 +747,7 @@ type openAIRealtimeSTTStream struct {
 	closed     bool
 	inputEnded bool
 	committed  bool
+	hasAudio   bool
 	pushedSR   uint32
 	audio      *audio.AudioByteStream
 	state      *openAIRealtimeSTTMessageState
@@ -785,6 +795,7 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 			s.mu.Unlock()
 			return err
 		}
+		s.hasAudio = true
 		s.committed = false
 	}
 	s.mu.Unlock()
@@ -831,8 +842,10 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 	if s.vadStream != nil {
 		vadErr = s.vadStream.EndInput()
 	}
-	if err := s.commitAudioLocked(); err != nil {
-		return err
+	if s.vadStream == nil {
+		if err := s.commitAudioLocked(); err != nil {
+			return err
+		}
 	}
 	return vadErr
 }
@@ -848,6 +861,7 @@ func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
 				s.closeAfterWriteFailureLocked()
 				return err
 			}
+			s.hasAudio = true
 			s.committed = false
 		}
 	}
@@ -855,7 +869,7 @@ func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
 }
 
 func (s *openAIRealtimeSTTStream) commitAudioLocked() error {
-	if s.committed {
+	if s.committed || !s.hasAudio {
 		return nil
 	}
 	message, err := buildOpenAIRealtimeSTTCommitMessage()

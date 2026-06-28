@@ -1208,12 +1208,18 @@ func TestRealtimeInitialSessionUsesDefaultInputAudioOptions(t *testing.T) {
 	if turnDetection["interrupt_response"] != true {
 		t.Fatalf("turn_detection interrupt_response = %#v, want true", turnDetection["interrupt_response"])
 	}
-	noiseReduction, ok := input["noise_reduction"].(map[string]any)
-	if !ok {
-		t.Fatalf("noise_reduction = %#v, want default near_field config", input["noise_reduction"])
+	if _, ok := input["noise_reduction"]; ok {
+		t.Fatalf("noise_reduction = %#v, want omitted by reference default", input["noise_reduction"])
 	}
-	if noiseReduction["type"] != "near_field" {
-		t.Fatalf("noise_reduction type = %#v, want near_field", noiseReduction["type"])
+}
+
+func TestRealtimeInitialSessionOmitsDefaultInputAudioNoiseReduction(t *testing.T) {
+	session := openAIRealtimeInitialSession("gpt-realtime")
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+
+	if value, ok := input["noise_reduction"]; ok {
+		t.Fatalf("noise_reduction = %#v, want omitted unless configured", value)
 	}
 }
 
@@ -3482,6 +3488,50 @@ func TestRealtimeSessionResolvesDefaultModalitiesWhenItemDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionResolvesAudioOnlyModalitiesWhenItemDone(t *testing.T) {
+	session := &realtimeSession{
+		model: NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeModalities([]string{"audio"})),
+	}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	select {
+	case modalities, ok := <-msg.ModalitiesCh:
+		if !ok {
+			t.Fatal("ModalitiesCh closed before audio-only fallback modalities")
+		}
+		if len(modalities) != 1 || modalities[0] != "audio" {
+			t.Fatalf("modalities = %#v, want audio-only fallback modalities", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for audio-only fallback modalities")
+	}
+}
+
 func TestOpenAIRealtimeIgnoresCancellationFailedErrorEvent(t *testing.T) {
 	if ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "error",
@@ -3971,6 +4021,82 @@ func TestRealtimeSessionReconnectReplaysTools(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("session did not replay tools after reconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+}
+
+func TestRealtimeSessionReconnectReplaysUpdatedOptions(t *testing.T) {
+	var dialCount atomic.Int32
+	optionsReplayed := make(chan map[string]any, 1)
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		_, initialPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read options update error = %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		var initialUpdate map[string]any
+		if err := json.Unmarshal(initialPayload, &initialUpdate); err != nil {
+			t.Errorf("Decode replayed initial session update error = %v", err)
+			return
+		}
+		optionsReplayed <- initialUpdate
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		Voice:                    "marin",
+		Speed:                    1.25,
+		TurnDetection:            map[string]any{"type": "server_vad", "threshold": 0.7},
+		InputAudioNoiseReduction: map[string]any{"type": "far_field"},
+	}); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	select {
+	case update := <-optionsReplayed:
+		if update["type"] != "session.update" {
+			t.Fatalf("replayed update type = %#v, want session.update", update["type"])
+		}
+		sessionPayload := update["session"].(map[string]any)
+		audio := sessionPayload["audio"].(map[string]any)
+		input := audio["input"].(map[string]any)
+		output := audio["output"].(map[string]any)
+		turnDetection := input["turn_detection"].(map[string]any)
+		if turnDetection["type"] != "server_vad" || turnDetection["threshold"] != 0.7 {
+			t.Fatalf("replayed turn_detection = %#v, want updated server_vad", turnDetection)
+		}
+		noiseReduction := input["noise_reduction"].(map[string]any)
+		if noiseReduction["type"] != "far_field" {
+			t.Fatalf("replayed noise_reduction = %#v, want far_field", noiseReduction)
+		}
+		if output["voice"] != "marin" || output["speed"] != 1.25 {
+			t.Fatalf("replayed output = %#v, want voice marin speed 1.25", output)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session did not replay updated options after reconnect")
 	}
 	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 	if reconnected.Reconnect == nil {

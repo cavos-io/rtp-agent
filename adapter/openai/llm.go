@@ -2275,6 +2275,7 @@ type openaiStream struct {
 	toolCallName    string
 	toolCallRawArgs string
 	thinking        bool
+	emitted         bool
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
@@ -2282,6 +2283,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		return nil, io.EOF
 	}
 	if chunk := s.popPending(); chunk != nil {
+		s.markEmitted()
 		return chunk, nil
 	}
 	for {
@@ -2290,11 +2292,15 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 			if s.isClosed() {
 				return nil, io.EOF
 			}
-			return nil, openAIStreamRecvError(err)
+			return nil, openAIStreamRecvError(err, !s.hasEmitted())
 		}
 
 		if len(resp.Choices) == 0 {
-			return &llm.ChatChunk{ID: resp.ID, Usage: openAICompletionUsage(resp.Usage)}, nil
+			if resp.Usage == nil {
+				continue
+			}
+			s.markEmitted()
+			return openAIUsageChunk(resp.ID, resp.Usage), nil
 		}
 
 		chunks := make([]*llm.ChatChunk, 0, len(resp.Choices)+1)
@@ -2312,6 +2318,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		for _, chunk := range chunks[1:] {
 			s.pushPending(chunk)
 		}
+		s.markEmitted()
 		return chunks[0], nil
 	}
 }
@@ -2367,6 +2374,18 @@ func (s *openaiStream) pushPending(chunk *llm.ChatChunk) {
 		return
 	}
 	s.pending = append(s.pending, chunk)
+}
+
+func (s *openaiStream) markEmitted() {
+	s.mu.Lock()
+	s.emitted = true
+	s.mu.Unlock()
+}
+
+func (s *openaiStream) hasEmitted() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.emitted
 }
 
 func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openai.ChatCompletionStreamChoice) *llm.ChatChunk {
@@ -2436,7 +2455,7 @@ func isEmptyOpenAIStreamChoiceDelta(choice openai.ChatCompletionStreamChoice) bo
 		len(delta.ToolCalls) == 0
 }
 
-func openAIStreamRecvError(err error) error {
+func openAIStreamRecvError(err error, retryable bool) error {
 	if errors.Is(err, io.EOF) {
 		return io.EOF
 	}
@@ -2450,6 +2469,12 @@ func openAIStreamRecvError(err error) error {
 	mapped := mapOpenAIError(err)
 	if errors.As(mapped, &statusErr) && statusErr.StatusCode == 499 {
 		return io.EOF
+	}
+	if !retryable {
+		var apiErr *llm.APIError
+		if errors.As(mapped, &apiErr) {
+			apiErr.Retryable = false
+		}
 	}
 	return mapped
 }

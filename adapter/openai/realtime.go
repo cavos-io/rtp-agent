@@ -714,9 +714,6 @@ func openAIRealtimeInitialSession(model string, modalities ...[]string) map[stri
 				"transcription": map[string]any{
 					"model": "gpt-4o-mini-transcribe",
 				},
-				"noise_reduction": map[string]any{
-					"type": "near_field",
-				},
 				"turn_detection": map[string]any{
 					"type":               "semantic_vad",
 					"create_response":    true,
@@ -2313,7 +2310,7 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		switch itemType {
 		case "message":
 			if msg := s.generation.messages[itemID]; msg != nil {
-				s.setRealtimeMessageModalities(itemID, []string{"audio", "text"})
+				s.setRealtimeMessageModalities(itemID, s.defaultRealtimeMessageModalities())
 				s.closeRealtimeMessageStreams(msg)
 			}
 		case "function_call":
@@ -2584,6 +2581,13 @@ func (s *realtimeSession) setRealtimeMessageModalities(itemID string, modalities
 	}
 }
 
+func (s *realtimeSession) defaultRealtimeMessageModalities() []string {
+	if s != nil && s.model != nil && len(s.model.modalities) > 0 {
+		return append([]string(nil), s.model.modalities...)
+	}
+	return []string{"audio", "text"}
+}
+
 func (s *realtimeSession) closeRealtimeGeneration() {
 	if s.generation == nil {
 		return
@@ -2591,7 +2595,7 @@ func (s *realtimeSession) closeRealtimeGeneration() {
 	s.lastGeneration = s.generation.timing
 	for _, msg := range s.generation.messages {
 		if msg.modalities == nil {
-			msg.modalities = []string{"audio", "text"}
+			msg.modalities = s.defaultRealtimeMessageModalities()
 			select {
 			case msg.modalitiesCh <- msg.modalities:
 			default:

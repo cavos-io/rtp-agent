@@ -609,11 +609,11 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
 	}
-	if audio.Frame.NumChannels != 2 {
-		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want reference provider channels", audio.Frame.NumChannels)
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")
@@ -625,6 +625,93 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 	if bytes.Equal(audio.Frame.Data[:prefixLen], mp3Data[:prefixLen]) {
 		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
+}
+
+func TestOpenAITTSSSEOpusDecodesReferenceAudio(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(openAITTSOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode opus fixture: %v", err)
+	}
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(opusData) + `"}` + "\n\n" +
+		`data: {"type":"speech.audio.done"}` + "\n\n"
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(strings.NewReader(sse)),
+		responseFormat: goopenai.SpeechResponseFormatOpus,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want decoded opus mono", audio.Frame.NumChannels)
+	}
+	if audio.Frame.SamplesPerChannel == 0 {
+		t.Fatal("decoded opus frame has no samples")
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded opus frame is empty")
+	}
+	prefixLen := min(len(audio.Frame.Data), len(opusData))
+	if bytes.Equal(audio.Frame.Data[:prefixLen], opusData[:prefixLen]) {
+		t.Fatal("frame data still contains compressed opus bytes")
+	}
+}
+
+func TestOpenAITTSAudioOpusDecodesReferenceAudio(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(openAITTSOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode opus fixture: %v", err)
+	}
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(bytes.NewReader(opusData)),
+		responseFormat: goopenai.SpeechResponseFormatOpus,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want decoded opus mono", audio.Frame.NumChannels)
+	}
+	if audio.Frame.SamplesPerChannel == 0 {
+		t.Fatal("decoded opus frame has no samples")
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded opus frame is empty")
+	}
+	prefixLen := min(len(audio.Frame.Data), len(opusData))
+	if bytes.Equal(audio.Frame.Data[:prefixLen], opusData[:prefixLen]) {
+		t.Fatal("frame data still contains compressed opus bytes")
+	}
+
+	for i := 0; i < 8; i++ {
+		next, err := stream.Next()
+		if err != nil {
+			t.Fatalf("drain Next %d error = %v", i, err)
+		}
+		if next.IsFinal {
+			if next.Frame != nil {
+				t.Fatalf("final audio = %+v, want boundary-only final marker", next)
+			}
+			return
+		}
+		if next.Frame == nil || next.Frame.SampleRate != 24000 {
+			t.Fatalf("drained audio = %+v, want decoded 24 kHz frame before final", next)
+		}
+	}
+	t.Fatal("raw Opus stream did not emit final marker")
 }
 
 func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
@@ -823,11 +910,11 @@ func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
 	}
-	if audio.Frame.NumChannels != 2 {
-		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want reference provider channels", audio.Frame.NumChannels)
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")
@@ -871,14 +958,15 @@ func TestOpenAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Next error = %v", err)
 			}
-			if audio.Frame.SampleRate != 16000 {
-				t.Fatalf("sample rate = %d, want WAV metadata", audio.Frame.SampleRate)
+			if audio.Frame.SampleRate != 24000 {
+				t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
 			}
 			if audio.Frame.NumChannels != 1 {
-				t.Fatalf("channels = %d, want WAV metadata", audio.Frame.NumChannels)
+				t.Fatalf("channels = %d, want reference provider channels", audio.Frame.NumChannels)
 			}
-			if !bytes.Equal(audio.Frame.Data, pcm) {
-				t.Fatalf("audio data = %#v, want decoded WAV PCM", audio.Frame.Data)
+			wantPCM := []byte{0x01, 0x02, 0x01, 0x02, 0x03, 0x04}
+			if !bytes.Equal(audio.Frame.Data, wantPCM) {
+				t.Fatalf("audio data = %#v, want resampled WAV PCM", audio.Frame.Data)
 			}
 		})
 	}
@@ -898,11 +986,12 @@ func TestOpenAITTSChunkedStreamBuffersFragmentedWAVHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if audio.Frame.SampleRate != 16000 {
-		t.Fatalf("sample rate = %d, want WAV metadata", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
 	}
-	if !bytes.Equal(audio.Frame.Data, pcm) {
-		t.Fatalf("audio data = %#v, want decoded WAV PCM without header bytes", audio.Frame.Data)
+	wantPCM := []byte{0x05, 0x06, 0x05, 0x06, 0x07, 0x08}
+	if !bytes.Equal(audio.Frame.Data, wantPCM) {
+		t.Fatalf("audio data = %#v, want resampled WAV PCM without header bytes", audio.Frame.Data)
 	}
 }
 
@@ -920,11 +1009,12 @@ func TestOpenAITTSChunkedStreamStreamsWAVDataAfterHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if audio.Frame.SampleRate != 16000 {
-		t.Fatalf("sample rate = %d, want WAV metadata", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
 	}
-	if !bytes.Equal(audio.Frame.Data, pcm[:4]) {
-		t.Fatalf("first audio data = %#v, want first streamed PCM chunk only", audio.Frame.Data)
+	wantPCM := []byte{0x05, 0x06, 0x05, 0x06, 0x07, 0x08}
+	if !bytes.Equal(audio.Frame.Data, wantPCM) {
+		t.Fatalf("first audio data = %#v, want first resampled PCM chunk only", audio.Frame.Data)
 	}
 }
 
@@ -1489,3 +1579,5 @@ func openAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
 	wav.Write(pcm)
 	return wav.Bytes()
 }
+
+const openAITTSOpusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="

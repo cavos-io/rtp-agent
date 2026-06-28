@@ -432,6 +432,28 @@ func TestNewAzureOpenAISTTUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeWhisperUsesDefaultSileroVAD(t *testing.T) {
+	provider, err := NewAzureOpenAISTT(
+		"gpt-realtime-whisper",
+		"https://resource.openai.azure.com",
+		"realtime-whisper-deployment",
+		"2025-04-01-preview",
+		"azure-key",
+		"",
+		WithOpenAISTTRealtime(true),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if provider.vad == nil {
+		t.Fatal("vad = nil, want default local VAD for realtime whisper endpointing")
+	}
+	if label := provider.vad.Label(); label != "silero.VAD" {
+		t.Fatalf("vad label = %q, want reference Silero VAD", label)
+	}
+}
+
 func TestNewOVHCloudOpenAISTTDefaultsMatchReference(t *testing.T) {
 	t.Setenv("OVHCLOUD_API_KEY", "env-ovh-key")
 	var gotAuth string
@@ -1289,6 +1311,60 @@ func TestOpenAIRealtimeSTTEndInputFlushesAndCommitsAudioBuffer(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTEndInputWithoutAudioDoesNotCommit(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "empty EndInput should not commit provider audio buffer")
+}
+
 func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
 	vadStream := newFakeOpenAISTTVADStream()
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
@@ -1342,7 +1418,7 @@ func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
 }
 
-func TestOpenAIRealtimeSTTEndInputWithVADCommitsAudioBuffer(t *testing.T) {
+func TestOpenAIRealtimeSTTEndInputWithVADWaitsForEndOfSpeech(t *testing.T) {
 	vadStream := newFakeOpenAISTTVADStream()
 	vadStream.suppressEndOfSpeech = true
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
@@ -1401,15 +1477,20 @@ func TestOpenAIRealtimeSTTEndInputWithVADCommitsAudioBuffer(t *testing.T) {
 		t.Fatalf("EndInput error = %v", err)
 	}
 	select {
-	case message := <-messages:
-		assertRealtimeMessage(t, message, "input_audio_buffer.commit", "")
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for audio buffer commit")
-	}
-	select {
 	case <-vadStream.endInputCh:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for VAD EndInput")
+	}
+	select {
+	case message := <-messages:
+		t.Fatalf("unexpected message after VAD EndInput without EOS: %s", message)
+	case <-time.After(time.Second):
+	}
+	vadStream.mu.Lock()
+	vadClosed := vadStream.closed
+	vadStream.mu.Unlock()
+	if !vadClosed {
+		t.Fatal("VAD stream still open after EndInput")
 	}
 }
 
@@ -2074,6 +2155,30 @@ func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
 	input := audio["input"].(map[string]any)
 	if _, ok := input["turn_detection"]; ok {
 		t.Fatalf("turn_detection = %+v, want omitted for realtime whisper model", input["turn_detection"])
+	}
+}
+
+func TestOpenAIRealtimeWhisperUsesDefaultVADForEndpointing(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+	)
+
+	if provider.vad == nil {
+		t.Fatal("vad = nil, want default local VAD for realtime whisper endpointing")
+	}
+	if label := provider.vad.Label(); label != "silero.VAD" {
+		t.Fatalf("vad label = %q, want reference Silero VAD", label)
+	}
+}
+
+func TestOpenAIRealtimeWhisperExplicitNilVADOptsOut(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTVAD(nil),
+	)
+
+	if provider.vad != nil {
+		t.Fatalf("vad = %#v, want explicit nil VAD opt-out", provider.vad)
 	}
 }
 
