@@ -663,6 +663,57 @@ func TestOpenAITTSSSEOpusDecodesReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSAudioOpusDecodesReferenceAudio(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(openAITTSOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode opus fixture: %v", err)
+	}
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(bytes.NewReader(opusData)),
+		responseFormat: goopenai.SpeechResponseFormatOpus,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want decoded opus mono", audio.Frame.NumChannels)
+	}
+	if audio.Frame.SamplesPerChannel == 0 {
+		t.Fatal("decoded opus frame has no samples")
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded opus frame is empty")
+	}
+	prefixLen := min(len(audio.Frame.Data), len(opusData))
+	if bytes.Equal(audio.Frame.Data[:prefixLen], opusData[:prefixLen]) {
+		t.Fatal("frame data still contains compressed opus bytes")
+	}
+
+	for i := 0; i < 8; i++ {
+		next, err := stream.Next()
+		if err != nil {
+			t.Fatalf("drain Next %d error = %v", i, err)
+		}
+		if next.IsFinal {
+			if next.Frame != nil {
+				t.Fatalf("final audio = %+v, want boundary-only final marker", next)
+			}
+			return
+		}
+		if next.Frame == nil || next.Frame.SampleRate != 24000 {
+			t.Fatalf("drained audio = %+v, want decoded 24 kHz frame before final", next)
+		}
+	}
+	t.Fatal("raw Opus stream did not emit final marker")
+}
+
 func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	wantAudio := []byte(strings.Repeat("x", 70*1024))
 	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
