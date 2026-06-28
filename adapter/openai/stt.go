@@ -560,7 +560,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		return nil, mapOpenAIError(err)
 	}
 
-	return openAISpeechEvent(resp), nil
+	return openAISpeechEvent(resp, req.Language), nil
 }
 
 func openAISTTWAVBytes(frames []*model.AudioFrame) []byte {
@@ -629,13 +629,17 @@ func openAISTTRequestLanguage(language string) string {
 	return languageutil.Language(language)
 }
 
-func openAISpeechEvent(resp openai.AudioResponse) *stt.SpeechEvent {
+func openAISpeechEvent(resp openai.AudioResponse, fallbackLanguage string) *stt.SpeechEvent {
+	language := resp.Language
+	if language == "" {
+		language = fallbackLanguage
+	}
 	return &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
 		Alternatives: []stt.SpeechData{
 			{
 				Text:       resp.Text,
-				Language:   resp.Language,
+				Language:   language,
 				Confidence: stt.DefaultTranscriptConfidence(resp.Text),
 				Words:      openAITimedStrings(resp.Words),
 			},

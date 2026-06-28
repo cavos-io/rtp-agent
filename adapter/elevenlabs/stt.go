@@ -314,11 +314,11 @@ func (s *ElevenLabsSTT) Recognize(ctx context.Context, frames []*model.AudioFram
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		message, body, err := elevenLabsSTTStatusErrorBody(respBody)
+		_, _, err := elevenLabsSTTStatusErrorBody(respBody)
 		if err != nil {
 			return nil, llm.NewAPIConnectionError(err.Error())
 		}
-		return nil, llm.NewAPIStatusError(message, resp.StatusCode, "", body)
+		return nil, llm.NewAPIConnectionError("")
 	}
 	var result elevenLabsSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -629,6 +629,7 @@ func (s *elevenLabsSTTStream) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))

@@ -948,8 +948,8 @@ func TestElevenLabsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 160,
-	}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("PushFrame after provider Close error = %v, want stream input ended", err)
 	}
 
 	select {
@@ -958,6 +958,80 @@ func TestElevenLabsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 		t.Fatal(err)
 	case <-time.After(time.Second):
 		t.Fatal("provider Close did not close active websocket stream")
+	}
+}
+
+func TestElevenLabsSTTStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	handlerDone := make(chan struct{})
+	serverErr := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer close(handlerDone)
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})}
+	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+	for name, err := range map[string]error{
+		"PushFrame": stream.PushFrame(frame),
+		"Flush":     stream.Flush(),
+		"EndInput":  ending.EndInput(),
+	} {
+		if err == nil || err.Error() != "stream input ended" {
+			t.Fatalf("%s after Close error = %v, want stream input ended", name, err)
+		}
+	}
+
+	select {
+	case <-handlerDone:
+	case err := <-serverErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("stream Close did not close active websocket stream")
 	}
 }
 
@@ -1002,15 +1076,18 @@ func TestElevenLabsSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
-
-	if err := stream.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
 	concrete, ok := stream.(*elevenLabsSTTStream)
 	if !ok {
 		t.Fatalf("Stream() type = %T, want *elevenLabsSTTStream", stream)
 	}
 	concrete.events <- &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
+	if got := len(concrete.events); got != 1 {
+		t.Fatalf("queued events before Close = %d, want 1", got)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
 	event, err := stream.Next()
 	if event != nil {
 		t.Fatalf("Next event after Close = %#v, want nil", event)
@@ -1107,8 +1184,8 @@ func TestElevenLabsSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 160,
-	}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after rejected registration error = %v, want io.ErrClosedPipe", err)
+	}); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("PushFrame after rejected registration error = %v, want stream input ended", err)
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
@@ -1469,40 +1546,49 @@ func TestElevenLabsSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
-func TestElevenLabsSTTRecognizeReturnsAPIStatusError(t *testing.T) {
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusTooManyRequests,
-			Body:       io.NopCloser(strings.NewReader(`{"detail":"rate limited"}`)),
-			Header:     make(http.Header),
-			Request:    r,
-		}, nil
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
+func TestElevenLabsSTTRecognizeStatusFailureReturnsAPIConnectionErrorLikeReference(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "transient", status: http.StatusTooManyRequests, body: `{"detail":"rate limited"}`},
+		{name: "client", status: http.StatusBadRequest, body: `{"detail":"bad audio"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldClient := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: tt.status,
+					Body:       io.NopCloser(strings.NewReader(tt.body)),
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			})}
+			t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
+			provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
 
-	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
-	if err == nil {
-		t.Fatal("Recognize error = nil, want APIStatusError")
-	}
-	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
-	}
-	if statusErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
-	}
-	if statusErr.Message != "rate limited" {
-		t.Fatalf("message = %q, want provider detail", statusErr.Message)
-	}
-	body, ok := statusErr.Body.(map[string]any)
-	if !ok {
-		t.Fatalf("body = %#v, want parsed provider JSON body", statusErr.Body)
-	}
-	if body["detail"] != "rate limited" {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+			_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+			if err == nil {
+				t.Fatal("Recognize error = nil, want APIConnectionError")
+			}
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+			}
+			if connectionErr.Message != "Connection error." {
+				t.Fatalf("message = %q, want reference default connection error", connectionErr.Message)
+			}
+			if connectionErr.Body != nil {
+				t.Fatalf("body = %#v, want nil after reference connection wrapper", connectionErr.Body)
+			}
+			var statusErr *llm.APIStatusError
+			if errors.As(err, &statusErr) {
+				t.Fatalf("Recognize error = %T %v, want status wrapped as connection error", err, err)
+			}
+		})
 	}
 }
 

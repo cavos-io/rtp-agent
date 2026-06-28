@@ -61,6 +61,8 @@ type ElevenLabsTTS struct {
 	streamConnectionRefresh        bool
 	streams                        map[*elevenLabsStream]struct{}
 	currentStreamConn              *elevenLabsTTSConnection
+	streamConnCtx                  context.Context
+	streamConnCancel               context.CancelFunc
 	closed                         bool
 }
 
@@ -221,6 +223,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 	if modelID == "" {
 		modelID = "eleven_turbo_v2_5"
 	}
+	streamConnCtx, streamConnCancel := context.WithCancel(context.Background())
 	provider := &ElevenLabsTTS{
 		apiKey:                 resolveElevenLabsAPIKey(apiKey),
 		baseURL:                defaultElevenLabsBaseURL,
@@ -233,10 +236,18 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		enableLogging:          true,
 		syncAlignment:          true,
 		applyTextNormalization: "auto",
+		streamConnCtx:          streamConnCtx,
+		streamConnCancel:       streamConnCancel,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	sampleRate, err := parseElevenLabsSampleRate(provider.encoding)
+	if err != nil {
+		streamConnCancel()
+		return nil, err
+	}
+	provider.sampleRate = sampleRate
 	provider.streamConnectionRefresh = false
 	if !provider.autoModeExplicit {
 		autoMode := len(provider.chunkLengthSchedule) == 0
@@ -267,8 +278,14 @@ func (t *ElevenLabsTTS) Close() error {
 	t.streams = nil
 	currentConn := t.currentStreamConn
 	t.currentStreamConn = nil
+	streamConnCancel := t.streamConnCancel
+	t.streamConnCtx = nil
+	t.streamConnCancel = nil
 	t.mu.Unlock()
 
+	if streamConnCancel != nil {
+		streamConnCancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
@@ -299,7 +316,7 @@ func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) bool {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		_ = stream.rejectClosedPipe()
+		_ = stream.Close()
 		return false
 	}
 	if t.streams == nil {
@@ -520,7 +537,7 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	defer s.mu.Unlock()
 	if !strings.HasPrefix(s.encoding, "pcm") {
-		return nil, fmt.Errorf("unsupported elevenlabs TTS encoding %q: no decoder available", s.encoding)
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("unsupported elevenlabs TTS encoding %q: no decoder available", s.encoding))
 	}
 
 	// Read PCM audio in chunks from the HTTP response
@@ -730,7 +747,11 @@ func (t *ElevenLabsTTS) currentConnection(ctx context.Context, streamURL string,
 	if t.currentStreamConn != nil && t.currentStreamConn.matches(streamURL) {
 		return t.currentStreamConn
 	}
-	conn := newElevenLabsTTSConnection(t, ctx, streamURL, header)
+	connCtx := t.streamConnCtx
+	if connCtx == nil {
+		connCtx = context.Background()
+	}
+	conn := newElevenLabsTTSConnection(t, connCtx, streamURL, header)
 	t.currentStreamConn = conn
 	return conn
 }
@@ -769,14 +790,22 @@ func buildElevenLabsStreamURL(t *ElevenLabsTTS) string {
 }
 
 func elevenLabsSampleRate(encoding string) int {
+	sampleRate, err := parseElevenLabsSampleRate(encoding)
+	if err != nil {
+		return 0
+	}
+	return sampleRate
+}
+
+func parseElevenLabsSampleRate(encoding string) (int, error) {
 	parts := strings.Split(encoding, "_")
 	if len(parts) >= 2 {
 		var sampleRate int
 		if _, err := fmt.Sscanf(parts[1], "%d", &sampleRate); err == nil && sampleRate > 0 {
-			return sampleRate
+			return sampleRate, nil
 		}
 	}
-	return 22050
+	return 0, fmt.Errorf("invalid ElevenLabs TTS encoding %q: expected output_format sample rate", encoding)
 }
 
 type elevenLabsStream struct {
@@ -2138,45 +2167,6 @@ func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 
 func (s *elevenLabsStream) closedInputErrorLocked() error {
 	return s.inputErr
-}
-
-func (s *elevenLabsStream) rejectClosedPipe() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-	s.inputErr = io.ErrClosedPipe
-	s.cancelResponseTimeoutLocked()
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.mp3Decoder != nil {
-		if s.mp3Input != nil && !s.mp3InputClosed {
-			close(s.mp3Input)
-			s.mp3InputClosed = true
-		}
-		_ = s.mp3Decoder.Close()
-	}
-	if s.initSent && !s.inputEnd {
-		if s.sharedConn != nil {
-			_ = s.sharedConn.writeJSON(s.ctx, elevenLabsCloseContextPayload(s.contextID))
-		} else if s.conn != nil {
-			_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
-		}
-	}
-	if s.provider != nil {
-		s.provider.unregisterStream(s)
-	}
-	if s.sharedConn != nil {
-		s.sharedConn.unregisterStream(s)
-		return nil
-	}
-	if s.conn != nil {
-		return s.conn.Close()
-	}
-	return nil
 }
 
 func (s *elevenLabsStream) Close() error {

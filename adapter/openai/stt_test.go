@@ -87,7 +87,7 @@ func TestOpenAISpeechEventPreservesWordTimestamps(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	event := openAISpeechEvent(resp)
+	event := openAISpeechEvent(resp, "en")
 	if event.Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("event type = %v, want %v", event.Type, stt.SpeechEventFinalTranscript)
 	}
@@ -119,7 +119,7 @@ func TestOpenAISpeechEventDefaultsMissingConfidenceToOne(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	event := openAISpeechEvent(resp)
+	event := openAISpeechEvent(resp, "en")
 	if len(event.Alternatives) != 1 {
 		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
 	}
@@ -187,6 +187,39 @@ func TestOpenAISTTRecognizeUploadsWAVContainer(t *testing.T) {
 	}
 	if got := uploaded[len(uploaded)-4:]; string(got) != string([]byte{0x01, 0x00, 0x02, 0x00}) {
 		t.Fatalf("wav payload tail = %#v, want original PCM", got)
+	}
+}
+
+func TestOpenAISTTRecognizeFallsBackToConfiguredLanguage(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		if r.FormValue("language") != "id" {
+			t.Fatalf("language form = %q, want id", r.FormValue("language"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"halo"}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTLanguage("id-ID"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one final transcript", event)
+	}
+	if got := event.Alternatives[0].Language; got != "id" {
+		t.Fatalf("language = %q, want configured base language id", got)
 	}
 }
 
