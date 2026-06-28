@@ -639,18 +639,65 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 }
 
 func (s *openaiTTSChunkedStream) decodedAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
-	if s.responseFormat != openai.SpeechResponseFormatOpus {
-		return frame, nil
-	}
-	targetRate := uint32(24000)
-	if s.provider != nil && s.provider.SampleRate() > 0 {
-		targetRate = uint32(s.provider.SampleRate())
-	}
-	resampled, err := coreaudio.ResampleAudioFrame(frame, targetRate)
+	resampled, err := coreaudio.ResampleAudioFrame(frame, s.targetSampleRate())
 	if err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
-	return resampled, nil
+	normalized, err := openAITTSConvertChannels(resampled, s.targetChannels())
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	return normalized, nil
+}
+
+func (s *openaiTTSChunkedStream) targetSampleRate() uint32 {
+	if s.provider != nil && s.provider.SampleRate() > 0 {
+		return uint32(s.provider.SampleRate())
+	}
+	return 24000
+}
+
+func (s *openaiTTSChunkedStream) targetChannels() uint32 {
+	if s.provider != nil && s.provider.NumChannels() > 0 {
+		return uint32(s.provider.NumChannels())
+	}
+	return 1
+}
+
+func openAITTSConvertChannels(frame *model.AudioFrame, targetChannels uint32) (*model.AudioFrame, error) {
+	if frame == nil || targetChannels == 0 || frame.NumChannels == targetChannels {
+		return frame, nil
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot convert audio with zero channels")
+	}
+	if targetChannels != 1 {
+		return nil, fmt.Errorf("unsupported openai tts target channel count: %d", targetChannels)
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot convert non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	out := make([]byte, int(frame.SamplesPerChannel*targetChannels*2))
+	sourceChannels := int(frame.NumChannels)
+	for sample := 0; sample < int(frame.SamplesPerChannel); sample++ {
+		var sum int32
+		for ch := 0; ch < sourceChannels; ch++ {
+			offset := (sample*sourceChannels + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		binary.LittleEndian.PutUint16(out[sample*2:sample*2+2], uint16(int16(sum/int32(sourceChannels))))
+	}
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       targetChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
 }
 
 func openAITTSDecodeEOF(err error) bool {
@@ -678,6 +725,10 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 		if ok {
+			frame, err = s.decodedAudioFrame(frame)
+			if err != nil {
+				return nil, err
+			}
 			return &tts.SynthesizedAudio{Frame: frame}, nil
 		}
 		return nil, nil
