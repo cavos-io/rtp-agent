@@ -443,13 +443,15 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		}
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
+	eventStream := newOpenAIRealtimeQueuedStream[*stt.SpeechEvent]()
 	stream := &openAIRealtimeSTTStream{
-		conn:      conn,
-		ctx:       streamCtx,
-		cancel:    cancel,
-		events:    make(chan *stt.SpeechEvent, 100),
-		errCh:     make(chan error, 1),
-		vadStream: vadStream,
+		conn:        conn,
+		ctx:         streamCtx,
+		cancel:      cancel,
+		events:      eventStream.rawChan(),
+		eventStream: eventStream,
+		errCh:       make(chan error, 1),
+		vadStream:   vadStream,
 		state: &openAIRealtimeSTTMessageState{
 			language: eventLanguage,
 			timing:   map[string]openAIRealtimeSTTTiming{},
@@ -738,21 +740,22 @@ func openAITimedStrings(words []struct {
 }
 
 type openAIRealtimeSTTStream struct {
-	conn       *websocket.Conn
-	ctx        context.Context
-	cancel     context.CancelFunc
-	events     chan *stt.SpeechEvent
-	errCh      chan error
-	mu         sync.Mutex
-	closed     bool
-	inputEnded bool
-	committed  bool
-	hasAudio   bool
-	pushedSR   uint32
-	audio      *audio.AudioByteStream
-	state      *openAIRealtimeSTTMessageState
-	owner      *OpenAISTT
-	vadStream  vad.VADStream
+	conn        *websocket.Conn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	events      chan *stt.SpeechEvent
+	eventStream *openAIRealtimeQueuedStream[*stt.SpeechEvent]
+	errCh       chan error
+	mu          sync.Mutex
+	closed      bool
+	inputEnded  bool
+	committed   bool
+	hasAudio    bool
+	pushedSR    uint32
+	audio       *audio.AudioByteStream
+	state       *openAIRealtimeSTTMessageState
+	owner       *OpenAISTT
+	vadStream   vad.VADStream
 }
 
 func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -760,11 +763,11 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return nil
 	}
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
+		s.mu.Unlock()
+		return openAIRealtimeSTTInputEndedError()
+	}
+	if s.closed {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
@@ -816,10 +819,10 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 func (s *openAIRealtimeSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
+		return openAIRealtimeSTTInputEndedError()
+	}
+	if s.closed {
 		return io.ErrClosedPipe
 	}
 	return s.flushAudioLocked()
@@ -828,10 +831,10 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 func (s *openAIRealtimeSTTStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
+		return openAIRealtimeSTTInputEndedError()
+	}
+	if s.closed {
 		return io.ErrClosedPipe
 	}
 	if err := s.flushAudioLocked(); err != nil {
@@ -889,22 +892,17 @@ func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.state == nil {
 		s.state = &openAIRealtimeSTTMessageState{}
 	}
 	s.state.language = language
 	if s.closed || s.conn == nil || s.owner == nil {
+		s.mu.Unlock()
 		return
 	}
-	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
-	if err != nil {
-		s.sendErrorLocked(err)
-		return
-	}
-	if err := s.conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
-		s.closeAfterWriteFailureLocked()
-	}
+	conn := s.conn
+	s.mu.Unlock()
+	_ = conn.Close()
 }
 
 func (s *openAIRealtimeSTTStream) Close() error {
@@ -913,6 +911,7 @@ func (s *openAIRealtimeSTTStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	if s.owner != nil {
 		s.owner.unregisterRealtimeSTTStream(s)
@@ -936,6 +935,10 @@ func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
 	_ = s.conn.Close()
 }
 
+func openAIRealtimeSTTInputEndedError() error {
+	return fmt.Errorf("stream input ended")
+}
+
 func (s *openAIRealtimeSTTStream) closeVADStreamLocked() {
 	if s.vadStream == nil {
 		return
@@ -955,6 +958,33 @@ func (s *openAIRealtimeSTTStream) sendErrorLocked(err error) {
 	select {
 	case s.errCh <- err:
 	default:
+	}
+}
+
+func (s *openAIRealtimeSTTStream) sendEvent(event *stt.SpeechEvent) bool {
+	if s == nil || event == nil {
+		return false
+	}
+	if s.eventStream != nil {
+		return s.eventStream.Send(event)
+	}
+	if s.events == nil {
+		return false
+	}
+	s.events <- event
+	return true
+}
+
+func (s *openAIRealtimeSTTStream) closeEventStream() {
+	if s == nil {
+		return
+	}
+	if s.eventStream != nil {
+		s.eventStream.Close()
+		return
+	}
+	if s.events != nil {
+		close(s.events)
 	}
 }
 
@@ -1021,7 +1051,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		if s.owner != nil {
 			s.owner.unregisterRealtimeSTTStream(s)
 		}
-		close(s.events)
+		s.closeEventStream()
 	}()
 	connectedAt := time.Now()
 	for {
@@ -1048,7 +1078,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 			return
 		}
 		for _, event := range events {
-			s.events <- event
+			s.sendEvent(event)
 		}
 		if s.shouldRecycleAfterEvents(events, connectedAt) {
 			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
@@ -1136,6 +1166,9 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 		return mapOpenAIError(err)
 	}
 	s.conn = conn
+	s.audio = nil
+	s.hasAudio = false
+	s.committed = false
 	return nil
 }
 

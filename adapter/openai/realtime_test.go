@@ -4748,6 +4748,34 @@ func TestRealtimeSessionPreservesQueuedTextDeltas(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionPreservesQueuedMessageGenerations(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+
+	const total = 150
+	for i := 0; i < total; i++ {
+		session.trackOpenAIRealtimeEvent(map[string]any{
+			"type": "response.output_item.added",
+			"item": map[string]any{
+				"id":   fmt.Sprintf("msg_%03d", i),
+				"type": "message",
+			},
+		})
+	}
+	session.closeRealtimeGeneration()
+
+	got := 0
+	for range created.Generation.MessageCh {
+		got++
+	}
+	if got != total {
+		t.Fatalf("queued message generations = %d, want %d", got, total)
+	}
+}
+
 func TestRealtimeSessionPersistsEmptyIDAudioTranscriptOnResponseDone(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	if err := session.remote.Insert(nil, &llm.ChatMessage{
@@ -5350,6 +5378,38 @@ func TestRealtimeSessionUpdatesRemoteItemOnFinalInputAudioTranscription(t *testi
 	}
 	if tracked.TextContent() != "hello" {
 		t.Fatalf("tracked message text = %q, want hello", tracked.TextContent())
+	}
+	if tracked.TranscriptConfidence == nil || *tracked.TranscriptConfidence != confidence {
+		t.Fatalf("tracked confidence = %#v, want %.2f", tracked.TranscriptConfidence, confidence)
+	}
+}
+
+func TestRealtimeSessionAppendsEmptyFinalInputAudioTranscriptionToRemoteItem(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	msg := &llm.ChatMessage{ID: "item_123", Role: llm.ChatRoleUser}
+	session.remote.Insert(nil, msg)
+	confidence := 0.42
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "",
+			IsFinal:    true,
+			Confidence: &confidence,
+		},
+	})
+
+	item := session.remote.Get("item_123")
+	tracked, ok := item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("tracked item = %T, want *llm.ChatMessage", item)
+	}
+	if len(tracked.Content) != 1 {
+		t.Fatalf("tracked content length = %d, want reference empty transcript content", len(tracked.Content))
+	}
+	if tracked.Content[0].Text != "" {
+		t.Fatalf("tracked content text = %q, want empty final transcript", tracked.Content[0].Text)
 	}
 	if tracked.TranscriptConfidence == nil || *tracked.TranscriptConfidence != confidence {
 		t.Fatalf("tracked confidence = %#v, want %.2f", tracked.TranscriptConfidence, confidence)
@@ -6511,6 +6571,55 @@ func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
 	}
 	if ev.Metrics.TokensPerSecond <= 0 {
 		t.Fatalf("metrics tokens_per_second = %f, want output tokens divided by duration", ev.Metrics.TokensPerSecond)
+	}
+}
+
+func TestRealtimeSessionPreservesQueuedEvents(t *testing.T) {
+	const eventCount = 128
+	serverWroteEvents := make(chan struct{})
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		for i := 0; i < eventCount; i++ {
+			eventType := "input_audio_buffer.speech_started"
+			if i%2 == 1 {
+				eventType = "input_audio_buffer.speech_stopped"
+			}
+			if err := conn.WriteJSON(map[string]any{"type": eventType}); err != nil {
+				t.Errorf("Write realtime event %d error = %v", i, err)
+				return
+			}
+		}
+		close(serverWroteEvents)
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer close(releaseServer)
+	defer session.Close()
+
+	select {
+	case <-serverWroteEvents:
+	case <-time.After(time.Second):
+		t.Fatal("server blocked writing queued realtime events")
+	}
+
+	for i := 0; i < eventCount; i++ {
+		want := llm.RealtimeEventTypeSpeechStarted
+		if i%2 == 1 {
+			want = llm.RealtimeEventTypeSpeechStopped
+		}
+		assertRealtimeEventType(t, session.EventCh(), want)
 	}
 }
 
