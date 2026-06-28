@@ -1152,6 +1152,47 @@ func TestOpenAITTSRawAudioStreamKeepsAudioBeforeReadFailure(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSRawPCMFramesPreserveSampleBoundary(t *testing.T) {
+	stream := &openaiTTSChunkedStream{
+		resp: &chunkedReadCloser{chunks: [][]byte{
+			{1, 2, 3},
+			{4, 5, 6},
+		}},
+		responseFormat: goopenai.SpeechResponseFormatPcm,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want first whole PCM sample", err)
+	}
+	if string(first.Frame.Data) != string([]byte{1, 2}) {
+		t.Fatalf("first frame bytes = %v, want first whole sample only", first.Frame.Data)
+	}
+	if first.Frame.SamplesPerChannel != 1 {
+		t.Fatalf("first samples = %d, want 1", first.Frame.SamplesPerChannel)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want buffered sample plus next chunk", err)
+	}
+	if string(second.Frame.Data) != string([]byte{3, 4, 5, 6}) {
+		t.Fatalf("second frame bytes = %v, want buffered trailing byte plus next chunk", second.Frame.Data)
+	}
+	if second.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("second samples = %d, want 2", second.Frame.SamplesPerChannel)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("third Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("third Next = %#v, want final marker", final)
+	}
+}
+
 func TestOpenAITTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing.T) {
 	stream := &openaiTTSChunkedStream{resp: failingReadCloser{err: errors.New("socket closed")}}
 

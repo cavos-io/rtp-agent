@@ -414,6 +414,7 @@ type openaiTTSChunkedStream struct {
 	wavDataLeft    int
 	wavSampleRate  uint32
 	wavChannels    uint32
+	pcmRemainder   []byte
 	closed         bool
 	audioSawAudio  bool
 	audioFinalSent bool
@@ -642,6 +643,20 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 		if ok {
 			return &tts.SynthesizedAudio{Frame: frame}, nil
 		}
+		return nil, nil
+	}
+	if len(s.pcmRemainder) > 0 {
+		combined := make([]byte, 0, len(s.pcmRemainder)+len(data))
+		combined = append(combined, s.pcmRemainder...)
+		combined = append(combined, data...)
+		data = combined
+		s.pcmRemainder = nil
+	}
+	if len(data)%2 == 1 {
+		s.pcmRemainder = append(s.pcmRemainder[:0], data[len(data)-1])
+		data = data[:len(data)-1]
+	}
+	if len(data) == 0 {
 		return nil, nil
 	}
 	return &tts.SynthesizedAudio{
