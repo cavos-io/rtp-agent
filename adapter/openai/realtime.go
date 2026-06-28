@@ -1662,6 +1662,19 @@ func (s *realtimeSession) clearPendingRealtimeResponse(eventID string) {
 	}
 }
 
+func (s *realtimeSession) consumePendingRealtimeResponse(eventID string) bool {
+	if eventID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.pendingResponses[eventID]; !ok {
+		return false
+	}
+	delete(s.pendingResponses, eventID)
+	return true
+}
+
 func (s *realtimeSession) clearAllPendingRealtimeResponses() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2047,14 +2060,6 @@ func (s *realtimeSession) eventLoop() {
 				continue
 			}
 
-			if openAIRealtimeString(ev["type"]) == "response.created" {
-				if response, _ := ev["response"].(map[string]any); response != nil {
-					if clientEventID, ok := openAIRealtimeResponseClientEventID(response); ok {
-						s.clearPendingRealtimeResponse(clientEventID)
-					}
-				}
-			}
-
 			if openAIRealtimeString(ev["type"]) == "response.done" && s.generation == nil {
 				if response, _ := ev["response"].(map[string]any); response != nil {
 					if clientEventID, ok := openAIRealtimeResponseClientEventID(response); ok {
@@ -2081,6 +2086,13 @@ func (s *realtimeSession) eventLoop() {
 			}
 			if realtimeEvent.Type == llm.RealtimeEventTypeSpeechStopped && realtimeEvent.SpeechStopped != nil {
 				realtimeEvent.SpeechStopped.UserTranscriptionEnabled = s.inputAudioTranscriptionEnabled()
+			}
+			if realtimeEvent.Type == llm.RealtimeEventTypeGenerationCreated && realtimeEvent.Generation != nil {
+				if response, _ := ev["response"].(map[string]any); response != nil {
+					if clientEventID, ok := openAIRealtimeResponseClientEventID(response); ok && s.consumePendingRealtimeResponse(clientEventID) {
+						realtimeEvent.Generation.UserInitiated = true
+					}
+				}
 			}
 			if realtimeEvent.Type == llm.RealtimeEventTypeFunctionCall && realtimeEvent.Function != nil && !s.acceptRealtimeFunctionCall(realtimeEvent.Function.Name) {
 				continue
@@ -2781,12 +2793,10 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		if !hasResponseID {
 			return llm.RealtimeEvent{}, false
 		}
-		_, userInitiated := openAIRealtimeResponseClientEventID(response)
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeGenerationCreated,
 			Generation: &llm.GenerationCreatedEvent{
-				ResponseID:    responseID,
-				UserInitiated: userInitiated,
+				ResponseID: responseID,
 			},
 		}, true
 	case "conversation.item.added", "conversation.item.created":

@@ -1763,7 +1763,13 @@ func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
 		t.Fatalf("GenerateReply first error = %v", err)
 	}
 	assertRealtimeMessage(t, <-messages, "response.create", "first")
-	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	created := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if !created.Generation.UserInitiated {
+		t.Fatalf("UserInitiated = false for matching pending response, want true")
+	}
 	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
 
 	time.Sleep(20 * time.Millisecond)
@@ -1781,6 +1787,60 @@ func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
 		assertRealtimeMessage(t, msg, "response.cancel", "")
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for response.cancel for later pending response")
+	}
+}
+
+func TestRealtimeSessionResponseCreatedForeignClientEventIsNotUserInitiated(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+			var payload map[string]any
+			if err := json.Unmarshal(msg, &payload); err != nil {
+				t.Errorf("decode realtime message: %v", err)
+				return
+			}
+			if payload["type"] != "response.create" {
+				continue
+			}
+			if err := conn.WriteJSON(map[string]any{
+				"type": "response.created",
+				"response": map[string]any{
+					"id":       "resp_foreign",
+					"metadata": map[string]any{"client_event_id": "response_create_foreign"},
+				},
+			}); err != nil {
+				t.Errorf("Write response.created error = %v", err)
+			}
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, <-messages, "session.update", "gpt-realtime")
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "start"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "start")
+
+	created := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if created.Generation.UserInitiated {
+		t.Fatalf("UserInitiated = true for foreign client_event_id, want false")
 	}
 }
 
@@ -2965,8 +3025,11 @@ func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	if ev.Generation == nil {
 		t.Fatal("Generation = nil, want generation-created payload")
 	}
-	if ev.Generation.ResponseID != "resp_123" || !ev.Generation.UserInitiated {
-		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
+	if ev.Generation.ResponseID != "resp_123" {
+		t.Fatalf("ResponseID = %q, want resp_123", ev.Generation.ResponseID)
+	}
+	if ev.Generation.UserInitiated {
+		t.Fatalf("UserInitiated = true without a matching pending response, want false")
 	}
 }
 
