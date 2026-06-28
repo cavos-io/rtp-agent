@@ -645,11 +645,14 @@ func TestOpenAITTSSSEOpusDecodesReferenceAudio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded opus rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 24000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
 	}
 	if audio.Frame.NumChannels != 1 {
 		t.Fatalf("channels = %d, want decoded opus mono", audio.Frame.NumChannels)
+	}
+	if audio.Frame.SamplesPerChannel == 0 {
+		t.Fatal("decoded opus frame has no samples")
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded opus frame is empty")

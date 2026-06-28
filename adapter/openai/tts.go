@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -506,6 +507,10 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	frame, err = s.decodedAudioFrame(frame)
+	if err != nil {
+		return nil, err
+	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
@@ -626,7 +631,26 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	frame, err = s.decodedAudioFrame(frame)
+	if err != nil {
+		return nil, err
+	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *openaiTTSChunkedStream) decodedAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if s.responseFormat != openai.SpeechResponseFormatOpus {
+		return frame, nil
+	}
+	targetRate := uint32(24000)
+	if s.provider != nil && s.provider.SampleRate() > 0 {
+		targetRate = uint32(s.provider.SampleRate())
+	}
+	resampled, err := coreaudio.ResampleAudioFrame(frame, targetRate)
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
+	return resampled, nil
 }
 
 func openAITTSDecodeEOF(err error) bool {
