@@ -111,3 +111,10 @@ func (s *GroqSTT) Stream(ctx context.Context, language string) (stt.RecognizeStr
 func (s *GroqSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
 	return s.inner.Recognize(ctx, frames, language)
 }
+
+func (s *GroqSTT) Close() error {
+	if s == nil || s.inner == nil {
+		return nil
+	}
+	return s.inner.Close()
+}

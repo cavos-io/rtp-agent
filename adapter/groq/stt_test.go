@@ -2,6 +2,8 @@ package groq
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -101,5 +103,23 @@ func TestGroqSTTStreamUnsupportedLikeReferenceOfflineMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "realtime stt is not enabled") {
 		t.Fatalf("Stream error = %q, want offline-mode guidance", err)
+	}
+}
+
+func TestGroqSTTRecognizeAfterCloseIsRejected(t *testing.T) {
+	provider, err := NewGroqSTT("test-key", "", WithGroqSTTBaseURL("://bad-url"))
+	if err != nil {
+		t.Fatalf("NewGroqSTT error = %v", err)
+	}
+	if err := stt.Close(provider); err != nil {
+		t.Fatalf("stt.Close error = %v", err)
+	}
+
+	event, err := provider.Recognize(context.Background(), nil, "en")
+	if event != nil {
+		t.Fatalf("Recognize returned event %+v, want closed error", event)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Recognize after Close error = %T %v, want io.ErrClosedPipe", err, err)
 	}
 }
