@@ -2975,6 +2975,30 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMRequestOptions(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMPromptCacheOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "prompt_cache_key=room-123,prompt_cache_retention=24h")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 2 {
+		t.Fatalf("Azure LLM option count = %d, want prompt_cache_key and prompt_cache_retention options", gotOptions)
+	}
+}
+
 func TestDefaultConfigFromEnvMapsAzureResponsesLLMLatencyOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")

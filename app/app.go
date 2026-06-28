@@ -3336,6 +3336,12 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
 		llmOpts = append(llmOpts, azure.WithAzureLLMToolChoice(toolChoice))
 	}
+	if promptCacheKey := modelOptionString(cfg.LLMModelOptions, "prompt_cache_key"); promptCacheKey != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMPromptCacheKey(promptCacheKey))
+	}
+	if promptCacheRetention := modelOptionString(cfg.LLMModelOptions, "prompt_cache_retention"); promptCacheRetention != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMPromptCacheRetention(promptCacheRetention))
+	}
 	if reasoning, ok := cfg.LLMModelOptions["reasoning"].(map[string]any); ok && len(reasoning) > 0 {
 		llmOpts = append(llmOpts, azure.WithAzureLLMReasoning(reasoning))
 	}
