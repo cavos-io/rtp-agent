@@ -2267,6 +2267,7 @@ type openaiStream struct {
 	provider        *OpenAILLM
 	mu              sync.Mutex
 	closed          bool
+	pending         []*llm.ChatChunk
 	toolIndex       int
 	toolIndexSet    bool
 	toolCallID      string
@@ -2278,6 +2279,9 @@ type openaiStream struct {
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	if s.isClosed() {
 		return nil, io.EOF
+	}
+	if chunk := s.popPending(); chunk != nil {
+		return chunk, nil
 	}
 	for {
 		resp, err := s.stream.Recv()
@@ -2294,6 +2298,9 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 
 		choice := resp.Choices[0]
 		if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
+			if resp.Usage != nil {
+				s.pushPending(openAIUsageChunk(resp.ID, resp.Usage))
+			}
 			return s.finishOpenAIStreamToolCall(resp.ID, choice), nil
 		}
 		if resp.Usage == nil && isEmptyOpenAIStreamChoiceDelta(choice) {
@@ -2301,11 +2308,20 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		}
 		if len(choice.Delta.ToolCalls) > 0 {
 			if chunk := s.processOpenAIStreamToolCalls(resp.ID, choice); chunk != nil {
+				if resp.Usage != nil {
+					s.pushPending(openAIUsageChunk(resp.ID, resp.Usage))
+				}
 				return chunk, nil
 			}
 			if choice.Delta.Content == "" && resp.Usage == nil {
 				continue
 			}
+		}
+		if isEmptyOpenAIStreamChoiceDelta(choice) {
+			if resp.Usage != nil {
+				return openAIUsageChunk(resp.ID, resp.Usage), nil
+			}
+			continue
 		}
 		chunk := &llm.ChatChunk{
 			ID: resp.ID,
@@ -2316,11 +2332,29 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		if resp.Usage != nil {
-			chunk.Usage = openAICompletionUsage(resp.Usage)
+			s.pushPending(openAIUsageChunk(resp.ID, resp.Usage))
 		}
 
 		return chunk, nil
 	}
+}
+
+func (s *openaiStream) popPending() *llm.ChatChunk {
+	if len(s.pending) == 0 {
+		return nil
+	}
+	chunk := s.pending[0]
+	copy(s.pending, s.pending[1:])
+	s.pending[len(s.pending)-1] = nil
+	s.pending = s.pending[:len(s.pending)-1]
+	return chunk
+}
+
+func (s *openaiStream) pushPending(chunk *llm.ChatChunk) {
+	if chunk == nil {
+		return
+	}
+	s.pending = append(s.pending, chunk)
 }
 
 func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openai.ChatCompletionStreamChoice) *llm.ChatChunk {
@@ -2421,6 +2455,10 @@ func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
 		result.PromptCachedTokens = usage.PromptTokensDetails.CachedTokens
 	}
 	return result
+}
+
+func openAIUsageChunk(id string, usage *openai.Usage) *llm.ChatChunk {
+	return &llm.ChatChunk{ID: id, Usage: openAICompletionUsage(usage)}
 }
 
 func (s *openaiStream) Close() error {

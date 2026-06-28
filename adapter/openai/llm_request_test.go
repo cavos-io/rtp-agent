@@ -2439,6 +2439,55 @@ func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamSplitsUsageAfterToolCallFinish(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-tool-usage","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"query\":\"weather\"}"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool-usage","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"completion_tokens":4,"prompt_tokens":6,"total_tokens":10,"prompt_tokens_details":{"cached_tokens":2}}}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("tool Next error = %v", err)
+	}
+	if toolChunk == nil || toolChunk.Delta == nil || len(toolChunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("tool chunk = %#v, want accumulated tool call", toolChunk)
+	}
+	if toolChunk.Usage != nil {
+		t.Fatalf("tool chunk usage = %#v, want reference usage-only chunk after tool call", toolChunk.Usage)
+	}
+
+	usageChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next error = %v", err)
+	}
+	if usageChunk == nil || usageChunk.Delta != nil || usageChunk.Usage == nil {
+		t.Fatalf("usage chunk = %#v, want usage-only chunk after tool call", usageChunk)
+	}
+	if usageChunk.Usage.CompletionTokens != 4 || usageChunk.Usage.PromptTokens != 6 ||
+		usageChunk.Usage.TotalTokens != 10 || usageChunk.Usage.PromptCachedTokens != 2 {
+		t.Fatalf("usage chunk = %+v, want mapped usage tokens", usageChunk.Usage)
+	}
+
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after usage = %v, want EOF", err)
+	}
+}
+
 func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
 	err := openAIStreamRecvError(llm.NewAPIStatusError("client closed", 499, "req_499", nil))
 	if !errors.Is(err, io.EOF) {
