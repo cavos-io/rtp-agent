@@ -2,6 +2,9 @@ package groq
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -89,4 +92,61 @@ func TestGroqLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
 	if !strings.Contains(err.Error(), "GROQ_API_KEY") {
 		t.Fatalf("Chat error = %q, want GROQ_API_KEY guidance", err)
 	}
+}
+
+func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
+	calls := 0
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		calls++
+		body := io.NopCloser(strings.NewReader(
+			`data: {"id":"chatcmpl-groq","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}` + "\n\n" +
+				"data: [DONE]\n\n"))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+
+	stream, err := provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := llm.Close(provider); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after provider Close error = %T %v, want EOF", err, err)
+	}
+
+	_, err = provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Chat() after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	if calls != 1 {
+		t.Fatalf("HTTP calls = %d, want no request after provider Close", calls)
+	}
+}
+
+type groqLLMHTTPDoer func(*http.Request) (*http.Response, error)
+
+func (f groqLLMHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
