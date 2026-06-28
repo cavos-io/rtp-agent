@@ -3646,6 +3646,9 @@ func groqLLMFromConfig(cfg AppConfig) *groq.GroqLLM {
 	if cfg.LLMBaseURL != "" {
 		llmOpts = append(llmOpts, groq.WithGroqLLMBaseURL(cfg.LLMBaseURL))
 	}
+	if timeoutMS := modelOptionInt(cfg.LLMModelOptions, "timeout_ms"); timeoutMS > 0 {
+		llmOpts = append(llmOpts, groq.WithGroqLLMTimeout(time.Duration(timeoutMS)*time.Millisecond))
+	}
 	if openAIOpts := groqOpenAILLMOptionsFromConfig(cfg); len(openAIOpts) > 0 {
 		llmOpts = append(llmOpts, groq.WithGroqLLMOptions(openAIOpts...))
 	}

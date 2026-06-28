@@ -13461,6 +13461,44 @@ func TestDefaultConfigFromEnvMapsGroqLLMMetadata(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsGroqLLMTimeoutOption(t *testing.T) {
+	t.Setenv("GROQ_API_KEY", "test-groq-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "groq")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "llama3-70b-8192")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "timeout_ms=750")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	groqLLM, ok := app.Session.LLM.(*groq.GroqLLM)
+	if !ok {
+		t.Fatalf("LLM provider type = %T, want *groq.GroqLLM", app.Session.LLM)
+	}
+	if got := groqLLMDefaultConnectDuration(t, groqLLM, "Timeout"); got != 750*time.Millisecond {
+		t.Fatalf("Groq LLM default timeout = %v, want 750ms from model options", got)
+	}
+}
+
+func groqLLMDefaultConnectDuration(t *testing.T, provider *groq.GroqLLM, field string) time.Duration {
+	t.Helper()
+
+	state := reflect.ValueOf(provider).Elem()
+	inner := state.FieldByName("inner")
+	if inner.IsNil() {
+		t.Fatal("Groq LLM inner OpenAI provider is nil")
+	}
+	connect := inner.Elem().FieldByName("defaultConnect")
+	if connect.IsNil() {
+		t.Fatal("Groq LLM default connect options are nil")
+	}
+	value := connect.Elem().FieldByName(field)
+	if !value.IsValid() {
+		t.Fatalf("Groq LLM default connect field %q is invalid", field)
+	}
+	return time.Duration(value.Int())
+}
+
 func TestDefaultConfigFromEnvSelectsCavosSpeechProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "cavos")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://steno.example/v1")
