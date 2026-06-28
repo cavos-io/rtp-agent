@@ -41,29 +41,30 @@ const (
 )
 
 type OpenAISTT struct {
-	client          *openai.Client
-	httpClient      openai.HTTPDoer
-	apiKey          string
-	baseURL         string
-	model           string
-	language        string
-	languageSet     bool
-	languageValue   string
-	detectLanguage  bool
-	detectOptionSet bool
-	prompt          string
-	turnDetection   map[string]interface{}
-	noiseReduction  string
-	useRealtime     bool
-	connect         llm.APIConnectOptions
-	maxSession      time.Duration
-	dialWebsocket   openAIRealtimeSTTWebsocketDialer
-	vad             vad.VAD
-	streamsMu       sync.Mutex
-	streams         map[*openAIRealtimeSTTStream]struct{}
-	nextRequestID   uint64
-	requestCancels  map[uint64]context.CancelFunc
-	closed          bool
+	client           *openai.Client
+	httpClient       openai.HTTPDoer
+	apiKey           string
+	baseURL          string
+	model            string
+	language         string
+	languageSet      bool
+	languageValue    string
+	detectLanguage   bool
+	detectOptionSet  bool
+	prompt           string
+	turnDetection    map[string]interface{}
+	turnDetectionSet bool
+	noiseReduction   string
+	useRealtime      bool
+	connect          llm.APIConnectOptions
+	maxSession       time.Duration
+	dialWebsocket    openAIRealtimeSTTWebsocketDialer
+	vad              vad.VAD
+	streamsMu        sync.Mutex
+	streams          map[*openAIRealtimeSTTStream]struct{}
+	nextRequestID    uint64
+	requestCancels   map[uint64]context.CancelFunc
+	closed           bool
 }
 
 type OpenAISTTOption func(*OpenAISTT)
@@ -110,6 +111,7 @@ func WithOpenAISTTNoiseReductionType(noiseReductionType string) OpenAISTTOption 
 
 func WithOpenAISTTTurnDetection(turnDetection map[string]interface{}) OpenAISTTOption {
 	return func(s *OpenAISTT) {
+		s.turnDetectionSet = true
 		if turnDetection == nil {
 			s.turnDetection = nil
 			return
@@ -534,7 +536,7 @@ func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
 	}
 	if !openAIRealtimeIsWhisperModel(s.model) {
 		turnDetection := s.turnDetection
-		if turnDetection == nil {
+		if !s.turnDetectionSet && turnDetection == nil {
 			turnDetection = map[string]interface{}{
 				"type":                "server_vad",
 				"threshold":           openAIRealtimeSTTDefaultThreshold,
