@@ -908,6 +908,52 @@ func TestOpenAITTSCompressedFormatsDecodeReferenceAudio(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSCompressedFormatsEmitFinalMarker(t *testing.T) {
+	cases := []struct {
+		name   string
+		format goopenai.SpeechResponseFormat
+		data   string
+		stream string
+	}{
+		{name: "audio-aac", format: goopenai.SpeechResponseFormatAac, data: openAITTSAACADTSFixtureBase64, stream: openAITTSStreamFormatAudio},
+		{name: "sse-aac", format: goopenai.SpeechResponseFormatAac, data: openAITTSAACADTSFixtureBase64, stream: openAITTSStreamFormatSSE},
+		{name: "audio-flac", format: goopenai.SpeechResponseFormatFlac, data: openAITTSFLACFixtureBase64, stream: openAITTSStreamFormatAudio},
+		{name: "sse-flac", format: goopenai.SpeechResponseFormatFlac, data: openAITTSFLACFixtureBase64, stream: openAITTSStreamFormatSSE},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			compressed, err := base64.StdEncoding.DecodeString(tc.data)
+			if err != nil {
+				t.Fatalf("decode fixture: %v", err)
+			}
+			var body io.ReadCloser
+			if tc.stream == openAITTSStreamFormatSSE {
+				sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(compressed) + `"}` + "\n\n" +
+					`data: {"type":"speech.audio.done"}` + "\n\n"
+				body = io.NopCloser(strings.NewReader(sse))
+			} else {
+				body = io.NopCloser(bytes.NewReader(compressed))
+			}
+			stream := &openaiTTSChunkedStream{
+				resp:           body,
+				responseFormat: tc.format,
+				streamFormat:   tc.stream,
+			}
+			defer stream.Close()
+
+			for {
+				audio, err := stream.Next()
+				if err != nil {
+					t.Fatalf("Next before final = %v", err)
+				}
+				if audio != nil && audio.IsFinal {
+					return
+				}
+			}
+		})
+	}
+}
+
 func TestOpenAITTSCompressedEmptyStreamsReturnEOF(t *testing.T) {
 	cases := []struct {
 		name   string

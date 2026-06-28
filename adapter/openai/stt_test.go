@@ -129,6 +129,36 @@ func TestOpenAISpeechEventDefaultsMissingConfidenceToOne(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTRecognizeFallsBackToReferenceRequestLanguage(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		if r.FormValue("language") != "id" {
+			t.Fatalf("language form = %q, want id", r.FormValue("language"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"halo"}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTBaseURL("https://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "id")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if got := event.Alternatives[0].Language; got != "id" {
+		t.Fatalf("language = %q, want request language fallback", got)
+	}
+}
+
 func TestOpenAISTTRecognizeUploadsWAVContainer(t *testing.T) {
 	var uploaded []byte
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
@@ -910,6 +940,75 @@ func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTConnectOptions(llm.APIConnectOptions{MaxRetry: 1, RetryInterval: time.Millisecond, Timeout: time.Second}),
+	)
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	sendFinal := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if attempt == 1 {
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"error",
+					"error":{"message":"temporary provider error","code":"server_error"}
+				}`)); err != nil {
+					t.Errorf("write provider error: %v", err)
+				}
+				return
+			}
+			close(secondConnected)
+			<-sendFinal
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"conversation.item.input_audio_transcription.completed",
+				"item_id":"item-2",
+				"transcript":"after provider error"
+			}`)); err != nil {
+				t.Errorf("write final transcript: %v", err)
+			}
+			<-releaseSecond
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not reconnect after provider error")
+	}
+	close(sendFinal)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error after provider error reconnect = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %v, want FINAL_TRANSCRIPT", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "after provider error" {
+		t.Fatalf("transcript = %q, want after provider error", got)
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want 2", got)
+	}
+}
+
 func TestOpenAISTTStreamReconnectsAfterUnexpectedNormalClose(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -1175,6 +1274,159 @@ func TestOpenAIRealtimeSTTStreamNormalizesInputAudio(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "normalized 48k stereo audio should emit two 50ms 24k mono chunks")
 }
 
+func TestOpenAIRealtimeSTTStreamResamplesInputAudioWithReferenceTiming(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	frame := make([]byte, 2)
+	binary.LittleEndian.PutUint16(frame, 1)
+	for i := 0; i < 2204; i++ {
+		if err := stream.PushFrame(&model.AudioFrame{
+			Data:              frame,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("PushFrame frame %d error = %v", i, err)
+		}
+	}
+	assertNoRealtimeMessage(t, messages, "2204 single-sample 44.1kHz frames should stay below one reference 50ms 24k STT chunk")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame frame 2205 error = %v", err)
+	}
+	var raw string
+	select {
+	case raw = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for 50ms STT chunk after exact 2205 input samples")
+	}
+	chunk := assertOpenAIRealtimeSTTAudioAppend(t, raw)
+	if len(chunk) != openAIRealtimeSTTChunkBytes() {
+		t.Fatalf("normalized audio bytes = %d, want one 50ms 24k mono chunk", len(chunk))
+	}
+}
+
+func TestOpenAIRealtimeSTTFlushEmitsResamplerTail(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	frame := make([]byte, 2)
+	binary.LittleEndian.PutUint16(frame, 7)
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame single sample error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "single sample should wait for resampler flush")
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	var raw string
+	select {
+	case raw = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for flushed resampler tail")
+	}
+	chunk := assertOpenAIRealtimeSTTAudioAppend(t, raw)
+	if len(chunk) != 2 {
+		t.Fatalf("flushed resampler tail bytes = %d, want one 16-bit PCM sample", len(chunk))
+	}
+	if got := int16(binary.LittleEndian.Uint16(chunk)); got != 7 {
+		t.Fatalf("flushed resampler tail sample = %d, want 7", got)
+	}
+	assertNoRealtimeMessage(t, messages, "Flush should not commit audio buffer")
+}
+
 func TestOpenAIRealtimeSTTStreamRejectsSampleRateChange(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -1417,6 +1669,78 @@ func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
 	}
 	_ = assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+}
+
+func TestOpenAIRealtimeSTTVADReceivesNormalizedInputAudio(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.suppressEndOfSpeech = true
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	stereo48kChunk := make([]byte, 4800*2*2)
+	for i := 0; i < 4800; i++ {
+		sampleOffset := i * 4
+		binary.LittleEndian.PutUint16(stereo48kChunk[sampleOffset:sampleOffset+2], uint16(int16(i)))
+		binary.LittleEndian.PutUint16(stereo48kChunk[sampleOffset+2:sampleOffset+4], uint16(int16(i)))
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              stereo48kChunk,
+		SampleRate:        48000,
+		NumChannels:       2,
+		SamplesPerChannel: 4800,
+	}); err != nil {
+		t.Fatalf("PushFrame stereo 48k error = %v", err)
+	}
+
+	frames := vadStream.pushedFrames()
+	if len(frames) != 1 {
+		t.Fatalf("VAD pushed frames = %d, want 1", len(frames))
+	}
+	frame := frames[0]
+	if frame.SampleRate != openAIRealtimeSTTSampleRate ||
+		frame.NumChannels != openAIRealtimeSTTNumChannels ||
+		frame.SamplesPerChannel != openAIRealtimeSTTSampleRate/10 ||
+		len(frame.Data) != openAIRealtimeSTTSampleRate/10*2 {
+		t.Fatalf("VAD frame = %+v len=%d, want normalized 100ms 24k mono", frame, len(frame.Data))
+	}
 }
 
 func TestOpenAIRealtimeSTTEndInputWithVADWaitsForEndOfSpeech(t *testing.T) {
@@ -2968,6 +3292,37 @@ func TestOpenAIRealtimeSTTSpeechStartedClearsStaleCurrentItemID(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTCompletedWithoutItemIDClearsCurrentPartial(t *testing.T) {
+	now := time.Unix(100, 0)
+	state := &openAIRealtimeSTTMessageState{
+		now: func() time.Time {
+			return now
+		},
+	}
+
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state); err != nil {
+		t.Fatalf("speech started: %v", err)
+	}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"old"}`), state); err != nil {
+		t.Fatalf("first delta: %v", err)
+	}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","transcript":"old","usage":{}}`), state); err != nil {
+		t.Fatalf("completion without item id: %v", err)
+	}
+
+	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","delta":"new"}`), state)
+	if err != nil {
+		t.Fatalf("next missing-id delta: %v", err)
+	}
+	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("events = %+v, want fresh interim transcript", events)
+	}
+	if events[0].Alternatives[0].Text != "new" {
+		t.Fatalf("interim text = %q, want fresh transcript after completed reset", events[0].Alternatives[0].Text)
+	}
+}
+
 func TestOpenAIRealtimeSTTErrorMessageReturnsAPIError(t *testing.T) {
 	_, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
 		"type":"error",
@@ -3047,6 +3402,7 @@ type fakeOpenAISTTVADStream struct {
 	pushStartedCh       chan struct{}
 	releasePushCh       chan struct{}
 	suppressEndOfSpeech bool
+	frames              []*model.AudioFrame
 	closed              bool
 	endInputOnce        sync.Once
 	closeOnce           sync.Once
@@ -3060,7 +3416,7 @@ func newFakeOpenAISTTVADStream() *fakeOpenAISTTVADStream {
 	}
 }
 
-func (f *fakeOpenAISTTVADStream) PushFrame(*model.AudioFrame) error {
+func (f *fakeOpenAISTTVADStream) PushFrame(frame *model.AudioFrame) error {
 	if f.pushStartedCh != nil {
 		f.pushStartedCh <- struct{}{}
 	}
@@ -3072,10 +3428,23 @@ func (f *fakeOpenAISTTVADStream) PushFrame(*model.AudioFrame) error {
 	if f.closed {
 		return io.ErrClosedPipe
 	}
+	if frame != nil {
+		cloned := *frame
+		cloned.Data = append([]byte(nil), frame.Data...)
+		f.frames = append(f.frames, &cloned)
+	}
 	if !f.suppressEndOfSpeech {
 		f.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
 	}
 	return nil
+}
+
+func (f *fakeOpenAISTTVADStream) pushedFrames() []*model.AudioFrame {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	frames := make([]*model.AudioFrame, len(f.frames))
+	copy(frames, f.frames)
+	return frames
 }
 
 func (f *fakeOpenAISTTVADStream) Flush() error {

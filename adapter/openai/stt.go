@@ -631,6 +631,9 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if s.isClosed() {
 		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 	}
+	if resp.Language == "" {
+		resp.Language = openAIAudioRequestLanguage(s, language)
+	}
 
 	return openAISpeechEvent(resp, req.Language), nil
 }
@@ -676,13 +679,7 @@ func openAISTTWAVBytes(frames []*model.AudioFrame) []byte {
 }
 
 func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.AudioRequest {
-	requestLanguage := s.language
-	if language != "" {
-		requestLanguage = language
-	}
-	if requestLanguage != "" {
-		requestLanguage = openAISTTRequestLanguage(requestLanguage)
-	}
+	requestLanguage := openAIAudioRequestLanguage(s, language)
 	req := openai.AudioRequest{
 		Model:    s.model,
 		FilePath: "file.wav", // Static filename required by API when Reader is used.
@@ -695,6 +692,17 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 		req.Format = openai.AudioResponseFormatVerboseJSON
 	}
 	return req
+}
+
+func openAIAudioRequestLanguage(s *OpenAISTT, language string) string {
+	requestLanguage := s.language
+	if language != "" {
+		requestLanguage = language
+	}
+	if requestLanguage != "" {
+		requestLanguage = openAISTTRequestLanguage(requestLanguage)
+	}
+	return requestLanguage
 }
 
 func openAISTTRequestLanguage(language string) string {
@@ -753,6 +761,7 @@ type openAIRealtimeSTTStream struct {
 	hasAudio    bool
 	pushedSR    uint32
 	audio       *audio.AudioByteStream
+	normalizer  openAIRealtimeInputAudioNormalizer
 	state       *openAIRealtimeSTTMessageState
 	owner       *OpenAISTT
 	vadStream   vad.VADStream
@@ -778,7 +787,7 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		s.pushedSR = frame.SampleRate
 	}
-	normalizedFrame, err := normalizeOpenAIRealtimeInputAudio(frame)
+	normalizedFrame, err := s.normalizer.normalize(frame)
 	if err != nil {
 		s.mu.Unlock()
 		return err
@@ -787,6 +796,7 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.audio = newOpenAIRealtimeSTTAudioByteStream()
 	}
 	vadStream := s.vadStream
+	vadFrame := normalizedFrame
 	for _, chunk := range s.audio.Push(normalizedFrame.Data) {
 		message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
 		if err != nil {
@@ -802,8 +812,8 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.committed = false
 	}
 	s.mu.Unlock()
-	if vadStream != nil {
-		if err := vadStream.PushFrame(frame); err != nil {
+	if vadStream != nil && vadFrame != nil && len(vadFrame.Data) > 0 {
+		if err := vadStream.PushFrame(vadFrame); err != nil {
 			s.mu.Lock()
 			closed := s.closed
 			s.mu.Unlock()
@@ -854,6 +864,23 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 }
 
 func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
+	if tail := s.normalizer.flush(); tail != nil {
+		if s.audio == nil {
+			s.audio = newOpenAIRealtimeSTTAudioByteStream()
+		}
+		for _, chunk := range s.audio.Push(tail.Data) {
+			message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
+			if err != nil {
+				return err
+			}
+			if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+			s.hasAudio = true
+			s.committed = false
+		}
+	}
 	if s.audio != nil {
 		for _, chunk := range s.audio.Flush() {
 			message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
@@ -1054,6 +1081,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		s.closeEventStream()
 	}()
 	connectedAt := time.Now()
+	providerErrorRetries := 0
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
@@ -1074,12 +1102,26 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		}
 		events, err := openAIRealtimeSTTEventsFromMessage(payload, s.state)
 		if err != nil {
+			var apiErr *llm.APIError
+			if errors.As(err, &apiErr) && s.owner != nil && providerErrorRetries < s.owner.connect.MaxRetry {
+				providerErrorRetries++
+				if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
+					if s.isClosed() || s.ctx.Err() != nil {
+						return
+					}
+					s.errCh <- reconnectErr
+					return
+				}
+				connectedAt = time.Now()
+				continue
+			}
 			s.errCh <- err
 			return
 		}
 		for _, event := range events {
 			s.sendEvent(event)
 		}
+		providerErrorRetries = 0
 		if s.shouldRecycleAfterEvents(events, connectedAt) {
 			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
 				if s.isClosed() || s.ctx.Err() != nil {
@@ -1166,6 +1208,7 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	}
 	s.conn = conn
 	s.audio = nil
+	s.normalizer.reset()
 	s.hasAudio = false
 	s.committed = false
 	if s.owner.vad != nil {
@@ -1269,6 +1312,10 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		itemID := openAIString(message["item_id"])
 		transcript := openAIString(message["transcript"])
 		delete(state.partials, itemID)
+		if itemID == "" && state.currentItemID != "" {
+			delete(state.partials, state.currentItemID)
+			state.currentItemID = ""
+		}
 		events := []*stt.SpeechEvent{}
 		if transcript != "" {
 			events = append(events, &stt.SpeechEvent{

@@ -929,6 +929,70 @@ func (c *extraBodyHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	return base.Do(cloned)
 }
 
+type openAIExtraContentPatch struct {
+	Message   map[string]any
+	ToolCalls []map[string]any
+}
+
+type extraContentHTTPClient struct {
+	base    openai.HTTPDoer
+	patches []openAIExtraContentPatch
+}
+
+func (c *extraContentHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	base := c.base
+	if base == nil {
+		base = http.DefaultClient
+	}
+	if req.Body == nil || len(c.patches) == 0 {
+		return base.Do(req)
+	}
+	original, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	_ = req.Body.Close()
+
+	payload := map[string]any{}
+	if len(original) > 0 {
+		if err := json.Unmarshal(original, &payload); err != nil {
+			cloned := req.Clone(req.Context())
+			cloned.Body = io.NopCloser(bytes.NewReader(original))
+			cloned.ContentLength = int64(len(original))
+			return base.Do(cloned)
+		}
+	}
+	messages, _ := payload["messages"].([]any)
+	for i := 0; i < len(messages) && i < len(c.patches); i++ {
+		message, ok := messages[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		patch := c.patches[i]
+		if len(patch.Message) > 0 {
+			message["extra_content"] = patch.Message
+		}
+		toolCalls, _ := message["tool_calls"].([]any)
+		for j := 0; j < len(toolCalls) && j < len(patch.ToolCalls); j++ {
+			toolCall, ok := toolCalls[j].(map[string]any)
+			if ok && len(patch.ToolCalls[j]) > 0 {
+				toolCall["extra_content"] = patch.ToolCalls[j]
+			}
+		}
+	}
+	merged, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Body = io.NopCloser(bytes.NewReader(merged))
+	cloned.ContentLength = int64(len(merged))
+	cloned.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(merged)), nil
+	}
+	return base.Do(cloned)
+}
+
 func (l *OpenAILLM) Model() string {
 	return l.model
 }
@@ -1062,7 +1126,8 @@ func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	defaultReasoning := l.defaultReasoning && !l.reasoningObjectSet
 	req := buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(l.model, chatCtx, effectiveOptions, defaultReasoning, l.strictToolSchema)
 	client := l.client
-	if callClient := l.openAIClientWithCallExtras(effectiveOptions.ExtraParams); callClient != nil {
+	extraContentPatches := openAIChatExtraContentPatches(chatCtx)
+	if callClient := l.openAIClientWithCallExtras(effectiveOptions.ExtraParams, extraContentPatches); callClient != nil {
 		client = callClient
 	}
 
@@ -1193,11 +1258,11 @@ func waitOpenAIRetryInterval(ctx context.Context, interval time.Duration) error 
 	}
 }
 
-func (l *OpenAILLM) openAIClientWithCallExtras(params map[string]any) *openai.Client {
+func (l *OpenAILLM) openAIClientWithCallExtras(params map[string]any, patches []openAIExtraContentPatch) *openai.Client {
 	headers := openAIExtraHeaderParams(params)
 	query := openAIExtraQueryParams(params)
 	body := openAIExtraBodyParams(params)
-	if len(headers) == 0 && len(query) == 0 && len(body) == 0 {
+	if len(headers) == 0 && len(query) == 0 && len(body) == 0 && len(patches) == 0 {
 		return nil
 	}
 
@@ -1218,6 +1283,12 @@ func (l *OpenAILLM) openAIClientWithCallExtras(params map[string]any) *openai.Cl
 		config.HTTPClient = &extraBodyHTTPClient{
 			base: config.HTTPClient,
 			body: body,
+		}
+	}
+	if len(patches) > 0 {
+		config.HTTPClient = &extraContentHTTPClient{
+			base:    config.HTTPClient,
+			patches: patches,
 		}
 	}
 	return openai.NewClientWithConfig(config)
@@ -2088,6 +2159,89 @@ func buildOpenAIChatMessages(chatCtx *llm.ChatContext) []openai.ChatCompletionMe
 		}
 	}
 	return messages
+}
+
+func openAIChatExtraContentPatches(chatCtx *llm.ChatContext) []openAIExtraContentPatch {
+	if chatCtx == nil {
+		return nil
+	}
+	patches := make([]openAIExtraContentPatch, 0)
+	hasExtras := false
+	for _, group := range groupOpenAIChatItems(chatCtx.Items) {
+		if group.message == nil && len(group.toolCalls) == 0 && len(group.toolOutputs) == 0 {
+			continue
+		}
+
+		patch := openAIExtraContentPatch{}
+		if group.message != nil {
+			patch.Message = openAIAllowedExtraContent(group.message.Extra)
+			hasExtras = hasExtras || len(patch.Message) > 0
+		}
+		if len(group.toolCalls) > 0 {
+			patch.ToolCalls = make([]map[string]any, 0, len(group.toolCalls))
+			for _, toolCall := range group.toolCalls {
+				toolExtra := openAIAllowedExtraContent(toolCall.Extra)
+				hasExtras = hasExtras || len(toolExtra) > 0
+				patch.ToolCalls = append(patch.ToolCalls, toolExtra)
+			}
+		}
+		patches = append(patches, patch)
+		for range group.toolOutputs {
+			patches = append(patches, openAIExtraContentPatch{})
+		}
+	}
+	if !hasExtras {
+		return nil
+	}
+	return patches
+}
+
+func openAIAllowedExtraContent(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return nil
+	}
+	filtered := make(map[string]any, 3)
+	for _, key := range []string{"google", "livekit", "xai"} {
+		value, ok := extra[key]
+		if ok && openAIExtraContentTruthy(value) {
+			filtered[key] = value
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
+func openAIExtraContentTruthy(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case string:
+		return v != ""
+	case int:
+		return v != 0
+	case int32:
+		return v != 0
+	case int64:
+		return v != 0
+	case float32:
+		return v != 0
+	case float64:
+		return v != 0
+	case []any:
+		return len(v) > 0
+	case []string:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	case map[string]string:
+		return len(v) > 0
+	default:
+		return true
+	}
 }
 
 func buildOpenAIChatMessage(msg *llm.ChatMessage) openai.ChatCompletionMessage {

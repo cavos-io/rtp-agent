@@ -403,6 +403,7 @@ type realtimeSession struct {
 	instructions          string
 	tools                 []llm.Tool
 	audioBStream          *audio.AudioByteStream
+	audioNormalizer       openAIRealtimeInputAudioNormalizer
 	pushedDuration        float64
 	optionsState          map[string]any
 	connectedAt           time.Time
@@ -1260,16 +1261,11 @@ func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, e
 			}
 		}
 		if msg.Role == llm.ChatRoleUser && part.Audio != nil {
-			audioPart := map[string]any{"type": "input_audio"}
-			if encoded := openAIRealtimeAudioContent(part.Audio); encoded != "" {
-				audioPart["audio"] = encoded
-			}
-			if part.Audio.Transcript != "" {
-				audioPart["transcript"] = part.Audio.Transcript
-			}
-			if len(audioPart) > 1 {
-				content = append(content, audioPart)
-			}
+			content = append(content, map[string]any{
+				"type":       "input_audio",
+				"audio":      openAIRealtimeAudioContent(part.Audio),
+				"transcript": part.Audio.Transcript,
+			})
 		}
 	}
 	return content, nil
@@ -1610,7 +1606,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	frame, err := normalizeOpenAIRealtimeInputAudio(frame)
+	frame, err := s.audioNormalizer.normalize(frame)
 	if err != nil {
 		return err
 	}
@@ -1633,7 +1629,15 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return nil
 }
 
-func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFrame, error) {
+type openAIRealtimeInputAudioNormalizer struct {
+	sampleRate  uint32
+	numChannels uint32
+	remainder   uint64
+	lastSample  int16
+	hasTail     bool
+}
+
+func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) (*model.AudioFrame, error) {
 	if frame == nil {
 		return nil, nil
 	}
@@ -1641,6 +1645,7 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 		return frame, nil
 	}
 	if frame.SampleRate == openAIRealtimeInputSampleRate && frame.NumChannels == openAIRealtimeInputNumChannels {
+		n.reset()
 		return frame, nil
 	}
 	if len(frame.Data)%2 != 0 {
@@ -1654,6 +1659,11 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 	if len(frame.Data) < expectedBytes {
 		return nil, fmt.Errorf("openai realtime input audio data is shorter than declared sample count")
 	}
+	if n.sampleRate != frame.SampleRate || n.numChannels != frame.NumChannels {
+		n.sampleRate = frame.SampleRate
+		n.numChannels = frame.NumChannels
+		n.remainder = 0
+	}
 	if samplesPerChannel == 0 {
 		return &model.AudioFrame{
 			SampleRate:        openAIRealtimeInputSampleRate,
@@ -1662,9 +1672,12 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 		}, nil
 	}
 
-	outSamples := uint32((uint64(samplesPerChannel)*uint64(openAIRealtimeInputSampleRate) + uint64(frame.SampleRate) - 1) / uint64(frame.SampleRate))
+	scaledSamples := uint64(samplesPerChannel)*uint64(openAIRealtimeInputSampleRate) + n.remainder
+	outSamples := uint32(scaledSamples / uint64(frame.SampleRate))
+	n.remainder = scaledSamples % uint64(frame.SampleRate)
 	out := make([]byte, int(outSamples*openAIRealtimeInputNumChannels*2))
 	channelCount := int(frame.NumChannels)
+	n.hasTail = false
 	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
 		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(openAIRealtimeInputSampleRate))
 		if srcIdx >= samplesPerChannel {
@@ -1678,6 +1691,16 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 		sample := sum / int32(channelCount)
 		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(int16(sample)))
 	}
+	if n.remainder > 0 {
+		srcIdx := samplesPerChannel - 1
+		var sum int32
+		for ch := 0; ch < channelCount; ch++ {
+			offset := (int(srcIdx)*channelCount + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		n.lastSample = int16(sum / int32(channelCount))
+		n.hasTail = true
+	}
 
 	return &model.AudioFrame{
 		Data:              out,
@@ -1685,6 +1708,30 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 		NumChannels:       openAIRealtimeInputNumChannels,
 		SamplesPerChannel: outSamples,
 	}, nil
+}
+
+func (n *openAIRealtimeInputAudioNormalizer) flush() *model.AudioFrame {
+	if n == nil || n.remainder == 0 || !n.hasTail || n.sampleRate == 0 {
+		return nil
+	}
+	out := make([]byte, openAIRealtimeInputNumChannels*2)
+	binary.LittleEndian.PutUint16(out, uint16(n.lastSample))
+	n.remainder = 0
+	n.hasTail = false
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        openAIRealtimeInputSampleRate,
+		NumChannels:       openAIRealtimeInputNumChannels,
+		SamplesPerChannel: 1,
+	}
+}
+
+func (n *openAIRealtimeInputAudioNormalizer) reset() {
+	n.sampleRate = 0
+	n.numChannels = 0
+	n.remainder = 0
+	n.lastSample = 0
+	n.hasTail = false
 }
 
 func newOpenAIRealtimeAudioByteStream() *audio.AudioByteStream {
@@ -2711,6 +2758,12 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 func (s *realtimeSession) trackRealtimeMetrics(ev llm.RealtimeEvent) llm.RealtimeEvent {
 	if ev.Metrics == nil {
 		return ev
+	}
+	if ev.Metrics.Metadata == nil && s.model != nil {
+		ev.Metrics.Metadata = &telemetry.Metadata{
+			ModelName:     llm.RealtimeModelName(s.model),
+			ModelProvider: llm.RealtimeProvider(s.model),
+		}
 	}
 	timing := s.lastGeneration
 	if s.generation != nil && !s.generation.timing.createdAt.IsZero() {

@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1419,6 +1420,64 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestRealtimeSessionResamplesInputAudioWithReferenceStreamTiming(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(raw)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeWebsocketDialer(dialer))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	assertRealtimeMessage(t, <-messages, "session.update", "")
+
+	frame := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(frame[i*2:i*2+2], uint16(int16(i)))
+	}
+	for i := 0; i < 44; i++ {
+		if err := session.PushAudio(&audiomodel.AudioFrame{
+			Data:              frame,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: 100,
+		}); err != nil {
+			t.Fatalf("PushAudio frame %d error = %v", i, err)
+		}
+	}
+	assertNoRealtimeMessage(t, messages, "44 short 44.1kHz frames should stay below one reference 100ms 24k chunk")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	}); err != nil {
+		t.Fatalf("PushAudio frame 45 error = %v", err)
+	}
+	msg := <-messages
+	assertRealtimeMessage(t, msg, "input_audio_buffer.append", "")
+	payload := realtimeMessagePayload(t, msg, "audio")
+	audio, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("decode audio payload: %v", err)
+	}
+	if got, want := len(audio), int(openAIRealtimeInputSampleRate/10*2); got != want {
+		t.Fatalf("audio chunk bytes = %d, want %d", got, want)
 	}
 }
 
@@ -6215,6 +6274,57 @@ func TestRealtimeChatContextCreateMessagesPreserveEmptyTextContent(t *testing.T)
 }
 
 func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
+	cases := []struct {
+		name       string
+		transcript string
+	}{
+		{name: "non-empty transcript", transcript: "spoken words"},
+		{name: "empty transcript", transcript: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chatCtx := llm.NewChatContext()
+			chatCtx.AddMessage(llm.ChatMessageArgs{
+				ID:   "msg_audio",
+				Role: llm.ChatRoleUser,
+				Content: []llm.ChatContent{{
+					Audio: &llm.AudioContent{
+						Frames: []any{
+							&audiomodel.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+							&audiomodel.AudioFrame{Data: []byte{3, 4}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+						},
+						Transcript: tc.transcript,
+					},
+				}},
+			})
+
+			msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+			if err != nil {
+				t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+			}
+			if len(msgs) != 1 {
+				t.Fatalf("messages len = %d, want 1", len(msgs))
+			}
+			item := msgs[0]["item"].(map[string]any)
+			content := item["content"].([]map[string]any)
+			if len(content) != 1 || content[0]["type"] != "input_audio" {
+				t.Fatalf("content = %#v, want one input audio content part", content)
+			}
+			if got, want := content[0]["audio"], base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}); got != want {
+				t.Fatalf("audio = %#v, want %q", got, want)
+			}
+			transcript, ok := content[0]["transcript"]
+			if !ok {
+				t.Fatalf("transcript missing from content %#v", content[0])
+			}
+			if transcript != tc.transcript {
+				t.Fatalf("transcript = %#v, want %q", transcript, tc.transcript)
+			}
+		})
+	}
+}
+
+func TestRealtimeChatContextCreateMessagesPreservesEmptyUserAudioContent(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.AddMessage(llm.ChatMessageArgs{
 		ID:   "msg_audio",
@@ -6222,10 +6332,8 @@ func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
 		Content: []llm.ChatContent{{
 			Audio: &llm.AudioContent{
 				Frames: []any{
-					&audiomodel.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
-					&audiomodel.AudioFrame{Data: []byte{3, 4}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+					&audiomodel.AudioFrame{SampleRate: 24000, NumChannels: 1},
 				},
-				Transcript: "spoken words",
 			},
 		}},
 	})
@@ -6240,13 +6348,13 @@ func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
 	item := msgs[0]["item"].(map[string]any)
 	content := item["content"].([]map[string]any)
 	if len(content) != 1 || content[0]["type"] != "input_audio" {
-		t.Fatalf("content = %#v, want one input audio content part", content)
+		t.Fatalf("content = %#v, want one empty input_audio part", content)
 	}
-	if got, want := content[0]["audio"], base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}); got != want {
-		t.Fatalf("audio = %#v, want %q", got, want)
+	if audio, ok := content[0]["audio"].(string); !ok || audio != "" {
+		t.Fatalf("audio = %#v, want explicit empty audio payload", content[0]["audio"])
 	}
-	if got := content[0]["transcript"]; got != "spoken words" {
-		t.Fatalf("transcript = %#v, want spoken words", got)
+	if transcript, ok := content[0]["transcript"].(string); !ok || transcript != "" {
+		t.Fatalf("transcript = %#v, want explicit empty transcript", content[0]["transcript"])
 	}
 }
 
@@ -6571,6 +6679,29 @@ func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
 	}
 	if ev.Metrics.TokensPerSecond <= 0 {
 		t.Fatalf("metrics tokens_per_second = %f, want output tokens divided by duration", ev.Metrics.TokensPerSecond)
+	}
+}
+
+func TestRealtimeSessionAddsReferenceMetadataToResponseMetrics(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime")
+	model.baseURL = "wss://realtime.openai.test/v1/realtime"
+	session := &realtimeSession{model: model}
+
+	ev := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			RequestID: "resp_123",
+		},
+	})
+
+	if ev.Metrics == nil || ev.Metrics.Metadata == nil {
+		t.Fatalf("metrics = %#v, want metadata", ev.Metrics)
+	}
+	if ev.Metrics.Metadata.ModelName != "gpt-realtime" {
+		t.Fatalf("metrics model_name = %q, want gpt-realtime", ev.Metrics.Metadata.ModelName)
+	}
+	if ev.Metrics.Metadata.ModelProvider != "realtime.openai.test" {
+		t.Fatalf("metrics model_provider = %q, want realtime.openai.test", ev.Metrics.Metadata.ModelProvider)
 	}
 }
 
