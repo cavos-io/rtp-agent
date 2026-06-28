@@ -2479,36 +2479,65 @@ func TestOpenAIRealtimeSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 }
 
 func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe", WithOpenAISTTRealtime(true))
+	stream := &openAIRealtimeSTTStream{
+		state: &openAIRealtimeSTTMessageState{language: "en"},
+	}
+	provider.registerRealtimeSTTStream(stream)
+	provider.UpdateOptions(WithOpenAISTTLanguage("id"))
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
+		"type":"conversation.item.input_audio_transcription.delta",
+		"item_id":"item-1",
+		"delta":"halo"
+	}`), stream.state)
+	if err != nil {
+		t.Fatalf("events from message: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want interim transcript", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "id" {
+		t.Fatalf("language = %q, want id", got)
+	}
+}
+
+func TestOpenAISTTUpdateOptionsReconnectsActiveStreamLikeReference(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
 		WithOpenAISTTBaseURL("http://openai.test/v1"),
 	)
-	started := make(chan struct{})
-	updated := make(chan map[string]any, 1)
+	var dialCount atomic.Int32
+	firstConnected := make(chan struct{})
+	secondConnected := make(chan map[string]any, 1)
 	sendDelta := make(chan struct{})
 	releaseServer := make(chan struct{})
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
 		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
 				t.Errorf("session update read error = %v", err)
 				return
 			}
-			close(started)
-			_, updatePayload, err := conn.ReadMessage()
-			if err != nil {
-				t.Errorf("language update read error = %v", err)
-				return
-			}
 			var update map[string]any
-			if err := json.Unmarshal(updatePayload, &update); err != nil {
-				t.Errorf("decode language update: %v", err)
+			if err := json.Unmarshal(payload, &update); err != nil {
+				t.Errorf("decode session update: %v", err)
 				return
 			}
-			updated <- update
+			if attempt == 1 {
+				close(firstConnected)
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+				<-releaseServer
+				return
+			}
+			secondConnected <- update
 			<-sendDelta
 			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
 				"type":"conversation.item.input_audio_transcription.delta",
-				"item_id":"item-1",
+				"item_id":"item-2",
 				"delta":"halo"
 			}`)); err != nil {
 				t.Errorf("write delta: %v", err)
@@ -2526,32 +2555,36 @@ func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	defer close(releaseServer)
 
 	select {
-	case <-started:
+	case <-firstConnected:
 	case <-time.After(time.Second):
 		t.Fatal("stream did not send initial session update")
 	}
 
 	provider.UpdateOptions(WithOpenAISTTLanguage("id"))
+	var update map[string]any
 	select {
-	case update := <-updated:
-		session := update["session"].(map[string]any)
-		audio := session["audio"].(map[string]any)
-		input := audio["input"].(map[string]any)
-		transcription := input["transcription"].(map[string]any)
-		if got := transcription["language"]; got != "id" {
-			t.Fatalf("updated session language = %#v, want id", got)
-		}
+	case update = <-secondConnected:
 	case <-time.After(time.Second):
-		t.Fatal("stream did not send provider language session update")
+		t.Fatal("stream did not reconnect active websocket after language update")
+	}
+	session := update["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if got := transcription["language"]; got != "id" {
+		t.Fatalf("reconnected session language = %#v, want id", got)
 	}
 	close(sendDelta)
 
 	event, err := stream.Next()
 	if err != nil {
-		t.Fatalf("Next error = %v", err)
+		t.Fatalf("Next error after reconnect = %v", err)
 	}
 	if got := event.Alternatives[0].Language; got != "id" {
 		t.Fatalf("language = %q, want id", got)
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want reconnect", got)
 	}
 }
 

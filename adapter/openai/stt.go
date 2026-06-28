@@ -892,22 +892,17 @@ func (s *openAIRealtimeSTTStream) UpdateOptions(language string) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.state == nil {
 		s.state = &openAIRealtimeSTTMessageState{}
 	}
 	s.state.language = language
 	if s.closed || s.conn == nil || s.owner == nil {
+		s.mu.Unlock()
 		return
 	}
-	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
-	if err != nil {
-		s.sendErrorLocked(err)
-		return
-	}
-	if err := s.conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
-		s.closeAfterWriteFailureLocked()
-	}
+	conn := s.conn
+	s.mu.Unlock()
+	_ = conn.Close()
 }
 
 func (s *openAIRealtimeSTTStream) Close() error {
