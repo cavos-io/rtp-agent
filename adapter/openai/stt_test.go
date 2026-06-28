@@ -2404,6 +2404,56 @@ func TestOpenAIRealtimeSTTCompletedEmptyTranscriptEmitsUsageOnly(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
+	now := time.Unix(100, 0)
+	state := &openAIRealtimeSTTMessageState{
+		language: "en",
+		now: func() time.Time {
+			return now
+		},
+	}
+
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state); err != nil {
+		t.Fatalf("item-1 speech started: %v", err)
+	}
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"hello"}`), state)
+	if err != nil {
+		t.Fatalf("item-1 delta: %v", err)
+	}
+	if len(events) != 1 || events[0].RequestID != "item-1" || events[0].Alternatives[0].Text != "hello" {
+		t.Fatalf("item-1 events = %+v, want isolated hello interim", events)
+	}
+
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-2","audio_start_ms":200}`), state); err != nil {
+		t.Fatalf("item-2 speech started: %v", err)
+	}
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-2","delta":"wo"}`), state)
+	if err != nil {
+		t.Fatalf("item-2 first delta: %v", err)
+	}
+	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "wo" {
+		t.Fatalf("item-2 first events = %+v, want fresh item transcript", events)
+	}
+
+	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"!"}`), state)
+	if err != nil {
+		t.Fatalf("item-1 second delta: %v", err)
+	}
+	if len(events) != 1 || events[0].RequestID != "item-1" || events[0].Alternatives[0].Text != "hello!" {
+		t.Fatalf("item-1 second events = %+v, want item-1 accumulated transcript only", events)
+	}
+
+	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-2","delta":"rld"}`), state)
+	if err != nil {
+		t.Fatalf("item-2 second delta: %v", err)
+	}
+	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "world" {
+		t.Fatalf("item-2 second events = %+v, want item-2 accumulated transcript only", events)
+	}
+}
+
 func TestOpenAIRealtimeSTTSpeechStartedClearsStaleCurrentItemID(t *testing.T) {
 	now := time.Unix(100, 0)
 	state := &openAIRealtimeSTTMessageState{

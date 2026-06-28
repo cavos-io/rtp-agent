@@ -1124,18 +1124,25 @@ type openAIRealtimeSTTTiming struct {
 	endMS   int
 }
 
+type openAIRealtimeSTTPartial struct {
+	text          string
+	lastInterimAt time.Time
+}
+
 type openAIRealtimeSTTMessageState struct {
 	language      string
-	currentText   string
 	currentItemID string
-	lastInterimAt time.Time
 	now           func() time.Time
 	timing        map[string]openAIRealtimeSTTTiming
+	partials      map[string]openAIRealtimeSTTPartial
 }
 
 func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTTMessageState) ([]*stt.SpeechEvent, error) {
 	if state.timing == nil {
 		state.timing = map[string]openAIRealtimeSTTTiming{}
+	}
+	if state.partials == nil {
+		state.partials = map[string]openAIRealtimeSTTPartial{}
 	}
 	var message map[string]interface{}
 	if err := json.Unmarshal(payload, &message); err != nil {
@@ -1168,25 +1175,28 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		if delta == "" {
 			return nil, nil
 		}
-		state.currentText += delta
+		partial := state.partials[itemID]
+		partial.text += delta
 		now := openAIRealtimeSTTStateNow(state)
-		if !state.lastInterimAt.IsZero() && now.Sub(state.lastInterimAt) <= openAIRealtimeSTTDeltaInterval {
+		state.partials[itemID] = partial
+		if !partial.lastInterimAt.IsZero() && now.Sub(partial.lastInterimAt) <= openAIRealtimeSTTDeltaInterval {
 			return nil, nil
 		}
-		state.lastInterimAt = now
+		partial.lastInterimAt = now
+		state.partials[itemID] = partial
 		return []*stt.SpeechEvent{{
 			Type:      stt.SpeechEventInterimTranscript,
-			RequestID: state.currentItemID,
+			RequestID: itemID,
 			Alternatives: []stt.SpeechData{{
-				Text:       state.currentText,
+				Text:       partial.text,
 				Language:   state.language,
-				Confidence: stt.DefaultTranscriptConfidence(state.currentText),
+				Confidence: stt.DefaultTranscriptConfidence(partial.text),
 			}},
 		}}, nil
 	case "conversation.item.input_audio_transcription.completed":
 		itemID := openAIString(message["item_id"])
 		transcript := openAIString(message["transcript"])
-		state.currentText = ""
+		delete(state.partials, itemID)
 		events := []*stt.SpeechEvent{}
 		if transcript != "" {
 			events = append(events, &stt.SpeechEvent{
