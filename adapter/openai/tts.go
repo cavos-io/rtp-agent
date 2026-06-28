@@ -242,9 +242,11 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		return nil, fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
 	}
 
+	streamCtx, cancel := context.WithCancel(ctx)
 	req := buildOpenAITTSSpeechRequest(t, text)
 	stream := &openaiTTSChunkedStream{
-		ctx:            ctx,
+		ctx:            streamCtx,
+		cancel:         cancel,
 		request:        req,
 		responseFormat: t.responseFormat,
 		streamFormat:   openAITTSStreamFormatForModel(t.model),
@@ -252,6 +254,7 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		inputText:      text,
 	}
 	if !t.registerStream(stream) {
+		stream.Close()
 		return nil, fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
 	}
 	return stream, nil
@@ -392,6 +395,7 @@ func (t *OpenAITTS) isClosed() bool {
 
 type openaiTTSChunkedStream struct {
 	ctx            context.Context
+	cancel         context.CancelFunc
 	request        openai.CreateSpeechRequest
 	resp           io.ReadCloser
 	responseFormat openai.SpeechResponseFormat
@@ -448,6 +452,10 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 		}
 		resp, err := s.provider.client.CreateSpeech(s.ctx, s.request)
 		if err != nil {
+			if s.closed {
+				s.startErr = io.EOF
+				return
+			}
 			s.startErr = mapOpenAIError(err)
 			return
 		}
@@ -1013,6 +1021,9 @@ func (s *openaiTTSChunkedStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}

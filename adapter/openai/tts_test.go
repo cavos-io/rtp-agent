@@ -585,6 +585,53 @@ func TestOpenAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSChunkedStreamCloseCancelsReferenceRequestStartup(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		<-r.Context().Done()
+		close(requestCanceled)
+		return nil, r.Context().Err()
+	})
+	provider, err := NewOpenAITTS("test-key", "", "", withOpenAITTSHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for request startup")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close during request startup error = %v", err)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for request context cancellation")
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close during startup error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Next to unblock")
+	}
+}
+
 func TestOpenAITTSSynthesizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
