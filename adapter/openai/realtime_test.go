@@ -3488,6 +3488,50 @@ func TestRealtimeSessionResolvesDefaultModalitiesWhenItemDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionResolvesAudioOnlyModalitiesWhenItemDone(t *testing.T) {
+	session := &realtimeSession{
+		model: NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeModalities([]string{"audio"})),
+	}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	select {
+	case modalities, ok := <-msg.ModalitiesCh:
+		if !ok {
+			t.Fatal("ModalitiesCh closed before audio-only fallback modalities")
+		}
+		if len(modalities) != 1 || modalities[0] != "audio" {
+			t.Fatalf("modalities = %#v, want audio-only fallback modalities", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for audio-only fallback modalities")
+	}
+}
+
 func TestOpenAIRealtimeIgnoresCancellationFailedErrorEvent(t *testing.T) {
 	if ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "error",
