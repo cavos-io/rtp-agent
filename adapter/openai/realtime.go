@@ -403,6 +403,7 @@ type realtimeSession struct {
 	instructions          string
 	tools                 []llm.Tool
 	audioBStream          *audio.AudioByteStream
+	audioNormalizer       openAIRealtimeInputAudioNormalizer
 	pushedDuration        float64
 	optionsState          map[string]any
 	connectedAt           time.Time
@@ -1610,7 +1611,7 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	frame, err := normalizeOpenAIRealtimeInputAudio(frame)
+	frame, err := s.audioNormalizer.normalize(frame)
 	if err != nil {
 		return err
 	}
@@ -1634,6 +1635,17 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 }
 
 func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	var normalizer openAIRealtimeInputAudioNormalizer
+	return normalizer.normalize(frame)
+}
+
+type openAIRealtimeInputAudioNormalizer struct {
+	sampleRate  uint32
+	numChannels uint32
+	remainder   uint64
+}
+
+func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) (*model.AudioFrame, error) {
 	if frame == nil {
 		return nil, nil
 	}
@@ -1641,6 +1653,7 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 		return frame, nil
 	}
 	if frame.SampleRate == openAIRealtimeInputSampleRate && frame.NumChannels == openAIRealtimeInputNumChannels {
+		n.reset()
 		return frame, nil
 	}
 	if len(frame.Data)%2 != 0 {
@@ -1654,6 +1667,11 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 	if len(frame.Data) < expectedBytes {
 		return nil, fmt.Errorf("openai realtime input audio data is shorter than declared sample count")
 	}
+	if n.sampleRate != frame.SampleRate || n.numChannels != frame.NumChannels {
+		n.sampleRate = frame.SampleRate
+		n.numChannels = frame.NumChannels
+		n.remainder = 0
+	}
 	if samplesPerChannel == 0 {
 		return &model.AudioFrame{
 			SampleRate:        openAIRealtimeInputSampleRate,
@@ -1662,7 +1680,9 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 		}, nil
 	}
 
-	outSamples := uint32((uint64(samplesPerChannel)*uint64(openAIRealtimeInputSampleRate) + uint64(frame.SampleRate) - 1) / uint64(frame.SampleRate))
+	scaledSamples := uint64(samplesPerChannel)*uint64(openAIRealtimeInputSampleRate) + n.remainder
+	outSamples := uint32(scaledSamples / uint64(frame.SampleRate))
+	n.remainder = scaledSamples % uint64(frame.SampleRate)
 	out := make([]byte, int(outSamples*openAIRealtimeInputNumChannels*2))
 	channelCount := int(frame.NumChannels)
 	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
@@ -1685,6 +1705,12 @@ func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFra
 		NumChannels:       openAIRealtimeInputNumChannels,
 		SamplesPerChannel: outSamples,
 	}, nil
+}
+
+func (n *openAIRealtimeInputAudioNormalizer) reset() {
+	n.sampleRate = 0
+	n.numChannels = 0
+	n.remainder = 0
 }
 
 func newOpenAIRealtimeAudioByteStream() *audio.AudioByteStream {

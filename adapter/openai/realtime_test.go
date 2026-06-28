@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1419,6 +1420,64 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestRealtimeSessionResamplesInputAudioWithReferenceStreamTiming(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, raw, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(raw)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeWebsocketDialer(dialer))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	assertRealtimeMessage(t, <-messages, "session.update", "")
+
+	frame := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(frame[i*2:i*2+2], uint16(int16(i)))
+	}
+	for i := 0; i < 44; i++ {
+		if err := session.PushAudio(&audiomodel.AudioFrame{
+			Data:              frame,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: 100,
+		}); err != nil {
+			t.Fatalf("PushAudio frame %d error = %v", i, err)
+		}
+	}
+	assertNoRealtimeMessage(t, messages, "44 short 44.1kHz frames should stay below one reference 100ms 24k chunk")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	}); err != nil {
+		t.Fatalf("PushAudio frame 45 error = %v", err)
+	}
+	msg := <-messages
+	assertRealtimeMessage(t, msg, "input_audio_buffer.append", "")
+	payload := realtimeMessagePayload(t, msg, "audio")
+	audio, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("decode audio payload: %v", err)
+	}
+	if got, want := len(audio), int(openAIRealtimeInputSampleRate/10*2); got != want {
+		t.Fatalf("audio chunk bytes = %d, want %d", got, want)
 	}
 }
 
