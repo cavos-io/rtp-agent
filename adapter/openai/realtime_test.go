@@ -4748,6 +4748,34 @@ func TestRealtimeSessionPreservesQueuedTextDeltas(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionPreservesQueuedMessageGenerations(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+
+	const total = 150
+	for i := 0; i < total; i++ {
+		session.trackOpenAIRealtimeEvent(map[string]any{
+			"type": "response.output_item.added",
+			"item": map[string]any{
+				"id":   fmt.Sprintf("msg_%03d", i),
+				"type": "message",
+			},
+		})
+	}
+	session.closeRealtimeGeneration()
+
+	got := 0
+	for range created.Generation.MessageCh {
+		got++
+	}
+	if got != total {
+		t.Fatalf("queued message generations = %d, want %d", got, total)
+	}
+}
+
 func TestRealtimeSessionPersistsEmptyIDAudioTranscriptOnResponseDone(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	if err := session.remote.Insert(nil, &llm.ChatMessage{
