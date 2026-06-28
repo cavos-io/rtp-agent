@@ -2077,6 +2077,27 @@ func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeWhisperUsesDefaultVADForEndpointing(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+	)
+
+	if provider.vad == nil {
+		t.Fatal("vad = nil, want default local VAD for realtime whisper endpointing")
+	}
+}
+
+func TestOpenAIRealtimeWhisperExplicitNilVADOptsOut(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTVAD(nil),
+	)
+
+	if provider.vad != nil {
+		t.Fatalf("vad = %#v, want explicit nil VAD opt-out", provider.vad)
+	}
+}
+
 func TestOpenAIRealtimeSTTDetectLanguageOmitsLanguage(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),

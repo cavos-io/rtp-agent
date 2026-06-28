@@ -60,6 +60,7 @@ type OpenAISTT struct {
 	maxSession       time.Duration
 	dialWebsocket    openAIRealtimeSTTWebsocketDialer
 	vad              vad.VAD
+	vadSet           bool
 	streamsMu        sync.Mutex
 	streams          map[*openAIRealtimeSTTStream]struct{}
 	nextRequestID    uint64
@@ -131,6 +132,7 @@ func WithOpenAISTTRealtime(useRealtime bool) OpenAISTTOption {
 
 func WithOpenAISTTVAD(v vad.VAD) OpenAISTTOption {
 	return func(s *OpenAISTT) {
+		s.vadSet = true
 		s.vad = v
 	}
 }
@@ -183,6 +185,9 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	for _, opt := range opts {
 		opt(provider)
 	}
+	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
+		provider.vad = vad.NewSimpleVADWith(vad.WithSampleRate(openAIRealtimeSTTSampleRate))
+	}
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = provider.baseURL
 	if provider.httpClient != nil {
@@ -229,6 +234,9 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
+		provider.vad = vad.NewSimpleVADWith(vad.WithSampleRate(openAIRealtimeSTTSampleRate))
 	}
 
 	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
