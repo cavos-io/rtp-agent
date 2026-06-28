@@ -260,11 +260,11 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	if !s.started {
 		if err := s.startWAV(); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				s.finalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
-			return nil, err
+			return nil, s.fail(err)
 		}
 		s.started = true
 	}
@@ -275,7 +275,7 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	data, err := s.readPCMChunk()
 	if err != nil {
-		return nil, err
+		return nil, s.fail(err)
 	}
 	frame := &model.AudioFrame{
 		Data:              data,
@@ -287,12 +287,27 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.sampleRate > 0 && frame.SampleRate != uint32(s.sampleRate) {
 		frame, err = audio.ResampleAudioFrame(frame, uint32(s.sampleRate))
 		if err != nil {
-			return nil, err
+			return nil, s.fail(err)
 		}
 	}
 	return &tts.SynthesizedAudio{
 		Frame: frame,
 	}, nil
+}
+
+func (s *groqTTSChunkedStream) fail(err error) error {
+	_ = s.Close()
+	return groqTTSStreamError(err)
+}
+
+func groqTTSStreamError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, io.ErrClosedPipe) {
+		return err
+	}
+	return groqTTSTransportError(err)
 }
 
 func groqDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {

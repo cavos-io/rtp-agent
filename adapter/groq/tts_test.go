@@ -283,6 +283,36 @@ func TestGroqTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGroqTTSChunkedStreamFailuresReturnAPIConnectionError(t *testing.T) {
+	truncated := groqTestWAV([]byte{0x01, 0x00, 0x02, 0x00}, 48000, 1)
+	truncated = truncated[:len(truncated)-1]
+	tests := []struct {
+		name string
+		body []byte
+	}{
+		{name: "invalid header", body: []byte("not wav")},
+		{name: "truncated data", body: truncated},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := &groqTTSChunkedStream{
+				resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(tt.body))},
+				sampleRate: 48000,
+			}
+
+			audio, err := stream.Next()
+			if audio != nil {
+				t.Fatalf("Next audio = %#v, want nil on malformed provider stream", audio)
+			}
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+			}
+		})
+	}
+}
+
 func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &groqTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00, 0x02, 0x00}, 24000, 1)))},
