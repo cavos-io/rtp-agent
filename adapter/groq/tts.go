@@ -143,6 +143,9 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		if t.isClosed() && errors.Is(reqCtx.Err(), context.Canceled) {
 			return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
 		}
+		if errors.Is(reqCtx.Err(), context.Canceled) {
+			return nil, context.Canceled
+		}
 		return nil, groqTTSTransportError(err)
 	}
 	if t.isClosed() {

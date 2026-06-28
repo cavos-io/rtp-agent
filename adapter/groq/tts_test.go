@@ -364,6 +364,48 @@ func TestGroqTTSProviderCloseCancelsPendingSynthesize(t *testing.T) {
 	}
 }
 
+func TestGroqTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	requests := make(chan *http.Request, 1)
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		stream, err := provider.Synthesize(ctx, "hello")
+		if stream != nil {
+			_ = stream.Close()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Synthesize canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Synthesize canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize remained blocked after caller cancellation")
+	}
+}
+
 func TestGroqTTSChunkedStreamFailuresReturnAPIConnectionError(t *testing.T) {
 	truncated := groqTestWAV([]byte{0x01, 0x00, 0x02, 0x00}, 48000, 1)
 	truncated = truncated[:len(truncated)-1]
