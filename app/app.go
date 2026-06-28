@@ -3278,6 +3278,9 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	if speechHost := azureSTTSpeechHostFromConfig(cfg); speechHost != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSpeechHost(speechHost))
 	}
+	if speechEndpoint := azureSTTSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSpeechEndpoint(speechEndpoint))
+	}
 	if language := strings.TrimSpace(cfg.STTLanguage); language != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTLanguage(language))
 	} else if languages := azureSTTStringListModelOption(cfg.STTModelOptions, "language"); len(languages) > 0 {
@@ -3378,12 +3381,16 @@ func azureSTTSpeechHostFromConfig(cfg AppConfig) string {
 	if strings.TrimSpace(cfg.STTBaseURL) != "" {
 		return strings.TrimSpace(cfg.STTBaseURL)
 	}
-	for _, key := range []string{"azure_endpoint", "speech_endpoint", "speech_host"} {
+	for _, key := range []string{"azure_endpoint", "speech_host"} {
 		if value := azureSTTModelOption(cfg.STTModelOptions, key); value != "" {
 			return value
 		}
 	}
 	return ""
+}
+
+func azureSTTSpeechEndpointFromConfig(cfg AppConfig) string {
+	return azureSTTModelOption(cfg.STTModelOptions, "speech_endpoint")
 }
 
 func azureSTTLanguageFromConfig(cfg AppConfig) string {

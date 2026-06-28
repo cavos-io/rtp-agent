@@ -12869,6 +12869,28 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureSTTSpeechEndpoint(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "speech_endpoint=https://speech.endpoint.test/custom/stt")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("speechEndpoint").String(), "https://speech.endpoint.test/custom/stt"; got != want {
+		t.Fatalf("Azure STT speechEndpoint = %q, want %q", got, want)
+	}
+	if got := state.FieldByName("speechHost").String(); got != "" {
+		t.Fatalf("Azure STT speechHost = %q, want empty when speech_endpoint configured", got)
+	}
+}
+
 func TestDefaultConfigFromEnvMapsAzureSTTLanguageCandidates(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
