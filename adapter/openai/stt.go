@@ -788,6 +788,7 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.audio = newOpenAIRealtimeSTTAudioByteStream()
 	}
 	vadStream := s.vadStream
+	vadFrame := normalizedFrame
 	for _, chunk := range s.audio.Push(normalizedFrame.Data) {
 		message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
 		if err != nil {
@@ -803,8 +804,8 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.committed = false
 	}
 	s.mu.Unlock()
-	if vadStream != nil {
-		if err := vadStream.PushFrame(frame); err != nil {
+	if vadStream != nil && vadFrame != nil && len(vadFrame.Data) > 0 {
+		if err := vadStream.PushFrame(vadFrame); err != nil {
 			s.mu.Lock()
 			closed := s.closed
 			s.mu.Unlock()
