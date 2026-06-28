@@ -247,6 +247,42 @@ func TestGroqTTSSynthesizeTransportErrorsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGroqTTSProviderCloseClosesActiveStreams(t *testing.T) {
+	body := &groqCloseCountBody{Reader: bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))}
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if err := tts.Close(provider); err != nil {
+		t.Fatalf("tts.Close error = %v", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closeCount)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
+	}
+	if err := tts.Close(provider); err != nil {
+		t.Fatalf("second tts.Close error = %v", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close calls after second Close = %d, want 1", body.closeCount)
+	}
+}
+
 func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &groqTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00, 0x02, 0x00}, 24000, 1)))},
