@@ -36,7 +36,7 @@
         formatter = pkgs.alejandra;
 
         devShells.default = pkgs.mkShell {
-          buildInputs = [pkgs.go_1_26] ++ libraryDependencies;
+          buildInputs = with pkgs; [go_1_26 ffmpeg] ++ libraryDependencies;
 
           shellHook = ''
             export CGO_ENABLED=1

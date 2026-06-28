@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -310,6 +311,209 @@ func DecodeOpusAudio(data []byte, sampleRate int, numChannels int) (*model.Audio
 		NumChannels:       outputChannels,
 		SamplesPerChannel: samplesPerChannel,
 	}, nil
+}
+
+type FFmpegAudioStreamDecoder struct {
+	inputFormat string
+	sampleRate  int
+	numChannels int
+
+	inputCh  chan []byte
+	outputCh chan *model.AudioFrame
+	errCh    chan error
+
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout io.ReadCloser
+
+	mu      sync.Mutex
+	closed  bool
+	ended   bool
+	inOnce  sync.Once
+	outOnce sync.Once
+}
+
+func NewAACAudioStreamDecoder() AudioStreamDecoder {
+	return NewFFmpegAudioStreamDecoder("aac", 24000, 1)
+}
+
+func NewFLACAudioStreamDecoder() AudioStreamDecoder {
+	return NewFFmpegAudioStreamDecoder("flac", 24000, 1)
+}
+
+func NewFFmpegAudioStreamDecoder(inputFormat string, sampleRate int, numChannels int) AudioStreamDecoder {
+	d := &FFmpegAudioStreamDecoder{
+		inputFormat: inputFormat,
+		sampleRate:  sampleRate,
+		numChannels: numChannels,
+		inputCh:     make(chan []byte, 100),
+		outputCh:    make(chan *model.AudioFrame, 100),
+		errCh:       make(chan error, 1),
+	}
+	go d.processLoop()
+	return d
+}
+
+func (d *FFmpegAudioStreamDecoder) Push(data []byte) {
+	chunk := make([]byte, len(data))
+	copy(chunk, data)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed || d.ended {
+		return
+	}
+	d.inputCh <- chunk
+}
+
+func (d *FFmpegAudioStreamDecoder) EndInput() {
+	d.mu.Lock()
+	if !d.ended {
+		d.ended = true
+		d.inOnce.Do(func() { close(d.inputCh) })
+	}
+	d.mu.Unlock()
+}
+
+func (d *FFmpegAudioStreamDecoder) Next() (*model.AudioFrame, error) {
+	select {
+	case frame, ok := <-d.outputCh:
+		if !ok {
+			return nil, fmt.Errorf("decoder closed")
+		}
+		return frame, nil
+	case err := <-d.errCh:
+		return nil, err
+	}
+}
+
+func (d *FFmpegAudioStreamDecoder) Close() error {
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil
+	}
+	d.closed = true
+	d.inOnce.Do(func() { close(d.inputCh) })
+	if d.stdin != nil {
+		_ = d.stdin.Close()
+	}
+	if d.stdout != nil {
+		_ = d.stdout.Close()
+	}
+	if d.cmd != nil && d.cmd.Process != nil {
+		_ = d.cmd.Process.Kill()
+	}
+	d.mu.Unlock()
+	return nil
+}
+
+func (d *FFmpegAudioStreamDecoder) processLoop() {
+	defer d.closeOutput()
+
+	args := []string{
+		"-hide_banner", "-loglevel", "error",
+		"-f", d.inputFormat,
+		"-i", "pipe:0",
+		"-f", "s16le",
+		"-acodec", "pcm_s16le",
+		"-ar", fmt.Sprint(d.sampleRate),
+		"-ac", fmt.Sprint(d.numChannels),
+		"pipe:1",
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		d.errCh <- fmt.Errorf("failed to create ffmpeg stdin: %w", err)
+		return
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = stdin.Close()
+		d.errCh <- fmt.Errorf("failed to create ffmpeg stdout: %w", err)
+		return
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		_ = stdin.Close()
+		_ = stdout.Close()
+		d.errCh <- fmt.Errorf("failed to start ffmpeg decoder: %w", err)
+		return
+	}
+
+	d.mu.Lock()
+	d.cmd = cmd
+	d.stdin = stdin
+	d.stdout = stdout
+	d.mu.Unlock()
+
+	waitCh := make(chan error, 1)
+	go d.writeFFmpegInput(stdin)
+	go func() { waitCh <- cmd.Wait() }()
+
+	frameBytes := max((d.sampleRate*20/1000)*d.numChannels*2, d.numChannels*2)
+	buf := make([]byte, frameBytes)
+	var pending []byte
+	for {
+		n, readErr := stdout.Read(buf)
+		if n > 0 {
+			pending = append(pending, buf[:n]...)
+			for len(pending) >= frameBytes {
+				chunk := make([]byte, frameBytes)
+				copy(chunk, pending[:frameBytes])
+				pending = pending[frameBytes:]
+				d.outputCh <- &model.AudioFrame{
+					Data:              chunk,
+					SampleRate:        uint32(d.sampleRate),
+					NumChannels:       uint32(d.numChannels),
+					SamplesPerChannel: uint32(frameBytes / (d.numChannels * 2)),
+				}
+			}
+		}
+		if readErr != nil {
+			if readErr != io.EOF {
+				d.errCh <- fmt.Errorf("ffmpeg %s decode error: %w", d.inputFormat, readErr)
+			}
+			break
+		}
+	}
+	if len(pending) > 0 && len(pending)%(d.numChannels*2) == 0 {
+		chunk := make([]byte, len(pending))
+		copy(chunk, pending)
+		d.outputCh <- &model.AudioFrame{
+			Data:              chunk,
+			SampleRate:        uint32(d.sampleRate),
+			NumChannels:       uint32(d.numChannels),
+			SamplesPerChannel: uint32(len(chunk) / (d.numChannels * 2)),
+		}
+	}
+	if err := <-waitCh; err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			d.errCh <- fmt.Errorf("ffmpeg %s decode error: %w: %s", d.inputFormat, err, msg)
+			return
+		}
+		d.errCh <- fmt.Errorf("ffmpeg %s decode error: %w", d.inputFormat, err)
+	}
+}
+
+func (d *FFmpegAudioStreamDecoder) writeFFmpegInput(stdin io.WriteCloser) {
+	for chunk := range d.inputCh {
+		if len(chunk) == 0 {
+			continue
+		}
+		if _, err := stdin.Write(chunk); err != nil {
+			break
+		}
+	}
+	_ = stdin.Close()
+}
+
+func (d *FFmpegAudioStreamDecoder) closeOutput() {
+	d.outOnce.Do(func() {
+		close(d.outputCh)
+	})
 }
 
 func int16SliceToBytes(samples []int16) []byte {

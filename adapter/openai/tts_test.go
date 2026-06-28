@@ -714,6 +714,80 @@ func TestOpenAITTSAudioOpusDecodesReferenceAudio(t *testing.T) {
 	t.Fatal("raw Opus stream did not emit final marker")
 }
 
+func TestOpenAITTSCompressedFormatsDecodeReferenceAudio(t *testing.T) {
+	cases := []struct {
+		name   string
+		format goopenai.SpeechResponseFormat
+		data   string
+		stream string
+	}{
+		{
+			name:   "audio-aac",
+			format: goopenai.SpeechResponseFormatAac,
+			data:   openAITTSAACADTSFixtureBase64,
+			stream: openAITTSStreamFormatAudio,
+		},
+		{
+			name:   "sse-aac",
+			format: goopenai.SpeechResponseFormatAac,
+			data:   openAITTSAACADTSFixtureBase64,
+			stream: openAITTSStreamFormatSSE,
+		},
+		{
+			name:   "audio-flac",
+			format: goopenai.SpeechResponseFormatFlac,
+			data:   openAITTSFLACFixtureBase64,
+			stream: openAITTSStreamFormatAudio,
+		},
+		{
+			name:   "sse-flac",
+			format: goopenai.SpeechResponseFormatFlac,
+			data:   openAITTSFLACFixtureBase64,
+			stream: openAITTSStreamFormatSSE,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			compressed, err := base64.StdEncoding.DecodeString(tc.data)
+			if err != nil {
+				t.Fatalf("decode fixture: %v", err)
+			}
+			var body io.ReadCloser
+			if tc.stream == openAITTSStreamFormatSSE {
+				sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(compressed) + `"}` + "\n\n" +
+					`data: {"type":"speech.audio.done"}` + "\n\n"
+				body = io.NopCloser(strings.NewReader(sse))
+			} else {
+				body = io.NopCloser(bytes.NewReader(compressed))
+			}
+			stream := &openaiTTSChunkedStream{
+				resp:           body,
+				responseFormat: tc.format,
+				streamFormat:   tc.stream,
+			}
+			defer stream.Close()
+
+			audio, err := stream.Next()
+			if err != nil {
+				t.Fatalf("Next error = %v", err)
+			}
+			if audio.Frame.SampleRate != 24000 {
+				t.Fatalf("sample rate = %d, want reference provider rate 24000", audio.Frame.SampleRate)
+			}
+			if audio.Frame.NumChannels != 1 {
+				t.Fatalf("channels = %d, want reference provider channels", audio.Frame.NumChannels)
+			}
+			if audio.Frame.SamplesPerChannel == 0 || len(audio.Frame.Data) == 0 {
+				t.Fatalf("decoded frame = %+v, want PCM audio", audio.Frame)
+			}
+			prefixLen := min(len(audio.Frame.Data), len(compressed))
+			if bytes.Equal(audio.Frame.Data[:prefixLen], compressed[:prefixLen]) {
+				t.Fatalf("frame data still contains compressed %s bytes", tc.format)
+			}
+		})
+	}
+}
+
 func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	wantAudio := []byte(strings.Repeat("x", 70*1024))
 	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
@@ -1581,3 +1655,7 @@ func openAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
 }
 
 const openAITTSOpusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
+
+const openAITTSAACADTSFixtureBase64 = "//FYQCW//N4CAExhdmM1OS4zNy4xMDAAAkivW6qEHV2Era+88Zx+Lmqu6laZJJuSSdvOREkl//+xxdxr2VxbpLZtPUzbWI83eI1VlnJXPMf/z/t8jbtgVAi7i5pzVxrsrPuOsRwqmaa771bhdqxuKsNiynHYnHbTt2U5VYbFWZ7G2Kw1qNjo1+sOOsNirNirMdWY6NjlKpSqUqlKpSqUqlKpSqUqlKpSqUqlKpSqUqlKpSqUriSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSnBRJRJRLklyS5JKcFRRRRRRRRZ2hVDGydCyDBt6FdMLIULJr87Nyau3n5NeSIoiFRIosqnJDFdorqF/4/fvbfuXtv3LrXW2XaSo3JcM4P/xWEAv//wBTJ7Zu9tyGlF3I4RCrddMhL+P/4fGS7vTS1evPz8/v1AXq76/t/T/cXq7ulX+f9f9y7u7uKACEPCTwwZ2dnZ2dnYWdn79ra1ShMEvRxEo87yHMSqOqu7MBm3hsjdUTH5leOGyNhDr2FVOxysSf22tuaTBdtNotAHOZ+jamA1fKflIMDO4SEgwM7hISDAwM7uEhISDAwM7uEhIT/P3b94fy/lst7vcB/L1fyQ9pfVxGvDOIiNxJ3CuOGJu39ZDoCoTgRoMSkxIvLOB94REf6sQGPzuWoMsh3Dc1yRPaV68HbXFPnZuTVIJ20WpqkE50XJyqmqQTgTtps6bU1VTSghgXOmziamqo1UC4FzprTNTVUaVS0palqhnTZzJTP/G/q3ya7du6ZCQnUwMDA1269oSEhIT6PPpuNezge2oTGWYIvlErXOCc2FMRFBf133vVsTPYmess9Oz062nZ5q2nWzVtOyTVs1VNVTU0xNYY4YyUuzs7Ozhg1QO//FYQCV//AEin7bUJIPF/kPy/p/3tq5F3d3/29/v99LVABSncK/EKYrRESC9SpDC4T6d7Tx4FvvUy7s3w+7N8PuzfD7t2ab4eHzRf4/wHx0gf406QP8adIB8fl/jSAf4/x/j4gB/j/HxiuLOwQAAcc8gAB/V+ogAARhvItaAABGRFIw4YAAEYLyLnAAARixCMOEAABGDAIveRc0i1gAAAAARQgic5ExiJigAAAABFByJzkTGImMAAAAAESlIlKRIQiQhEYyIxgAAAAAAAERjIiEREIiIREQSIQgAAAAAAAEQhIhCRCAiABEACIAEQAIgAAAAAAAAAAABEAP/3/9//f/3/9//f/0AAAAAAAAAAP/3/9//f/3/9//f/3/9//f/0AAAAAAAAAAAAA4="
+
+const openAITTSFLACFixtureBase64 = "ZkxhQwAAACIJAAkAAAFxAAFxBdwA8AAAA8DrQTcn425MUFIsj3pbRk7HhAAALg0AAABMYXZmNTkuMjcuMTAwAQAAABUAAABlbmNvZGVyPUxhdmY1OS4yNy4xMDD/+HcIAAO/OEIASwHH5r+TwAAqAAFAmabaVU3y9oypCEoUjaNIUjKQJCIFT08KaFJKEIgGGTMkyZkyUOcMpLCphEnDIhkzAKGTkNDCmQIJOBTh+SZwiQLAiHDhQhJQmcLDJz0KZQNJSckoFkKQlDmEJJhSUJSkp5cshJKSgZJyFDmThQhKEQ8OFKFJTKUMhmEySGQiBkycKTQMyJDykpgRmTJQgYYcOBlCFDkmc4GETJScoSyTCoZIEkk0JECk5KZNDkEmhyZoFQMoFCTMIGSUChTKGgXOUJYFClIaSFJhkkwkyQCzJQqTwsmcLJBJmYczMMoQ4cwIXKaeU5zCwlAIRAzMmQ5mHDSUgaUlCJlCISIQsyUDDDJmYUKHChECwKcPQwoU8JEOEpJwIJkw55DOU5TKBShzIgEQMocMkpIUCFDJKTzKcvlISZwyScKGGhSScCaSgXIWZlC8mTqYrIqoyeioyKjKtCSixgeAQAAkK1k="

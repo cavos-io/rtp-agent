@@ -475,14 +475,23 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 }
 
 func openAITTSUsesStreamDecoder(format openai.SpeechResponseFormat) bool {
-	return format == openai.SpeechResponseFormatMp3 || format == openai.SpeechResponseFormatOpus
+	return format == openai.SpeechResponseFormatMp3 ||
+		format == openai.SpeechResponseFormatOpus ||
+		format == openai.SpeechResponseFormatAac ||
+		format == openai.SpeechResponseFormatFlac
 }
 
 func openAITTSStreamDecoder(format openai.SpeechResponseFormat) codecs.AudioStreamDecoder {
-	if format == openai.SpeechResponseFormatOpus {
+	switch format {
+	case openai.SpeechResponseFormatOpus:
 		return codecs.NewOpusAudioStreamDecoder(48000, 1)
+	case openai.SpeechResponseFormatAac:
+		return codecs.NewAACAudioStreamDecoder()
+	case openai.SpeechResponseFormatFlac:
+		return codecs.NewFLACAudioStreamDecoder()
+	default:
+		return codecs.NewMP3AudioStreamDecoder()
 	}
-	return codecs.NewMP3AudioStreamDecoder()
 }
 
 func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, error) {
