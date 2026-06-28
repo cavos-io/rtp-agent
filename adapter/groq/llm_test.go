@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -178,6 +179,49 @@ func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("HTTP calls = %d, want no request after provider Close", calls)
+	}
+}
+
+func TestGroqLLMProviderCloseCancelsPendingChat(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+	errCh := make(chan error, 1)
+	go func() {
+		stream, err := provider.Chat(
+			context.Background(),
+			llm.NewChatContext(),
+			llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		)
+		if stream != nil {
+			_ = stream.Close()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Chat did not start provider request")
+	}
+	if err := llm.Close(provider); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Chat after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Chat remained blocked after provider Close")
 	}
 }
 
