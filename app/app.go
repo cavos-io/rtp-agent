@@ -3291,6 +3291,17 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	} else if numChannels := azureSTTIntModelOption(cfg.STTModelOptions, "num_channels"); numChannels > 0 {
 		sttOpts = append(sttOpts, azure.WithAzureSTTNumChannels(numChannels))
 	}
+	if cfg.STTEndpointingMS != nil {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationSilenceTimeout(*cfg.STTEndpointingMS))
+	} else if silenceTimeout := azureSTTIntModelOption(cfg.STTModelOptions, "segmentation_silence_timeout_ms"); silenceTimeout > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationSilenceTimeout(silenceTimeout))
+	}
+	if maxTime := azureSTTIntModelOption(cfg.STTModelOptions, "segmentation_max_time_ms"); maxTime > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationMaxTime(maxTime))
+	}
+	if strategy := azureSTTModelOption(cfg.STTModelOptions, "segmentation_strategy"); strategy != "" {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSegmentationStrategy(strategy))
+	}
 	return azure.NewAzureSTT("", cfg.STTRegion, sttOpts...)
 }
 

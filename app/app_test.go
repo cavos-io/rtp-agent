@@ -12762,6 +12762,33 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureSTTSegmentationOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "250")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "segmentation_max_time_ms=1200,segmentation_strategy=Semantic")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := int(state.FieldByName("segmentationSilence").Int()), 250; got != want {
+		t.Fatalf("Azure STT segmentationSilence = %d, want %d", got, want)
+	}
+	if got, want := int(state.FieldByName("segmentationMaxTime").Int()), 1200; got != want {
+		t.Fatalf("Azure STT segmentationMaxTime = %d, want %d", got, want)
+	}
+	if got, want := state.FieldByName("segmentationStrategy").String(), "Semantic"; got != want {
+		t.Fatalf("Azure STT segmentationStrategy = %q, want %q", got, want)
+	}
+}
+
 func TestNewAppMapsAzureSTTBundleSettingEndpoint(t *testing.T) {
 	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
 	cfg := AppConfig{
