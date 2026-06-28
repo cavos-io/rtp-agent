@@ -461,7 +461,7 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	s.registerRealtimeSTTStream(stream)
 	go stream.readLoop()
 	if vadStream != nil {
-		go stream.vadLoop()
+		go stream.vadLoopFor(vadStream)
 	}
 	return stream, nil
 }
@@ -1093,8 +1093,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 	}
 }
 
-func (s *openAIRealtimeSTTStream) vadLoop() {
-	vadStream := s.vadStream
+func (s *openAIRealtimeSTTStream) vadLoopFor(vadStream vad.VADStream) {
 	if vadStream == nil {
 		return
 	}
@@ -1169,6 +1168,18 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	s.audio = nil
 	s.hasAudio = false
 	s.committed = false
+	if s.owner.vad != nil {
+		s.closeVADStreamLocked()
+		vadStream, err := s.owner.vad.Stream(s.ctx)
+		if err != nil {
+			_ = conn.Close()
+			return err
+		}
+		s.vadStream = vadStream
+		if vadStream != nil {
+			go s.vadLoopFor(vadStream)
+		}
+	}
 	return nil
 }
 
