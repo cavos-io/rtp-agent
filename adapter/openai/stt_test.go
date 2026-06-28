@@ -910,6 +910,75 @@ func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTConnectOptions(llm.APIConnectOptions{MaxRetry: 1, RetryInterval: time.Millisecond, Timeout: time.Second}),
+	)
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	sendFinal := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if attempt == 1 {
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"error",
+					"error":{"message":"temporary provider error","code":"server_error"}
+				}`)); err != nil {
+					t.Errorf("write provider error: %v", err)
+				}
+				return
+			}
+			close(secondConnected)
+			<-sendFinal
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"conversation.item.input_audio_transcription.completed",
+				"item_id":"item-2",
+				"transcript":"after provider error"
+			}`)); err != nil {
+				t.Errorf("write final transcript: %v", err)
+			}
+			<-releaseSecond
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not reconnect after provider error")
+	}
+	close(sendFinal)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error after provider error reconnect = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %v, want FINAL_TRANSCRIPT", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "after provider error" {
+		t.Fatalf("transcript = %q, want after provider error", got)
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want 2", got)
+	}
+}
+
 func TestOpenAISTTStreamReconnectsAfterUnexpectedNormalClose(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),

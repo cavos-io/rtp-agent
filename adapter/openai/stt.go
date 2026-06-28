@@ -1073,6 +1073,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		s.closeEventStream()
 	}()
 	connectedAt := time.Now()
+	providerErrorRetries := 0
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
@@ -1093,12 +1094,26 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		}
 		events, err := openAIRealtimeSTTEventsFromMessage(payload, s.state)
 		if err != nil {
+			var apiErr *llm.APIError
+			if errors.As(err, &apiErr) && s.owner != nil && providerErrorRetries < s.owner.connect.MaxRetry {
+				providerErrorRetries++
+				if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
+					if s.isClosed() || s.ctx.Err() != nil {
+						return
+					}
+					s.errCh <- reconnectErr
+					return
+				}
+				connectedAt = time.Now()
+				continue
+			}
 			s.errCh <- err
 			return
 		}
 		for _, event := range events {
 			s.sendEvent(event)
 		}
+		providerErrorRetries = 0
 		if s.shouldRecycleAfterEvents(events, connectedAt) {
 			if reconnectErr := s.reconnectAfterUnexpectedClose(); reconnectErr != nil {
 				if s.isClosed() || s.ctx.Err() != nil {
