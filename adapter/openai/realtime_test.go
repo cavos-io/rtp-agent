@@ -1774,6 +1774,45 @@ func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
 	}
 }
 
+func TestRealtimeInterruptClearsPendingResponseBeforeCreated(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, <-messages, "session.update", "gpt-realtime")
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "start"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "start")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.cancel", "")
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("second Interrupt error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "second interrupt after pending response cancel should be silent")
+}
+
 func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *testing.T) {
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
 		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"input_audio_buffer.speech_stopped"}`)); err != nil {

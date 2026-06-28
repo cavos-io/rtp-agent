@@ -1455,7 +1455,9 @@ func openAIRealtimeToolChoice(choice llm.ToolChoice) any {
 
 func (s *realtimeSession) Interrupt() error {
 	s.mu.Lock()
-	active := s.generation != nil || len(s.pendingResponses) > 0
+	hasGeneration := s.generation != nil
+	hasPendingResponse := len(s.pendingResponses) > 0
+	active := hasGeneration || hasPendingResponse
 	s.mu.Unlock()
 	if !active {
 		return nil
@@ -1463,7 +1465,13 @@ func (s *realtimeSession) Interrupt() error {
 	msg := map[string]any{
 		"type": "response.cancel",
 	}
-	return s.sendMsg(msg)
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	if !hasGeneration && hasPendingResponse {
+		s.clearAllPendingRealtimeResponses()
+	}
+	return nil
 }
 
 func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
@@ -1639,6 +1647,14 @@ func (s *realtimeSession) clearPendingRealtimeResponse(eventID string) {
 	for pendingID := range s.pendingResponses {
 		delete(s.pendingResponses, pendingID)
 		return
+	}
+}
+
+func (s *realtimeSession) clearAllPendingRealtimeResponses() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for pendingID := range s.pendingResponses {
+		delete(s.pendingResponses, pendingID)
 	}
 }
 
