@@ -1418,7 +1418,7 @@ func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
 }
 
-func TestOpenAIRealtimeSTTEndInputWithVADCommitsAudioBuffer(t *testing.T) {
+func TestOpenAIRealtimeSTTEndInputWithVADWaitsForEndOfSpeech(t *testing.T) {
 	vadStream := newFakeOpenAISTTVADStream()
 	vadStream.suppressEndOfSpeech = true
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
@@ -1477,15 +1477,20 @@ func TestOpenAIRealtimeSTTEndInputWithVADCommitsAudioBuffer(t *testing.T) {
 		t.Fatalf("EndInput error = %v", err)
 	}
 	select {
-	case message := <-messages:
-		assertRealtimeMessage(t, message, "input_audio_buffer.commit", "")
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for audio buffer commit")
-	}
-	select {
 	case <-vadStream.endInputCh:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for VAD EndInput")
+	}
+	select {
+	case message := <-messages:
+		t.Fatalf("unexpected message after VAD EndInput without EOS: %s", message)
+	case <-time.After(time.Second):
+	}
+	vadStream.mu.Lock()
+	vadClosed := vadStream.closed
+	vadStream.mu.Unlock()
+	if !vadClosed {
+		t.Fatal("VAD stream still open after EndInput")
 	}
 }
 
