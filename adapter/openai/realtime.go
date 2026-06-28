@@ -2396,6 +2396,9 @@ func (s *realtimeSession) persistRealtimeAudioTranscripts() {
 		if !ok {
 			continue
 		}
+		if generation.transcript == "" || msg.TextContent() == generation.transcript {
+			continue
+		}
 		msg.Content = append(msg.Content, llm.ChatContent{Text: generation.transcript})
 	}
 }

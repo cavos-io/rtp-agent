@@ -4560,6 +4560,57 @@ func TestRealtimeSessionPersistsTextDeltaOnResponseDone(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionDoesNotDuplicateExistingRemoteOutputTranscript(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "msg_text",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "already spoken"}},
+	}); err != nil {
+		t.Fatalf("Insert remote message error = %v", err)
+	}
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_text",
+			"type": "message",
+		},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_text.delta",
+		"item_id": "msg_text",
+		"delta":   "already ",
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_text.delta",
+		"item_id": "msg_text",
+		"delta":   "spoken",
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":     "response.done",
+		"response": map[string]any{"id": "resp_text", "status": "completed"},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+
+	msg, ok := session.remote.Get("msg_text").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote item = %T, want *llm.ChatMessage", session.remote.Get("msg_text"))
+	}
+	if got := msg.TextContent(); got != "already spoken" {
+		t.Fatalf("remote text content = %q, want no duplicate output transcript", got)
+	}
+	if len(msg.Content) != 1 {
+		t.Fatalf("remote content parts = %#v, want existing content only", msg.Content)
+	}
+}
+
 func TestRealtimeSessionResolvesDefaultModalitiesWhenResponseDone(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
