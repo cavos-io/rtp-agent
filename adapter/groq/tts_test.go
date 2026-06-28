@@ -208,6 +208,37 @@ func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGroqTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := &groqReadTrackingCloser{}
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next = (%#v, %v), want nil, io.EOF for reference client-closed status", audio, err)
+	}
+	if body.reads != 0 {
+		t.Fatalf("body reads = %d, want 0 for client-closed status cleanup", body.reads)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body closes = %d, want 1", body.closed)
+	}
+}
+
 func TestGroqTTSSynthesizeTransportErrorsMatchReference(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -550,6 +581,21 @@ func (b *groqCloseCountBody) Close() error {
 	if b.closeCount > 1 {
 		return errors.New("closed twice")
 	}
+	return nil
+}
+
+type groqReadTrackingCloser struct {
+	reads  int
+	closed int
+}
+
+func (r *groqReadTrackingCloser) Read([]byte) (int, error) {
+	r.reads++
+	return 0, io.EOF
+}
+
+func (r *groqReadTrackingCloser) Close() error {
+	r.closed++
 	return nil
 }
 

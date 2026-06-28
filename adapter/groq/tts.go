@@ -124,6 +124,10 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		return nil, groqTTSTransportError(err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 499 {
+			resp.Body.Close()
+			return groqTTSEOFStream{}, nil
+		}
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, llm.NewAPIStatusError("Groq TTS request failed", resp.StatusCode, "", string(respBody))
@@ -230,6 +234,16 @@ func buildGroqTTSRequest(ctx context.Context, t *GroqTTS, text string) (*http.Re
 
 func (t *GroqTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("groq streaming tts not natively supported")
+}
+
+type groqTTSEOFStream struct{}
+
+func (groqTTSEOFStream) Next() (*tts.SynthesizedAudio, error) {
+	return nil, io.EOF
+}
+
+func (groqTTSEOFStream) Close() error {
+	return nil
 }
 
 type groqTTSChunkedStream struct {
