@@ -3649,6 +3649,9 @@ func groqLLMFromConfig(cfg AppConfig) *groq.GroqLLM {
 	if timeoutMS := modelOptionInt(cfg.LLMModelOptions, "timeout_ms"); timeoutMS > 0 {
 		llmOpts = append(llmOpts, groq.WithGroqLLMTimeout(time.Duration(timeoutMS)*time.Millisecond))
 	}
+	if maxRetries, ok := modelOptionIntValue(cfg.LLMModelOptions, "max_retries"); ok && maxRetries >= 0 {
+		llmOpts = append(llmOpts, groq.WithGroqLLMMaxRetries(maxRetries))
+	}
 	if openAIOpts := groqOpenAILLMOptionsFromConfig(cfg); len(openAIOpts) > 0 {
 		llmOpts = append(llmOpts, groq.WithGroqLLMOptions(openAIOpts...))
 	}
@@ -6954,23 +6957,36 @@ func modelOptionFloat(options map[string]any, key string) *float64 {
 }
 
 func modelOptionInt(options map[string]any, key string) int {
-	value, ok := options[key]
+	value, ok := modelOptionIntValue(options, key)
 	if !ok {
 		return 0
 	}
+	return value
+}
+
+func modelOptionIntValue(options map[string]any, key string) (int, bool) {
+	value, ok := options[key]
+	if !ok {
+		return 0, false
+	}
 	switch typed := value.(type) {
 	case int:
-		return typed
+		return typed, true
+	case bool:
+		if typed {
+			return 1, true
+		}
+		return 0, true
 	case float64:
-		return int(typed)
+		return int(typed), true
 	case string:
 		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
 		if err != nil {
-			return 0
+			return 0, false
 		}
-		return parsed
+		return parsed, true
 	default:
-		return 0
+		return 0, false
 	}
 }
 

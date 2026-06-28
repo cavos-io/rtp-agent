@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -26,6 +27,7 @@ const (
 	defaultGroqTTSVoice          = "autumn"
 	defaultGroqTTSResponseFormat = "wav"
 	defaultGroqTTSSampleRate     = 48000
+	defaultGroqTTSTotalTimeout   = 30 * time.Second
 )
 
 type GroqTTS struct {
@@ -116,62 +118,13 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
 	}
 
-	reqCtx, cancel := context.WithCancel(ctx)
-	requestID, ok := t.registerRequest(cancel)
-	if !ok {
-		cancel()
-		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
-	}
-	requestRegistered := true
-	unregisterRequest := func() {
-		if requestRegistered {
-			t.unregisterRequest(requestID)
-			requestRegistered = false
-		}
-	}
-
-	req, err := buildGroqTTSRequest(reqCtx, t, text)
-	if err != nil {
-		unregisterRequest()
-		cancel()
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	unregisterRequest()
-	if err != nil {
-		if t.isClosed() && errors.Is(reqCtx.Err(), context.Canceled) {
-			return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
-		}
-		if errors.Is(reqCtx.Err(), context.Canceled) {
-			return nil, context.Canceled
-		}
-		return nil, groqTTSTransportError(err)
-	}
-	if t.isClosed() {
-		resp.Body.Close()
-		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
-	}
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == 499 {
-			resp.Body.Close()
-			return groqTTSEOFStream{}, nil
-		}
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Groq TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIError("Groq returned non-audio data", string(respBody), true)
-	}
-
+	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &groqTTSChunkedStream{
-		resp:       resp,
+		ctx:        streamCtx,
+		cancel:     cancel,
+		inputText:  text,
 		sampleRate: t.sampleRate,
 		provider:   t,
-		requestID:  fmt.Sprintf("groq-tts-%d", requestID),
 	}
 	if !t.registerStream(stream) {
 		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
@@ -299,17 +252,13 @@ func (t *GroqTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return nil, fmt.Errorf("groq streaming tts not natively supported")
 }
 
-type groqTTSEOFStream struct{}
-
-func (groqTTSEOFStream) Next() (*tts.SynthesizedAudio, error) {
-	return nil, io.EOF
-}
-
-func (groqTTSEOFStream) Close() error {
-	return nil
-}
-
 type groqTTSChunkedStream struct {
+	ctx              context.Context
+	cancel           context.CancelFunc
+	requestCancel    context.CancelFunc
+	inputText        string
+	startOnce        sync.Once
+	startErr         error
 	resp             *http.Response
 	sampleRate       int
 	provider         *GroqTTS
@@ -317,6 +266,7 @@ type groqTTSChunkedStream struct {
 	started          bool
 	finalSent        bool
 	pendingFinal     bool
+	closed           bool
 	sourceSampleRate uint32
 	numChannels      uint16
 	remainingData    int
@@ -324,10 +274,13 @@ type groqTTSChunkedStream struct {
 }
 
 func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.resp == nil || s.resp.Body == nil {
+	if s.finalSent {
 		return nil, io.EOF
 	}
-	if s.finalSent {
+	if err := s.ensureStarted(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
@@ -380,6 +333,106 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *groqTTSChunkedStream) fail(err error) error {
 	_ = s.Close()
 	return groqTTSStreamError(err)
+}
+
+func (s *groqTTSChunkedStream) ensureStarted() error {
+	if s.resp != nil || s.provider == nil || s.inputText == "" {
+		return nil
+	}
+	s.startOnce.Do(func() {
+		if s.isClosed() {
+			s.startErr = io.EOF
+			return
+		}
+		if s.provider.isClosed() {
+			s.startErr = fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+			return
+		}
+		reqCtx, reqCancel := context.WithTimeout(s.ctx, defaultGroqTTSTotalTimeout)
+		s.requestCancel = reqCancel
+		requestID, ok := s.provider.registerRequest(reqCancel)
+		if !ok {
+			reqCancel()
+			s.startErr = fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+			return
+		}
+		cleanupRequest := func() {
+			s.provider.unregisterRequest(requestID)
+			reqCancel()
+			s.requestCancel = nil
+		}
+		req, err := buildGroqTTSRequest(reqCtx, s.provider, s.inputText)
+		if err != nil {
+			cleanupRequest()
+			s.startErr = err
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		s.provider.unregisterRequest(requestID)
+		if err != nil {
+			defer reqCancel()
+			s.requestCancel = nil
+			if s.isClosed() {
+				s.startErr = io.EOF
+				return
+			}
+			if s.provider.isClosed() && errors.Is(reqCtx.Err(), context.Canceled) {
+				s.startErr = fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+				return
+			}
+			if errors.Is(reqCtx.Err(), context.Canceled) {
+				s.startErr = context.Canceled
+				return
+			}
+			s.startErr = groqTTSTransportError(err)
+			return
+		}
+		if s.isClosed() {
+			resp.Body.Close()
+			reqCancel()
+			s.requestCancel = nil
+			s.startErr = io.EOF
+			return
+		}
+		if s.provider.isClosed() {
+			resp.Body.Close()
+			reqCancel()
+			s.requestCancel = nil
+			s.startErr = fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			if resp.StatusCode == 499 {
+				resp.Body.Close()
+				reqCancel()
+				s.requestCancel = nil
+				s.finalSent = true
+				s.startErr = io.EOF
+				return
+			}
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			reqCancel()
+			s.requestCancel = nil
+			s.startErr = llm.NewAPIStatusError("Groq TTS request failed", resp.StatusCode, "", string(respBody))
+			return
+		}
+		if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			reqCancel()
+			s.requestCancel = nil
+			s.startErr = llm.NewAPIError("Groq returned non-audio data", string(respBody), true)
+			return
+		}
+		s.requestID = fmt.Sprintf("groq-tts-%d", requestID)
+		s.resp = resp
+	})
+	return s.startErr
+}
+
+func (s *groqTTSChunkedStream) isClosed() bool {
+	return s.closed
 }
 
 func groqTTSStreamError(err error) error {
@@ -540,6 +593,18 @@ func discardGroqWAVBytes(r io.Reader, n int) error {
 }
 
 func (s *groqTTSChunkedStream) Close() error {
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+	if s.requestCancel != nil {
+		s.requestCancel()
+		s.requestCancel = nil
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		if s.provider != nil {
 			s.provider.unregisterStream(s)

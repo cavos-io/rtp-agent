@@ -214,6 +214,35 @@ func TestGroqLLMAppliesReferenceMaxRetriesOption(t *testing.T) {
 	}
 }
 
+func TestNewGroqLLMDoesNotRetryByDefault(t *testing.T) {
+	attempts := 0
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		attempts++
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Status:     http.StatusText(http.StatusInternalServerError),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"try again","type":"server_error","code":"server_error"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+
+	stream, err := provider.Chat(context.Background(), llm.NewChatContext())
+	if stream != nil {
+		_ = stream.Close()
+	}
+	if err == nil {
+		t.Fatal("Chat error is nil, want first provider failure returned without default retry")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want no default provider retry", attempts)
+	}
+}
+
 func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
 	calls := 0
 	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {

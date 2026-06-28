@@ -89,7 +89,7 @@ func NewGroqLLM(apiKey string, model string, opts ...GroqLLMOption) *GroqLLM {
 	if provider.reasoningEffort == "" {
 		provider.reasoningEffort = defaultGroqLLMReasoningEffort(model)
 	}
-	openAIOpts := []openai.OpenAILLMOption{}
+	openAIOpts := []openai.OpenAILLMOption{openai.WithOpenAILLMMaxRetries(0)}
 	if provider.reasoningEffort != "" {
 		openAIOpts = append(openAIOpts, openai.WithOpenAILLMReasoningEffort(provider.reasoningEffort))
 	}

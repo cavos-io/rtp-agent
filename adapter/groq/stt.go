@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -12,9 +13,10 @@ import (
 )
 
 const (
-	defaultGroqSTTBaseURL  = "https://api.groq.com/openai/v1"
-	defaultGroqSTTModel    = "whisper-large-v3-turbo"
-	defaultGroqSTTLanguage = "en"
+	defaultGroqSTTBaseURL      = "https://api.groq.com/openai/v1"
+	defaultGroqSTTModel        = "whisper-large-v3-turbo"
+	defaultGroqSTTLanguage     = "en"
+	defaultGroqSTTTotalTimeout = 30 * time.Second
 )
 
 type GroqSTT struct {
@@ -124,7 +126,9 @@ func (s *GroqSTT) Stream(ctx context.Context, language string) (stt.RecognizeStr
 }
 
 func (s *GroqSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
-	return s.inner.Recognize(ctx, frames, language)
+	reqCtx, cancel := context.WithTimeout(ctx, defaultGroqSTTTotalTimeout)
+	defer cancel()
+	return s.inner.Recognize(reqCtx, frames, language)
 }
 
 func (s *GroqSTT) Close() error {

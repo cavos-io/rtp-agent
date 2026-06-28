@@ -147,6 +147,37 @@ func TestGroqTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestGroqTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error = %v, want lazy stream", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want deferred request", requests)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after Close before Next = %d, want no provider request", requests)
+	}
+}
+
 func TestGroqTTSRejectsNonAudioResponse(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -162,16 +193,20 @@ func TestGroqTTSRejectsNonAudioResponse(t *testing.T) {
 	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error = %v, want lazy stream", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want non-audio response error")
+		t.Fatal("Next returned nil error, want non-audio response error")
 	}
 	if !strings.Contains(err.Error(), "non-audio") {
 		t.Fatalf("error = %q, want non-audio guidance", err)
 	}
 	var apiErr *llm.APIError
 	if !errors.As(err, &apiErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIError", err, err)
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
 	}
 	if apiErr.Body != `{"error":"not audio"}` {
 		t.Fatalf("APIError body = %#v, want provider body", apiErr.Body)
@@ -213,7 +248,9 @@ func TestGroqTTSAcceptsReferenceAudioPrefixContentType(t *testing.T) {
 func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
+	var requestContext context.Context
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requestContext = r.Context()
 		return &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -225,16 +262,28 @@ func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error = %v, want lazy stream", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+		t.Fatal("Next returned nil error, want APIStatusError")
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if requestContext == nil {
+		t.Fatal("request context was not captured")
+	}
+	select {
+	case <-requestContext.Done():
+	default:
+		t.Fatal("request context still active after status error, want cleanup after response close")
 	}
 }
 
@@ -298,23 +347,65 @@ func TestGroqTTSSynthesizeTransportErrorsMatchReference(t *testing.T) {
 			provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
 
 			stream, err := provider.Synthesize(context.Background(), "hello")
+			if err != nil {
+				t.Fatalf("Synthesize returned error = %v, want lazy stream", err)
+			}
+			defer stream.Close()
+			_, err = stream.Next()
 			if err == nil {
-				defer stream.Close()
-				t.Fatal("Synthesize returned nil error, want transport error")
+				t.Fatal("Next returned nil error, want transport error")
 			}
 			switch tt.wantErr.(type) {
 			case *llm.APITimeoutError:
 				var timeoutErr *llm.APITimeoutError
 				if !errors.As(err, &timeoutErr) {
-					t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+					t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 				}
 			case *llm.APIConnectionError:
 				var connectionErr *llm.APIConnectionError
 				if !errors.As(err, &connectionErr) {
-					t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+					t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 				}
 			}
 		})
+	}
+}
+
+func TestGroqTTSSynthesizeAppliesReferenceTotalTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error = %v, want lazy stream", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want provider error after request capture")
+	}
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want reference total timeout")
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want bounded by 30s total timeout", remaining)
 	}
 }
 
@@ -322,7 +413,9 @@ func TestGroqTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	body := &groqCloseCountBody{Reader: bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))}
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
+	var requestContext context.Context
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requestContext = r.Context()
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
@@ -337,11 +430,22 @@ func TestGroqTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Synthesize error = %v", err)
 	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v, want active provider response", err)
+	}
 	if err := tts.Close(provider); err != nil {
 		t.Fatalf("tts.Close error = %v", err)
 	}
 	if body.closeCount != 1 {
 		t.Fatalf("body Close calls = %d, want 1", body.closeCount)
+	}
+	if requestContext == nil {
+		t.Fatal("request context was not captured")
+	}
+	select {
+	case <-requestContext.Done():
+	default:
+		t.Fatal("request context still active after provider Close closes stream")
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
@@ -365,12 +469,13 @@ func TestGroqTTSProviderCloseCancelsPendingSynthesize(t *testing.T) {
 	})}
 
 	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		stream, err := provider.Synthesize(context.Background(), "hello")
-		if stream != nil {
-			_ = stream.Close()
-		}
+		_, err := stream.Next()
 		errCh <- err
 	}()
 
@@ -385,11 +490,11 @@ func TestGroqTTSProviderCloseCancelsPendingSynthesize(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		if !errors.Is(err, io.ErrClosedPipe) {
-			t.Fatalf("Synthesize after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+		if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Next after provider Close error = %T %v, want EOF or io.ErrClosedPipe", err, err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Synthesize remained blocked after provider Close")
+		t.Fatal("Next remained blocked after provider Close")
 	}
 }
 
@@ -405,12 +510,13 @@ func TestGroqTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
 
 	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
 	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		stream, err := provider.Synthesize(ctx, "hello")
-		if stream != nil {
-			_ = stream.Close()
-		}
+		_, err := stream.Next()
 		errCh <- err
 	}()
 
@@ -424,14 +530,14 @@ func TestGroqTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Synthesize canceled error = %T %v, want context.Canceled", err, err)
+			t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
 		}
 		var connectionErr *llm.APIConnectionError
 		if errors.As(err, &connectionErr) {
-			t.Fatalf("Synthesize canceled error = %T, want raw context cancellation", err)
+			t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Synthesize remained blocked after caller cancellation")
+		t.Fatal("Next remained blocked after caller cancellation")
 	}
 }
 

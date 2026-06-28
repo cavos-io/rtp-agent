@@ -216,6 +216,47 @@ func TestGroqSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestGroqSTTRecognizeAppliesReferenceTotalTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	client := groqSTTHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Status:     http.StatusText(http.StatusTooManyRequests),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewGroqSTT("test-key", "",
+		WithGroqSTTBaseURL("https://groq.example/openai/v1"),
+		withGroqSTTHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewGroqSTT error = %v", err)
+	}
+
+	event, err := provider.Recognize(context.Background(), nil, "en")
+	if event != nil {
+		t.Fatalf("Recognize event = %+v, want nil after provider failure", event)
+	}
+	if err == nil {
+		t.Fatal("Recognize error = nil, want provider failure after request capture")
+	}
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want reference total timeout")
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want bounded by 30s total timeout", remaining)
+	}
+}
+
 type groqSTTHTTPDoer func(*http.Request) (*http.Response, error)
 
 func (f groqSTTHTTPDoer) Do(req *http.Request) (*http.Response, error) {
