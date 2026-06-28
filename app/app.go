@@ -3360,6 +3360,15 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 	if timeoutMS := modelOptionInt(cfg.LLMModelOptions, "timeout_ms"); timeoutMS > 0 {
 		llmOpts = append(llmOpts, azure.WithAzureLLMTimeout(time.Duration(timeoutMS)*time.Millisecond))
 	}
+	if user := modelOptionString(cfg.LLMModelOptions, "user"); user != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMUser(user))
+	}
+	if organization := modelOptionString(cfg.LLMModelOptions, "organization"); organization != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMOrganization(organization))
+	}
+	if project := modelOptionString(cfg.LLMModelOptions, "project"); project != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMProject(project))
+	}
 	return newAzureLLM(
 		cfg.LLMModel,
 		cfg.LLMBaseURL,
