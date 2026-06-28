@@ -348,6 +348,53 @@ func TestElevenLabsSTTStreamLanguageOverrideNormalizesLikeReference(t *testing.T
 	}
 }
 
+func TestElevenLabsSTTStreamUsesConfiguredModelWithoutLocalRealtimeGuard(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	queries := make(chan url.Values, 1)
+	serverErr := make(chan error, 1)
+	releaseServer := make(chan struct{})
+	releaseClosed := false
+	defer func() {
+		if !releaseClosed {
+			close(releaseServer)
+		}
+	}()
+	go runElevenLabsSTTHandshakeRecorder(serverConn, queries, releaseServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v, want websocket stream like reference", err)
+	}
+	defer stream.Close()
+
+	query := readElevenLabsSTTHandshakeQuery(t, queries)
+	assertElevenLabsQuery(t, query, "model_id", "scribe_v1")
+	assertElevenLabsQuery(t, query, "language_code", "en")
+
+	close(releaseServer)
+	releaseClosed = true
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestElevenLabsSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	messages := make(chan map[string]any, 2)

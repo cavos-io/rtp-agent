@@ -226,9 +226,6 @@ func (s *ElevenLabsSTT) Stream(ctx context.Context, language string) (stt.Recogn
 		return nil, err
 	}
 
-	if !elevenLabsSTTIsRealtime(s.modelID) {
-		return nil, fmt.Errorf("elevenlabs streaming stt requires scribe_v2_realtime")
-	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildElevenLabsSTTStreamURL(s, language), buildElevenLabsSTTHeaders(s))
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("Failed to connect to ElevenLabs")
