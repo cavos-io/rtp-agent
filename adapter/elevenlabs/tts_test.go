@@ -2864,8 +2864,14 @@ func TestElevenLabsTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	if provider.registerStream(stream) {
 		t.Fatal("registerStream after provider Close = true, want false")
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after rejected registration error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after rejected registration error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after rejected registration error = %v, want nil", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput after rejected registration error = %v, want nil", err)
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("provider streams = %d, want 0", len(provider.streams))

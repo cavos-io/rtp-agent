@@ -310,7 +310,7 @@ func (t *ElevenLabsTTS) registerStream(stream *elevenLabsStream) bool {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
-		_ = stream.rejectClosedPipe()
+		_ = stream.Close()
 		return false
 	}
 	if t.streams == nil {
@@ -2153,45 +2153,6 @@ func (s *elevenLabsStream) closeAfterWriteFailureLocked() {
 
 func (s *elevenLabsStream) closedInputErrorLocked() error {
 	return s.inputErr
-}
-
-func (s *elevenLabsStream) rejectClosedPipe() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-	s.inputErr = io.ErrClosedPipe
-	s.cancelResponseTimeoutLocked()
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.mp3Decoder != nil {
-		if s.mp3Input != nil && !s.mp3InputClosed {
-			close(s.mp3Input)
-			s.mp3InputClosed = true
-		}
-		_ = s.mp3Decoder.Close()
-	}
-	if s.initSent && !s.inputEnd {
-		if s.sharedConn != nil {
-			_ = s.sharedConn.writeJSON(s.ctx, elevenLabsCloseContextPayload(s.contextID))
-		} else if s.conn != nil {
-			_ = s.conn.WriteJSON(elevenLabsCloseContextPayload(s.contextID))
-		}
-	}
-	if s.provider != nil {
-		s.provider.unregisterStream(s)
-	}
-	if s.sharedConn != nil {
-		s.sharedConn.unregisterStream(s)
-		return nil
-	}
-	if s.conn != nil {
-		return s.conn.Close()
-	}
-	return nil
 }
 
 func (s *elevenLabsStream) Close() error {
