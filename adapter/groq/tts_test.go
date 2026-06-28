@@ -247,6 +247,36 @@ func TestGroqTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	}
 }
 
+func TestGroqTTSChunkedStreamEmitsIncrementalWAVChunks(t *testing.T) {
+	firstPCM := []byte{0x01, 0x00, 0x02, 0x00}
+	secondPCM := []byte{0x03, 0x00, 0x04, 0x00}
+	body := &groqChunkedReadCloser{
+		reader: bytes.NewReader(groqTestWAV(append(append([]byte(nil), firstPCM...), secondPCM...), 48000, 1)),
+		limit:  len(firstPCM),
+	}
+	stream := &groqTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, firstPCM) {
+		t.Fatalf("first frame data = %#v, want first provider chunk %#v", audio.Frame.Data, firstPCM)
+	}
+
+	audio, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, secondPCM) {
+		t.Fatalf("second frame data = %#v, want second provider chunk %#v", audio.Frame.Data, secondPCM)
+	}
+}
+
 func TestGroqTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &groqTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1)))},
@@ -372,5 +402,23 @@ func (b *groqCloseCountBody) Close() error {
 	if b.closeCount > 1 {
 		return errors.New("closed twice")
 	}
+	return nil
+}
+
+type groqChunkedReadCloser struct {
+	reader *bytes.Reader
+	limit  int
+	reads  int
+}
+
+func (r *groqChunkedReadCloser) Read(p []byte) (int, error) {
+	if len(p) > r.limit {
+		p = p[:r.limit]
+	}
+	r.reads++
+	return r.reader.Read(p)
+}
+
+func (r *groqChunkedReadCloser) Close() error {
 	return nil
 }
