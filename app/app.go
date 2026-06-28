@@ -3278,6 +3278,9 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	if speechHost := azureSTTSpeechHostFromConfig(cfg); speechHost != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSpeechHost(speechHost))
 	}
+	if speechEndpoint := azureSTTSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
+		sttOpts = append(sttOpts, azure.WithAzureSTTSpeechEndpoint(speechEndpoint))
+	}
 	if language := strings.TrimSpace(cfg.STTLanguage); language != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTLanguage(language))
 	} else if languages := azureSTTStringListModelOption(cfg.STTModelOptions, "language"); len(languages) > 0 {
@@ -3336,6 +3339,12 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
 		llmOpts = append(llmOpts, azure.WithAzureLLMToolChoice(toolChoice))
 	}
+	if promptCacheKey := modelOptionString(cfg.LLMModelOptions, "prompt_cache_key"); promptCacheKey != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMPromptCacheKey(promptCacheKey))
+	}
+	if promptCacheRetention := modelOptionString(cfg.LLMModelOptions, "prompt_cache_retention"); promptCacheRetention != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMPromptCacheRetention(promptCacheRetention))
+	}
 	if reasoning, ok := cfg.LLMModelOptions["reasoning"].(map[string]any); ok && len(reasoning) > 0 {
 		llmOpts = append(llmOpts, azure.WithAzureLLMReasoning(reasoning))
 	}
@@ -3347,6 +3356,21 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 	}
 	if verbosity := modelOptionString(cfg.LLMModelOptions, "verbosity"); verbosity != "" {
 		llmOpts = append(llmOpts, azure.WithAzureLLMVerbosity(verbosity))
+	}
+	if timeoutMS := modelOptionInt(cfg.LLMModelOptions, "timeout_ms"); timeoutMS > 0 {
+		llmOpts = append(llmOpts, azure.WithAzureLLMTimeout(time.Duration(timeoutMS)*time.Millisecond))
+	}
+	if user := modelOptionString(cfg.LLMModelOptions, "user"); user != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMUser(user))
+	}
+	if organization := modelOptionString(cfg.LLMModelOptions, "organization"); organization != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMOrganization(organization))
+	}
+	if project := modelOptionString(cfg.LLMModelOptions, "project"); project != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMProject(project))
+	}
+	if baseURL := modelOptionString(cfg.LLMModelOptions, "base_url"); baseURL != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMBaseURL(baseURL))
 	}
 	return newAzureLLM(
 		cfg.LLMModel,
@@ -3372,12 +3396,16 @@ func azureSTTSpeechHostFromConfig(cfg AppConfig) string {
 	if strings.TrimSpace(cfg.STTBaseURL) != "" {
 		return strings.TrimSpace(cfg.STTBaseURL)
 	}
-	for _, key := range []string{"azure_endpoint", "speech_endpoint", "speech_host"} {
+	for _, key := range []string{"azure_endpoint", "speech_host"} {
 		if value := azureSTTModelOption(cfg.STTModelOptions, key); value != "" {
 			return value
 		}
 	}
 	return ""
+}
+
+func azureSTTSpeechEndpointFromConfig(cfg AppConfig) string {
+	return azureSTTModelOption(cfg.STTModelOptions, "speech_endpoint")
 }
 
 func azureSTTLanguageFromConfig(cfg AppConfig) string {

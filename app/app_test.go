@@ -2975,6 +2975,30 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMRequestOptions(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMPromptCacheOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "prompt_cache_key=room-123,prompt_cache_retention=24h")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 2 {
+		t.Fatalf("Azure LLM option count = %d, want prompt_cache_key and prompt_cache_retention options", gotOptions)
+	}
+}
+
 func TestDefaultConfigFromEnvMapsAzureResponsesLLMLatencyOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
@@ -3026,6 +3050,78 @@ func TestDefaultConfigFromEnvMapsAzureResponsesLLMReasoningOption(t *testing.T) 
 	}
 	if gotOptions != 1 {
 		t.Fatalf("Azure LLM option count = %d, want reasoning option", gotOptions)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMTimeoutOption(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "timeout_ms=750")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 1 {
+		t.Fatalf("Azure LLM option count = %d, want timeout option", gotOptions)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMMetadataOptions(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "user=caller-123,organization=org-456,project=proj-789")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 3 {
+		t.Fatalf("Azure LLM option count = %d, want user, organization, and project options", gotOptions)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureResponsesLLMBaseURLOption(t *testing.T) {
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gpt-4o-mini")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://configured-resource.openai.azure.com")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "base_url=https://gateway.openai.azure.test/custom")
+	t.Setenv("AZURE_OPENAI_API_KEY", "test-azure-openai-key")
+
+	var gotOptions int
+	previous := newAzureLLM
+	newAzureLLM = func(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...azure.AzureLLMOption) (llm.LLM, error) {
+		gotOptions = len(opts)
+		return &fakeAppLLM{}, nil
+	}
+	t.Cleanup(func() { newAzureLLM = previous })
+
+	_, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if gotOptions != 1 {
+		t.Fatalf("Azure LLM option count = %d, want base_url option", gotOptions)
 	}
 }
 
@@ -12842,6 +12938,28 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	}
 	if got, want := int(state.FieldByName("numChannels").Int()), 2; got != want {
 		t.Fatalf("Azure STT numChannels = %d, want %d", got, want)
+	}
+}
+
+func TestDefaultConfigFromEnvMapsAzureSTTSpeechEndpoint(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "speech_endpoint=https://speech.endpoint.test/custom/stt")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("speechEndpoint").String(), "https://speech.endpoint.test/custom/stt"; got != want {
+		t.Fatalf("Azure STT speechEndpoint = %q, want %q", got, want)
+	}
+	if got := state.FieldByName("speechHost").String(); got != "" {
+		t.Fatalf("Azure STT speechHost = %q, want empty when speech_endpoint configured", got)
 	}
 }
 
