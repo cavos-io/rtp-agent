@@ -2085,6 +2085,9 @@ func TestOpenAIRealtimeWhisperUsesDefaultVADForEndpointing(t *testing.T) {
 	if provider.vad == nil {
 		t.Fatal("vad = nil, want default local VAD for realtime whisper endpointing")
 	}
+	if label := provider.vad.Label(); label != "silero.VAD" {
+		t.Fatalf("vad label = %q, want reference Silero VAD", label)
+	}
 }
 
 func TestOpenAIRealtimeWhisperExplicitNilVADOptsOut(t *testing.T) {

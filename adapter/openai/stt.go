@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/silero"
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -186,7 +187,7 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 		opt(provider)
 	}
 	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
-		provider.vad = vad.NewSimpleVADWith(vad.WithSampleRate(openAIRealtimeSTTSampleRate))
+		provider.vad = silero.NewSileroVAD()
 	}
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = provider.baseURL
@@ -236,7 +237,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		opt(provider)
 	}
 	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
-		provider.vad = vad.NewSimpleVADWith(vad.WithSampleRate(openAIRealtimeSTTSampleRate))
+		provider.vad = silero.NewSileroVAD()
 	}
 
 	config := openai.DefaultAzureConfig(apiKey, azureEndpoint)
