@@ -61,6 +61,8 @@ type ElevenLabsTTS struct {
 	streamConnectionRefresh        bool
 	streams                        map[*elevenLabsStream]struct{}
 	currentStreamConn              *elevenLabsTTSConnection
+	streamConnCtx                  context.Context
+	streamConnCancel               context.CancelFunc
 	closed                         bool
 }
 
@@ -221,6 +223,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 	if modelID == "" {
 		modelID = "eleven_turbo_v2_5"
 	}
+	streamConnCtx, streamConnCancel := context.WithCancel(context.Background())
 	provider := &ElevenLabsTTS{
 		apiKey:                 resolveElevenLabsAPIKey(apiKey),
 		baseURL:                defaultElevenLabsBaseURL,
@@ -233,6 +236,8 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 		enableLogging:          true,
 		syncAlignment:          true,
 		applyTextNormalization: "auto",
+		streamConnCtx:          streamConnCtx,
+		streamConnCancel:       streamConnCancel,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -267,8 +272,14 @@ func (t *ElevenLabsTTS) Close() error {
 	t.streams = nil
 	currentConn := t.currentStreamConn
 	t.currentStreamConn = nil
+	streamConnCancel := t.streamConnCancel
+	t.streamConnCtx = nil
+	t.streamConnCancel = nil
 	t.mu.Unlock()
 
+	if streamConnCancel != nil {
+		streamConnCancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
@@ -730,7 +741,11 @@ func (t *ElevenLabsTTS) currentConnection(ctx context.Context, streamURL string,
 	if t.currentStreamConn != nil && t.currentStreamConn.matches(streamURL) {
 		return t.currentStreamConn
 	}
-	conn := newElevenLabsTTSConnection(t, ctx, streamURL, header)
+	connCtx := t.streamConnCtx
+	if connCtx == nil {
+		connCtx = context.Background()
+	}
+	conn := newElevenLabsTTSConnection(t, connCtx, streamURL, header)
 	t.currentStreamConn = conn
 	return conn
 }
