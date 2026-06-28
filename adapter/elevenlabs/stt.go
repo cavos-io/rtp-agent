@@ -747,15 +747,28 @@ func (s *elevenLabsSTTStream) unregisterFromProvider() {
 
 func (s *elevenLabsSTTStream) writeMessageLocked(message map[string]any) error {
 	if s.writeJSON != nil {
-		return s.writeJSON(message)
+		if err := s.writeJSON(message); err != nil {
+			s.closeAfterWriteFailureLocked(err)
+			return err
+		}
+		return nil
 	}
 	if err := writeElevenLabsSTTMessage(s.conn, message); err != nil {
-		s.closed = true
-		s.cancel()
-		_ = s.conn.Close()
+		s.closeAfterWriteFailureLocked(err)
 		return err
 	}
 	return nil
+}
+
+func (s *elevenLabsSTTStream) closeAfterWriteFailureLocked(err error) {
+	s.closed = true
+	s.sendError(llm.NewAPIConnectionError(fmt.Sprintf("failed to write to ElevenLabs: %v", err)))
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 }
 
 func (s *elevenLabsSTTStream) emitRecognitionUsageLocked() {

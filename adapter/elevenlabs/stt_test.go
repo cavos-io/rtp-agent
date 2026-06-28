@@ -1719,6 +1719,41 @@ func TestElevenLabsSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSTTWriteFailureSurfacesProviderErrorBeforeEOF(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &elevenLabsSTTStream{
+		events:     make(chan *stt.SpeechEvent),
+		errCh:      make(chan error, 1),
+		ctx:        ctx,
+		cancel:     cancel,
+		sampleRate: 16000,
+		state:      &elevenLabsSTTStreamState{language: "en"},
+		writeJSON: func(map[string]any) error {
+			return errors.New("write failed")
+		},
+	}
+
+	writeErr := stream.PushFrame(&model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x01}, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	if writeErr == nil {
+		t.Fatal("PushFrame error = nil after write failure, want error")
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil after write failure, want provider error")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestElevenLabsSTTStreamProviderErrorMessageDoesNotAbortReferenceStream(t *testing.T) {
 	serverErr := make(chan error, 1)
 	clientConn, serverConn := net.Pipe()
