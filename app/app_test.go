@@ -9638,6 +9638,61 @@ func TestAzureTTSFallbackMapsBundleSettingEndpoint(t *testing.T) {
 	}
 }
 
+func TestAzureTTSFallbackPassesReferenceVoiceControls(t *testing.T) {
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+	t.Setenv("AZURE_SPEECH_REGION", "eastus")
+
+	provider, err := fallbackTTSFromProvider(AppConfig{
+		TTSVoice: "en-US-JennyNeural",
+		TTSModelOptions: map[string]any{
+			"lexicon_uri":    "https://voice.example.test/lexicon.xml",
+			"style":          "chat",
+			"style_degree":   "1.4",
+			"prosody_rate":   "fast",
+			"prosody_volume": "loud",
+			"prosody_pitch":  "high",
+		},
+	}, providerAzure)
+	if err != nil {
+		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
+	}
+
+	azureProvider, ok := provider.(*azure.AzureTTS)
+	if !ok {
+		t.Fatalf("provider type = %T, want *azure.AzureTTS", provider)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("lexiconURI").String(), "https://voice.example.test/lexicon.xml"; got != want {
+		t.Fatalf("lexiconURI = %q, want %q", got, want)
+	}
+	if !state.FieldByName("lexiconURISet").Bool() {
+		t.Fatal("lexiconURISet = false, want true")
+	}
+	style := state.FieldByName("style")
+	if got, want := style.FieldByName("Style").String(), "chat"; got != want {
+		t.Fatalf("style = %q, want %q", got, want)
+	}
+	if got, want := style.FieldByName("Degree").Float(), 1.4; got != want {
+		t.Fatalf("style degree = %v, want %v", got, want)
+	}
+	if !state.FieldByName("styleSet").Bool() {
+		t.Fatal("styleSet = false, want true")
+	}
+	prosody := state.FieldByName("prosody")
+	if got, want := prosody.FieldByName("Rate").String(), "fast"; got != want {
+		t.Fatalf("prosody rate = %q, want %q", got, want)
+	}
+	if got, want := prosody.FieldByName("Volume").String(), "loud"; got != want {
+		t.Fatalf("prosody volume = %q, want %q", got, want)
+	}
+	if got, want := prosody.FieldByName("Pitch").String(), "high"; got != want {
+		t.Fatalf("prosody pitch = %q, want %q", got, want)
+	}
+	if !state.FieldByName("prosodySet").Bool() {
+		t.Fatal("prosodySet = false, want true")
+	}
+}
+
 func TestBasetenTTSFallbackPassesReferenceOptions(t *testing.T) {
 	t.Setenv("BASETEN_API_KEY", "test-baseten-key")
 	temperature := 0.72

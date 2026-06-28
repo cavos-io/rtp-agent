@@ -3443,6 +3443,43 @@ func azureTTSSpeechEndpointFromConfig(cfg AppConfig) string {
 	return ""
 }
 
+func azureTTSOptionsFromConfig(cfg AppConfig) []azure.AzureTTSOption {
+	ttsOpts := []azure.AzureTTSOption{}
+	if speechEndpoint := azureTTSSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(speechEndpoint))
+	}
+	if language := azureTTSLanguageFromConfig(cfg); language != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(language))
+	}
+	if cfg.TTSSampleRate != nil {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
+	} else if sampleRate := azureTTSIntModelOption(cfg.TTSModelOptions, "sample_rate"); sampleRate > 0 {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(sampleRate))
+	}
+	if deploymentID := azureTTSModelOption(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSDeploymentID(deploymentID))
+	}
+	if lexiconURI := azureTTSModelOption(cfg.TTSModelOptions, "lexicon_uri"); lexiconURI != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSLexiconURI(lexiconURI))
+	}
+	if styleName := azureTTSModelOption(cfg.TTSModelOptions, "style"); styleName != "" {
+		style := azure.AzureTTSStyle{Style: styleName}
+		if degree := azureTTSFloatModelOption(cfg.TTSModelOptions, "style_degree"); degree != nil {
+			style.Degree = *degree
+		}
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSStyle(style))
+	}
+	prosody := azure.AzureTTSProsody{
+		Rate:   azureTTSModelOption(cfg.TTSModelOptions, "prosody_rate"),
+		Volume: azureTTSModelOption(cfg.TTSModelOptions, "prosody_volume"),
+		Pitch:  azureTTSModelOption(cfg.TTSModelOptions, "prosody_pitch"),
+	}
+	if prosody.Rate != "" || prosody.Volume != "" || prosody.Pitch != "" {
+		ttsOpts = append(ttsOpts, azure.WithAzureTTSProsody(prosody))
+	}
+	return ttsOpts
+}
+
 func azureTTSLanguageFromConfig(cfg AppConfig) string {
 	if strings.TrimSpace(cfg.TTSLanguage) != "" {
 		return strings.TrimSpace(cfg.TTSLanguage)
@@ -3459,6 +3496,17 @@ func azureTTSIntModelOption(options map[string]any, key string) int {
 		return 0
 	}
 	return modelOptionInt(setting, key)
+}
+
+func azureTTSFloatModelOption(options map[string]any, key string) *float64 {
+	if value := modelOptionFloat(options, key); value != nil {
+		return value
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return modelOptionFloat(setting, key)
 }
 
 func azureTTSModelOption(options map[string]any, key string) string {
@@ -3733,21 +3781,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return adapteraws.NewAWSTTS(context.Background(), cfg.AWSRegion, cfg.TTSVoice, ttsOpts...)
 	case providerAzure:
-		ttsOpts := []azure.AzureTTSOption{}
-		if speechEndpoint := azureTTSSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(speechEndpoint))
-		}
-		if language := azureTTSLanguageFromConfig(cfg); language != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(language))
-		}
-		if cfg.TTSSampleRate != nil {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
-		} else if sampleRate := azureTTSIntModelOption(cfg.TTSModelOptions, "sample_rate"); sampleRate > 0 {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(sampleRate))
-		}
-		if deploymentID := azureTTSModelOption(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSDeploymentID(deploymentID))
-		}
+		ttsOpts := azureTTSOptionsFromConfig(cfg)
 		return azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 	case providerBaseten:
 		ttsOpts := []baseten.BasetenTTSOption{}
@@ -5564,21 +5598,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = provider
 	case providerAzure:
-		ttsOpts := []azure.AzureTTSOption{}
-		if speechEndpoint := azureTTSSpeechEndpointFromConfig(cfg); speechEndpoint != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSpeechEndpoint(speechEndpoint))
-		}
-		if language := azureTTSLanguageFromConfig(cfg); language != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSLanguage(language))
-		}
-		if cfg.TTSSampleRate != nil {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(*cfg.TTSSampleRate))
-		} else if sampleRate := azureTTSIntModelOption(cfg.TTSModelOptions, "sample_rate"); sampleRate > 0 {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSSampleRate(sampleRate))
-		}
-		if deploymentID := azureTTSModelOption(cfg.TTSModelOptions, "deployment_id"); deploymentID != "" {
-			ttsOpts = append(ttsOpts, azure.WithAzureTTSDeploymentID(deploymentID))
-		}
+		ttsOpts := azureTTSOptionsFromConfig(cfg)
 		provider, err := azure.NewAzureTTSWithOptions("", "", cfg.TTSVoice, ttsOpts...)
 		if err != nil {
 			return nil, err
