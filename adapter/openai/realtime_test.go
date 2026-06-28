@@ -533,6 +533,9 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	if transcription["model"] != "whisper-1" {
 		t.Fatalf("input_audio_transcription = %#v, want Azure whisper-1 default", transcription)
 	}
+	if _, ok := sessionPayload["input_audio_noise_reduction"]; ok {
+		t.Fatalf("input_audio_noise_reduction = %#v, want omitted by Azure default", sessionPayload["input_audio_noise_reduction"])
+	}
 	turnDetection := sessionPayload["turn_detection"].(map[string]any)
 	if turnDetection["type"] != "server_vad" {
 		t.Fatalf("turn_detection = %#v, want Azure server_vad default", turnDetection)

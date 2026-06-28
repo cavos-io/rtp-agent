@@ -481,6 +481,9 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 			openAIRealtimeMergeSessionPayload(initialSession, session)
 		}
 	}
+	if m.isAzure && !initialOptions.InputAudioNoiseReductionSet && initialOptions.InputAudioNoiseReduction == nil {
+		openAIRealtimeRemoveInputNoiseReduction(initialSession)
+	}
 	s := &realtimeSession{
 		model:            m,
 		conn:             conn,
@@ -1358,6 +1361,12 @@ func openAIRealtimeMergeSessionPayload(dst map[string]any, src map[string]any) {
 	}
 }
 
+func openAIRealtimeRemoveInputNoiseReduction(session map[string]any) {
+	audio, _ := session["audio"].(map[string]any)
+	input, _ := audio["input"].(map[string]any)
+	delete(input, "noise_reduction")
+}
+
 func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 	entries := make(map[string]any)
 	if value, ok := session["tool_choice"]; ok {
@@ -2149,6 +2158,11 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 
 	initialSession := openAIRealtimeInitialSession(s.model.model, s.model.modalities)
 	openAIRealtimeMergeSessionPayload(initialSession, openAIRealtimeSessionFromOptionEntries(optionsState))
+	if s.model.isAzure {
+		if _, ok := optionsState["audio.input.noise_reduction"]; !ok {
+			openAIRealtimeRemoveInputNoiseReduction(initialSession)
+		}
+	}
 	if instructions != "" {
 		initialSession["instructions"] = instructions
 	}
