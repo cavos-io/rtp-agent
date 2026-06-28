@@ -445,14 +445,94 @@ type realtimeGeneration struct {
 }
 
 type realtimeMessageGeneration struct {
-	textCh        chan string
-	timedTextCh   chan llm.RealtimeTimedText
-	audioCh       chan *model.AudioFrame
+	textStream    *openAIRealtimeQueuedStream[string]
+	timedText     *openAIRealtimeQueuedStream[llm.RealtimeTimedText]
+	audioStream   *openAIRealtimeQueuedStream[*model.AudioFrame]
 	modalitiesCh  chan []string
 	modalities    []string
 	transcript    string
 	audioClosed   bool
 	streamsClosed bool
+}
+
+type openAIRealtimeQueuedStream[T any] struct {
+	out    chan T
+	wake   chan struct{}
+	mu     sync.Mutex
+	queue  []T
+	closed bool
+}
+
+func newOpenAIRealtimeQueuedStream[T any]() *openAIRealtimeQueuedStream[T] {
+	stream := &openAIRealtimeQueuedStream[T]{
+		out:  make(chan T),
+		wake: make(chan struct{}, 1),
+	}
+	go stream.run()
+	return stream
+}
+
+func (s *openAIRealtimeQueuedStream[T]) Chan() <-chan T {
+	if s == nil {
+		return nil
+	}
+	return s.out
+}
+
+func (s *openAIRealtimeQueuedStream[T]) Send(value T) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.queue = append(s.queue, value)
+	s.notifyLocked()
+	return true
+}
+
+func (s *openAIRealtimeQueuedStream[T]) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	s.notifyLocked()
+}
+
+func (s *openAIRealtimeQueuedStream[T]) notifyLocked() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *openAIRealtimeQueuedStream[T]) run() {
+	for {
+		s.mu.Lock()
+		for len(s.queue) == 0 && !s.closed {
+			s.mu.Unlock()
+			<-s.wake
+			s.mu.Lock()
+		}
+		if len(s.queue) == 0 && s.closed {
+			s.mu.Unlock()
+			close(s.out)
+			return
+		}
+		value := s.queue[0]
+		var zero T
+		s.queue[0] = zero
+		s.queue = s.queue[1:]
+		s.mu.Unlock()
+		s.out <- value
+	}
 }
 
 func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
@@ -2268,9 +2348,9 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 			return llm.RealtimeEvent{}, false
 		}
 		msg := &realtimeMessageGeneration{
-			textCh:       make(chan string, 100),
-			timedTextCh:  make(chan llm.RealtimeTimedText, 100),
-			audioCh:      make(chan *model.AudioFrame, 100),
+			textStream:   newOpenAIRealtimeQueuedStream[string](),
+			timedText:    newOpenAIRealtimeQueuedStream[llm.RealtimeTimedText](),
+			audioStream:  newOpenAIRealtimeQueuedStream[*model.AudioFrame](),
 			modalitiesCh: make(chan []string, 1),
 		}
 		if s.model != nil && !s.model.Capabilities().AudioOutput {
@@ -2281,9 +2361,9 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		s.generation.messages[itemID] = msg
 		message := llm.MessageGeneration{
 			MessageID:    itemID,
-			TextCh:       msg.textCh,
-			TimedTextCh:  msg.timedTextCh,
-			AudioCh:      msg.audioCh,
+			TextCh:       msg.textStream.Chan(),
+			TimedTextCh:  msg.timedText.Chan(),
+			AudioCh:      msg.audioStream.Chan(),
 			ModalitiesCh: msg.modalitiesCh,
 		}
 		select {
@@ -2510,17 +2590,13 @@ func (s *realtimeSession) trackRealtimeText(ev llm.RealtimeEvent) {
 	if msg.audioClosed && s.generation.timing.firstTokenAt.IsZero() {
 		s.generation.timing.firstTokenAt = time.Now()
 	}
-	select {
-	case msg.textCh <- ev.Text:
-	default:
+	if !msg.textStream.Send(ev.Text) {
 		logger.Logger.Warnw("dropping OpenAI realtime text delta for full message stream", nil, "item_id", ev.ItemID)
 	}
 	if ev.TimedText == nil {
 		return
 	}
-	select {
-	case msg.timedTextCh <- *ev.TimedText:
-	default:
+	if !msg.timedText.Send(*ev.TimedText) {
 		logger.Logger.Warnw("dropping OpenAI realtime timed text delta for full message stream", nil, "item_id", ev.ItemID)
 	}
 }
@@ -2543,9 +2619,7 @@ func (s *realtimeSession) trackRealtimeAudio(ev llm.RealtimeEvent) {
 		SamplesPerChannel: uint32(len(ev.Data) / 2),
 	}
 	s.setRealtimeMessageModalities(ev.ItemID, []string{"audio", "text"})
-	select {
-	case msg.audioCh <- frame:
-	default:
+	if !msg.audioStream.Send(frame) {
 		logger.Logger.Warnw("dropping OpenAI realtime audio delta for full message stream", nil, "item_id", ev.ItemID)
 	}
 }
@@ -2623,8 +2697,8 @@ func (s *realtimeSession) closeRealtimeMessageStreams(msg *realtimeMessageGenera
 		default:
 		}
 	}
-	close(msg.textCh)
-	close(msg.timedTextCh)
+	msg.textStream.Close()
+	msg.timedText.Close()
 	s.closeRealtimeMessageAudioStream(msg)
 	close(msg.modalitiesCh)
 	msg.streamsClosed = true
@@ -2634,7 +2708,7 @@ func (s *realtimeSession) closeRealtimeMessageAudioStream(msg *realtimeMessageGe
 	if msg == nil || msg.audioClosed {
 		return
 	}
-	close(msg.audioCh)
+	msg.audioStream.Close()
 	msg.audioClosed = true
 }
 

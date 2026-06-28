@@ -4708,6 +4708,46 @@ func TestRealtimeSessionRoutesTimedAudioTranscriptDelta(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionPreservesQueuedTextDeltas(t *testing.T) {
+	session := &realtimeSession{}
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_123",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-session.generation.messageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("message generation not routed")
+	}
+
+	const total = 150
+	for i := 0; i < total; i++ {
+		session.trackRealtimeEvent(llm.RealtimeEvent{
+			Type:   llm.RealtimeEventTypeText,
+			ItemID: "msg_123",
+			Text:   "x",
+		})
+	}
+	session.closeRealtimeMessageStreams(session.generation.messages["msg_123"])
+
+	got := 0
+	for range msg.TextCh {
+		got++
+	}
+	if got != total {
+		t.Fatalf("queued text deltas = %d, want %d", got, total)
+	}
+}
+
 func TestRealtimeSessionPersistsEmptyIDAudioTranscriptOnResponseDone(t *testing.T) {
 	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
 	if err := session.remote.Insert(nil, &llm.ChatMessage{
@@ -6437,8 +6477,9 @@ func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
 		Generation: &llm.GenerationCreatedEvent{},
 	})
 	session.generation.messages["item_123"] = &realtimeMessageGeneration{
-		textCh:       make(chan string, 1),
-		audioCh:      make(chan *audiomodel.AudioFrame, 1),
+		textStream:   newOpenAIRealtimeQueuedStream[string](),
+		timedText:    newOpenAIRealtimeQueuedStream[llm.RealtimeTimedText](),
+		audioStream:  newOpenAIRealtimeQueuedStream[*audiomodel.AudioFrame](),
 		modalitiesCh: make(chan []string, 1),
 	}
 
