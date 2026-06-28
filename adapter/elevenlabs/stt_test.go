@@ -292,7 +292,9 @@ func TestElevenLabsSTTStreamURLAndMessagesMatchReference(t *testing.T) {
 	assertElevenLabsQuery(t, query, "audio_format", "pcm_16000")
 	assertElevenLabsQuery(t, query, "commit_strategy", "vad")
 	assertElevenLabsQuery(t, query, "language_code", "en")
-	assertElevenLabsQuery(t, query, "include_timestamps", "true")
+	if got := query.Get("include_timestamps"); got != "" {
+		t.Fatalf("include_timestamps = %q, want omitted for realtime reference URL", got)
+	}
 	assertElevenLabsQuery(t, query, "vad_silence_threshold_secs", "0.7")
 	assertElevenLabsQuery(t, query, "vad_threshold", "0.45")
 	assertElevenLabsQuery(t, query, "min_speech_duration_ms", "120")

@@ -442,9 +442,6 @@ func buildElevenLabsSTTStreamURL(s *ElevenLabsSTT, language string) string {
 	} else {
 		q.Set("language_code", requestLanguage)
 	}
-	if s.includeTimestamps {
-		q.Set("include_timestamps", "true")
-	}
 	if s.serverVAD != nil {
 		if s.serverVAD.VADSilenceThresholdSecs != nil {
 			q.Set("vad_silence_threshold_secs", formatElevenLabsFloat(*s.serverVAD.VADSilenceThresholdSecs))
