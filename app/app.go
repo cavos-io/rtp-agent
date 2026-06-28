@@ -3369,6 +3369,9 @@ func azureLLMFromConfig(cfg AppConfig) (llm.LLM, error) {
 	if project := modelOptionString(cfg.LLMModelOptions, "project"); project != "" {
 		llmOpts = append(llmOpts, azure.WithAzureLLMProject(project))
 	}
+	if baseURL := modelOptionString(cfg.LLMModelOptions, "base_url"); baseURL != "" {
+		llmOpts = append(llmOpts, azure.WithAzureLLMBaseURL(baseURL))
+	}
 	return newAzureLLM(
 		cfg.LLMModel,
 		cfg.LLMBaseURL,
