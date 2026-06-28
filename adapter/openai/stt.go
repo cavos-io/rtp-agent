@@ -607,6 +607,10 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 			cleanupRequest()
 			return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			cleanupRequest()
+			return nil, context.Canceled
+		}
 		cleanupRequest()
 		return nil, mapOpenAIError(err)
 	}

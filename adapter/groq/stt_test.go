@@ -170,6 +170,49 @@ func TestGroqSTTProviderCloseCancelsPendingRecognize(t *testing.T) {
 	}
 }
 
+func TestGroqSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	client := groqSTTHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})
+
+	provider, err := NewGroqSTT("test-key", "",
+		WithGroqSTTBaseURL("https://groq.example/openai/v1"),
+		withGroqSTTHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewGroqSTT error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		event, err := provider.Recognize(ctx, nil, "en")
+		if event != nil {
+			errCh <- errors.New("Recognize returned event after caller cancellation")
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Recognize did not start provider request")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Recognize canceled error = %T %v, want context.Canceled", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recognize remained blocked after caller cancellation")
+	}
+}
+
 type groqSTTHTTPDoer func(*http.Request) (*http.Response, error)
 
 func (f groqSTTHTTPDoer) Do(req *http.Request) (*http.Response, error) {
