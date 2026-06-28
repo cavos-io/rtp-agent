@@ -12762,6 +12762,34 @@ func TestDefaultConfigFromEnvMapsAzureSTTLanguageAndEndpoint(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAzureSTTLanguageCandidates(t *testing.T) {
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
+	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")
+	t.Setenv("RTP_AGENT_STT_MODEL_OPTIONS", "language=en-US|id-ID")
+	t.Setenv("AZURE_SPEECH_KEY", "test-azure-key")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	azureProvider, ok := app.Session.STT.(*azure.AzureSTT)
+	if !ok {
+		t.Fatalf("STT provider = %T, want *azure.AzureSTT", app.Session.STT)
+	}
+	state := reflect.ValueOf(azureProvider).Elem()
+	if got, want := state.FieldByName("language").String(), "en-US"; got != want {
+		t.Fatalf("Azure STT language = %q, want first candidate %q", got, want)
+	}
+	languages := state.FieldByName("languages")
+	gotLanguages := make([]string, 0, languages.Len())
+	for i := 0; i < languages.Len(); i++ {
+		gotLanguages = append(gotLanguages, languages.Index(i).String())
+	}
+	if !reflect.DeepEqual(gotLanguages, []string{"en-US", "id-ID"}) {
+		t.Fatalf("Azure STT languages = %#v, want [en-US id-ID]", gotLanguages)
+	}
+}
+
 func TestDefaultConfigFromEnvMapsAzureSTTSegmentationOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "azure")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "https://southindia.api.cognitive.microsoft.com/")

@@ -3278,8 +3278,12 @@ func azureSTTFromConfig(cfg AppConfig) (*azure.AzureSTT, error) {
 	if speechHost := azureSTTSpeechHostFromConfig(cfg); speechHost != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSpeechHost(speechHost))
 	}
-	if language := azureSTTLanguageFromConfig(cfg); language != "" {
+	if language := strings.TrimSpace(cfg.STTLanguage); language != "" {
 		sttOpts = append(sttOpts, azure.WithAzureSTTLanguage(language))
+	} else if languages := azureSTTStringListModelOption(cfg.STTModelOptions, "language"); len(languages) > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTLanguages(languages...))
+	} else if languages := azureSTTStringListModelOption(cfg.STTModelOptions, "languages"); len(languages) > 0 {
+		sttOpts = append(sttOpts, azure.WithAzureSTTLanguages(languages...))
 	}
 	if cfg.STTSampleRate != nil {
 		sttOpts = append(sttOpts, azure.WithAzureSTTSampleRate(*cfg.STTSampleRate))
@@ -3403,6 +3407,17 @@ func azureSTTBoolModelOption(options map[string]any, key string) *bool {
 		return nil
 	}
 	return modelOptionBool(setting, key)
+}
+
+func azureSTTStringListModelOption(options map[string]any, key string) []string {
+	if values := modelOptionStringList(options, key); len(values) > 0 {
+		return values
+	}
+	setting, ok := options["setting"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return modelOptionStringList(setting, key)
 }
 
 func azureSTTModelOption(options map[string]any, key string) string {
