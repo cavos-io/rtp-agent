@@ -1175,6 +1175,84 @@ func TestOpenAIRealtimeSTTStreamNormalizesInputAudio(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "normalized 48k stereo audio should emit two 50ms 24k mono chunks")
 }
 
+func TestOpenAIRealtimeSTTStreamResamplesInputAudioWithReferenceTiming(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	frame := make([]byte, 2)
+	binary.LittleEndian.PutUint16(frame, 1)
+	for i := 0; i < 2204; i++ {
+		if err := stream.PushFrame(&model.AudioFrame{
+			Data:              frame,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("PushFrame frame %d error = %v", i, err)
+		}
+	}
+	assertNoRealtimeMessage(t, messages, "2204 single-sample 44.1kHz frames should stay below one reference 50ms 24k STT chunk")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame frame 2205 error = %v", err)
+	}
+	var raw string
+	select {
+	case raw = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for 50ms STT chunk after exact 2205 input samples")
+	}
+	chunk := assertOpenAIRealtimeSTTAudioAppend(t, raw)
+	if len(chunk) != openAIRealtimeSTTChunkBytes() {
+		t.Fatalf("normalized audio bytes = %d, want one 50ms 24k mono chunk", len(chunk))
+	}
+}
+
 func TestOpenAIRealtimeSTTStreamRejectsSampleRateChange(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),

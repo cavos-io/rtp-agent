@@ -753,6 +753,7 @@ type openAIRealtimeSTTStream struct {
 	hasAudio    bool
 	pushedSR    uint32
 	audio       *audio.AudioByteStream
+	normalizer  openAIRealtimeInputAudioNormalizer
 	state       *openAIRealtimeSTTMessageState
 	owner       *OpenAISTT
 	vadStream   vad.VADStream
@@ -778,7 +779,7 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		s.pushedSR = frame.SampleRate
 	}
-	normalizedFrame, err := normalizeOpenAIRealtimeInputAudio(frame)
+	normalizedFrame, err := s.normalizer.normalize(frame)
 	if err != nil {
 		s.mu.Unlock()
 		return err
@@ -1166,6 +1167,7 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	}
 	s.conn = conn
 	s.audio = nil
+	s.normalizer.reset()
 	s.hasAudio = false
 	s.committed = false
 	if s.owner.vad != nil {
