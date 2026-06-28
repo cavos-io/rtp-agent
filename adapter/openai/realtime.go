@@ -1261,16 +1261,11 @@ func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, e
 			}
 		}
 		if msg.Role == llm.ChatRoleUser && part.Audio != nil {
-			audioPart := map[string]any{"type": "input_audio"}
-			if encoded := openAIRealtimeAudioContent(part.Audio); encoded != "" {
-				audioPart["audio"] = encoded
-			}
-			if _, ok := audioPart["audio"]; ok || part.Audio.Transcript != "" {
-				audioPart["transcript"] = part.Audio.Transcript
-			}
-			if len(audioPart) > 1 {
-				content = append(content, audioPart)
-			}
+			content = append(content, map[string]any{
+				"type":       "input_audio",
+				"audio":      openAIRealtimeAudioContent(part.Audio),
+				"transcript": part.Audio.Transcript,
+			})
 		}
 	}
 	return content, nil

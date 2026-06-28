@@ -6324,7 +6324,7 @@ func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
 	}
 }
 
-func TestRealtimeChatContextCreateMessagesDropsEmptyUserAudioContent(t *testing.T) {
+func TestRealtimeChatContextCreateMessagesPreservesEmptyUserAudioContent(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.AddMessage(llm.ChatMessageArgs{
 		ID:   "msg_audio",
@@ -6347,8 +6347,14 @@ func TestRealtimeChatContextCreateMessagesDropsEmptyUserAudioContent(t *testing.
 	}
 	item := msgs[0]["item"].(map[string]any)
 	content := item["content"].([]map[string]any)
-	if len(content) != 0 {
-		t.Fatalf("content = %#v, want empty when audio has no data and no transcript", content)
+	if len(content) != 1 || content[0]["type"] != "input_audio" {
+		t.Fatalf("content = %#v, want one empty input_audio part", content)
+	}
+	if audio, ok := content[0]["audio"].(string); !ok || audio != "" {
+		t.Fatalf("audio = %#v, want explicit empty audio payload", content[0]["audio"])
+	}
+	if transcript, ok := content[0]["transcript"].(string); !ok || transcript != "" {
+		t.Fatalf("transcript = %#v, want explicit empty transcript", content[0]["transcript"])
 	}
 }
 
