@@ -3978,6 +3978,82 @@ func TestRealtimeSessionReconnectReplaysTools(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionReconnectReplaysUpdatedOptions(t *testing.T) {
+	var dialCount atomic.Int32
+	optionsReplayed := make(chan map[string]any, 1)
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		_, initialPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read options update error = %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		var initialUpdate map[string]any
+		if err := json.Unmarshal(initialPayload, &initialUpdate); err != nil {
+			t.Errorf("Decode replayed initial session update error = %v", err)
+			return
+		}
+		optionsReplayed <- initialUpdate
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		Voice:                    "marin",
+		Speed:                    1.25,
+		TurnDetection:            map[string]any{"type": "server_vad", "threshold": 0.7},
+		InputAudioNoiseReduction: map[string]any{"type": "far_field"},
+	}); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	select {
+	case update := <-optionsReplayed:
+		if update["type"] != "session.update" {
+			t.Fatalf("replayed update type = %#v, want session.update", update["type"])
+		}
+		sessionPayload := update["session"].(map[string]any)
+		audio := sessionPayload["audio"].(map[string]any)
+		input := audio["input"].(map[string]any)
+		output := audio["output"].(map[string]any)
+		turnDetection := input["turn_detection"].(map[string]any)
+		if turnDetection["type"] != "server_vad" || turnDetection["threshold"] != 0.7 {
+			t.Fatalf("replayed turn_detection = %#v, want updated server_vad", turnDetection)
+		}
+		noiseReduction := input["noise_reduction"].(map[string]any)
+		if noiseReduction["type"] != "far_field" {
+			t.Fatalf("replayed noise_reduction = %#v, want far_field", noiseReduction)
+		}
+		if output["voice"] != "marin" || output["speed"] != 1.25 {
+			t.Fatalf("replayed output = %#v, want voice marin speed 1.25", output)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session did not replay updated options after reconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+}
+
 func TestRealtimeSessionReconnectReplaysChatContext(t *testing.T) {
 	var dialCount atomic.Int32
 	chatReplayed := make(chan map[string]any, 1)
