@@ -6274,6 +6274,57 @@ func TestRealtimeChatContextCreateMessagesPreserveEmptyTextContent(t *testing.T)
 }
 
 func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
+	cases := []struct {
+		name       string
+		transcript string
+	}{
+		{name: "non-empty transcript", transcript: "spoken words"},
+		{name: "empty transcript", transcript: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chatCtx := llm.NewChatContext()
+			chatCtx.AddMessage(llm.ChatMessageArgs{
+				ID:   "msg_audio",
+				Role: llm.ChatRoleUser,
+				Content: []llm.ChatContent{{
+					Audio: &llm.AudioContent{
+						Frames: []any{
+							&audiomodel.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+							&audiomodel.AudioFrame{Data: []byte{3, 4}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+						},
+						Transcript: tc.transcript,
+					},
+				}},
+			})
+
+			msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+			if err != nil {
+				t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+			}
+			if len(msgs) != 1 {
+				t.Fatalf("messages len = %d, want 1", len(msgs))
+			}
+			item := msgs[0]["item"].(map[string]any)
+			content := item["content"].([]map[string]any)
+			if len(content) != 1 || content[0]["type"] != "input_audio" {
+				t.Fatalf("content = %#v, want one input audio content part", content)
+			}
+			if got, want := content[0]["audio"], base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}); got != want {
+				t.Fatalf("audio = %#v, want %q", got, want)
+			}
+			transcript, ok := content[0]["transcript"]
+			if !ok {
+				t.Fatalf("transcript missing from content %#v", content[0])
+			}
+			if transcript != tc.transcript {
+				t.Fatalf("transcript = %#v, want %q", transcript, tc.transcript)
+			}
+		})
+	}
+}
+
+func TestRealtimeChatContextCreateMessagesDropsEmptyUserAudioContent(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.AddMessage(llm.ChatMessageArgs{
 		ID:   "msg_audio",
@@ -6281,10 +6332,8 @@ func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
 		Content: []llm.ChatContent{{
 			Audio: &llm.AudioContent{
 				Frames: []any{
-					&audiomodel.AudioFrame{Data: []byte{1, 2}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
-					&audiomodel.AudioFrame{Data: []byte{3, 4}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1},
+					&audiomodel.AudioFrame{SampleRate: 24000, NumChannels: 1},
 				},
-				Transcript: "spoken words",
 			},
 		}},
 	})
@@ -6298,14 +6347,8 @@ func TestRealtimeChatContextCreateMessagesMapUserAudioContent(t *testing.T) {
 	}
 	item := msgs[0]["item"].(map[string]any)
 	content := item["content"].([]map[string]any)
-	if len(content) != 1 || content[0]["type"] != "input_audio" {
-		t.Fatalf("content = %#v, want one input audio content part", content)
-	}
-	if got, want := content[0]["audio"], base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}); got != want {
-		t.Fatalf("audio = %#v, want %q", got, want)
-	}
-	if got := content[0]["transcript"]; got != "spoken words" {
-		t.Fatalf("transcript = %#v, want spoken words", got)
+	if len(content) != 0 {
+		t.Fatalf("content = %#v, want empty when audio has no data and no transcript", content)
 	}
 }
 

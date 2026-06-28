@@ -1265,7 +1265,7 @@ func openAIRealtimeChatMessageContent(msg *llm.ChatMessage) ([]map[string]any, e
 			if encoded := openAIRealtimeAudioContent(part.Audio); encoded != "" {
 				audioPart["audio"] = encoded
 			}
-			if part.Audio.Transcript != "" {
+			if _, ok := audioPart["audio"]; ok || part.Audio.Transcript != "" {
 				audioPart["transcript"] = part.Audio.Transcript
 			}
 			if len(audioPart) > 1 {
@@ -1632,11 +1632,6 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		}
 	}
 	return nil
-}
-
-func normalizeOpenAIRealtimeInputAudio(frame *model.AudioFrame) (*model.AudioFrame, error) {
-	var normalizer openAIRealtimeInputAudioNormalizer
-	return normalizer.normalize(frame)
 }
 
 type openAIRealtimeInputAudioNormalizer struct {
