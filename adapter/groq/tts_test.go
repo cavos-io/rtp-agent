@@ -216,6 +216,29 @@ func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestGroqTTSChunkedStreamNormalizesReferenceMonoOutput(t *testing.T) {
+	stereoPCM := []byte{
+		0x02, 0x00, 0x04, 0x00,
+		0x06, 0x00, 0x08, 0x00,
+	}
+	stream := &groqTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV(stereoPCM, 48000, 2)))},
+		sampleRate: 48000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want mono output", audio.Frame.NumChannels)
+	}
+	want := []byte{0x03, 0x00, 0x07, 0x00}
+	if !bytes.Equal(audio.Frame.Data, want) {
+		t.Fatalf("frame data = %#v, want downmixed mono %#v", audio.Frame.Data, want)
+	}
+}
+
 func TestGroqTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	pcm := []byte{0x01, 0x00, 0x02, 0x00}
 	stream := &groqTTSChunkedStream{

@@ -208,6 +208,7 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		NumChannels:       uint32(s.numChannels),
 		SamplesPerChannel: uint32(len(data) / s.bytesPerFrame),
 	}
+	frame = groqDownmixToMono(frame)
 	if s.sampleRate > 0 && frame.SampleRate != uint32(s.sampleRate) {
 		frame, err = audio.ResampleAudioFrame(frame, uint32(s.sampleRate))
 		if err != nil {
@@ -217,6 +218,34 @@ func (s *groqTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: frame,
 	}, nil
+}
+
+func groqDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil || frame.NumChannels <= 1 {
+		return frame
+	}
+	channels := int(frame.NumChannels)
+	samples := int(frame.SamplesPerChannel)
+	if samples == 0 {
+		samples = len(frame.Data) / (channels * 2)
+	}
+	out := make([]byte, samples*2)
+	for sample := 0; sample < samples; sample++ {
+		sum := int32(0)
+		for channel := 0; channel < channels; channel++ {
+			offset := (sample*channels + channel) * 2
+			if offset+2 > len(frame.Data) {
+				break
+			}
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		binary.LittleEndian.PutUint16(out[sample*2:sample*2+2], uint16(int16(sum/int32(channels))))
+	}
+	mono := *frame
+	mono.Data = out
+	mono.NumChannels = 1
+	mono.SamplesPerChannel = uint32(samples)
+	return &mono
 }
 
 func (s *groqTTSChunkedStream) startWAV() error {
