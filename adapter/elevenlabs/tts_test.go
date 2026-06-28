@@ -4021,6 +4021,10 @@ func runElevenLabsTTSOneContextWebsocketServer(conn net.Conn, audio []byte, errC
 		"audio":      base64.StdEncoding.EncodeToString(audio),
 		"isFinal":    true,
 	}); err != nil {
+		if errors.Is(err, io.ErrClosedPipe) {
+			errCh <- nil
+			return
+		}
 		errCh <- err
 		return
 	}
