@@ -38,6 +38,8 @@ type GroqTTS struct {
 	mu             sync.Mutex
 	closed         bool
 	streams        map[*groqTTSChunkedStream]struct{}
+	nextRequestID  uint64
+	requestCancels map[uint64]context.CancelFunc
 }
 
 type GroqTTSOption func(*GroqTTS)
@@ -114,14 +116,38 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
 	}
 
-	req, err := buildGroqTTSRequest(ctx, t, text)
+	reqCtx, cancel := context.WithCancel(ctx)
+	requestID, ok := t.registerRequest(cancel)
+	if !ok {
+		cancel()
+		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+	}
+	requestRegistered := true
+	unregisterRequest := func() {
+		if requestRegistered {
+			t.unregisterRequest(requestID)
+			requestRegistered = false
+		}
+	}
+
+	req, err := buildGroqTTSRequest(reqCtx, t, text)
 	if err != nil {
+		unregisterRequest()
+		cancel()
 		return nil, err
 	}
 
 	resp, err := http.DefaultClient.Do(req)
+	unregisterRequest()
 	if err != nil {
+		if t.isClosed() && errors.Is(reqCtx.Err(), context.Canceled) {
+			return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+		}
 		return nil, groqTTSTransportError(err)
+	}
+	if t.isClosed() {
+		resp.Body.Close()
+		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
 	}
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == 499 {
@@ -156,8 +182,16 @@ func (t *GroqTTS) Close() error {
 		streams = append(streams, stream)
 	}
 	t.streams = make(map[*groqTTSChunkedStream]struct{})
+	requestCancels := make([]context.CancelFunc, 0, len(t.requestCancels))
+	for _, cancel := range t.requestCancels {
+		requestCancels = append(requestCancels, cancel)
+	}
+	t.requestCancels = make(map[uint64]context.CancelFunc)
 	t.mu.Unlock()
 
+	for _, cancel := range requestCancels {
+		cancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
@@ -180,6 +214,27 @@ func (t *GroqTTS) registerStream(stream *groqTTSChunkedStream) bool {
 	t.streams[stream] = struct{}{}
 	t.mu.Unlock()
 	return true
+}
+
+func (t *GroqTTS) registerRequest(cancel context.CancelFunc) (uint64, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return 0, false
+	}
+	if t.requestCancels == nil {
+		t.requestCancels = make(map[uint64]context.CancelFunc)
+	}
+	t.nextRequestID++
+	id := t.nextRequestID
+	t.requestCancels[id] = cancel
+	return id, true
+}
+
+func (t *GroqTTS) unregisterRequest(id uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.requestCancels, id)
 }
 
 func (t *GroqTTS) unregisterStream(stream *groqTTSChunkedStream) {

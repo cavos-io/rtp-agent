@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -321,6 +322,45 @@ func TestGroqTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if body.closeCount != 1 {
 		t.Fatalf("body Close calls after second Close = %d, want 1", body.closeCount)
+	}
+}
+
+func TestGroqTTSProviderCloseCancelsPendingSynthesize(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	requests := make(chan *http.Request, 1)
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+	errCh := make(chan error, 1)
+	go func() {
+		stream, err := provider.Synthesize(context.Background(), "hello")
+		if stream != nil {
+			_ = stream.Close()
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Synthesize after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize remained blocked after provider Close")
 	}
 }
 
