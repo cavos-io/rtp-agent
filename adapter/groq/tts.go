@@ -182,6 +182,7 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		sampleRate: t.sampleRate,
 		provider:   t,
 		requestID:  fmt.Sprintf("groq-tts-%d", requestID),
+		cancel:     cancel,
 	}
 	if !t.registerStream(stream) {
 		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
@@ -324,6 +325,7 @@ type groqTTSChunkedStream struct {
 	sampleRate       int
 	provider         *GroqTTS
 	requestID        string
+	cancel           context.CancelFunc
 	started          bool
 	finalSent        bool
 	pendingFinal     bool
@@ -550,6 +552,10 @@ func discardGroqWAVBytes(r io.Reader, n int) error {
 }
 
 func (s *groqTTSChunkedStream) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		if s.provider != nil {
 			s.provider.unregisterStream(s)

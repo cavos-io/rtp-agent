@@ -368,7 +368,9 @@ func TestGroqTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	body := &groqCloseCountBody{Reader: bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))}
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
+	var requestContext context.Context
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requestContext = r.Context()
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
@@ -388,6 +390,14 @@ func TestGroqTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if body.closeCount != 1 {
 		t.Fatalf("body Close calls = %d, want 1", body.closeCount)
+	}
+	if requestContext == nil {
+		t.Fatal("request context was not captured")
+	}
+	select {
+	case <-requestContext.Done():
+	default:
+		t.Fatal("request context still active after provider Close closes stream")
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
