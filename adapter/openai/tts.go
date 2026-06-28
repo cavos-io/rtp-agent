@@ -414,9 +414,11 @@ type openaiTTSChunkedStream struct {
 	wavDataLeft    int
 	wavSampleRate  uint32
 	wavChannels    uint32
+	pcmRemainder   []byte
 	closed         bool
 	audioSawAudio  bool
 	audioFinalSent bool
+	audioReadErr   error
 	sseDone        bool
 	sseSawAudio    bool
 	sseFinalSent   bool
@@ -436,6 +438,11 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 	if s.responseFormat == openai.SpeechResponseFormatMp3 {
 		return s.nextMP3Audio()
 	}
+	if s.audioReadErr != nil {
+		err := s.audioReadErr
+		s.audioReadErr = nil
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
 
 	buf := make([]byte, 4096)
 	for {
@@ -447,6 +454,9 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 			}
 			if audio != nil {
 				s.audioSawAudio = true
+				if err != nil && err != io.EOF {
+					s.audioReadErr = err
+				}
 				return audio, nil
 			}
 		}
@@ -633,6 +643,20 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 		if ok {
 			return &tts.SynthesizedAudio{Frame: frame}, nil
 		}
+		return nil, nil
+	}
+	if len(s.pcmRemainder) > 0 {
+		combined := make([]byte, 0, len(s.pcmRemainder)+len(data))
+		combined = append(combined, s.pcmRemainder...)
+		combined = append(combined, data...)
+		data = combined
+		s.pcmRemainder = nil
+	}
+	if len(data)%2 == 1 {
+		s.pcmRemainder = append(s.pcmRemainder[:0], data[len(data)-1])
+		data = data[:len(data)-1]
+	}
+	if len(data) == 0 {
 		return nil, nil
 	}
 	return &tts.SynthesizedAudio{

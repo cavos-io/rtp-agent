@@ -1124,6 +1124,75 @@ func TestOpenAITTSRawAudioStreamReturnsEOFWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSRawAudioStreamKeepsAudioBeforeReadFailure(t *testing.T) {
+	stream := &openaiTTSChunkedStream{
+		resp:           &dataThenErrorReader{data: []byte{1, 2, 3, 4}, err: errors.New("socket closed")},
+		responseFormat: goopenai.SpeechResponseFormatPcm,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want data before read failure", err)
+	}
+	if string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio bytes = %v, want read-failure data", audio.Frame.Data)
+	}
+
+	audio, err = stream.Next()
+	if audio != nil {
+		t.Fatalf("second Next audio = %#v, want stream error only", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "socket closed" {
+		t.Fatalf("APIConnectionError message = %q, want socket closed", connectionErr.Message)
+	}
+}
+
+func TestOpenAITTSRawPCMFramesPreserveSampleBoundary(t *testing.T) {
+	stream := &openaiTTSChunkedStream{
+		resp: &chunkedReadCloser{chunks: [][]byte{
+			{1, 2, 3},
+			{4, 5, 6},
+		}},
+		responseFormat: goopenai.SpeechResponseFormatPcm,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want first whole PCM sample", err)
+	}
+	if string(first.Frame.Data) != string([]byte{1, 2}) {
+		t.Fatalf("first frame bytes = %v, want first whole sample only", first.Frame.Data)
+	}
+	if first.Frame.SamplesPerChannel != 1 {
+		t.Fatalf("first samples = %d, want 1", first.Frame.SamplesPerChannel)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want buffered sample plus next chunk", err)
+	}
+	if string(second.Frame.Data) != string([]byte{3, 4, 5, 6}) {
+		t.Fatalf("second frame bytes = %v, want buffered trailing byte plus next chunk", second.Frame.Data)
+	}
+	if second.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("second samples = %d, want 2", second.Frame.SamplesPerChannel)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("third Next error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("third Next = %#v, want final marker", final)
+	}
+}
+
 func TestOpenAITTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing.T) {
 	stream := &openaiTTSChunkedStream{resp: failingReadCloser{err: errors.New("socket closed")}}
 
@@ -1310,6 +1379,23 @@ func (r *eofWithDataReader) Read(p []byte) (int, error) {
 	copy(p, r.data)
 	r.done = true
 	return len(r.data), io.EOF
+}
+
+type dataThenErrorReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *dataThenErrorReader) Close() error { return nil }
+
+func (r *dataThenErrorReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	copy(p, r.data)
+	r.done = true
+	return len(r.data), r.err
 }
 
 type chunkedReadCloser struct {

@@ -2030,6 +2030,32 @@ func TestOpenAIRealtimeSTTSessionUpdateUsesCustomTurnDetection(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTSessionUpdateClearsExplicitNilTurnDetection(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTTurnDetection(nil),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	turnDetection, ok := input["turn_detection"]
+	if !ok {
+		t.Fatal("turn_detection missing, want explicit null")
+	}
+	if turnDetection != nil {
+		t.Fatalf("turn_detection = %#v, want nil", turnDetection)
+	}
+}
+
 func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper-2025-06-03",
 		WithOpenAISTTRealtime(true),

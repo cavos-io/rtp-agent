@@ -1763,7 +1763,13 @@ func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
 		t.Fatalf("GenerateReply first error = %v", err)
 	}
 	assertRealtimeMessage(t, <-messages, "response.create", "first")
-	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	created := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if !created.Generation.UserInitiated {
+		t.Fatalf("UserInitiated = false for matching pending response, want true")
+	}
 	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
 
 	time.Sleep(20 * time.Millisecond)
@@ -1781,6 +1787,60 @@ func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
 		assertRealtimeMessage(t, msg, "response.cancel", "")
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for response.cancel for later pending response")
+	}
+}
+
+func TestRealtimeSessionResponseCreatedForeignClientEventIsNotUserInitiated(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+			var payload map[string]any
+			if err := json.Unmarshal(msg, &payload); err != nil {
+				t.Errorf("decode realtime message: %v", err)
+				return
+			}
+			if payload["type"] != "response.create" {
+				continue
+			}
+			if err := conn.WriteJSON(map[string]any{
+				"type": "response.created",
+				"response": map[string]any{
+					"id":       "resp_foreign",
+					"metadata": map[string]any{"client_event_id": "response_create_foreign"},
+				},
+			}); err != nil {
+				t.Errorf("Write response.created error = %v", err)
+			}
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, <-messages, "session.update", "gpt-realtime")
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "start"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "start")
+
+	created := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
+	}
+	if created.Generation.UserInitiated {
+		t.Fatalf("UserInitiated = true for foreign client_event_id, want false")
 	}
 }
 
@@ -2965,8 +3025,11 @@ func TestRealtimeEventMapsResponseCreated(t *testing.T) {
 	if ev.Generation == nil {
 		t.Fatal("Generation = nil, want generation-created payload")
 	}
-	if ev.Generation.ResponseID != "resp_123" || !ev.Generation.UserInitiated {
-		t.Fatalf("Generation = %#v, want user-initiated response", ev.Generation)
+	if ev.Generation.ResponseID != "resp_123" {
+		t.Fatalf("ResponseID = %q, want resp_123", ev.Generation.ResponseID)
+	}
+	if ev.Generation.UserInitiated {
+		t.Fatalf("UserInitiated = true without a matching pending response, want false")
 	}
 }
 
@@ -5609,8 +5672,8 @@ func TestOpenAIRealtimeChatItemRejectsMissingContentWithReferenceError(t *testin
 	}
 }
 
-func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
-	ev, ok := openAIRealtimeEvent(map[string]any{
+func TestRealtimeEventIgnoresOutputItemDoneFunctionCallWithoutGeneration(t *testing.T) {
+	if ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.output_item.done",
 		"item": map[string]any{
 			"id":        "fc_123",
@@ -5619,23 +5682,19 @@ func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
 			"name":      "lookup",
 			"arguments": `{"query":"hello"}`,
 		},
-	})
-	if !ok {
-		t.Fatal("openAIRealtimeEvent returned ok=false, want completed function call event")
-	}
-	if ev.Type != llm.RealtimeEventTypeFunctionCall {
-		t.Fatalf("event type = %q, want function call", ev.Type)
-	}
-	if ev.Function == nil {
-		t.Fatal("Function = nil, want completed function call")
-	}
-	if ev.Function.CallID != "call_123" || ev.Function.Name != "lookup" || ev.Function.Arguments != `{"query":"hello"}` {
-		t.Fatalf("Function = %#v, want completed OpenAI function call", ev.Function)
+	}); ok {
+		t.Fatalf("openAIRealtimeEvent = %#v, true; want generation stream to own function call routing", ev)
 	}
 }
 
-func TestRealtimeEventOutputItemDoneFunctionCallPreservesReferenceID(t *testing.T) {
-	ev, ok := openAIRealtimeEvent(map[string]any{
+func TestRealtimeSessionOutputItemDoneFunctionCallPreservesReferenceID(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
 		"type": "response.output_item.done",
 		"item": map[string]any{
 			"id":        "fc_123",
@@ -5644,16 +5703,24 @@ func TestRealtimeEventOutputItemDoneFunctionCallPreservesReferenceID(t *testing.
 			"name":      "lookup",
 			"arguments": `{"query":"hello"}`,
 		},
-	})
-	if !ok || ev.Function == nil {
-		t.Fatalf("openAIRealtimeEvent = %#v, %v; want completed function call", ev, ok)
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
 	}
-	if ev.Function.ID != "fc_123" {
-		t.Fatalf("Function.ID = %q, want reference item id %q", ev.Function.ID, "fc_123")
+
+	select {
+	case call := <-created.Generation.FunctionCh:
+		if call == nil {
+			t.Fatal("function call = nil, want completed call")
+		}
+		if call.ID != "fc_123" {
+			t.Fatalf("function call ID = %q, want reference item id %q", call.ID, "fc_123")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for function call")
 	}
 }
 
-func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
+func TestRealtimeSessionRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		id   any
@@ -5674,16 +5741,26 @@ func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
 				item["id"] = tt.id
 			}
 
-			if ev, ok := openAIRealtimeEvent(map[string]any{
+			session := &realtimeSession{}
+			session.trackRealtimeEvent(llm.RealtimeEvent{
+				Type:       llm.RealtimeEventTypeGenerationCreated,
+				Generation: &llm.GenerationCreatedEvent{},
+			})
+			if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
 				"type": "response.output_item.done",
 				"item": item,
 			}); ok {
-				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed function call ignored", ev)
+				t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want malformed function call ignored", ev)
 			}
 		})
 	}
 
-	if ev, ok := openAIRealtimeEvent(map[string]any{
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
 		"type": "response.output_item.done",
 		"item": map[string]any{
 			"id":        "",
@@ -5692,8 +5769,16 @@ func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
 			"name":      "lookup",
 			"arguments": `{"query":"hello"}`,
 		},
-	}); !ok || ev.Function == nil {
-		t.Fatalf("openAIRealtimeEvent explicit empty id = %#v, %v; want accepted function call", ev, ok)
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent explicit empty id = %#v, true; want side effect only", ev)
+	}
+	select {
+	case call := <-created.Generation.FunctionCh:
+		if call == nil || call.ID != "" {
+			t.Fatalf("function call = %#v, want accepted empty item id", call)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id function call")
 	}
 }
 
@@ -6201,11 +6286,13 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 		t.Fatalf("openAIRealtimeEvent = %#v, %v; want metrics event", metricsEvent, ok)
 	}
 
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
 	session := &realtimeSession{
 		generation: &realtimeGeneration{
 			messages:   map[string]*realtimeMessageGeneration{},
-			messageCh:  make(chan llm.MessageGeneration),
-			functionCh: make(chan *llm.FunctionCall),
+			messageCh:  messageCh,
+			functionCh: functionCh,
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
@@ -6267,7 +6354,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	}
 }
 
-func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
+func TestRealtimeResponseDoneIncompleteClosesGenerationWithoutError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -6280,33 +6367,41 @@ func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 		},
 	}
 
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
 	session := &realtimeSession{
 		generation: &realtimeGeneration{
 			messages:   map[string]*realtimeMessageGeneration{},
-			messageCh:  make(chan llm.MessageGeneration),
-			functionCh: make(chan *llm.FunctionCall),
+			messageCh:  messageCh,
+			functionCh: functionCh,
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if !ok {
-		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	if ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want incomplete response logged only", errorEvent)
 	}
-	if errorEvent.Type != llm.RealtimeEventTypeError {
-		t.Fatalf("event type = %q, want error", errorEvent.Type)
+	if session.generation != nil {
+		t.Fatal("generation still active, want incomplete response to close streams")
 	}
-	var apiErr *llm.APIError
-	if !errors.As(errorEvent.Error, &apiErr) {
-		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	select {
+	case _, ok := <-messageCh:
+		if ok {
+			t.Fatal("message stream still open, want incomplete response to close it")
+		}
+	default:
+		t.Fatal("message stream not closed")
 	}
-	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
-		t.Fatalf("APIError message = %q", apiErr.Message)
-	}
-	if !apiErr.Retryable {
-		t.Fatal("APIError Retryable = false, want true")
+	select {
+	case _, ok := <-functionCh:
+		if ok {
+			t.Fatal("function stream still open, want incomplete response to close it")
+		}
+	default:
+		t.Fatal("function stream not closed")
 	}
 }
 
-func TestRealtimeResponseDoneIncompletePreservesStringStatusDetails(t *testing.T) {
+func TestRealtimeResponseDoneIncompleteStringStatusDetailsIsLoggedOnly(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -6316,26 +6411,37 @@ func TestRealtimeResponseDoneIncompletePreservesStringStatusDetails(t *testing.T
 		},
 	}
 
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
 	session := &realtimeSession{
 		generation: &realtimeGeneration{
 			messages:   map[string]*realtimeMessageGeneration{},
-			messageCh:  make(chan llm.MessageGeneration),
-			functionCh: make(chan *llm.FunctionCall),
+			messageCh:  messageCh,
+			functionCh: functionCh,
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if !ok {
-		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	if ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want string incomplete status logged only", errorEvent)
 	}
-	var apiErr *llm.APIError
-	if !errors.As(errorEvent.Error, &apiErr) {
-		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	if session.generation != nil {
+		t.Fatal("generation still active, want incomplete response to close streams")
 	}
-	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
-		t.Fatalf("APIError message = %q", apiErr.Message)
+	select {
+	case _, ok := <-messageCh:
+		if ok {
+			t.Fatal("message stream still open, want string incomplete response to close it")
+		}
+	default:
+		t.Fatal("message stream not closed")
 	}
-	if apiErr.Body != "max_output_tokens" {
-		t.Fatalf("APIError Body = %#v, want string status_details", apiErr.Body)
+	select {
+	case _, ok := <-functionCh:
+		if ok {
+			t.Fatal("function stream still open, want string incomplete response to close it")
+		}
+	default:
+		t.Fatal("function stream not closed")
 	}
 }
 
