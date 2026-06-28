@@ -58,6 +58,7 @@ type ElevenLabsTTS struct {
 	applyLanguageTextNormalization *bool
 	preferredAlignment             string
 	streamResponseTimeout          time.Duration
+	streamConnectionRefresh        bool
 	streams                        map[*elevenLabsStream]struct{}
 	currentStreamConn              *elevenLabsTTSConnection
 	closed                         bool
@@ -139,6 +140,7 @@ func WithElevenLabsVoiceSettings(settings ElevenLabsVoiceSettings) ElevenLabsTTS
 	return func(t *ElevenLabsTTS) {
 		copied := settings
 		t.voiceSettings = &copied
+		t.streamConnectionRefresh = true
 	}
 }
 
@@ -173,6 +175,7 @@ func WithElevenLabsEnableLogging(enabled bool) ElevenLabsTTSOption {
 func WithElevenLabsPronunciationDictionaries(locators []ElevenLabsPronunciationDictionaryLocator) ElevenLabsTTSOption {
 	return func(t *ElevenLabsTTS) {
 		t.pronunciationDictionaries = append([]ElevenLabsPronunciationDictionaryLocator(nil), locators...)
+		t.streamConnectionRefresh = true
 	}
 }
 
@@ -234,6 +237,7 @@ func NewElevenLabsTTS(apiKey string, voiceID string, modelID string, opts ...Ele
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.streamConnectionRefresh = false
 	if !provider.autoModeExplicit {
 		autoMode := len(provider.chunkLengthSchedule) == 0
 		provider.autoMode = &autoMode
@@ -317,11 +321,14 @@ func (t *ElevenLabsTTS) unregisterStream(stream *elevenLabsStream) {
 
 func (t *ElevenLabsTTS) UpdateOptions(opts ...ElevenLabsTTSOption) {
 	before := t.connectionKey()
+	t.streamConnectionRefresh = false
 	for _, opt := range opts {
 		opt(t)
 	}
 	after := t.connectionKey()
-	if before != after {
+	refresh := t.streamConnectionRefresh
+	t.streamConnectionRefresh = false
+	if refresh || before != after {
 		t.mu.Lock()
 		currentConn := t.currentStreamConn
 		t.currentStreamConn = nil

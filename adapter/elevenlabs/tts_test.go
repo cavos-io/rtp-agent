@@ -1640,6 +1640,44 @@ func TestElevenLabsTTSUpdateOptionsInvalidatesReferenceWebsocketConnection(t *te
 	}
 }
 
+func TestElevenLabsTTSUpdateOptionsExplicitSameConfigInvalidatesWebsocketLikeReference(t *testing.T) {
+	voiceSettings := ElevenLabsVoiceSettings{Stability: 0.7, SimilarityBoost: 0.8}
+	dictionaries := []ElevenLabsPronunciationDictionaryLocator{
+		{PronunciationDictionaryID: "dict-1", VersionID: "version-1"},
+	}
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "eleven_turbo_v2_5",
+		WithElevenLabsVoiceSettings(voiceSettings),
+		WithElevenLabsPronunciationDictionaries(dictionaries),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	connCtx, connCancel := context.WithCancel(context.Background())
+	defer connCancel()
+	currentConn := &elevenLabsTTSConnection{
+		provider: provider,
+		ctx:      connCtx,
+		cancel:   connCancel,
+		ready:    make(chan struct{}),
+		streams:  make(map[string]*elevenLabsStream),
+		current:  true,
+	}
+	provider.currentStreamConn = currentConn
+
+	provider.UpdateOptions(
+		WithElevenLabsVoiceSettings(voiceSettings),
+		WithElevenLabsPronunciationDictionaries(dictionaries),
+	)
+
+	if provider.currentStreamConn != nil {
+		t.Fatal("currentStreamConn still set after explicit same-value config update, want invalidated")
+	}
+	if currentConn.current {
+		t.Fatal("old connection current = true after explicit same-value config update, want non-current")
+	}
+}
+
 func TestElevenLabsTTSUpdateOptionsClosesDrainedNonCurrentConnectionLikeReference(t *testing.T) {
 	firstServerErr := make(chan error, 1)
 	secondServerErr := make(chan error, 1)
