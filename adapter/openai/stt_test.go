@@ -2662,6 +2662,82 @@ func TestOpenAISTTUpdateOptionsReconnectDropsBufferedPartialAudioLikeReference(t
 	}
 }
 
+func TestOpenAIRealtimeSTTReconnectRefreshesVADStreamLikeReference(t *testing.T) {
+	firstVAD := newFakeOpenAISTTVADStream()
+	secondVAD := newFakeOpenAISTTVADStream()
+	secondVAD.pushStartedCh = make(chan struct{}, 1)
+	fakeVAD := &fakeOpenAISTTVAD{streams: []*fakeOpenAISTTVADStream{firstVAD, secondVAD}}
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(fakeVAD),
+	)
+	var dialCount atomic.Int32
+	firstConnected := make(chan struct{})
+	secondConnected := make(chan struct{})
+	messages := make(chan string, 10)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if attempt == 1 {
+				close(firstConnected)
+			} else {
+				close(secondConnected)
+			}
+			for {
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	select {
+	case <-firstConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	provider.UpdateOptions(WithOpenAISTTLanguage("id"))
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not reconnect after language update")
+	}
+	select {
+	case <-firstVAD.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("old VAD stream was not closed on reconnect")
+	}
+	if got := fakeVAD.streamCount(); got != 2 {
+		t.Fatalf("VAD stream count = %d, want fresh stream after reconnect", got)
+	}
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x04}, openAIRealtimeSTTChunkBytes()))); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	_ = assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+
+	select {
+	case <-secondVAD.pushStartedCh:
+	case <-time.After(time.Second):
+		t.Fatal("second VAD stream did not own post-reconnect endpointing")
+	}
+}
+
 func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	now := time.Unix(100, 0)
 	state := &openAIRealtimeSTTMessageState{
@@ -2929,7 +3005,10 @@ func (f openAITestHTTPDoer) Do(req *http.Request) (*http.Response, error) {
 }
 
 type fakeOpenAISTTVAD struct {
-	stream *fakeOpenAISTTVADStream
+	mu      sync.Mutex
+	stream  *fakeOpenAISTTVADStream
+	streams []*fakeOpenAISTTVADStream
+	count   int
 }
 
 func (f *fakeOpenAISTTVAD) Label() string { return "fake.VAD" }
@@ -2942,7 +3021,22 @@ func (f *fakeOpenAISTTVAD) OnMetricsCollected(vad.VADMetricsHandler) func() {
 	return func() {}
 }
 func (f *fakeOpenAISTTVAD) Stream(context.Context) (vad.VADStream, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.streams) > 0 {
+		stream := f.streams[0]
+		f.streams = f.streams[1:]
+		f.count++
+		return stream, nil
+	}
+	f.count++
 	return f.stream, nil
+}
+
+func (f *fakeOpenAISTTVAD) streamCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.count
 }
 
 type fakeOpenAISTTVADStream struct {
