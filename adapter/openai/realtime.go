@@ -2844,9 +2844,7 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 	if s.model != nil && s.model.inputTranscriptionFinalHook != nil {
 		s.model.inputTranscriptionFinalHook(msg, transcription)
 	}
-	if transcription.Transcript != "" {
-		msg.Content = append(msg.Content, llm.ChatContent{Text: transcription.Transcript})
-	}
+	msg.Content = append(msg.Content, llm.ChatContent{Text: transcription.Transcript})
 	msg.TranscriptConfidence = transcription.Confidence
 	return ev
 }

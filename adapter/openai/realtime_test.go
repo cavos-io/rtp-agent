@@ -5384,6 +5384,38 @@ func TestRealtimeSessionUpdatesRemoteItemOnFinalInputAudioTranscription(t *testi
 	}
 }
 
+func TestRealtimeSessionAppendsEmptyFinalInputAudioTranscriptionToRemoteItem(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	msg := &llm.ChatMessage{ID: "item_123", Role: llm.ChatRoleUser}
+	session.remote.Insert(nil, msg)
+	confidence := 0.42
+
+	session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_123",
+			Transcript: "",
+			IsFinal:    true,
+			Confidence: &confidence,
+		},
+	})
+
+	item := session.remote.Get("item_123")
+	tracked, ok := item.(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("tracked item = %T, want *llm.ChatMessage", item)
+	}
+	if len(tracked.Content) != 1 {
+		t.Fatalf("tracked content length = %d, want reference empty transcript content", len(tracked.Content))
+	}
+	if tracked.Content[0].Text != "" {
+		t.Fatalf("tracked content text = %q, want empty final transcript", tracked.Content[0].Text)
+	}
+	if tracked.TranscriptConfidence == nil || *tracked.TranscriptConfidence != confidence {
+		t.Fatalf("tracked confidence = %#v, want %.2f", tracked.TranscriptConfidence, confidence)
+	}
+}
+
 func TestRealtimeSessionEmitsFinalPartialTranscriptOnInputAudioTranscriptionFailed(t *testing.T) {
 	session := &realtimeSession{}
 	session.trackRealtimeEvent(llm.RealtimeEvent{
