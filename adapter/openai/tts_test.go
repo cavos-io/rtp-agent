@@ -627,6 +627,39 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEOpusDecodesReferenceAudio(t *testing.T) {
+	opusData, err := base64.StdEncoding.DecodeString(openAITTSOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode opus fixture: %v", err)
+	}
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(opusData) + `"}` + "\n\n" +
+		`data: {"type":"speech.audio.done"}` + "\n\n"
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(strings.NewReader(sse)),
+		responseFormat: goopenai.SpeechResponseFormatOpus,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded opus rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want decoded opus mono", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded opus frame is empty")
+	}
+	prefixLen := min(len(audio.Frame.Data), len(opusData))
+	if bytes.Equal(audio.Frame.Data[:prefixLen], opusData[:prefixLen]) {
+		t.Fatal("frame data still contains compressed opus bytes")
+	}
+}
+
 func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	wantAudio := []byte(strings.Repeat("x", 70*1024))
 	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
@@ -1489,3 +1522,5 @@ func openAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
 	wav.Write(pcm)
 	return wav.Bytes()
 }
+
+const openAITTSOpusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
