@@ -5609,8 +5609,8 @@ func TestOpenAIRealtimeChatItemRejectsMissingContentWithReferenceError(t *testin
 	}
 }
 
-func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
-	ev, ok := openAIRealtimeEvent(map[string]any{
+func TestRealtimeEventIgnoresOutputItemDoneFunctionCallWithoutGeneration(t *testing.T) {
+	if ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "response.output_item.done",
 		"item": map[string]any{
 			"id":        "fc_123",
@@ -5619,23 +5619,19 @@ func TestRealtimeEventMapsOutputItemDoneFunctionCall(t *testing.T) {
 			"name":      "lookup",
 			"arguments": `{"query":"hello"}`,
 		},
-	})
-	if !ok {
-		t.Fatal("openAIRealtimeEvent returned ok=false, want completed function call event")
-	}
-	if ev.Type != llm.RealtimeEventTypeFunctionCall {
-		t.Fatalf("event type = %q, want function call", ev.Type)
-	}
-	if ev.Function == nil {
-		t.Fatal("Function = nil, want completed function call")
-	}
-	if ev.Function.CallID != "call_123" || ev.Function.Name != "lookup" || ev.Function.Arguments != `{"query":"hello"}` {
-		t.Fatalf("Function = %#v, want completed OpenAI function call", ev.Function)
+	}); ok {
+		t.Fatalf("openAIRealtimeEvent = %#v, true; want generation stream to own function call routing", ev)
 	}
 }
 
-func TestRealtimeEventOutputItemDoneFunctionCallPreservesReferenceID(t *testing.T) {
-	ev, ok := openAIRealtimeEvent(map[string]any{
+func TestRealtimeSessionOutputItemDoneFunctionCallPreservesReferenceID(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
 		"type": "response.output_item.done",
 		"item": map[string]any{
 			"id":        "fc_123",
@@ -5644,16 +5640,24 @@ func TestRealtimeEventOutputItemDoneFunctionCallPreservesReferenceID(t *testing.
 			"name":      "lookup",
 			"arguments": `{"query":"hello"}`,
 		},
-	})
-	if !ok || ev.Function == nil {
-		t.Fatalf("openAIRealtimeEvent = %#v, %v; want completed function call", ev, ok)
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
 	}
-	if ev.Function.ID != "fc_123" {
-		t.Fatalf("Function.ID = %q, want reference item id %q", ev.Function.ID, "fc_123")
+
+	select {
+	case call := <-created.Generation.FunctionCh:
+		if call == nil {
+			t.Fatal("function call = nil, want completed call")
+		}
+		if call.ID != "fc_123" {
+			t.Fatalf("function call ID = %q, want reference item id %q", call.ID, "fc_123")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for function call")
 	}
 }
 
-func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
+func TestRealtimeSessionRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		id   any
@@ -5674,16 +5678,26 @@ func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
 				item["id"] = tt.id
 			}
 
-			if ev, ok := openAIRealtimeEvent(map[string]any{
+			session := &realtimeSession{}
+			session.trackRealtimeEvent(llm.RealtimeEvent{
+				Type:       llm.RealtimeEventTypeGenerationCreated,
+				Generation: &llm.GenerationCreatedEvent{},
+			})
+			if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
 				"type": "response.output_item.done",
 				"item": item,
 			}); ok {
-				t.Fatalf("openAIRealtimeEvent = %#v, true; want malformed function call ignored", ev)
+				t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want malformed function call ignored", ev)
 			}
 		})
 	}
 
-	if ev, ok := openAIRealtimeEvent(map[string]any{
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
 		"type": "response.output_item.done",
 		"item": map[string]any{
 			"id":        "",
@@ -5692,8 +5706,16 @@ func TestRealtimeEventRejectsOutputItemDoneFunctionCallWithoutID(t *testing.T) {
 			"name":      "lookup",
 			"arguments": `{"query":"hello"}`,
 		},
-	}); !ok || ev.Function == nil {
-		t.Fatalf("openAIRealtimeEvent explicit empty id = %#v, %v; want accepted function call", ev, ok)
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent explicit empty id = %#v, true; want side effect only", ev)
+	}
+	select {
+	case call := <-created.Generation.FunctionCh:
+		if call == nil || call.ID != "" {
+			t.Fatalf("function call = %#v, want accepted empty item id", call)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for empty-id function call")
 	}
 }
 
