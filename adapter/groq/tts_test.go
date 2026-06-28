@@ -168,6 +168,16 @@ func TestGroqTTSRejectsNonAudioResponse(t *testing.T) {
 	if !strings.Contains(err.Error(), "non-audio") {
 		t.Fatalf("error = %q, want non-audio guidance", err)
 	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Body != `{"error":"not audio"}` {
+		t.Fatalf("APIError body = %#v, want provider body", apiErr.Body)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError retryable = false, want true")
+	}
 }
 
 func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
