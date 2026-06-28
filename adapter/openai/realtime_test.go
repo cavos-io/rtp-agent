@@ -6201,11 +6201,13 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 		t.Fatalf("openAIRealtimeEvent = %#v, %v; want metrics event", metricsEvent, ok)
 	}
 
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
 	session := &realtimeSession{
 		generation: &realtimeGeneration{
 			messages:   map[string]*realtimeMessageGeneration{},
-			messageCh:  make(chan llm.MessageGeneration),
-			functionCh: make(chan *llm.FunctionCall),
+			messageCh:  messageCh,
+			functionCh: functionCh,
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
@@ -6267,7 +6269,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	}
 }
 
-func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
+func TestRealtimeResponseDoneIncompleteClosesGenerationWithoutError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -6280,33 +6282,41 @@ func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 		},
 	}
 
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
 	session := &realtimeSession{
 		generation: &realtimeGeneration{
 			messages:   map[string]*realtimeMessageGeneration{},
-			messageCh:  make(chan llm.MessageGeneration),
-			functionCh: make(chan *llm.FunctionCall),
+			messageCh:  messageCh,
+			functionCh: functionCh,
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if !ok {
-		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	if ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want incomplete response logged only", errorEvent)
 	}
-	if errorEvent.Type != llm.RealtimeEventTypeError {
-		t.Fatalf("event type = %q, want error", errorEvent.Type)
+	if session.generation != nil {
+		t.Fatal("generation still active, want incomplete response to close streams")
 	}
-	var apiErr *llm.APIError
-	if !errors.As(errorEvent.Error, &apiErr) {
-		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	select {
+	case _, ok := <-messageCh:
+		if ok {
+			t.Fatal("message stream still open, want incomplete response to close it")
+		}
+	default:
+		t.Fatal("message stream not closed")
 	}
-	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
-		t.Fatalf("APIError message = %q", apiErr.Message)
-	}
-	if !apiErr.Retryable {
-		t.Fatal("APIError Retryable = false, want true")
+	select {
+	case _, ok := <-functionCh:
+		if ok {
+			t.Fatal("function stream still open, want incomplete response to close it")
+		}
+	default:
+		t.Fatal("function stream not closed")
 	}
 }
 
-func TestRealtimeResponseDoneIncompletePreservesStringStatusDetails(t *testing.T) {
+func TestRealtimeResponseDoneIncompleteStringStatusDetailsIsLoggedOnly(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -6316,26 +6326,37 @@ func TestRealtimeResponseDoneIncompletePreservesStringStatusDetails(t *testing.T
 		},
 	}
 
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
 	session := &realtimeSession{
 		generation: &realtimeGeneration{
 			messages:   map[string]*realtimeMessageGeneration{},
-			messageCh:  make(chan llm.MessageGeneration),
-			functionCh: make(chan *llm.FunctionCall),
+			messageCh:  messageCh,
+			functionCh: functionCh,
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if !ok {
-		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	if ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want string incomplete status logged only", errorEvent)
 	}
-	var apiErr *llm.APIError
-	if !errors.As(errorEvent.Error, &apiErr) {
-		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	if session.generation != nil {
+		t.Fatal("generation still active, want incomplete response to close streams")
 	}
-	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
-		t.Fatalf("APIError message = %q", apiErr.Message)
+	select {
+	case _, ok := <-messageCh:
+		if ok {
+			t.Fatal("message stream still open, want string incomplete response to close it")
+		}
+	default:
+		t.Fatal("message stream not closed")
 	}
-	if apiErr.Body != "max_output_tokens" {
-		t.Fatalf("APIError Body = %#v, want string status_details", apiErr.Body)
+	select {
+	case _, ok := <-functionCh:
+		if ok {
+			t.Fatal("function stream still open, want string incomplete response to close it")
+		}
+	default:
+		t.Fatal("function stream not closed")
 	}
 }
 
