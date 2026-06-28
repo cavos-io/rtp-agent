@@ -1469,40 +1469,49 @@ func TestElevenLabsSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
-func TestElevenLabsSTTRecognizeReturnsAPIStatusError(t *testing.T) {
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusTooManyRequests,
-			Body:       io.NopCloser(strings.NewReader(`{"detail":"rate limited"}`)),
-			Header:     make(http.Header),
-			Request:    r,
-		}, nil
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
+func TestElevenLabsSTTRecognizeStatusFailureReturnsAPIConnectionErrorLikeReference(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "transient", status: http.StatusTooManyRequests, body: `{"detail":"rate limited"}`},
+		{name: "client", status: http.StatusBadRequest, body: `{"detail":"bad audio"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldClient := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: elevenLabsSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: tt.status,
+					Body:       io.NopCloser(strings.NewReader(tt.body)),
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			})}
+			t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
+			provider := NewElevenLabsSTT("test-key", WithElevenLabsSTTBaseURL("https://eleven.example/v1"))
 
-	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
-	if err == nil {
-		t.Fatal("Recognize error = nil, want APIStatusError")
-	}
-	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
-	}
-	if statusErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
-	}
-	if statusErr.Message != "rate limited" {
-		t.Fatalf("message = %q, want provider detail", statusErr.Message)
-	}
-	body, ok := statusErr.Body.(map[string]any)
-	if !ok {
-		t.Fatalf("body = %#v, want parsed provider JSON body", statusErr.Body)
-	}
-	if body["detail"] != "rate limited" {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+			_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "")
+			if err == nil {
+				t.Fatal("Recognize error = nil, want APIConnectionError")
+			}
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+			}
+			if connectionErr.Message != "Connection error." {
+				t.Fatalf("message = %q, want reference default connection error", connectionErr.Message)
+			}
+			if connectionErr.Body != nil {
+				t.Fatalf("body = %#v, want nil after reference connection wrapper", connectionErr.Body)
+			}
+			var statusErr *llm.APIStatusError
+			if errors.As(err, &statusErr) {
+				t.Fatalf("Recognize error = %T %v, want status wrapped as connection error", err, err)
+			}
+		})
 	}
 }
 
