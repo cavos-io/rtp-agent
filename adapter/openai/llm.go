@@ -2297,63 +2297,57 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 			return &llm.ChatChunk{ID: resp.ID, Usage: openAICompletionUsage(resp.Usage)}, nil
 		}
 
-		choice := resp.Choices[0]
-		if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
-			if resp.Usage != nil {
-				s.pushPending(openAIUsageChunk(resp.ID, resp.Usage))
-			}
-			return s.finishOpenAIStreamToolCall(resp.ID, choice), nil
-		}
-		if resp.Usage == nil && isEmptyOpenAIStreamChoiceDelta(choice) {
-			continue
-		}
-		if len(choice.Delta.ToolCalls) > 0 {
-			if chunk := s.processOpenAIStreamToolCalls(resp.ID, choice); chunk != nil {
-				if resp.Usage != nil {
-					s.pushPending(openAIUsageChunk(resp.ID, resp.Usage))
-				}
-				return chunk, nil
-			}
-			if choice.Delta.Content == "" && resp.Usage == nil {
-				continue
+		chunks := make([]*llm.ChatChunk, 0, len(resp.Choices)+1)
+		for _, choice := range resp.Choices {
+			if chunk := s.chunkFromOpenAIStreamChoice(resp.ID, choice); chunk != nil {
+				chunks = append(chunks, chunk)
 			}
 		}
-		if isEmptyOpenAIStreamChoiceDelta(choice) {
-			if resp.Usage != nil {
-				return openAIUsageChunk(resp.ID, resp.Usage), nil
-			}
-			continue
-		}
-		content := choice.Delta.Content
-		if content != "" {
-			var ok bool
-			content, ok = llm.StripThinkingTokens(content, &s.thinking)
-			if !ok {
-				if resp.Usage != nil {
-					return openAIUsageChunk(resp.ID, resp.Usage), nil
-				}
-				continue
-			}
-		}
-		if content == "" {
-			if resp.Usage != nil {
-				return openAIUsageChunk(resp.ID, resp.Usage), nil
-			}
-			continue
-		}
-		chunk := &llm.ChatChunk{
-			ID: resp.ID,
-			Delta: &llm.ChoiceDelta{
-				Role:    llm.ChatRoleAssistant,
-				Content: content,
-			},
-		}
-
 		if resp.Usage != nil {
-			s.pushPending(openAIUsageChunk(resp.ID, resp.Usage))
+			chunks = append(chunks, openAIUsageChunk(resp.ID, resp.Usage))
 		}
+		if len(chunks) == 0 {
+			continue
+		}
+		for _, chunk := range chunks[1:] {
+			s.pushPending(chunk)
+		}
+		return chunks[0], nil
+	}
+}
 
-		return chunk, nil
+func (s *openaiStream) chunkFromOpenAIStreamChoice(id string, choice openai.ChatCompletionStreamChoice) *llm.ChatChunk {
+	if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
+		return s.finishOpenAIStreamToolCall(id, choice)
+	}
+	if isEmptyOpenAIStreamChoiceDelta(choice) {
+		return nil
+	}
+	if len(choice.Delta.ToolCalls) > 0 {
+		if chunk := s.processOpenAIStreamToolCalls(id, choice); chunk != nil {
+			return chunk
+		}
+		if choice.Delta.Content == "" {
+			return nil
+		}
+	}
+	content := choice.Delta.Content
+	if content != "" {
+		var ok bool
+		content, ok = llm.StripThinkingTokens(content, &s.thinking)
+		if !ok {
+			return nil
+		}
+	}
+	if content == "" {
+		return nil
+	}
+	return &llm.ChatChunk{
+		ID: id,
+		Delta: &llm.ChoiceDelta{
+			Role:    llm.ChatRoleAssistant,
+			Content: content,
+		},
 	}
 }
 
