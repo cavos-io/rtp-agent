@@ -198,6 +198,55 @@ func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGroqTTSSynthesizeTransportErrorsMatchReference(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantErr any
+	}{
+		{
+			name:    "connection",
+			err:     errors.New("dial failed"),
+			wantErr: &llm.APIConnectionError{},
+		},
+		{
+			name:    "timeout",
+			err:     context.DeadlineExceeded,
+			wantErr: &llm.APITimeoutError{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			originalClient := http.DefaultClient
+			t.Cleanup(func() { http.DefaultClient = originalClient })
+			http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return nil, tt.err
+			})}
+
+			provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+			stream, err := provider.Synthesize(context.Background(), "hello")
+			if err == nil {
+				defer stream.Close()
+				t.Fatal("Synthesize returned nil error, want transport error")
+			}
+			switch tt.wantErr.(type) {
+			case *llm.APITimeoutError:
+				var timeoutErr *llm.APITimeoutError
+				if !errors.As(err, &timeoutErr) {
+					t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+				}
+			case *llm.APIConnectionError:
+				var connectionErr *llm.APIConnectionError
+				if !errors.As(err, &connectionErr) {
+					t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+				}
+			}
+		})
+	}
+}
+
 func TestGroqTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &groqTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00, 0x02, 0x00}, 24000, 1)))},

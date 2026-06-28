@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -111,7 +113,7 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, groqTTSTransportError(err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -125,6 +127,17 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	}
 
 	return &groqTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
+}
+
+func groqTTSTransportError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(err.Error())
 }
 
 func validateGroqTTSAPIKey(apiKey string) error {
