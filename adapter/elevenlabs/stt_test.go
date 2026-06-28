@@ -948,8 +948,8 @@ func TestElevenLabsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 160,
-	}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	}); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("PushFrame after provider Close error = %v, want stream input ended", err)
 	}
 
 	select {
@@ -958,6 +958,80 @@ func TestElevenLabsSTTProviderCloseClosesActiveStreams(t *testing.T) {
 		t.Fatal(err)
 	case <-time.After(time.Second):
 		t.Fatal("provider Close did not close active websocket stream")
+	}
+}
+
+func TestElevenLabsSTTStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	handlerDone := make(chan struct{})
+	serverErr := make(chan error, 1)
+	upgrader := websocket.Upgrader{}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer close(handlerDone)
+		defer conn.Close()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})}
+	go server.Serve(&singleElevenLabsConnListener{conn: serverConn})
+	defer server.Close()
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewElevenLabsSTT("test-key",
+		WithElevenLabsSTTModel("scribe_v2_realtime"),
+		WithElevenLabsSTTBaseURL("ws://eleven.test/v1"),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	frame := &model.AudioFrame{
+		Data:              bytes.Repeat([]byte{0x11}, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}
+	for name, err := range map[string]error{
+		"PushFrame": stream.PushFrame(frame),
+		"Flush":     stream.Flush(),
+		"EndInput":  ending.EndInput(),
+	} {
+		if err == nil || err.Error() != "stream input ended" {
+			t.Fatalf("%s after Close error = %v, want stream input ended", name, err)
+		}
+	}
+
+	select {
+	case <-handlerDone:
+	case err := <-serverErr:
+		t.Fatal(err)
+	case <-time.After(time.Second):
+		t.Fatal("stream Close did not close active websocket stream")
 	}
 }
 
@@ -1107,8 +1181,8 @@ func TestElevenLabsSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 160,
-	}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after rejected registration error = %v, want io.ErrClosedPipe", err)
+	}); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("PushFrame after rejected registration error = %v, want stream input ended", err)
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("provider streams = %d, want 0", len(provider.streams))

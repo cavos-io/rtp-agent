@@ -629,6 +629,7 @@ func (s *elevenLabsSTTStream) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	s.cancel()
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
