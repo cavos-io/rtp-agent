@@ -1651,8 +1651,8 @@ func TestOpenAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("provider Close did not close active realtime STT websocket")
 	}
-	if err := stream.PushFrame(openAIRealtimeSTTTestFrame([]byte{0x01, 0x02})); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame([]byte{0x01, 0x02})); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame after provider Close error = %v, want input ended", err)
 	}
 }
 
@@ -1727,6 +1727,34 @@ func TestOpenAIRealtimeSTTNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after Close error = %v, want io.EOF", err)
+	}
+}
+
+func TestOpenAIRealtimeSTTReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &openAIRealtimeSTTStream{
+		ctx:        ctx,
+		cancel:     cancel,
+		events:     make(chan *stt.SpeechEvent),
+		errCh:      make(chan error, 1),
+		closed:     true,
+		inputEnded: true,
+	}
+	cancel()
+
+	ending, ok := any(stream).(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	errs := map[string]error{
+		"PushFrame": stream.PushFrame(openAIRealtimeSTTTestFrame([]byte{0x01, 0x02})),
+		"Flush":     stream.Flush(),
+		"EndInput":  ending.EndInput(),
+	}
+	for name, err := range errs {
+		if err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("%s after Close error = %v, want input ended", name, err)
+		}
 	}
 }
 

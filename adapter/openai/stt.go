@@ -763,11 +763,11 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return nil
 	}
 	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
+		s.mu.Unlock()
+		return openAIRealtimeSTTInputEndedError()
+	}
+	if s.closed {
 		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
@@ -819,10 +819,10 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 func (s *openAIRealtimeSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
+		return openAIRealtimeSTTInputEndedError()
+	}
+	if s.closed {
 		return io.ErrClosedPipe
 	}
 	return s.flushAudioLocked()
@@ -831,10 +831,10 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 func (s *openAIRealtimeSTTStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
+		return openAIRealtimeSTTInputEndedError()
+	}
+	if s.closed {
 		return io.ErrClosedPipe
 	}
 	if err := s.flushAudioLocked(); err != nil {
@@ -916,6 +916,7 @@ func (s *openAIRealtimeSTTStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	if s.owner != nil {
 		s.owner.unregisterRealtimeSTTStream(s)
@@ -937,6 +938,10 @@ func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
 	s.cancel()
 	s.closeVADStreamLocked()
 	_ = s.conn.Close()
+}
+
+func openAIRealtimeSTTInputEndedError() error {
+	return fmt.Errorf("stream input ended")
 }
 
 func (s *openAIRealtimeSTTStream) closeVADStreamLocked() {
