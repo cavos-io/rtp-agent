@@ -88,6 +88,9 @@ func NewGroqSTT(apiKey string, model string, opts ...GroqSTTOption) (*GroqSTT, e
 	for _, opt := range opts {
 		opt(provider)
 	}
+	if provider.detectLanguage {
+		provider.language = ""
+	}
 
 	openAIOpts := []openai.OpenAISTTOption{
 		openai.WithOpenAISTTBaseURL(provider.baseURL),

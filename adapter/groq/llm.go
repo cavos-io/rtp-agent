@@ -3,9 +3,11 @@ package groq
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/openai"
@@ -23,6 +25,9 @@ type GroqLLM struct {
 	baseURL         string
 	reasoningEffort string
 	llmOptions      []openai.OpenAILLMOption
+	mu              sync.Mutex
+	closed          bool
+	streams         map[*groqLLMStream]struct{}
 	httpClient      interface {
 		Do(*http.Request) (*http.Response, error)
 	}
@@ -125,12 +130,164 @@ func (l *GroqLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...ll
 	if l.apiKey == "" {
 		return nil, fmt.Errorf("groq API key is required, either as argument or set GROQ_API_KEY environmental variable")
 	}
-	return l.inner.Chat(ctx, chatCtx, opts...)
+	if l.isClosed() {
+		return nil, fmt.Errorf("groq llm is closed: %w", io.ErrClosedPipe)
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &groqLLMStream{
+		ctx:      streamCtx,
+		cancel:   cancel,
+		provider: l,
+		chatCtx:  chatCtx,
+		opts:     append([]llm.ChatOption(nil), opts...),
+	}
+	if !l.registerStream(stream) {
+		_ = stream.Close()
+		return nil, fmt.Errorf("groq llm is closed: %w", io.ErrClosedPipe)
+	}
+	return stream, nil
 }
 
 func (l *GroqLLM) Close() error {
 	if l == nil || l.inner == nil {
 		return nil
 	}
+	l.mu.Lock()
+	l.closed = true
+	streams := make([]*groqLLMStream, 0, len(l.streams))
+	for stream := range l.streams {
+		streams = append(streams, stream)
+	}
+	l.streams = make(map[*groqLLMStream]struct{})
+	l.mu.Unlock()
+	for _, stream := range streams {
+		_ = stream.Close()
+	}
 	return l.inner.Close()
+}
+
+func (l *GroqLLM) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
+}
+
+func (l *GroqLLM) registerStream(stream *groqLLMStream) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return false
+	}
+	if l.streams == nil {
+		l.streams = make(map[*groqLLMStream]struct{})
+	}
+	l.streams[stream] = struct{}{}
+	return true
+}
+
+func (l *GroqLLM) unregisterStream(stream *groqLLMStream) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.streams, stream)
+}
+
+type groqLLMStream struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	provider *GroqLLM
+	chatCtx  *llm.ChatContext
+	opts     []llm.ChatOption
+
+	startOnce sync.Once
+	startErr  error
+	stream    llm.LLMStream
+	mu        sync.Mutex
+	closed    bool
+}
+
+func (s *groqLLMStream) Next() (*llm.ChatChunk, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
+	if err := s.ensureStarted(); err != nil {
+		return nil, err
+	}
+	if s.stream == nil {
+		return nil, io.EOF
+	}
+	chunk, err := s.stream.Next()
+	if s.isClosed() && err != nil {
+		return nil, io.EOF
+	}
+	if err != nil {
+		_ = s.Close()
+	}
+	return chunk, err
+}
+
+func (s *groqLLMStream) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	cancel := s.cancel
+	s.cancel = nil
+	stream := s.stream
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if stream != nil {
+		err := stream.Close()
+		s.unregister()
+		return err
+	}
+	s.unregister()
+	return nil
+}
+
+func (s *groqLLMStream) ensureStarted() error {
+	s.startOnce.Do(func() {
+		if s.isClosed() {
+			s.startErr = io.EOF
+			return
+		}
+		stream, err := s.provider.inner.Chat(s.ctx, s.chatCtx, s.opts...)
+		if err != nil {
+			if s.isClosed() {
+				s.startErr = io.EOF
+				s.unregister()
+				return
+			}
+			s.startErr = err
+			s.unregister()
+			return
+		}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			_ = stream.Close()
+			s.startErr = io.EOF
+			s.unregister()
+			return
+		}
+		s.stream = stream
+		s.mu.Unlock()
+	})
+	return s.startErr
+}
+
+func (s *groqLLMStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *groqLLMStream) unregister() {
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }

@@ -96,6 +96,23 @@ func TestGroqSTTOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGroqSTTDetectLanguageWinsOverLaterLanguageOption(t *testing.T) {
+	provider, err := NewGroqSTT("test-key", "whisper-large-v3",
+		WithGroqSTTDetectLanguage(true),
+		WithGroqSTTLanguage("id"),
+	)
+	if err != nil {
+		t.Fatalf("NewGroqSTT error = %v", err)
+	}
+
+	if provider.language != "" {
+		t.Fatalf("language = %q, want empty when detect_language is enabled", provider.language)
+	}
+	if !provider.detectLanguage {
+		t.Fatalf("detectLanguage = false, want true")
+	}
+}
+
 func TestGroqSTTStreamUnsupportedLikeReferenceOfflineMode(t *testing.T) {
 	provider, err := NewGroqSTT("test-key", "")
 	if err != nil {
