@@ -417,6 +417,7 @@ type openaiTTSChunkedStream struct {
 	closed         bool
 	audioSawAudio  bool
 	audioFinalSent bool
+	audioReadErr   error
 	sseDone        bool
 	sseSawAudio    bool
 	sseFinalSent   bool
@@ -436,6 +437,11 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 	if s.responseFormat == openai.SpeechResponseFormatMp3 {
 		return s.nextMP3Audio()
 	}
+	if s.audioReadErr != nil {
+		err := s.audioReadErr
+		s.audioReadErr = nil
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
 
 	buf := make([]byte, 4096)
 	for {
@@ -447,6 +453,9 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 			}
 			if audio != nil {
 				s.audioSawAudio = true
+				if err != nil && err != io.EOF {
+					s.audioReadErr = err
+				}
 				return audio, nil
 			}
 		}
