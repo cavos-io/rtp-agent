@@ -1205,6 +1205,13 @@ func TestRealtimeInitialSessionUsesDefaultInputAudioOptions(t *testing.T) {
 	if turnDetection["interrupt_response"] != true {
 		t.Fatalf("turn_detection interrupt_response = %#v, want true", turnDetection["interrupt_response"])
 	}
+	noiseReduction, ok := input["noise_reduction"].(map[string]any)
+	if !ok {
+		t.Fatalf("noise_reduction = %#v, want default near_field config", input["noise_reduction"])
+	}
+	if noiseReduction["type"] != "near_field" {
+		t.Fatalf("noise_reduction type = %#v, want near_field", noiseReduction["type"])
+	}
 }
 
 func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {

@@ -711,6 +711,9 @@ func openAIRealtimeInitialSession(model string, modalities ...[]string) map[stri
 				"transcription": map[string]any{
 					"model": "gpt-4o-mini-transcribe",
 				},
+				"noise_reduction": map[string]any{
+					"type": "near_field",
+				},
 				"turn_detection": map[string]any{
 					"type":               "semantic_vad",
 					"create_response":    true,
