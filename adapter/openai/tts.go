@@ -576,6 +576,11 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 	if err := s.scanner.Err(); err != nil {
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	s.sseDone = true
+	if s.sseSawAudio && !s.sseFinalSent {
+		s.sseFinalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
 	return nil, io.EOF
 }
 
