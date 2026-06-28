@@ -452,7 +452,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 		}
 		if err != nil {
 			if err == io.EOF {
-				if !s.audioFinalSent {
+				if s.audioSawAudio && !s.audioFinalSent {
 					s.audioFinalSent = true
 					return &tts.SynthesizedAudio{IsFinal: true}, nil
 				}

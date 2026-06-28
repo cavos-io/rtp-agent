@@ -1111,6 +1111,19 @@ func TestOpenAITTSRawAudioStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSRawAudioStreamReturnsEOFWhenEmpty(t *testing.T) {
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(strings.NewReader("")),
+		responseFormat: goopenai.SpeechResponseFormatPcm,
+		streamFormat:   openAITTSStreamFormatAudio,
+	}
+
+	audio, err := stream.Next()
+	if !errors.Is(err, io.EOF) || audio != nil {
+		t.Fatalf("Next = (%#v, %v), want EOF without boundary-only final marker", audio, err)
+	}
+}
+
 func TestOpenAITTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing.T) {
 	stream := &openaiTTSChunkedStream{resp: failingReadCloser{err: errors.New("socket closed")}}
 
