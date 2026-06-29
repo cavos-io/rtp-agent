@@ -1304,6 +1304,10 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		itemID := openAIString(message["item_id"])
 		transcript := openAIString(message["transcript"])
 		delete(state.partials, itemID)
+		if itemID == "" && state.currentItemID != "" {
+			delete(state.partials, state.currentItemID)
+			state.currentItemID = ""
+		}
 		events := []*stt.SpeechEvent{}
 		if transcript != "" {
 			events = append(events, &stt.SpeechEvent{
