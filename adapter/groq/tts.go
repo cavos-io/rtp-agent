@@ -120,11 +120,16 @@ func (t *GroqTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &groqTTSChunkedStream{
-		ctx:        streamCtx,
-		cancel:     cancel,
-		inputText:  text,
-		sampleRate: t.sampleRate,
-		provider:   t,
+		ctx:            streamCtx,
+		cancel:         cancel,
+		inputText:      text,
+		apiKey:         t.apiKey,
+		baseURL:        t.baseURL,
+		model:          t.model,
+		voice:          t.voice,
+		responseFormat: t.responseFormat,
+		sampleRate:     t.sampleRate,
+		provider:       t,
 	}
 	if !t.registerStream(stream) {
 		return nil, fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
@@ -229,21 +234,25 @@ func validateGroqTTSAPIKey(apiKey string) error {
 }
 
 func buildGroqTTSRequest(ctx context.Context, t *GroqTTS, text string) (*http.Request, error) {
+	return buildGroqTTSRequestWithOptions(ctx, t.baseURL, t.apiKey, t.model, t.voice, t.responseFormat, text)
+}
+
+func buildGroqTTSRequestWithOptions(ctx context.Context, baseURL, apiKey, modelName, voice, responseFormat, text string) (*http.Request, error) {
 	reqBody := map[string]interface{}{
-		"model":           t.model,
-		"voice":           t.voice,
+		"model":           modelName,
+		"voice":           voice,
 		"input":           text,
-		"response_format": t.responseFormat,
+		"response_format": responseFormat,
 	}
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.baseURL, "/")+"/audio/speech", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/audio/speech", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
 }
@@ -260,6 +269,11 @@ type groqTTSChunkedStream struct {
 	startOnce        sync.Once
 	startErr         error
 	resp             *http.Response
+	apiKey           string
+	baseURL          string
+	model            string
+	voice            string
+	responseFormat   string
 	sampleRate       int
 	provider         *GroqTTS
 	requestID        string
@@ -364,7 +378,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 			reqCancel()
 			s.requestCancel = nil
 		}
-		req, err := buildGroqTTSRequest(reqCtx, s.provider, s.inputText)
+		req, err := buildGroqTTSRequestWithOptions(reqCtx, s.baseURL, s.apiKey, s.model, s.voice, s.responseFormat, s.inputText)
 		if err != nil {
 			cleanupRequest()
 			s.startErr = err

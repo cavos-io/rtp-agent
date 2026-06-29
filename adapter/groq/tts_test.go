@@ -134,6 +134,42 @@ func TestGroqTTSUpdateOptionsMatchReference(t *testing.T) {
 	assertGroqTTSPayload(t, payload, "voice", "fahad")
 }
 
+func TestGroqTTSSynthesizeSnapshotsReferenceOptions(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	var payload map[string]any
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       io.NopCloser(bytes.NewReader(groqTestWAV([]byte{0x01, 0x00}, 48000, 1))),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "",
+		WithGroqTTSBaseURL("https://groq.example/openai/v1"),
+		WithGroqTTSModel("canopylabs/orpheus-v1-english"),
+		WithGroqTTSVoice("autumn"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions("canopylabs/orpheus-arabic-saudi", "fahad")
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	assertGroqTTSPayload(t, payload, "model", "canopylabs/orpheus-v1-english")
+	assertGroqTTSPayload(t, payload, "voice", "autumn")
+}
+
 func TestGroqTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "")
 	provider := NewGroqTTS("", "", WithGroqTTSBaseURL("://bad-url"))
