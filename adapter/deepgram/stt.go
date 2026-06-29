@@ -1360,7 +1360,12 @@ func (s *deepgramStream) sendConnectionUsageRemainderLocked() {
 }
 
 func (s *deepgramStream) Close() error {
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.mu.Lock()
+	}
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil

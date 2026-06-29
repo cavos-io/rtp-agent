@@ -2297,6 +2297,60 @@ func TestDeepgramSTTStreamCloseSendsReferenceCloseStreamText(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTCloseUnblocksBackpressuredEventSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &deepgramStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		writeText: func(string) error {
+			return nil
+		},
+	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+
+	sendStarted := make(chan struct{})
+	sendDone := make(chan struct{})
+	go func() {
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		close(sendStarted)
+		stream.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript})
+		close(sendDone)
+	}()
+
+	select {
+	case <-sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked event send")
+	}
+	select {
+	case <-sendDone:
+		t.Fatal("sendEvent returned before Close canceled stream context")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not unblock backpressured event send")
+	}
+	select {
+	case <-sendDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked sendEvent did not exit after Close")
+	}
+}
+
 func TestDeepgramSTTStreamNextAfterCloseDrainsQueuedEvent(t *testing.T) {
 	want := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
