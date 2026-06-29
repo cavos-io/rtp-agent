@@ -567,6 +567,22 @@ func TestDeepgramTTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testi
 	}
 }
 
+func TestDeepgramTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: deepgramTTSReadCloser{err: context.Canceled}},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
+	}
+}
+
 func TestDeepgramTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &deepgramTTSCountingReadCloser{}
 	stream := &deepgramTTSChunkedStream{

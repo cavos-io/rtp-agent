@@ -326,6 +326,9 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF && n == 0 {
 			return s.emitFinal()
 		}
+		if err != io.EOF && errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		if err != io.EOF && errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError(err.Error())
 		}
