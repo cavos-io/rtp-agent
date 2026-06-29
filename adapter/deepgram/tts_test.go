@@ -748,16 +748,37 @@ func TestDeepgramTTSStreamCloseWaitsForReferenceFlushedAck(t *testing.T) {
 		t.Fatal("server did not receive Close message")
 	}
 
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next() error = %v, want Flushed final marker", err)
-	}
-	if audio == nil || !audio.IsFinal {
-		t.Fatalf("Next() = %+v, want final marker from Flushed ack", audio)
+	nextDone := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		nextDone <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	select {
+	case result := <-nextDone:
+		if result.err != nil {
+			t.Fatalf("Next() error = %v, want Flushed final marker", result.err)
+		}
+		if result.audio == nil || !result.audio.IsFinal {
+			t.Fatalf("Next() = %+v, want final marker from Flushed ack", result.audio)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not receive Flushed final marker promptly")
 	}
 
-	if err := <-closeDone; err != nil {
-		t.Fatalf("Close() error = %v", err)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close() did not return promptly after Flushed ack")
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)

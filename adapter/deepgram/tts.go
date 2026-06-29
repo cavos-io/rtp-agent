@@ -426,11 +426,11 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		audio := &tts.SynthesizedAudio{IsFinal: true}
 		s.annotateAudio(audio)
 		s.audio <- audio
+		s.signalFlushed()
 		s.mu.Lock()
 		s.flushPending = false
 		s.mu.Unlock()
 		s.segmentID = uuid.NewString()
-		s.signalFlushed()
 		s.closeAfterFinal()
 	case "Error", "error":
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
