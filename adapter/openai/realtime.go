@@ -1518,13 +1518,13 @@ func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 		entries["max_output_tokens"] = value
 	}
 	if value, ok := session["truncation"]; ok {
-		entries["truncation"] = value
+		entries["truncation"] = openAIRealtimeCloneOptionValue(value)
 	}
 	if value, ok := session["tracing"]; ok {
-		entries["tracing"] = value
+		entries["tracing"] = openAIRealtimeCloneOptionValue(value)
 	}
 	if value, ok := session["reasoning"]; ok {
-		entries["reasoning"] = value
+		entries["reasoning"] = openAIRealtimeCloneOptionValue(value)
 	}
 	audio, _ := session["audio"].(map[string]any)
 	input, _ := audio["input"].(map[string]any)

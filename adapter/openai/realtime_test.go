@@ -1217,6 +1217,57 @@ func TestRealtimeUpdateOptionsSnapshotsMutableTurnDetection(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsSnapshotsMutableReasoning(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime-2", WithOpenAIRealtimeWebsocketDialer(dialer))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	assertRealtimeMessage(t, <-messages, "session.update", "")
+
+	reasoning := map[string]any{"effort": "low"}
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Reasoning: reasoning}); err != nil {
+		t.Fatalf("UpdateOptions first reasoning error = %v", err)
+	}
+	first := <-messages
+	assertRealtimeMessage(t, first, "session.update", "")
+
+	reasoning["effort"] = "high"
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Reasoning: reasoning}); err != nil {
+		t.Fatalf("UpdateOptions mutated reasoning error = %v", err)
+	}
+	var second string
+	select {
+	case second = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for session.update after mutating reused reasoning map")
+	}
+	assertRealtimeMessage(t, second, "session.update", "")
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(second), &payload); err != nil {
+		t.Fatalf("decode mutated update: %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	got := sessionPayload["reasoning"].(map[string]any)
+	if got["effort"] != "high" {
+		t.Fatalf("reasoning effort = %#v, want mutated update high", got["effort"])
+	}
+}
+
 func TestRealtimeModelConstructorTextModalitiesApplyToInitialSession(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
