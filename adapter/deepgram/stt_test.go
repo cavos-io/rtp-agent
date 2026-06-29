@@ -690,6 +690,44 @@ func TestDeepgramSTTRecognizeUploadsReferenceWAV(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeAppliesReferenceRequestTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want Deepgram reference 30s request timeout")
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want bounded by Deepgram reference 30s timeout", remaining)
+	}
+}
+
 func TestDeepgramSTTRecognizeDetectLanguageMatchesReference(t *testing.T) {
 	var query url.Values
 	oldClient := http.DefaultClient
@@ -1659,6 +1697,49 @@ func TestDeepgramSTTStreamEndInputFlushesTailAndClosesReferenceInput(t *testing.
 	}
 	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
 		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	}
+}
+
+func TestDeepgramSTTStreamEndInputFlushesResampledReferenceTail(t *testing.T) {
+	var binaryWrites [][]byte
+	var textWrites []string
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func(data []byte) error {
+			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
+			return nil
+		},
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              deepgramTestInt16PCM(481),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 481,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(binaryWrites) != 0 {
+		t.Fatalf("binary writes after PushFrame = %d, want buffered below 50ms chunk", len(binaryWrites))
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if len(binaryWrites) != 1 {
+		t.Fatalf("binary writes after EndInput = %d, want one resampled tail chunk", len(binaryWrites))
+	}
+	want := deepgramEveryNthInt16PCM(481, 3)
+	if got := binaryWrites[0]; !bytes.Equal(got, want) {
+		t.Fatalf("EndInput binary data = %#v, want complete resampled tail %#v", got, want)
+	}
+	wantText := []string{deepgramSTTFinalizeMessage, deepgramSTTCloseStreamMessage}
+	if !reflect.DeepEqual(textWrites, wantText) {
+		t.Fatalf("text writes = %#v, want %#v", textWrites, wantText)
 	}
 }
 

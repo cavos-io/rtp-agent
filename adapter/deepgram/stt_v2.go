@@ -429,8 +429,7 @@ func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 			continue
 		}
 		if err := s.processEvent(resp); err != nil {
-			s.sendError(err)
-			return
+			continue
 		}
 	}
 }
@@ -717,6 +716,18 @@ func (s *deepgramV2Stream) EndInput() error {
 	}
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if tail := s.inputAudio.flush(); tail != nil {
+		if s.audioBStream == nil {
+			s.audioBStream = audio.NewAudioByteStream(uint32(s.sampleRate), 1, uint32(s.sampleRate/20))
+		}
+		for _, chunk := range s.audioBStream.Push(tail.Data) {
+			if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {
+				s.closed = true
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
 	}
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {

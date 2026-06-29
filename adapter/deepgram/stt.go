@@ -70,6 +70,7 @@ func WithDeepgramSTTModel(model string) DeepgramSTTOption {
 
 const deepgramSTTKeepAliveInterval = 5 * time.Second
 const deepgramSTTUsageInterval = 5 * time.Second
+const deepgramSTTRequestTimeout = 30 * time.Second
 const deepgramSTTKeepAliveMessage = `{"type": "KeepAlive"}`
 const deepgramSTTFinalizeMessage = `{"type": "Finalize"}`
 const deepgramSTTCloseStreamMessage = `{"type": "CloseStream"}`
@@ -393,7 +394,10 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	wav := deepgramSTTWAVBytes(frames, uint32(s.sampleRate), uint32(s.numChannels))
 
-	req, err := http.NewRequestWithContext(ctx, "POST", buildDeepgramRecognizeURL(s, languageStr), bytes.NewReader(wav))
+	reqCtx, cancel := context.WithTimeout(ctx, deepgramSTTRequestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "POST", buildDeepgramRecognizeURL(s, languageStr), bytes.NewReader(wav))
 	if err != nil {
 		return nil, err
 	}
@@ -1236,6 +1240,19 @@ func (s *deepgramStream) EndInput() error {
 		return io.ErrClosedPipe
 	}
 	flushedFrame := false
+	if tail := s.inputAudio.flush(); tail != nil {
+		if s.audioBStream == nil {
+			s.audioBStream = newDeepgramSTTAudioByteStream(s)
+		}
+		for _, chunk := range s.audioBStream.Push(tail.Data) {
+			flushedFrame = true
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
+	}
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
 			flushedFrame = true
