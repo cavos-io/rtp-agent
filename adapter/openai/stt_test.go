@@ -1090,6 +1090,58 @@ func TestOpenAIRealtimeSTTVADPushErrorClosesStreamLikeReference(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.suppressEndOfSpeech = true
+	vadStream.endInputErr = errors.New("vad end failed")
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	release := make(chan struct{})
+	defer close(release)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			<-release
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	err = ending.EndInput()
+	if err == nil || err.Error() != "vad end failed" {
+		t.Fatalf("EndInput error = %T %v, want VAD end error", err, err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	})
+	if err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("PushFrame after VAD EndInput error = %T %v, want input ended", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after VAD EndInput error")
+	}
+}
+
 func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -4009,6 +4061,7 @@ type fakeOpenAISTTVADStream struct {
 	pushStartedCh         chan struct{}
 	releasePushCh         chan struct{}
 	pushErr               error
+	endInputErr           error
 	suppressEndOfSpeech   bool
 	flushEmitsEndOfSpeech bool
 	frames                []*model.AudioFrame
@@ -4073,6 +4126,9 @@ func (f *fakeOpenAISTTVADStream) Flush() error {
 func (f *fakeOpenAISTTVADStream) EndInput() error {
 	f.endInputOnce.Do(func() { close(f.endInputCh) })
 	f.closeEvents()
+	if f.endInputErr != nil {
+		return f.endInputErr
+	}
 	return nil
 }
 

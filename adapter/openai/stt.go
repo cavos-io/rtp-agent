@@ -876,6 +876,10 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 	var vadErr error
 	if s.vadStream != nil {
 		vadErr = s.vadStream.EndInput()
+		if vadErr != nil {
+			s.closeAfterTerminalFailureLocked()
+			return vadErr
+		}
 	}
 	if s.vadStream == nil && s.shouldCommitOnEndInputLocked() {
 		if err := s.commitAudioLocked(); err != nil {
