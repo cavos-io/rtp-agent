@@ -200,6 +200,98 @@ func TestCavosTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+type cavosTTSChunkedBody struct {
+	chunks [][]byte
+	index  int
+}
+
+func (b *cavosTTSChunkedBody) Read(p []byte) (int, error) {
+	if b.index >= len(b.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(p, b.chunks[b.index])
+	b.index++
+	return n, nil
+}
+
+func (b *cavosTTSChunkedBody) Close() error { return nil }
+
+func TestCavosTTSChunkedStreamPreserves16BitAlignmentAcrossOddReads(t *testing.T) {
+	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	stream := &ttsStream{
+		resp: &cavosTTSChunkedBody{chunks: [][]byte{
+			{0x11, 0x22, 0x33},
+			{0x44, 0x55, 0x66},
+		}},
+		sampleRate: 44100,
+	}
+
+	var got []byte
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v", err)
+		}
+		if audio.Frame == nil {
+			continue
+		}
+		data := audio.Frame.Data
+		if len(data)%2 != 0 {
+			t.Fatalf("emitted frame with odd-length Data (%d bytes): %v — breaks 16-bit alignment, downstream renders as broadband noise", len(data), data)
+		}
+		if int(audio.Frame.SamplesPerChannel) != len(data)/2 {
+			t.Fatalf("SamplesPerChannel = %d, want %d for %d-byte frame", audio.Frame.SamplesPerChannel, len(data)/2, len(data))
+		}
+		got = append(got, data...)
+	}
+
+	if string(got) != string(want) {
+		t.Fatalf("reassembled PCM = %v, want %v — bytes lost or shifted across reads", got, want)
+	}
+}
+
+type cavosTTSDataThenErrorBody struct {
+	data []byte
+	err  error
+	read bool
+}
+
+func (b *cavosTTSDataThenErrorBody) Read(p []byte) (int, error) {
+	if b.read {
+		return 0, b.err
+	}
+	b.read = true
+	return copy(p, b.data), b.err
+}
+
+func (b *cavosTTSDataThenErrorBody) Close() error { return nil }
+
+func TestCavosTTSChunkedStreamEmitsBufferedAudioBeforeReadError(t *testing.T) {
+	boom := errors.New("connection reset")
+	stream := &ttsStream{
+		resp:       &cavosTTSDataThenErrorBody{data: []byte{0x01, 0x00, 0x02, 0x00}, err: boom},
+		sampleRate: 44100,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want buffered audio before read error", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+	if got := audio.Frame.Data; string(got) != "\x01\x00\x02\x00" {
+		t.Fatalf("audio data = %v, want bytes read before the error", got)
+	}
+
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, boom) {
+		t.Fatalf("second Next = (%+v, %v), want surfaced read error", audio, err)
+	}
+}
+
 func assertPayloadString(t *testing.T, payload map[string]any, key, want string) {
 	t.Helper()
 	if got, _ := payload[key].(string); got != want {

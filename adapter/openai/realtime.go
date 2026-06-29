@@ -1123,6 +1123,7 @@ func openAIRealtimeSyncedChatContext(chatCtx *llm.ChatContext) *llm.ChatContext 
 		return llm.NewChatContext()
 	}
 	synced := chatCtx.Copy(llm.ChatContextCopyOptions{
+		ExcludeFunctionCall: true,
 		ExcludeHandoff:      true,
 		ExcludeConfigUpdate: true,
 	})
@@ -1596,9 +1597,6 @@ func (s *realtimeSession) Interrupt() error {
 	if err := s.sendMsg(msg); err != nil {
 		return err
 	}
-	if !hasGeneration && hasPendingResponse {
-		s.clearAllPendingRealtimeResponses()
-	}
 	return nil
 }
 
@@ -1840,14 +1838,6 @@ func (s *realtimeSession) consumePendingRealtimeResponse(eventID string) bool {
 	}
 	delete(s.pendingResponses, eventID)
 	return true
-}
-
-func (s *realtimeSession) clearAllPendingRealtimeResponses() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for pendingID := range s.pendingResponses {
-		delete(s.pendingResponses, pendingID)
-	}
 }
 
 func (s *realtimeSession) startResponseCreateTimeout(eventID string) {
@@ -2408,6 +2398,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	}
 	s.conn = conn
 	s.pendingResponses = make(map[string]struct{})
+	s.inputTranscripts = nil
 	s.startMaxSessionRecycle(conn)
 	s.mu.Unlock()
 

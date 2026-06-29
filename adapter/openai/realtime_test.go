@@ -1974,15 +1974,35 @@ func TestRealtimeSessionResponseCreatedForeignClientEventIsNotUserInitiated(t *t
 	}
 }
 
-func TestRealtimeInterruptClearsPendingResponseBeforeCreated(t *testing.T) {
+func TestRealtimeInterruptKeepsPendingResponseBeforeCreated(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		var responseCreateEventID string
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				return
 			}
 			messages <- string(msg)
+			var payload map[string]any
+			if err := json.Unmarshal(msg, &payload); err != nil {
+				t.Errorf("decode realtime message: %v", err)
+				return
+			}
+			switch payload["type"] {
+			case "response.create":
+				responseCreateEventID, _ = payload["event_id"].(string)
+			case "response.cancel":
+				if err := conn.WriteJSON(map[string]any{
+					"type": "response.created",
+					"response": map[string]any{
+						"id":       "resp_cancelled_race",
+						"metadata": map[string]any{"client_event_id": responseCreateEventID},
+					},
+				}); err != nil {
+					t.Errorf("Write response.created error = %v", err)
+				}
+			}
 		}
 	})
 
@@ -2007,10 +2027,13 @@ func TestRealtimeInterruptClearsPendingResponseBeforeCreated(t *testing.T) {
 	}
 	assertRealtimeMessage(t, <-messages, "response.cancel", "")
 
-	if err := session.Interrupt(); err != nil {
-		t.Fatalf("second Interrupt error = %v", err)
+	created := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
 	}
-	assertNoRealtimeMessage(t, messages, "second interrupt after pending response cancel should be silent")
+	if !created.Generation.UserInitiated {
+		t.Fatalf("UserInitiated = false after interrupted pending response was created, want true")
+	}
 }
 
 func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *testing.T) {
@@ -4554,6 +4577,73 @@ func TestRealtimeSessionReconnectClearsPendingResponse(t *testing.T) {
 	assertNoRealtimeMessage(t, secondMessages, "reconnect should discard pending response")
 }
 
+func TestRealtimeSessionReconnectClearsInputTranscriptionPartials(t *testing.T) {
+	var dialCount atomic.Int32
+	closeFirst := make(chan struct{})
+	secondConnected := make(chan struct{})
+	sendFailure := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			<-closeFirst
+			_ = conn.Close()
+			return
+		}
+		close(secondConnected)
+		<-sendFailure
+		if err := conn.WriteJSON(map[string]any{
+			"type":    "conversation.item.input_audio_transcription.failed",
+			"item_id": "item_before_reconnect",
+		}); err != nil {
+			t.Errorf("Write input transcription failure error = %v", err)
+			return
+		}
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	rs := session.(*realtimeSession)
+	rs.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_before_reconnect",
+			Transcript: "stale partial",
+			IsFinal:    false,
+		},
+	})
+	close(closeFirst)
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after websocket disconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+
+	close(sendFailure)
+	select {
+	case ev := <-session.EventCh():
+		t.Fatalf("unexpected event after stale transcription failure: %#v", ev)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
 func TestRealtimeSessionInitialConnectRetriesDialFailure(t *testing.T) {
 	var dialCount atomic.Int32
 	connected := make(chan struct{})
@@ -6539,6 +6629,27 @@ func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
 	content := item["content"].([]map[string]any)
 	if len(content) != 1 || content[0]["type"] != "input_text" || content[0]["text"] != "hello" {
 		t.Fatalf("content = %#v, want input text hello", content)
+	}
+}
+
+func TestRealtimeChatContextCreateMessagesExcludeFunctionItems(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "msg_123", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.FunctionCall{ID: "call_123", CallID: "call_lookup", Name: "lookup", Arguments: "{}"},
+		&llm.FunctionCallOutput{ID: "out_123", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+	}
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want only user message after function filter", len(msgs))
+	}
+	item := msgs[0]["item"].(map[string]any)
+	if item["id"] != "msg_123" {
+		t.Fatalf("item id = %#v, want msg_123", item["id"])
 	}
 }
 

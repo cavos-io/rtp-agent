@@ -670,12 +670,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			return audio, nil
 		case "speech.audio.done":
 			s.emitSSEUsageMetrics(event)
-			s.sseDone = true
-			if s.sseSawAudio {
-				s.sseFinalSent = true
-				return s.finalAudio(), nil
-			}
-			return nil, s.noAudioError()
+			continue
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
@@ -1005,8 +1000,7 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 			s.decoder.Push(audioData)
 		case "speech.audio.done":
 			s.emitSSEUsageMetrics(event)
-			s.sseDone = true
-			return
+			continue
 		}
 	}
 	if err := s.scanner.Err(); err != nil {

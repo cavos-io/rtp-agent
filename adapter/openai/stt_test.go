@@ -1931,7 +1931,7 @@ func TestOpenAIRealtimeSTTFlushFlushesLocalVAD(t *testing.T) {
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
 }
 
-func TestOpenAIRealtimeSTTVADReceivesNormalizedInputAudio(t *testing.T) {
+func TestOpenAIRealtimeSTTVADReceivesReferenceInputAudio(t *testing.T) {
 	vadStream := newFakeOpenAISTTVADStream()
 	vadStream.suppressEndOfSpeech = true
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
@@ -1941,6 +1941,7 @@ func TestOpenAIRealtimeSTTVADReceivesNormalizedInputAudio(t *testing.T) {
 	)
 	started := make(chan struct{})
 	releaseServer := make(chan struct{})
+	messages := make(chan string, 2)
 	defer close(releaseServer)
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -1955,8 +1956,10 @@ func TestOpenAIRealtimeSTTVADReceivesNormalizedInputAudio(t *testing.T) {
 					return
 				default:
 				}
-				if _, _, err := conn.ReadMessage(); err != nil {
+				if _, payload, err := conn.ReadMessage(); err != nil {
 					return
+				} else {
+					messages <- string(payload)
 				}
 			}
 		})
@@ -1989,17 +1992,23 @@ func TestOpenAIRealtimeSTTVADReceivesNormalizedInputAudio(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PushFrame stereo 48k error = %v", err)
 	}
+	for i := 0; i < 2; i++ {
+		chunk := assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+		if len(chunk) != openAIRealtimeSTTChunkBytes() {
+			t.Fatalf("provider chunk %d bytes = %d, want normalized 50ms 24k mono", i, len(chunk))
+		}
+	}
 
 	frames := vadStream.pushedFrames()
 	if len(frames) != 1 {
 		t.Fatalf("VAD pushed frames = %d, want 1", len(frames))
 	}
 	frame := frames[0]
-	if frame.SampleRate != openAIRealtimeSTTSampleRate ||
-		frame.NumChannels != openAIRealtimeSTTNumChannels ||
-		frame.SamplesPerChannel != openAIRealtimeSTTSampleRate/10 ||
-		len(frame.Data) != openAIRealtimeSTTSampleRate/10*2 {
-		t.Fatalf("VAD frame = %+v len=%d, want normalized 100ms 24k mono", frame, len(frame.Data))
+	if frame.SampleRate != 48000 ||
+		frame.NumChannels != 2 ||
+		frame.SamplesPerChannel != 4800 ||
+		!bytes.Equal(frame.Data, stereo48kChunk) {
+		t.Fatalf("VAD frame = %+v len=%d, want original 100ms 48k stereo caller frame", frame, len(frame.Data))
 	}
 }
 
