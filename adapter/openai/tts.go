@@ -1040,14 +1040,14 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 	if inputTokens == 0 && outputTokens == 0 {
 		return
 	}
-	if !s.sseSawAudio {
-		return
-	}
 	duration := 0.0
 	if !s.metricsStarted.IsZero() {
 		duration = time.Since(s.metricsStarted).Seconds()
 	}
 	ttfb := 0.0
+	if !s.sseSawAudio {
+		ttfb = -1
+	}
 	if !s.metricsStarted.IsZero() && !s.metricsFirst.IsZero() {
 		ttfb = s.metricsFirst.Sub(s.metricsStarted).Seconds()
 	}

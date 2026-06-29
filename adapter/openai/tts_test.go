@@ -1226,7 +1226,7 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	}
 }
 
-func TestOpenAITTSSSEDoneUsageWithoutAudioSuppressesMetrics(t *testing.T) {
+func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
 		return &http.Response{
@@ -1257,8 +1257,14 @@ func TestOpenAITTSSSEDoneUsageWithoutAudioSuppressesMetrics(t *testing.T) {
 
 	select {
 	case metrics := <-metricsCh:
-		t.Fatalf("unexpected token usage metrics without audio: %#v", metrics)
-	case <-time.After(50 * time.Millisecond):
+		if metrics.AudioDuration != 0 {
+			t.Fatalf("AudioDuration = %f, want 0 without audio frames", metrics.AudioDuration)
+		}
+		if metrics.TTFB != -1 {
+			t.Fatalf("TTFB = %f, want -1 without audio frames", metrics.TTFB)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reference usage metrics without audio")
 	}
 }
 
