@@ -342,10 +342,12 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 	s.startOnce.Do(func() {
 		if s.isClosed() {
 			s.startErr = io.EOF
+			s.unregister()
 			return
 		}
 		if s.provider.isClosed() {
 			s.startErr = fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+			s.unregister()
 			return
 		}
 		reqCtx, reqCancel := context.WithTimeout(s.ctx, defaultGroqTTSTotalTimeout)
@@ -354,6 +356,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 		if !ok {
 			reqCancel()
 			s.startErr = fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+			s.unregister()
 			return
 		}
 		cleanupRequest := func() {
@@ -365,6 +368,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 		if err != nil {
 			cleanupRequest()
 			s.startErr = err
+			s.unregister()
 			return
 		}
 		resp, err := http.DefaultClient.Do(req)
@@ -374,17 +378,21 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 			s.requestCancel = nil
 			if s.isClosed() {
 				s.startErr = io.EOF
+				s.unregister()
 				return
 			}
 			if s.provider.isClosed() && errors.Is(reqCtx.Err(), context.Canceled) {
 				s.startErr = fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+				s.unregister()
 				return
 			}
 			if errors.Is(reqCtx.Err(), context.Canceled) {
 				s.startErr = context.Canceled
+				s.unregister()
 				return
 			}
 			s.startErr = groqTTSTransportError(err)
+			s.unregister()
 			return
 		}
 		if s.isClosed() {
@@ -392,6 +400,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 			reqCancel()
 			s.requestCancel = nil
 			s.startErr = io.EOF
+			s.unregister()
 			return
 		}
 		if s.provider.isClosed() {
@@ -399,6 +408,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 			reqCancel()
 			s.requestCancel = nil
 			s.startErr = fmt.Errorf("groq tts is closed: %w", io.ErrClosedPipe)
+			s.unregister()
 			return
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -408,6 +418,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 				s.requestCancel = nil
 				s.finalSent = true
 				s.startErr = io.EOF
+				s.unregister()
 				return
 			}
 			respBody, _ := io.ReadAll(resp.Body)
@@ -415,6 +426,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 			reqCancel()
 			s.requestCancel = nil
 			s.startErr = llm.NewAPIStatusError("Groq TTS request failed", resp.StatusCode, "", string(respBody))
+			s.unregister()
 			return
 		}
 		if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
@@ -423,6 +435,7 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 			reqCancel()
 			s.requestCancel = nil
 			s.startErr = llm.NewAPIError("Groq returned non-audio data", string(respBody), true)
+			s.unregister()
 			return
 		}
 		s.requestID = fmt.Sprintf("groq-tts-%d", requestID)
@@ -433,6 +446,12 @@ func (s *groqTTSChunkedStream) ensureStarted() error {
 
 func (s *groqTTSChunkedStream) isClosed() bool {
 	return s.closed
+}
+
+func (s *groqTTSChunkedStream) unregister() {
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
 
 func groqTTSStreamError(err error) error {
@@ -606,16 +625,12 @@ func (s *groqTTSChunkedStream) Close() error {
 		s.requestCancel = nil
 	}
 	if s.resp == nil || s.resp.Body == nil {
-		if s.provider != nil {
-			s.provider.unregisterStream(s)
-		}
+		s.unregister()
 		return nil
 	}
 	body := s.resp.Body
 	s.resp = nil
 	err := body.Close()
-	if s.provider != nil {
-		s.provider.unregisterStream(s)
-	}
+	s.unregister()
 	return err
 }

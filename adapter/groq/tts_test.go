@@ -287,6 +287,35 @@ func TestGroqTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGroqTTSStartupErrorUnregistersLazyStream(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewGroqTTS("test-key", "", WithGroqTTSBaseURL("https://groq.example/openai/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error = %v, want lazy stream", err)
+	}
+	if len(provider.streams) != 1 {
+		t.Fatalf("registered streams = %d, want lazy stream registered", len(provider.streams))
+	}
+	if _, err := stream.Next(); err == nil {
+		t.Fatal("Next error is nil, want provider startup error")
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("registered streams after startup error = %d, want unregistered", len(provider.streams))
+	}
+}
+
 func TestGroqTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
