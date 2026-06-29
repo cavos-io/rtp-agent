@@ -25,21 +25,23 @@ import (
 )
 
 const defaultDeepgramTTSBaseURL = "https://api.deepgram.com/v1/speak"
+const defaultDeepgramTTSStreamResponseTimeout = 10 * time.Second
 const deepgramTTSCloseAckTimeout = time.Second
 const deepgramTTSRequestTimeout = 30 * time.Second
 const deepgramTTSFlushMessage = `{"type": "Flush"}`
 const deepgramTTSCloseMessage = `{"type": "Close"}`
 
 type DeepgramTTS struct {
-	apiKey     string
-	baseURL    string
-	model      string
-	encoding   string
-	sampleRate int
-	mipOptOut  bool
-	mu         sync.Mutex
-	streams    map[*deepgramTTSStream]struct{}
-	closed     bool
+	apiKey                string
+	baseURL               string
+	model                 string
+	encoding              string
+	sampleRate            int
+	mipOptOut             bool
+	streamResponseTimeout time.Duration
+	mu                    sync.Mutex
+	streams               map[*deepgramTTSStream]struct{}
+	closed                bool
 }
 
 type DeepgramTTSOption func(*DeepgramTTS)
@@ -69,6 +71,14 @@ func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) DeepgramTTSOpti
 	}
 }
 
+func WithDeepgramTTSStreamResponseTimeout(timeout time.Duration) DeepgramTTSOption {
+	return func(t *DeepgramTTS) {
+		if timeout > 0 {
+			t.streamResponseTimeout = timeout
+		}
+	}
+}
+
 func deepgramTTSNormalizeEncoding(encoding string) string {
 	switch strings.ToLower(encoding) {
 	case "pcm_s16le", "linear_pcm", "pcm_linear":
@@ -90,12 +100,13 @@ func NewDeepgramTTS(apiKey string, model string, opts ...DeepgramTTSOption) *Dee
 		model = "aura-2-andromeda-en"
 	}
 	provider := &DeepgramTTS{
-		apiKey:     apiKey,
-		baseURL:    defaultDeepgramTTSBaseURL,
-		model:      model,
-		encoding:   "linear16",
-		sampleRate: 24000,
-		streams:    make(map[*deepgramTTSStream]struct{}),
+		apiKey:                apiKey,
+		baseURL:               defaultDeepgramTTSBaseURL,
+		model:                 model,
+		encoding:              "linear16",
+		sampleRate:            24000,
+		streamResponseTimeout: defaultDeepgramTTSStreamResponseTimeout,
+		streams:               make(map[*deepgramTTSStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -214,6 +225,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		inputSent:  make(chan struct{}),
 		sampleRate: t.sampleRate,
 		encoding:   t.encoding,
+		timeout:    t.streamResponseTimeout,
 		requestID:  uuid.NewString(),
 		segmentID:  uuid.NewString(),
 	}
@@ -452,6 +464,7 @@ type deepgramTTSStream struct {
 	closeAck      chan struct{}
 	inputSent     chan struct{}
 	inputSentOnce sync.Once
+	timeout       time.Duration
 	pendingText   string
 	requestID     string
 	segmentID     string
@@ -466,10 +479,13 @@ func (s *deepgramTTSStream) readLoop() {
 		return
 	}
 	for {
+		if s.timeout > 0 {
+			_ = s.conn.SetReadDeadline(time.Now().Add(s.timeout))
+		}
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
-				s.errCh <- deepgramTTSUnexpectedCloseError(err)
+				s.errCh <- deepgramTTSReadError(err)
 			}
 			return
 		}
@@ -494,6 +510,14 @@ func (s *deepgramTTSStream) readLoop() {
 			}
 		}
 	}
+}
+
+func deepgramTTSReadError(err error) error {
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return deepgramTTSUnexpectedCloseError(err)
 }
 
 func (s *deepgramTTSStream) waitForInputSent() bool {

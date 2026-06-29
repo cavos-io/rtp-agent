@@ -33,6 +33,9 @@ func TestDeepgramTTSDefaultsMatchReference(t *testing.T) {
 	if provider.encoding != "linear16" {
 		t.Fatalf("encoding = %q, want linear16", provider.encoding)
 	}
+	if provider.streamResponseTimeout != 10*time.Second {
+		t.Fatalf("stream response timeout = %s, want 10s", provider.streamResponseTimeout)
+	}
 	if got := tts.Model(provider); got != "aura-2-andromeda-en" {
 		t.Fatalf("model metadata = %q, want aura-2-andromeda-en", got)
 	}
@@ -832,6 +835,71 @@ func TestDeepgramTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestDeepgramTTSStreamTimesOutSilentProviderAfterInput(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSSilentAfterFlushWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"),
+		WithDeepgramTTSStreamResponseTimeout(20*time.Millisecond),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	type nextResult struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	done := make(chan nextResult, 1)
+	go func() {
+		audio, err := stream.Next()
+		done <- nextResult{audio: audio, err: err}
+	}()
+
+	select {
+	case result := <-done:
+		if result.audio != nil {
+			t.Fatalf("Next audio = %#v, want nil", result.audio)
+		}
+		var timeoutErr *llm.APITimeoutError
+		if !errors.As(result.err, &timeoutErr) {
+			t.Fatalf("Next error = %T %v, want APITimeoutError", result.err, result.err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next did not return after response timeout")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error = %v", err)
 	}
 }
 
@@ -2205,6 +2273,36 @@ func runDeepgramTTSMalformedTextWebsocketServer(conn net.Conn, errCh chan<- erro
 		return
 	}
 	errCh <- nil
+}
+
+func runDeepgramTTSSilentAfterFlushWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "Flush" {
+			break
+		}
+	}
+	for {
+		if _, _, err := readDeepgramTestClientWebsocketFrame(reader); err != nil {
+			errCh <- nil
+			return
+		}
+	}
 }
 
 func deepgramTestWebsocketMessageType(payload []byte) string {
