@@ -696,6 +696,8 @@ type deepgramStream struct {
 	errCh          chan error
 	mu             sync.Mutex
 	closed         bool
+	eventsClosed   bool
+	closeDraining  bool
 	inputEnded     bool
 	speaking       bool
 	reconnectNext  bool
@@ -1099,8 +1101,12 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			}
 			_ = s.closeConnection()
 		}
+		closeEvents := !stale && !s.closeDraining
+		if closeEvents {
+			s.eventsClosed = true
+		}
 		s.mu.Unlock()
-		if stale {
+		if stale || !closeEvents {
 			return
 		}
 		close(s.events)
@@ -1539,6 +1545,9 @@ func (s *deepgramStream) EndInput() error {
 }
 
 func (s *deepgramStream) sendConnectionUsageRemainderLocked() {
+	if s.eventsClosed {
+		return
+	}
 	if s.connStart.IsZero() {
 		return
 	}
@@ -1570,14 +1579,21 @@ func (s *deepgramStream) Close() error {
 		}
 		s.mu.Lock()
 	}
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
+	s.closeDraining = true
 	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
-	// Wait a tiny bit for the final transcript
+	s.mu.Unlock()
+
+	// Keep receive-side state unlocked so a final transcript can drain after CloseStream.
 	time.Sleep(50 * time.Millisecond)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeDraining = false
 	s.cancelIfUsageDeliveryWouldBlockLocked()
 	s.sendConnectionUsageRemainderLocked()
 	if s.cancel != nil {

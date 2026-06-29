@@ -2725,6 +2725,65 @@ func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamCloseDoesNotBlockFinalTranscriptDrain(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	closeSent := make(chan struct{})
+	closeDone := make(chan error, 1)
+	stream := &deepgramStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		writeText: func(payload string) error {
+			if payload == deepgramSTTCloseStreamMessage {
+				close(closeSent)
+			}
+			return nil
+		},
+	}
+
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case <-closeSent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+
+	delivered := make(chan struct{})
+	go func() {
+		stream.setRequestID("req-final")
+		stream.sendEvent(&stt.SpeechEvent{
+			Type:      stt.SpeechEventFinalTranscript,
+			RequestID: "req-final",
+			Alternatives: []stt.SpeechData{{
+				Text: "final during close",
+			}},
+		})
+		close(delivered)
+	}()
+
+	select {
+	case got := <-stream.events:
+		if got.Type != stt.SpeechEventFinalTranscript || got.RequestID != "req-final" || got.Alternatives[0].Text != "final during close" {
+			t.Fatalf("event = %#v, want drained final transcript during Close", got)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("final transcript blocked behind Close drain lock")
+	}
+
+	select {
+	case <-delivered:
+	case <-time.After(time.Second):
+		t.Fatal("final transcript delivery goroutine remained blocked")
+	}
+	if err := <-closeDone; err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
 func TestDeepgramSTTStreamCloseSendsReferenceCloseStreamText(t *testing.T) {
 	var textWrites []string
 	stream := &deepgramStream{
