@@ -48,6 +48,7 @@ type OpenAISTT struct {
 	apiKey           string
 	baseURL          string
 	baseURLSet       bool
+	realtimeBaseURL  string
 	model            string
 	language         string
 	languageSet      bool
@@ -231,18 +232,23 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if azureDeployment == "" {
 		azureDeployment = model
 	}
+	realtimeBaseURL := openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment)
 
 	provider := &OpenAISTT{
-		apiKey:        apiKey,
-		baseURL:       openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment),
-		model:         model,
-		language:      "en",
-		connect:       llm.DefaultAPIConnectOptions(),
-		maxSession:    10 * time.Minute,
-		dialWebsocket: defaultOpenAIRealtimeSTTWebsocketDialer,
+		apiKey:          apiKey,
+		baseURL:         realtimeBaseURL,
+		realtimeBaseURL: realtimeBaseURL,
+		model:           model,
+		language:        "en",
+		connect:         llm.DefaultAPIConnectOptions(),
+		maxSession:      10 * time.Minute,
+		dialWebsocket:   defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.baseURLSet {
+		provider.realtimeBaseURL = openAISTTAzureRealtimeBaseURL(provider.baseURL, azureDeployment)
 	}
 	provider.applyDetectLanguage()
 	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
@@ -532,6 +538,9 @@ func (s *OpenAISTT) dialRealtimeSTTWebsocketAttempt(ctx context.Context) (*webso
 
 func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {
 	baseURL := strings.TrimRight(s.baseURL, "/")
+	if s.realtimeBaseURL != "" {
+		baseURL = strings.TrimRight(s.realtimeBaseURL, "/")
+	}
 	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
 	}

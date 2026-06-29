@@ -567,6 +567,30 @@ func TestAzureOpenAIRealtimeSTTWebsocketRequestMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeSTTWebsocketUsesReferenceBaseURL(t *testing.T) {
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	wsURL := buildOpenAIRealtimeSTTWebsocketURL(provider)
+	if wsURL.Scheme != "wss" || wsURL.Host != "gateway.openai.azure.test" || wsURL.Path != "/custom/openai/deployments/stt-deployment/realtime" {
+		t.Fatalf("websocket URL = %q, want reference Azure base_url deployment realtime endpoint", wsURL.String())
+	}
+	if wsURL.Query().Get("intent") != "transcription" {
+		t.Fatalf("intent query = %q, want transcription", wsURL.Query().Get("intent"))
+	}
+}
+
 func TestAzureOpenAIRealtimeWhisperUsesDefaultSileroVAD(t *testing.T) {
 	provider, err := NewAzureOpenAISTT(
 		"gpt-realtime-whisper",
