@@ -1277,6 +1277,72 @@ func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveStreamMetadata(t *testing.T
 	}
 }
 
+func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveAudioBuffer(t *testing.T) {
+	requests := make(chan *url.URL, 2)
+	audioMessages := make(chan []byte, 1)
+	serverErr := make(chan error, 2)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "nova-2", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	_ = receiveDeepgramTestRequestURL(t, requests, "first websocket request")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	select {
+	case audio := <-audioMessages:
+		t.Fatalf("first partial frame emitted %d bytes, want buffered", len(audio))
+	default:
+	}
+
+	provider.UpdateOptions(WithDeepgramSTTTags([]string{"updated"}))
+
+	select {
+	case got := <-requests:
+		t.Fatalf("metadata-only update opened websocket %s, want active stream unchanged", got.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1280),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 640,
+	}); err != nil {
+		t.Fatalf("second PushFrame error = %v", err)
+	}
+	select {
+	case audio := <-audioMessages:
+		if len(audio) != 1600 {
+			t.Fatalf("audio chunk bytes = %d, want buffered 50ms reference chunk", len(audio))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for buffered audio after metadata-only update")
+	}
+}
+
 func TestDeepgramSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	closed := make(chan struct{})
 	clientConn, serverConn := net.Pipe()

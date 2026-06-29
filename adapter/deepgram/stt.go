@@ -1331,9 +1331,12 @@ func (s *deepgramStream) updateOptions(languageChanged bool) {
 		s.reconnectNext = true
 		reconnectNow = s.conn != nil
 	}
+	formatChanged := s.sampleRate != s.provider.sampleRate || s.numChannels != s.provider.numChannels
 	s.sampleRate = s.provider.sampleRate
 	s.numChannels = s.provider.numChannels
-	s.audioBStream = nil
+	if formatChanged {
+		s.audioBStream = nil
+	}
 	s.mu.Unlock()
 
 	if reconnectNow {
