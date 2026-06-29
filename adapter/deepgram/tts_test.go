@@ -428,6 +428,48 @@ func TestDeepgramTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *tes
 	}
 }
 
+func TestDeepgramTTSChunkedStreamAnnotatesReferenceRequestID(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02, 0x03, 0x04})),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("audio Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %+v, want frame", audio)
+	}
+	if audio.RequestID == "" {
+		t.Fatal("audio RequestID is empty, want reference request id")
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next() error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final = %+v, want final marker", final)
+	}
+	if final.RequestID != audio.RequestID {
+		t.Fatalf("final RequestID = %q, want %q", final.RequestID, audio.RequestID)
+	}
+}
+
 func TestDeepgramTTSStreamURLUsesReferenceOptions(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "")
 

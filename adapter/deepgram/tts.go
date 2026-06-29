@@ -163,6 +163,7 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	return &deepgramTTSChunkedStream{
 		resp:       resp,
 		sampleRate: t.sampleRate,
+		requestID:  uuid.NewString(),
 	}, nil
 }
 
@@ -281,6 +282,7 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 type deepgramTTSChunkedStream struct {
 	resp         *http.Response
 	sampleRate   int
+	requestID    string
 	pendingFinal bool
 	finalSent    bool
 	mu           sync.Mutex
@@ -314,6 +316,7 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 
 	return &tts.SynthesizedAudio{
+		RequestID: s.requestID,
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
 			SampleRate:        uint32(s.sampleRate),
@@ -333,7 +336,7 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 		s.resp = nil
 		_ = body.Close()
 	}
-	return &tts.SynthesizedAudio{IsFinal: true}, nil
+	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
 
 func (s *deepgramTTSChunkedStream) Close() error {
