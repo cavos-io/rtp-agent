@@ -782,8 +782,8 @@ func (s *deepgramV2Stream) SetStartTime(startTime float64) {
 
 func (s *deepgramV2Stream) sendEvent(ev *stt.SpeechEvent) {
 	select {
+	case <-s.done():
 	case s.events <- ev:
-	default:
 	}
 }
 

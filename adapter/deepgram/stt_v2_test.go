@@ -690,6 +690,40 @@ func TestDeepgramSTTv2NextReturnsQueuedTranscriptBeforeStreamError(t *testing.T)
 	}
 }
 
+func TestDeepgramSTTv2SendEventWaitsForConsumer(t *testing.T) {
+	stream := &deepgramV2Stream{
+		ctx:    context.Background(),
+		events: make(chan *stt.SpeechEvent, 1),
+	}
+	first := &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+	second := &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
+	stream.events <- first
+
+	sent := make(chan struct{})
+	go func() {
+		stream.sendEvent(second)
+		close(sent)
+	}()
+
+	select {
+	case <-sent:
+		t.Fatal("sendEvent returned while event queue was full; want reference non-lossy delivery")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if got := <-stream.events; got != first {
+		t.Fatalf("first drained event = %+v, want %+v", got, first)
+	}
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("sendEvent did not unblock after consumer drained queue")
+	}
+	if got := <-stream.events; got != second {
+		t.Fatalf("second drained event = %+v, want %+v", got, second)
+	}
+}
+
 func TestDeepgramSTTv2ErrorMessageReturnsAPIStatusError(t *testing.T) {
 	stream := &deepgramV2Stream{}
 
