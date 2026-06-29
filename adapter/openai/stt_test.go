@@ -1155,6 +1155,7 @@ func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
 		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
 	)
 	release := make(chan struct{})
+	messages := make(chan string, 4)
 	defer close(release)
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -1168,8 +1169,10 @@ func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
 					return
 				default:
 				}
-				if _, _, err := conn.ReadMessage(); err != nil {
+				if _, payload, err := conn.ReadMessage(); err != nil {
 					return
+				} else {
+					messages <- string(payload)
 				}
 			}
 		})
@@ -1182,9 +1185,14 @@ func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
 	}
 	defer stream.Close()
 
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x04}, openAIRealtimeSTTChunkBytes()/2))); err != nil {
+		t.Fatalf("PushFrame half chunk error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "half chunk should wait for Flush before provider append")
 	if err := stream.Flush(); err == nil || err.Error() != "vad flush failed" {
 		t.Fatalf("Flush error = %T %v, want VAD flush error", err, err)
 	}
+	assertNoRealtimeMessage(t, messages, "VAD flush failure should stop provider audio append")
 	err = stream.PushFrame(&model.AudioFrame{
 		Data:              make([]byte, 4800),
 		SampleRate:        24000,

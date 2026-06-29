@@ -850,29 +850,21 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 
 func (s *openAIRealtimeSTTStream) Flush() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.inputEnded {
-		s.mu.Unlock()
 		return openAIRealtimeSTTInputEndedError()
 	}
 	if s.closed {
-		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
-	err := s.flushAudioLocked()
 	vadStream := s.vadStream
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
 	if vadStream != nil {
 		if err := vadStream.Flush(); err != nil {
-			s.mu.Lock()
 			s.closeAfterTerminalFailureLocked()
-			s.mu.Unlock()
 			return err
 		}
 	}
-	return nil
+	return s.flushAudioLocked()
 }
 
 func (s *openAIRealtimeSTTStream) EndInput() error {
