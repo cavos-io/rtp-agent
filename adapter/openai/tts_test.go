@@ -494,6 +494,7 @@ func TestOpenAITTSRepeatedPrewarmDoesNotCancelPreviousRequest(t *testing.T) {
 func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	var gotAuth string
 	var gotPath string
+	const requestID = "req_audio_123"
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
@@ -516,7 +517,7 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}, "X-Request-Id": []string{requestID}},
 			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
 			Request:    r,
 		}, nil
@@ -544,6 +545,16 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	}
 	if string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
 		t.Fatalf("audio bytes = %v, want server bytes", audio.Frame.Data)
+	}
+	if audio.RequestID != requestID {
+		t.Fatalf("audio request id = %q, want provider request id", audio.RequestID)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != requestID {
+		t.Fatalf("final = %#v, want final marker with provider request id", final)
 	}
 	if gotAuth != "Bearer test-key" {
 		t.Fatalf("Authorization = %q, want bearer key", gotAuth)
@@ -709,7 +720,7 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"req_sse_123"}},
 			Body:       io.NopCloser(strings.NewReader(sse)),
 			Request:    r,
 		}, nil
@@ -734,6 +745,9 @@ func TestOpenAITTSDefaultModelUsesSSEStreamFormat(t *testing.T) {
 	}
 	if audio.Frame.NumChannels != 1 {
 		t.Fatalf("channels = %d, want reference provider channels", audio.Frame.NumChannels)
+	}
+	if audio.RequestID != "req_sse_123" {
+		t.Fatalf("SSE audio request id = %q, want provider request id", audio.RequestID)
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")

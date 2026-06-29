@@ -403,6 +403,7 @@ type openaiTTSChunkedStream struct {
 	streamFormat   string
 	provider       *OpenAITTS
 	inputText      string
+	requestID      string
 	startOnce      sync.Once
 	startErr       error
 	scanner        *bufio.Scanner
@@ -471,9 +472,20 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 			s.startErr = io.EOF
 			return
 		}
+		s.requestID = openAITTSRequestID(resp.Header())
 		s.resp = resp
 	})
 	return s.startErr
+}
+
+func openAITTSRequestID(header http.Header) string {
+	if header == nil {
+		return ""
+	}
+	if requestID := header.Get("X-Request-Id"); requestID != "" {
+		return requestID
+	}
+	return header.Get("Openai-Request-Id")
 }
 
 func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
@@ -509,7 +521,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				if s.audioSawAudio && !s.audioFinalSent {
 					s.audioFinalSent = true
-					return &tts.SynthesizedAudio{IsFinal: true}, nil
+					return s.finalAudio(), nil
 				}
 				return nil, io.EOF
 			}
@@ -560,7 +572,7 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 		if openAITTSDecodeEOF(err) {
 			if s.audioSawAudio && !s.audioFinalSent {
 				s.audioFinalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.finalAudio(), nil
 			}
 			return nil, io.EOF
 		}
@@ -570,7 +582,7 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 	if err != nil {
 		return nil, err
 	}
-	return &tts.SynthesizedAudio{Frame: frame}, nil
+	return s.audioFrame(frame), nil
 }
 
 func (s *openaiTTSChunkedStream) feedDecodedAudio() {
@@ -617,7 +629,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			s.sseDone = true
 			if s.sseSawAudio && !s.sseFinalSent {
 				s.sseFinalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.finalAudio(), nil
 			}
 			return nil, io.EOF
 		}
@@ -653,7 +665,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			s.sseDone = true
 			if s.sseSawAudio {
 				s.sseFinalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.finalAudio(), nil
 			}
 			return nil, io.EOF
 		}
@@ -667,7 +679,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 	s.sseDone = true
 	if s.sseSawAudio && !s.sseFinalSent {
 		s.sseFinalSent = true
-		return &tts.SynthesizedAudio{IsFinal: true}, nil
+		return s.finalAudio(), nil
 	}
 	return nil, io.EOF
 }
@@ -693,7 +705,7 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 		if openAITTSDecodeEOF(err) {
 			if s.sseDone && s.sseSawAudio && !s.sseFinalSent {
 				s.sseFinalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.finalAudio(), nil
 			}
 			return nil, io.EOF
 		}
@@ -703,7 +715,15 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 	if err != nil {
 		return nil, err
 	}
-	return &tts.SynthesizedAudio{Frame: frame}, nil
+	return s.audioFrame(frame), nil
+}
+
+func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{IsFinal: true, RequestID: s.requestID}
+}
+
+func (s *openaiTTSChunkedStream) audioFrame(frame *model.AudioFrame) *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{Frame: frame, RequestID: s.requestID}
 }
 
 func (s *openaiTTSChunkedStream) decodedAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
@@ -806,7 +826,7 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 			if err != nil {
 				return nil, err
 			}
-			return &tts.SynthesizedAudio{Frame: frame}, nil
+			return s.audioFrame(frame), nil
 		}
 		return nil, nil
 	}
@@ -825,6 +845,7 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 		return nil, nil
 	}
 	return &tts.SynthesizedAudio{
+		RequestID: s.requestID,
 		Frame: &model.AudioFrame{
 			Data:              data,
 			SampleRate:        sampleRate,
