@@ -6682,6 +6682,29 @@ func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionAddsReferenceMetadataToResponseMetrics(t *testing.T) {
+	model := NewRealtimeModel("test-key", "gpt-realtime")
+	model.baseURL = "wss://realtime.openai.test/v1/realtime"
+	session := &realtimeSession{model: model}
+
+	ev := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			RequestID: "resp_123",
+		},
+	})
+
+	if ev.Metrics == nil || ev.Metrics.Metadata == nil {
+		t.Fatalf("metrics = %#v, want metadata", ev.Metrics)
+	}
+	if ev.Metrics.Metadata.ModelName != "gpt-realtime" {
+		t.Fatalf("metrics model_name = %q, want gpt-realtime", ev.Metrics.Metadata.ModelName)
+	}
+	if ev.Metrics.Metadata.ModelProvider != "realtime.openai.test" {
+		t.Fatalf("metrics model_provider = %q, want realtime.openai.test", ev.Metrics.Metadata.ModelProvider)
+	}
+}
+
 func TestRealtimeSessionPreservesQueuedEvents(t *testing.T) {
 	const eventCount = 128
 	serverWroteEvents := make(chan struct{})
