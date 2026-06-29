@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -503,7 +504,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 	if s.audioReadErr != nil {
 		err := s.audioReadErr
 		s.audioReadErr = nil
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, openAITTSReadError(err)
 	}
 
 	buf := make([]byte, 4096)
@@ -533,7 +534,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 				}
 				return nil, s.noAudioError()
 			}
-			return nil, llm.NewAPIConnectionError(err.Error())
+			return nil, openAITTSReadError(err)
 		}
 	}
 }
@@ -607,7 +608,7 @@ func (s *openaiTTSChunkedStream) feedDecodedAudio() {
 		if err != nil {
 			if err != io.EOF {
 				select {
-				case s.decodeErrCh <- llm.NewAPIConnectionError(err.Error()):
+				case s.decodeErrCh <- openAITTSReadError(err):
 				default:
 				}
 			}
@@ -677,7 +678,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		if s.closed {
 			return nil, io.EOF
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		return nil, openAITTSReadError(err)
 	}
 	s.sseDone = true
 	if s.sseSawAudio && !s.sseFinalSent {
@@ -1004,10 +1005,24 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
-		s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
+		s.sendDecodeReadError(openAITTSReadError(err))
 		return
 	}
 	s.sseDone = true
+}
+
+func openAITTSReadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError("")
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return llm.NewAPITimeoutError("")
+	}
+	return llm.NewAPIConnectionError(openAIConnectionErrorMessage(err))
 }
 
 func (s *openaiTTSChunkedStream) sendDecodeReadError(err error) {

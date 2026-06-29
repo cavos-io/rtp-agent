@@ -1755,6 +1755,19 @@ func TestOpenAITTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing
 	}
 }
 
+func TestOpenAITTSChunkedStreamReturnsAPITimeoutErrorOnReadTimeout(t *testing.T) {
+	stream := &openaiTTSChunkedStream{resp: failingReadCloser{err: context.DeadlineExceeded}}
+
+	_, err := stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("APITimeoutError message = %q, want default timeout message", timeoutErr.Message)
+	}
+}
+
 func TestOpenAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &countingOpenAIReadCloser{}
 	stream := &openaiTTSChunkedStream{resp: body}
