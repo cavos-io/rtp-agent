@@ -1151,7 +1151,18 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 }
 
 func (r dgResponse) malformedReferenceResults() bool {
-	return r.parsedJSON && (!r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen || !r.alternativesSeen)
+	if !r.parsedJSON {
+		return false
+	}
+	if !r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen || !r.alternativesSeen {
+		return true
+	}
+	for _, alt := range r.Channel.Alternatives {
+		if deepgramLiveMalformedAlternative(alt) {
+			return true
+		}
+	}
+	return false
 }
 
 func deepgramSTTUnexpectedCloseError(err error) error {

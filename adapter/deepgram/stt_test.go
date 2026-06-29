@@ -3130,7 +3130,8 @@ func runDeepgramMalformedAlternativeThenValidWebsocketServer(conn net.Conn, clos
 		return
 	}
 	for _, message := range []string{
-		`{"type":"Results","is_final":false,"speech_final":false,"metadata":{"request_id":"req-bad"},"channel":{"alternatives":[{"transcript":"bad","words":[]}]}}`,
+		`{"type":"SpeechStarted"}`,
+		`{"type":"Results","is_final":false,"speech_final":true,"metadata":{"request_id":"req-bad"},"channel":{"alternatives":[{"transcript":"bad","words":[]}]}}`,
 		`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-valid"},"channel":{"alternatives":[{"transcript":"valid","confidence":0.9,"words":[]}]}}`,
 	} {
 		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
