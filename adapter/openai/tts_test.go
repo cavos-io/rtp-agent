@@ -359,8 +359,12 @@ func TestOpenAITTSLabelCapabilitiesAndUnsupportedStream(t *testing.T) {
 	if provider.SampleRate() != 24000 || provider.NumChannels() != 1 {
 		t.Fatalf("audio format = %d/%d, want 24000/1", provider.SampleRate(), provider.NumChannels())
 	}
-	if _, err := provider.Stream(context.Background()); !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("Stream error = %v, want io.ErrUnexpectedEOF", err)
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream returned %T, want nil", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "streaming is not supported") {
+		t.Fatalf("Stream error = %v, want explicit unsupported streaming error", err)
 	}
 }
 

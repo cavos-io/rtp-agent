@@ -275,7 +275,7 @@ func buildOpenAITTSSpeechRequest(t *OpenAITTS, text string) openai.CreateSpeechR
 
 func (t *OpenAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	// OpenAI does not have a native streaming API for TTS via standard REST.
-	return nil, io.ErrUnexpectedEOF
+	return nil, fmt.Errorf("streaming is not supported by openai tts, use Synthesize or a StreamAdapter")
 }
 
 func (t *OpenAITTS) Prewarm() {
