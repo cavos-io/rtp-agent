@@ -566,7 +566,7 @@ func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
 	if languageStr != "" {
 		q.Set("language", languageStr)
 	}
-	addDeepgramSTTAdvancedQuery(q, s)
+	addDeepgramSTTRecognizeAdvancedQuery(q, s)
 	u.RawQuery = q.Encode()
 	return u.String()
 }
@@ -590,6 +590,19 @@ func addDeepgramSTTAdvancedQuery(q url.Values, s *DeepgramSTT) {
 	for _, tag := range s.tags {
 		if tag != "" {
 			q.Add("tag", tag)
+		}
+	}
+}
+
+func addDeepgramSTTRecognizeAdvancedQuery(q url.Values, s *DeepgramSTT) {
+	for _, keyword := range s.keywords {
+		if keyword.Keyword != "" {
+			q.Add("keywords", keyword.Keyword+":"+strconv.FormatFloat(keyword.Boost, 'f', -1, 64))
+		}
+	}
+	for _, redact := range s.redact {
+		if redact != "" {
+			q.Add("redact", redact)
 		}
 	}
 }

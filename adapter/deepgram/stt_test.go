@@ -1154,9 +1154,13 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	assertDeepgramQuery(t, recognizeQuery, "profanity_filter", "true")
 	assertDeepgramQuery(t, recognizeQuery, "numerals", "true")
 	assertDeepgramQuery(t, recognizeQuery, "mip_opt_out", "true")
-	assertDeepgramQueryValues(t, recognizeQuery, "keyterm", []string{"LiveKit"})
 	assertDeepgramQueryValues(t, recognizeQuery, "redact", []string{"pci"})
-	assertDeepgramQueryValues(t, recognizeQuery, "tag", []string{"agent"})
+	if got := recognizeQuery["keyterm"]; len(got) != 0 {
+		t.Fatalf("recognize keyterm query = %#v, want absent like reference", got)
+	}
+	if got := recognizeQuery["tag"]; len(got) != 0 {
+		t.Fatalf("recognize tag query = %#v, want absent like reference", got)
+	}
 }
 
 func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
