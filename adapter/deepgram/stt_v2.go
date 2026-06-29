@@ -555,11 +555,11 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
@@ -583,17 +583,24 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 
 func (s *deepgramV2Stream) updateOptions() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed || s.provider == nil {
+		s.mu.Unlock()
 		return
 	}
 	nextURL := buildDeepgramSTTv2StreamURL(s.provider)
+	reconnectNow := false
 	if nextURL != s.streamURL {
 		s.streamURL = nextURL
 		s.reconnectNext = true
+		reconnectNow = s.conn != nil
 	}
 	s.sampleRate = s.provider.sampleRate
 	s.audioBStream = nil
+	s.mu.Unlock()
+
+	if reconnectNow {
+		go s.reconnectNow()
+	}
 }
 
 func (s *deepgramV2Stream) reconnectLocked() error {
@@ -618,14 +625,39 @@ func (s *deepgramV2Stream) reconnectLocked() error {
 	return nil
 }
 
+func (s *deepgramV2Stream) reconnectNow() {
+	s.mu.Lock()
+	if s.closed || !s.reconnectNext {
+		s.mu.Unlock()
+		return
+	}
+	err := s.reconnectLocked()
+	if err == nil {
+		s.reconnectNext = false
+	} else {
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.conn != nil {
+			_ = s.conn.Close()
+		}
+	}
+	s.mu.Unlock()
+
+	if err != nil {
+		s.sendError(err)
+	}
+}
+
 func (s *deepgramV2Stream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if s.audioBStream == nil {
 		return nil

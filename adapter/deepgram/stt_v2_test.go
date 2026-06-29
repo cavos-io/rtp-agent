@@ -572,6 +572,13 @@ func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	); err != nil {
 		t.Fatalf("UpdateOptions() error = %v", err)
 	}
+
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated STTv2 websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "model", "flux-general-multi")
+	assertDeepgramQuery(t, secondURL.Query(), "sample_rate", "48000")
+	assertDeepgramQuery(t, secondURL.Query(), "eager_eot_threshold", "0.6")
+	assertDeepgramQuery(t, secondURL.Query(), "eot_threshold", "0.8")
+
 	if err := stream.PushFrame(&model.AudioFrame{
 		Data:              make([]byte, 4800),
 		SampleRate:        48000,
@@ -580,12 +587,6 @@ func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PushFrame after update error = %v", err)
 	}
-
-	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated STTv2 websocket request")
-	assertDeepgramQuery(t, secondURL.Query(), "model", "flux-general-multi")
-	assertDeepgramQuery(t, secondURL.Query(), "sample_rate", "48000")
-	assertDeepgramQuery(t, secondURL.Query(), "eager_eot_threshold", "0.6")
-	assertDeepgramQuery(t, secondURL.Query(), "eot_threshold", "0.8")
 	select {
 	case got := <-audioMessages:
 		if len(got) == 0 {
