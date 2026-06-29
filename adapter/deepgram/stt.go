@@ -900,14 +900,13 @@ func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) erro
 	if !resp.requestIDSeen || !resp.channelsSeen || len(resp.Results.Channels) == 0 {
 		return fmt.Errorf("malformed deepgram recognition response")
 	}
-	for _, channel := range resp.Results.Channels {
-		if !channel.alternativesSeen {
-			return fmt.Errorf("malformed deepgram recognition channel")
-		}
-		for _, alt := range channel.Alternatives {
-			if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen) {
-				return fmt.Errorf("malformed deepgram recognition alternative")
-			}
+	channel := resp.Results.Channels[0]
+	if !channel.alternativesSeen {
+		return fmt.Errorf("malformed deepgram recognition channel")
+	}
+	for _, alt := range channel.Alternatives {
+		if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen) {
+			return fmt.Errorf("malformed deepgram recognition alternative")
 		}
 	}
 	return nil

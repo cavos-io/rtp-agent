@@ -1030,6 +1030,34 @@ func TestDeepgramSTTRecognizePreservesEmptyReferenceAlternatives(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeIgnoresReferenceExtraMalformedChannels(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"req-extra-channel"},"results":{"channels":[` +
+				`{"alternatives":[{"transcript":"first channel","confidence":0.9,"words":[]}]},` +
+				`{}]}}`)),
+			Request: r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want first-channel transcript", event)
+	}
+	if got := event.Alternatives[0].Text; got != "first channel" {
+		t.Fatalf("text = %q, want first channel", got)
+	}
+}
+
 func TestDeepgramSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	oldClient := http.DefaultClient
 	requests := make(chan *http.Request, 1)
