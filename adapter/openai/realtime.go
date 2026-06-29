@@ -2873,6 +2873,9 @@ func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
 	var previousItemID *string
 	if ev.RemoteItem.PreviousItemID != "" {
 		previousItemID = &ev.RemoteItem.PreviousItemID
+	} else if items := s.remote.ToChatCtx().Items; len(items) > 0 {
+		itemID := items[len(items)-1].GetID()
+		previousItemID = &itemID
 	}
 	if err := s.remote.Insert(previousItemID, ev.RemoteItem.Item); err != nil {
 		logger.Logger.Warnw("failed to track OpenAI realtime remote item", err, "item_id", ev.RemoteItem.Item.GetID())
