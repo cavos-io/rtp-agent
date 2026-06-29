@@ -19,6 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -208,6 +209,8 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		errCh:      make(chan error, 1),
 		flushed:    make(chan struct{}, 1),
 		sampleRate: t.sampleRate,
+		requestID:  uuid.NewString(),
+		segmentID:  uuid.NewString(),
 	}
 	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -359,6 +362,8 @@ type deepgramTTSStream struct {
 	closeConn   func() error
 	flushed     chan struct{}
 	pendingText string
+	requestID   string
+	segmentID   string
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -373,7 +378,7 @@ func (s *deepgramTTSStream) readLoop() {
 		}
 
 		if msgType == websocket.BinaryMessage {
-			s.audio <- &tts.SynthesizedAudio{
+			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              message,
 					SampleRate:        uint32(s.sampleRate),
@@ -381,6 +386,8 @@ func (s *deepgramTTSStream) readLoop() {
 					SamplesPerChannel: uint32(len(message) / 2),
 				},
 			}
+			s.annotateAudio(audio)
+			s.audio <- audio
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
 				s.errCh <- err
@@ -406,12 +413,23 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	}
 	switch metadata["type"] {
 	case "Flushed":
-		s.audio <- &tts.SynthesizedAudio{IsFinal: true}
+		audio := &tts.SynthesizedAudio{IsFinal: true}
+		s.annotateAudio(audio)
+		s.audio <- audio
+		s.segmentID = uuid.NewString()
 		s.signalFlushed()
 	case "Error", "error":
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
+}
+
+func (s *deepgramTTSStream) annotateAudio(audio *tts.SynthesizedAudio) {
+	if audio == nil {
+		return
+	}
+	audio.RequestID = s.requestID
+	audio.SegmentID = s.segmentID
 }
 
 func (s *deepgramTTSStream) signalFlushed() {
