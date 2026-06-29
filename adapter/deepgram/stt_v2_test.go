@@ -262,6 +262,63 @@ func TestDeepgramSTTv2RejectsReferenceInvalidTurnOptions(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2NextAfterCloseDrainsQueuedEvent(t *testing.T) {
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued final",
+		}},
+	}
+
+	for i := 0; i < 64; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stream := &deepgramV2Stream{
+			ctx:    ctx,
+			events: make(chan *stt.SpeechEvent, 1),
+			closed: true,
+		}
+		stream.events <- want
+
+		got, err := stream.Next()
+		if err != nil {
+			t.Fatalf("iteration %d: Next() error = %v, want queued event", i, err)
+		}
+		if got != want {
+			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
+		}
+	}
+}
+
+func TestDeepgramSTTv2NextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued final",
+		}},
+	}
+
+	for i := 0; i < 64; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		stream := &deepgramV2Stream{
+			ctx:    ctx,
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+		}
+		stream.events <- want
+		stream.errCh <- errors.New("stream failed")
+
+		got, err := stream.Next()
+		cancel()
+		if err != nil {
+			t.Fatalf("iteration %d: Next() error = %v, want queued event before stream error", i, err)
+		}
+		if got != want {
+			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
+		}
+	}
+}
+
 func TestDeepgramSTTv2ErrorMessageReturnsAPIStatusError(t *testing.T) {
 	stream := &deepgramV2Stream{}
 

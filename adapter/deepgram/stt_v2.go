@@ -527,7 +527,23 @@ func (s *deepgramV2Stream) Next() (*stt.SpeechEvent, error) {
 	}
 
 	select {
+	case err := <-s.errCh:
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		return nil, err
 	case <-s.done():
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, io.EOF
 	case event, ok := <-s.events:
 		if ok {
@@ -539,8 +555,6 @@ func (s *deepgramV2Stream) Next() (*stt.SpeechEvent, error) {
 		default:
 			return nil, io.EOF
 		}
-	case err := <-s.errCh:
-		return nil, err
 	}
 }
 
