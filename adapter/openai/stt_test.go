@@ -3052,8 +3052,12 @@ func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
 	if transcription["model"] != "gpt-4o-mini-transcribe" || transcription["language"] != "id" || transcription["prompt"] != "domain words" {
 		t.Fatalf("transcription = %+v, want model/language/prompt", transcription)
 	}
-	if input["turn_detection"] == nil {
-		t.Fatalf("turn_detection missing")
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" ||
+		turnDetection["threshold"] != float64(0.5) ||
+		turnDetection["prefix_padding_ms"] != float64(600) ||
+		turnDetection["silence_duration_ms"] != float64(350) {
+		t.Fatalf("turn_detection = %+v, want reference server_vad defaults", turnDetection)
 	}
 }
 
