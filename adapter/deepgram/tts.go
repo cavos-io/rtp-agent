@@ -153,35 +153,11 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 		return nil, err
 	}
 	u, jsonBody := buildDeepgramTTSSynthesizeRequest(t, text)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Token "+t.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == 499 {
-			resp.Body.Close()
-			return &deepgramTTSChunkedStream{requestID: uuid.NewString()}, nil
-		}
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &deepgramTTSChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		requestURL: u,
+		body:       jsonBody,
+		apiKey:     t.apiKey,
 		sampleRate: t.sampleRate,
 		encoding:   t.encoding,
 		requestID:  uuid.NewString(),
@@ -302,10 +278,15 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 }
 
 type deepgramTTSChunkedStream struct {
+	ctx          context.Context
+	requestURL   string
+	body         []byte
+	apiKey       string
 	resp         *http.Response
 	sampleRate   int
 	encoding     string
 	requestID    string
+	started      bool
 	pendingFinal bool
 	finalSent    bool
 	mu           sync.Mutex
@@ -314,6 +295,18 @@ type deepgramTTSChunkedStream struct {
 func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.resp == nil || s.resp.Body == nil || s.finalSent {
+		if !s.started && !s.finalSent {
+			if err := s.startRequestLocked(); err != nil {
+				return nil, err
+			}
+			if s.resp == nil || s.resp.Body == nil || s.finalSent {
+				return nil, io.EOF
+			}
+		} else {
+			return nil, io.EOF
+		}
+	}
 	if s.resp == nil || s.resp.Body == nil || s.finalSent {
 		return nil, io.EOF
 	}
@@ -350,6 +343,39 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *deepgramTTSChunkedStream) startRequestLocked() error {
+	s.started = true
+	req, err := http.NewRequestWithContext(s.ctx, "POST", s.requestURL, bytes.NewBuffer(s.body))
+	if err != nil {
+		s.finalSent = true
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Token "+s.apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.finalSent = true
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 499 {
+			resp.Body.Close()
+			s.finalSent = true
+			return nil
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		s.finalSent = true
+		return llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -366,6 +392,7 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 func (s *deepgramTTSChunkedStream) Close() error {
 	s.mu.Lock()
 	if s.resp == nil || s.resp.Body == nil {
+		s.finalSent = true
 		s.mu.Unlock()
 		return nil
 	}
