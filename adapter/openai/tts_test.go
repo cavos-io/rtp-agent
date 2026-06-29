@@ -1253,8 +1253,16 @@ func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
-	if audio, err := stream.Next(); !errors.Is(err, io.EOF) || audio != nil {
-		t.Fatalf("Next = (%#v, %v), want EOF without audio", audio, err)
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want nil without audio", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %v, want APIError no-audio", err)
+	}
+	if !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: hello tokens") {
+		t.Fatalf("APIError = %q, want reference no-audio message", apiErr.Error())
 	}
 
 	select {

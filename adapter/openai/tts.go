@@ -531,7 +531,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 					s.audioFinalSent = true
 					return s.finalAudio(), nil
 				}
-				return nil, io.EOF
+				return nil, s.noAudioError()
 			}
 			return nil, llm.NewAPIConnectionError(err.Error())
 		}
@@ -575,14 +575,14 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 			return nil, readErr
 		}
 		if !s.audioSawAudio && openAITTSEmptyDecodeEOF(err) {
-			return nil, io.EOF
+			return nil, s.noAudioError()
 		}
 		if openAITTSDecodeEOF(err) {
 			if s.audioSawAudio && !s.audioFinalSent {
 				s.audioFinalSent = true
 				return s.finalAudio(), nil
 			}
-			return nil, io.EOF
+			return nil, s.noAudioError()
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
@@ -639,7 +639,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 				s.sseFinalSent = true
 				return s.finalAudio(), nil
 			}
-			return nil, io.EOF
+			return nil, s.noAudioError()
 		}
 		var event map[string]any
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
@@ -675,7 +675,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 				s.sseFinalSent = true
 				return s.finalAudio(), nil
 			}
-			return nil, io.EOF
+			return nil, s.noAudioError()
 		}
 	}
 	if err := s.scanner.Err(); err != nil {
@@ -689,7 +689,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		s.sseFinalSent = true
 		return s.finalAudio(), nil
 	}
-	return nil, io.EOF
+	return nil, s.noAudioError()
 }
 
 func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, error) {
@@ -708,14 +708,14 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 			return nil, readErr
 		}
 		if !s.sseSawAudio && openAITTSEmptyDecodeEOF(err) {
-			return nil, io.EOF
+			return nil, s.noAudioError()
 		}
 		if openAITTSDecodeEOF(err) {
 			if s.sseDone && s.sseSawAudio && !s.sseFinalSent {
 				s.sseFinalSent = true
 				return s.finalAudio(), nil
 			}
-			return nil, io.EOF
+			return nil, s.noAudioError()
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
@@ -728,6 +728,13 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 
 func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
 	return &tts.SynthesizedAudio{IsFinal: true, RequestID: s.requestID}
+}
+
+func (s *openaiTTSChunkedStream) noAudioError() error {
+	if strings.TrimSpace(s.inputText) == "" {
+		return io.EOF
+	}
+	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
 }
 
 func (s *openaiTTSChunkedStream) audioFrame(frame *model.AudioFrame) *tts.SynthesizedAudio {
