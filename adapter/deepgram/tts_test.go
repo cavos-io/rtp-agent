@@ -1936,6 +1936,49 @@ func TestDeepgramTTSStreamMalformedTextReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamErrorDeliveryDoesNotBlockReadLoop(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSMalformedTextWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	streamIface, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := streamIface.(*deepgramTTSStream)
+	stream.errCh <- errors.New("already queued")
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	select {
+	case _, ok := <-stream.audio:
+		if ok {
+			t.Fatal("audio channel delivered data, want close after malformed text error")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("read loop blocked delivering error to full errCh")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	closeCalls := 0

@@ -490,7 +490,7 @@ func (s *deepgramTTSStream) readLoop() {
 		if err != nil {
 			if !s.isClosed() {
 				s.markReadDone()
-				s.errCh <- deepgramTTSReadError(err)
+				s.sendError(deepgramTTSReadError(err))
 			}
 			return
 		}
@@ -514,7 +514,7 @@ func (s *deepgramTTSStream) readLoop() {
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
 				s.markReadDone()
-				s.errCh <- err
+				s.sendError(err)
 				return
 			}
 		}
@@ -571,6 +571,16 @@ func (s *deepgramTTSStream) sendAudio(audio *tts.SynthesizedAudio) bool {
 		return true
 	case <-s.done:
 		return false
+	}
+}
+
+func (s *deepgramTTSStream) sendError(err error) {
+	if s.errCh == nil {
+		return
+	}
+	select {
+	case s.errCh <- err:
+	default:
 	}
 }
 
