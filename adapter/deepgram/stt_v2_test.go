@@ -496,6 +496,40 @@ func TestDeepgramSTTv2StreamRejectsReferenceSampleRateChange(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2StreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := provider.Stream(ctx, "en")
+		errCh <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Stream canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Stream canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stream remained blocked after caller cancellation")
+	}
+}
+
 func TestDeepgramSTTv2StreamUsesReferenceDefaultLanguage(t *testing.T) {
 	closeSeen := make(chan struct{})
 	clientConn, serverConn := net.Pipe()

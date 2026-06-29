@@ -351,6 +351,9 @@ func (s *DeepgramSTT) isClosed() bool {
 func openDeepgramStreamConnection(ctx context.Context, s *DeepgramSTT, streamURL string, header http.Header) (*websocket.Conn, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
 	}
 	return conn, nil

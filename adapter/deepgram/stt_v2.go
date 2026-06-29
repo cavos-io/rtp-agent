@@ -3,6 +3,7 @@ package deepgram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -215,6 +216,9 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStre
 	streamURL := buildDeepgramSTTv2StreamURL(s)
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
 	}
 
