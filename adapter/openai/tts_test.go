@@ -1882,6 +1882,45 @@ func TestOpenAITTSDecodeFailureUnregistersReferenceStream(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEInvalidBase64ClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: strings.NewReader(`data: {"type":"speech.audio.delta","delta":"%%%%"}` + "\n\n")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want no synthesized audio for malformed SSE audio", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after malformed SSE audio", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want malformed SSE stream unregistered", streamCount)
+	}
+}
+
 func TestOpenAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &countingOpenAIReadCloser{}
 	stream := &openaiTTSChunkedStream{resp: body}

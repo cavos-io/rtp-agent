@@ -664,11 +664,11 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			}
 			audioData, err := base64.StdEncoding.DecodeString(audioB64)
 			if err != nil {
-				return nil, llm.NewAPIConnectionError(err.Error())
+				return nil, s.terminalDecodeError(llm.NewAPIConnectionError(err.Error()))
 			}
 			audio, err := s.audioFrameFromPCMChunk(audioData)
 			if err != nil {
-				return nil, err
+				return nil, s.terminalDecodeError(err)
 			}
 			if audio == nil {
 				continue
