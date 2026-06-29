@@ -2959,16 +2959,18 @@ func TestOpenAIRealtimeSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 		WithOpenAISTTBaseURL("http://openai.test/v1"),
 	)
 	started := make(chan struct{})
+	var startedOnce sync.Once
 	closeServer := make(chan struct{})
 	serverDone := make(chan struct{})
+	var serverDoneOnce sync.Once
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
-			defer close(serverDone)
+			defer serverDoneOnce.Do(func() { close(serverDone) })
 			if _, _, err := conn.ReadMessage(); err != nil {
 				t.Errorf("session update read error = %v", err)
 				return
 			}
-			close(started)
+			startedOnce.Do(func() { close(started) })
 			<-closeServer
 			_ = conn.Close()
 		})

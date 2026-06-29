@@ -91,8 +91,8 @@ func TestNewAzureOpenAITTSRoutesDeploymentAndKeepsModelMetadata(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
-			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
 			Request:    r,
 		}, nil
 	})
@@ -105,6 +105,7 @@ func TestNewAzureOpenAITTSRoutesDeploymentAndKeepsModelMetadata(t *testing.T) {
 		"2024-06-01",
 		"azure-key",
 		"",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
 		withOpenAITTSHTTPClient(client),
 	)
 	if err != nil {
@@ -154,13 +155,16 @@ func TestNewAzureOpenAITTSFallsBackToReferenceEnvironment(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
-			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
 			Request:    r,
 		}, nil
 	})
 
-	provider, err := NewAzureOpenAITTS("", "", "", "", "", "", "", withOpenAITTSHTTPClient(client))
+	provider, err := NewAzureOpenAITTS("", "", "", "", "", "", "",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
 	if err != nil {
 		t.Fatalf("NewAzureOpenAITTS error = %v", err)
 	}
@@ -207,8 +211,8 @@ func TestNewAzureOpenAITTSUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
-			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
-			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
 			Request:    r,
 		}, nil
 	})
@@ -221,6 +225,7 @@ func TestNewAzureOpenAITTSUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 		"2024-06-01",
 		"",
 		"entra-token",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
 		withOpenAITTSHTTPClient(client),
 	)
 	if err != nil {
@@ -285,12 +290,13 @@ func TestOpenAITTSConstructorPreservesExplicitZeroSpeed(t *testing.T) {
 			StatusCode: http.StatusOK,
 			Status:     "200 OK",
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-			Body:       io.NopCloser(strings.NewReader(`data: {"type":"speech.audio.done"}` + "\n\n")),
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
 			Request:    r,
 		}, nil
 	})
 	provider := mustNewOpenAITTS(t, "test-key", "", "",
 		WithOpenAITTSSpeed(0),
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
 		withOpenAITTSHTTPClient(client),
 	)
 
@@ -304,8 +310,8 @@ func TestOpenAITTSConstructorPreservesExplicitZeroSpeed(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
-	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF after done event", err)
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("Next = (%#v, %v), want PCM audio", audio, err)
 	}
 	if !strings.Contains(string(body), `"speed":0`) {
 		t.Fatalf("request body %s missing explicit zero speed", body)
@@ -2046,6 +2052,11 @@ func receiveOpenAITTSPrewarmCall(t *testing.T, reqCh <-chan int) int {
 		t.Fatal("timed out waiting for OpenAI TTS prewarm request")
 		return 0
 	}
+}
+
+func openAITTSTestSSEPCM(pcm []byte) string {
+	return `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(pcm) + `"}` + "\n\n" +
+		`data: {"type":"speech.audio.done"}` + "\n\n"
 }
 
 func openAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
