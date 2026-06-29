@@ -197,46 +197,27 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	if err := validateDeepgramTTSAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	header := make(map[string][]string)
-	header["Authorization"] = []string{"Token " + t.apiKey}
-
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramTTSStreamURL(t), header)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-	if t.isClosed() {
-		conn.Close()
-		return nil, io.ErrClosedPipe
-	}
 
 	stream := &deepgramTTSStream{
 		provider:   t,
-		conn:       conn,
+		ctx:        ctx,
+		apiKey:     t.apiKey,
+		streamURL:  buildDeepgramTTSStreamURL(t),
 		audio:      make(chan *tts.SynthesizedAudio, 10),
 		errCh:      make(chan error, 1),
 		flushed:    make(chan struct{}, 1),
 		closeAck:   make(chan struct{}, 1),
 		inputSent:  make(chan struct{}),
+		done:       make(chan struct{}),
 		sampleRate: t.sampleRate,
 		encoding:   t.encoding,
 		timeout:    t.streamResponseTimeout,
 		requestID:  uuid.NewString(),
 		segmentID:  uuid.NewString(),
 	}
-	stream.writeJSON = stream.writeJSONMessage
-	stream.closeConn = stream.closeWebsocketConn
 	if !t.registerStream(stream) {
-		conn.Close()
 		return nil, io.ErrClosedPipe
 	}
-
-	go stream.readLoop()
 
 	return stream, nil
 }
@@ -447,6 +428,9 @@ func (s *deepgramTTSChunkedStream) cancelRequestLocked() {
 
 type deepgramTTSStream struct {
 	provider    *DeepgramTTS
+	ctx         context.Context
+	apiKey      string
+	streamURL   string
 	conn        *websocket.Conn
 	audio       chan *tts.SynthesizedAudio
 	errCh       chan error
@@ -465,6 +449,8 @@ type deepgramTTSStream struct {
 	closeAck      chan struct{}
 	inputSent     chan struct{}
 	inputSentOnce sync.Once
+	done          chan struct{}
+	doneOnce      sync.Once
 	timeout       time.Duration
 	pendingText   string
 	requestID     string
@@ -487,7 +473,7 @@ func (s *deepgramTTSStream) readLoop() {
 		if err != nil {
 			if !s.isClosed() {
 				s.markReadDone()
-				s.errCh <- deepgramTTSReadError(err)
+				s.sendError(deepgramTTSReadError(err))
 			}
 			return
 		}
@@ -504,11 +490,14 @@ func (s *deepgramTTSStream) readLoop() {
 				},
 			}
 			s.annotateAudio(audio)
-			s.audio <- audio
+			if !s.sendAudio(audio) {
+				s.markReadDone()
+				return
+			}
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
 				s.markReadDone()
-				s.errCh <- err
+				s.sendError(err)
 				return
 			}
 		}
@@ -546,6 +535,38 @@ func (s *deepgramTTSStream) markInputSent() {
 	})
 }
 
+func (s *deepgramTTSStream) closeDone() {
+	if s.done == nil {
+		return
+	}
+	s.doneOnce.Do(func() {
+		close(s.done)
+	})
+}
+
+func (s *deepgramTTSStream) sendAudio(audio *tts.SynthesizedAudio) bool {
+	if s.done == nil {
+		s.audio <- audio
+		return true
+	}
+	select {
+	case s.audio <- audio:
+		return true
+	case <-s.done:
+		return false
+	}
+}
+
+func (s *deepgramTTSStream) sendError(err error) {
+	if s.errCh == nil {
+		return
+	}
+	select {
+	case s.errCh <- err:
+	default:
+	}
+}
+
 func deepgramTTSUnexpectedCloseError(err error) error {
 	statusCode := -1
 	var closeErr *websocket.CloseError
@@ -564,7 +585,9 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	case "Flushed":
 		audio := &tts.SynthesizedAudio{IsFinal: true}
 		s.annotateAudio(audio)
-		s.audio <- audio
+		if !s.sendAudio(audio) {
+			return nil
+		}
 		s.signalFlushed()
 		s.mu.Lock()
 		s.flushPending = false
@@ -702,6 +725,10 @@ func (s *deepgramTTSStream) Flush() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	if err := s.ensureConnectedLocked(); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
 	if err := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"}); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
@@ -723,6 +750,10 @@ func (s *deepgramTTSStream) EndInput() error {
 	}
 	if s.segmentOpen {
 		if err := s.sendPendingWordsLocked(); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+		if err := s.ensureConnectedLocked(); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
@@ -774,6 +805,9 @@ func (s *deepgramTTSStream) sendPendingWordsLocked() error {
 }
 
 func (s *deepgramTTSStream) sendSpeakLocked(text string) error {
+	if err := s.ensureConnectedLocked(); err != nil {
+		return err
+	}
 	speakText := deepgramTTSSpeakText(text)
 	payload := fmt.Sprintf(`{"type": "Speak", "text": %s}`, deepgramTTSPythonJSONString(speakText))
 	if err := s.writeTextData(payload, map[string]interface{}{
@@ -837,10 +871,18 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	if !s.hasConnectionLocked() {
+		s.markInputSent()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return nil
+	}
 	s.drainCloseAckLocked()
 	flushErr := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"})
 	closeErr := s.writeTextData(deepgramTTSCloseMessage, map[string]interface{}{"type": "Close"})
 	s.markInputSent()
+	s.closeDoneIfAudioDeliveryWouldBlockLocked()
 	if flushErr == nil && closeErr == nil && !s.readDone {
 		s.waitForFlushedAckLocked()
 	}
@@ -851,6 +893,51 @@ func (s *deepgramTTSStream) Close() error {
 		return err
 	}
 	return nil
+}
+
+func (s *deepgramTTSStream) ensureConnectedLocked() error {
+	if s.hasConnectionLocked() {
+		return nil
+	}
+	header := make(map[string][]string)
+	header["Authorization"] = []string{"Token " + s.apiKey}
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, header)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if s.provider != nil && s.provider.isClosed() {
+		_ = conn.Close()
+		return io.ErrClosedPipe
+	}
+	if s.closed {
+		_ = conn.Close()
+		return io.ErrClosedPipe
+	}
+	s.conn = conn
+	s.writeJSON = s.writeJSONMessage
+	s.closeConn = s.closeWebsocketConn
+	go s.readLoop()
+	return nil
+}
+
+func (s *deepgramTTSStream) hasConnectionLocked() bool {
+	return s.conn != nil || s.writeText != nil || s.writeJSON != nil || s.closeConn != nil
+}
+
+func (s *deepgramTTSStream) closeDoneIfAudioDeliveryWouldBlockLocked() {
+	if s.audio == nil {
+		return
+	}
+	if cap(s.audio) == 0 || len(s.audio) >= cap(s.audio) {
+		s.readDone = true
+		s.closeDone()
+	}
 }
 
 func (s *deepgramTTSStream) drainCloseAckLocked() {
@@ -909,6 +996,9 @@ func (s *deepgramTTSStream) closeConnection() error {
 }
 
 func (s *deepgramTTSStream) closeWebsocketConn() error {
+	if s.conn == nil {
+		return nil
+	}
 	return s.conn.Close()
 }
 
@@ -918,6 +1008,9 @@ func (s *deepgramTTSStream) closeAfterWriteFailureLocked() {
 	}
 	s.closed = true
 	s.markInputSent()
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 	_ = s.closeConnection()
 }
 

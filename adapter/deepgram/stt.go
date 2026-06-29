@@ -729,10 +729,33 @@ type dgWord struct {
 }
 
 type dgAlternative struct {
-	Transcript string   `json:"transcript"`
-	Confidence float64  `json:"confidence"`
-	Languages  []string `json:"languages"`
-	Words      []dgWord `json:"words"`
+	Transcript    string
+	Confidence    float64
+	Languages     []string
+	languagesSeen bool
+	Words         []dgWord
+}
+
+func (a *dgAlternative) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Transcript string   `json:"transcript"`
+		Confidence float64  `json:"confidence"`
+		Languages  []string `json:"languages"`
+		Words      []dgWord `json:"words"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	a.Transcript = raw.Transcript
+	a.Confidence = raw.Confidence
+	a.Languages = raw.Languages
+	a.Words = raw.Words
+	_, a.languagesSeen = fields["languages"]
+	return nil
 }
 
 type dgRecognitionChannel struct {
@@ -826,6 +849,9 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 
 	var transcriptBuilder string
 	for _, alt := range resp.Channel.Alternatives {
+		if deepgramLiveMissingDetectedLanguage(languageStr, alt) {
+			return nil
+		}
 		transcriptBuilder += alt.Transcript
 		startTime, endTime := deepgramLiveTranscriptTimes(resp, alt.Words)
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
@@ -846,10 +872,11 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	return event
 }
 
+func deepgramLiveMissingDetectedLanguage(languageStr string, alt dgAlternative) bool {
+	return languageStr == "multi" && alt.languagesSeen && len(alt.Languages) == 0
+}
+
 func deepgramLiveTranscriptTimes(resp dgResponse, words []dgWord) (float64, float64) {
-	if resp.Start != 0 || resp.Duration != 0 {
-		return resp.Start, resp.Start + resp.Duration
-	}
 	return deepgramFirstWordStart(words), deepgramFirstWordEnd(words)
 }
 
@@ -919,7 +946,6 @@ func deepgramTimedStringsOffset(words []dgWord, startTimeOffset float64) []stt.T
 			Text:            word.Word,
 			StartTime:       word.Start + startTimeOffset,
 			EndTime:         word.End + startTimeOffset,
-			Confidence:      word.Confidence,
 			StartTimeOffset: startTimeOffset,
 		})
 	}
