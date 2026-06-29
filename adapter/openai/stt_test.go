@@ -1161,9 +1161,10 @@ func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T
 	}
 }
 
-func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
+func TestOpenAIRealtimeSTTFlushDoesNotFlushLocalVADErrorLikeReference(t *testing.T) {
 	vadStream := newFakeOpenAISTTVADStream()
 	vadStream.flushErr = errors.New("vad flush failed")
+	vadStream.suppressEndOfSpeech = true
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
 		WithOpenAISTTBaseURL("http://openai.test/v1"),
@@ -1204,26 +1205,26 @@ func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
 		t.Fatalf("PushFrame half chunk error = %v", err)
 	}
 	assertNoRealtimeMessage(t, messages, "half chunk should wait for Flush before provider append")
-	if err := stream.Flush(); err == nil || err.Error() != "vad flush failed" {
-		t.Fatalf("Flush error = %T %v, want VAD flush error", err, err)
-	}
-	assertNoRealtimeMessage(t, messages, "VAD flush failure should stop provider audio append")
-	err = stream.PushFrame(&model.AudioFrame{
-		Data:              make([]byte, 4800),
-		SampleRate:        24000,
-		NumChannels:       1,
-		SamplesPerChannel: 2400,
-	})
-	if !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after VAD Flush error = %T %v, want io.ErrClosedPipe", err, err)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
 	}
 	select {
+	case <-vadStream.flushCh:
+		t.Fatal("VAD Flush was called, want OpenAI FlushSentinel to only flush provider audio")
+	default:
+	}
+	_ = assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x05}, openAIRealtimeSTTChunkBytes()))); err != nil {
+		t.Fatalf("PushFrame after Flush error = %v", err)
+	}
+	_ = assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	select {
 	case <-vadStream.closeCh:
-	case <-time.After(time.Second):
-		t.Fatal("VAD stream was not closed after VAD Flush error")
+		t.Fatal("VAD stream closed after ignored Flush error")
+	default:
 	}
 	if got := vadStream.endInputCalls(); got != 0 {
-		t.Fatalf("VAD EndInput calls = %d, want cleanup close without EndInput after Flush error", got)
+		t.Fatalf("VAD EndInput calls = %d, want 0 after ignored Flush error", got)
 	}
 }
 
@@ -2208,7 +2209,7 @@ func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
 }
 
-func TestOpenAIRealtimeSTTFlushFlushesLocalVAD(t *testing.T) {
+func TestOpenAIRealtimeSTTFlushDoesNotFlushLocalVADLikeReference(t *testing.T) {
 	vadStream := newFakeOpenAISTTVADStream()
 	vadStream.suppressEndOfSpeech = true
 	vadStream.flushEmitsEndOfSpeech = true
@@ -2265,11 +2266,19 @@ func TestOpenAIRealtimeSTTFlushFlushesLocalVAD(t *testing.T) {
 	}
 	select {
 	case <-vadStream.flushCh:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for VAD Flush")
+		t.Fatal("VAD Flush was called, want OpenAI FlushSentinel to only flush provider audio")
+	default:
 	}
 	_ = assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
-	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+	assertNoRealtimeMessage(t, messages, "Flush should not commit via local VAD")
+	select {
+	case <-vadStream.closeCh:
+		t.Fatal("VAD stream closed after non-terminal Flush")
+	default:
+	}
+	if got := vadStream.endInputCalls(); got != 0 {
+		t.Fatalf("VAD EndInput calls = %d, want 0 after non-terminal Flush", got)
+	}
 }
 
 func TestOpenAIRealtimeSTTVADReceivesReferenceInputAudio(t *testing.T) {

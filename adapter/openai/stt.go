@@ -858,13 +858,6 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	vadStream := s.vadStream
-	if vadStream != nil {
-		if err := vadStream.Flush(); err != nil {
-			s.closeAfterTerminalFailureLocked()
-			return err
-		}
-	}
 	return s.flushAudioLocked()
 }
 
