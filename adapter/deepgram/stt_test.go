@@ -1416,7 +1416,7 @@ func TestDeepgramSTTStreamUnexpectedNormalCloseReturnsAPIStatusError(t *testing.
 
 func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	var binaryWrites [][]byte
-	var jsonWrites []any
+	var textWrites []string
 	stream := &deepgramStream{
 		sampleRate:  16000,
 		numChannels: 1,
@@ -1424,8 +1424,8 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
 			return nil
 		},
-		writeJSON: func(payload any) error {
-			jsonWrites = append(jsonWrites, payload)
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
 			return nil
 		},
 	}
@@ -1458,15 +1458,11 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	if got := len(binaryWrites[1]); got != 400 {
 		t.Fatalf("flush binary write length = %d, want 400", got)
 	}
-	if len(jsonWrites) != 1 {
-		t.Fatalf("json writes after Flush = %d, want Finalize", len(jsonWrites))
+	if len(textWrites) != 1 {
+		t.Fatalf("text writes after Flush = %d, want Finalize", len(textWrites))
 	}
-	finalize, ok := jsonWrites[0].(map[string]string)
-	if !ok {
-		t.Fatalf("Finalize payload = %T, want map[string]string", jsonWrites[0])
-	}
-	if got := finalize["type"]; got != "Finalize" {
-		t.Fatalf("Finalize type = %q, want Finalize", got)
+	if got := textWrites[0]; got != `{"type":"Finalize"}` {
+		t.Fatalf("Finalize payload = %q, want exact reference payload", got)
 	}
 }
 
@@ -1602,9 +1598,8 @@ func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
 		ctx:    ctx,
 		cancel: cancel,
 		events: make(chan *stt.SpeechEvent, 1),
-		writeJSON: func(payload any) error {
-			msg, ok := payload.(map[string]string)
-			if ok && msg["type"] == "CloseStream" {
+		writeText: func(payload string) error {
+			if payload == `{"type":"CloseStream"}` {
 				close(closeSent)
 			}
 			return nil
@@ -1646,6 +1641,26 @@ func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
 
 	if err := <-closeDone; err != nil {
 		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestDeepgramSTTStreamCloseSendsReferenceCloseStreamText(t *testing.T) {
+	var textWrites []string
+	stream := &deepgramStream{
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if len(textWrites) != 1 {
+		t.Fatalf("text writes after Close = %d, want CloseStream", len(textWrites))
+	}
+	if got := textWrites[0]; got != `{"type":"CloseStream"}` {
+		t.Fatalf("CloseStream payload = %q, want exact reference payload", got)
 	}
 }
 

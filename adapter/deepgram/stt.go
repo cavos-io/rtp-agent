@@ -622,6 +622,7 @@ type deepgramStream struct {
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
 	writeJSON    func(any) error
+	writeText    func(string) error
 }
 
 type dgWord struct {
@@ -913,7 +914,7 @@ func (s *deepgramStream) sendKeepAlive() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.closed {
-		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`))
+		_ = s.writeTextData(`{"type":"KeepAlive"}`, map[string]string{"type": "KeepAlive"})
 	}
 }
 
@@ -1054,7 +1055,7 @@ func (s *deepgramStream) Flush() error {
 		}
 	}
 	s.flushRecognitionUsageLocked()
-	if err := s.writeJSONData(map[string]string{"type": "Finalize"}); err != nil {
+	if err := s.writeTextData(`{"type":"Finalize"}`, map[string]string{"type": "Finalize"}); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -1081,7 +1082,7 @@ func (s *deepgramStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	_ = s.writeJSONData(map[string]string{"type": "CloseStream"})
+	_ = s.writeTextData(`{"type":"CloseStream"}`, map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
 	s.sendConnectionUsageRemainderLocked()
@@ -1165,6 +1166,16 @@ func (s *deepgramStream) writeJSONData(payload any) error {
 		return io.ErrClosedPipe
 	}
 	return s.conn.WriteJSON(payload)
+}
+
+func (s *deepgramStream) writeTextData(payload string, fallback any) error {
+	if s.writeText != nil {
+		return s.writeText(payload)
+	}
+	if s.conn != nil {
+		return s.conn.WriteMessage(websocket.TextMessage, []byte(payload))
+	}
+	return s.writeJSONData(fallback)
 }
 
 func (s *deepgramStream) closeAfterWriteFailureLocked() {
