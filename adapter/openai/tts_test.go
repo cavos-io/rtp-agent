@@ -2244,6 +2244,54 @@ func TestOpenAITTSSSEInvalidBase64ClosesReferenceStream(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEDoneMalformedUsageClosesReferenceStream(t *testing.T) {
+	wantAudio := []byte{1, 2}
+	body := &countingDataReadCloser{reader: strings.NewReader(`data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
+		`data: {"type":"speech.audio.done","usage":null}` + "\n\n")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, wantAudio) {
+		t.Fatalf("audio = %#v, want audio before malformed usage", audio)
+	}
+	final, err := stream.Next()
+	if final != nil {
+		t.Fatalf("second audio = %#v, want no final marker after malformed usage", final)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after malformed SSE usage", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want malformed SSE usage stream unregistered", streamCount)
+	}
+}
+
 func TestOpenAITTSMalformedWAVClosesReferenceStream(t *testing.T) {
 	body := &countingDataReadCloser{reader: bytes.NewReader(openAITTSTestInvalidWAV())}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
