@@ -8840,6 +8840,31 @@ func TestDeepgramSTTFallbackSelectsReferenceV2Options(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTFallbackV2UsesLanguageAsReferenceHint(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTVersion:  "v2",
+		STTModel:    "flux-general-multi",
+		STTLanguage: "id",
+	}, providerDeepgram)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	deepgramProvider, ok := provider.(*deepgram.DeepgramSTTv2)
+	if !ok {
+		t.Fatalf("provider type = %T, want *deepgram.DeepgramSTTv2", provider)
+	}
+	hintsField := reflect.ValueOf(deepgramProvider).Elem().FieldByName("langHints")
+	got := make([]string, 0, hintsField.Len())
+	for i := 0; i < hintsField.Len(); i++ {
+		got = append(got, hintsField.Index(i).String())
+	}
+	if want := []string{"id"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("language hints = %#v, want %#v", got, want)
+	}
+}
+
 func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		authorization string

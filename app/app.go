@@ -2490,6 +2490,8 @@ func deepgramSTTFromConfig(cfg AppConfig) corestt.STT {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2LanguageHints(hints))
 		} else if hints := modelOptionStringList(cfg.STTModelOptions, "language_hints"); len(hints) > 0 {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2LanguageHints(hints))
+		} else if language := strings.TrimSpace(cfg.STTLanguage); language != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2LanguageHints([]string{language}))
 		}
 		return deepgram.NewDeepgramSTTv2("", sttOpts...)
 	}
