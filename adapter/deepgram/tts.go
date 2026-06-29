@@ -25,6 +25,8 @@ import (
 
 const defaultDeepgramTTSBaseURL = "https://api.deepgram.com/v1/speak"
 const deepgramTTSCloseAckTimeout = time.Second
+const deepgramTTSFlushMessage = `{"type": "Flush"}`
+const deepgramTTSCloseMessage = `{"type": "Close"}`
 
 type DeepgramTTS struct {
 	apiKey     string
@@ -362,6 +364,7 @@ type deepgramTTSStream struct {
 
 	sampleRate  int
 	writeJSON   func(any) error
+	writeText   func(string) error
 	closeConn   func() error
 	flushed     chan struct{}
 	pendingText string
@@ -481,10 +484,7 @@ func (s *deepgramTTSStream) Flush() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
-	msg := map[string]interface{}{
-		"type": "Flush",
-	}
-	if err := s.writeJSONData(msg); err != nil {
+	if err := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"}); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -519,11 +519,13 @@ func (s *deepgramTTSStream) sendPendingWordsLocked() error {
 }
 
 func (s *deepgramTTSStream) sendSpeakLocked(text string) error {
-	msg := map[string]interface{}{
+	speakText := deepgramTTSSpeakText(text)
+	textJSON, _ := json.Marshal(speakText)
+	payload := fmt.Sprintf(`{"type": "Speak", "text": %s}`, textJSON)
+	return s.writeTextData(payload, map[string]interface{}{
 		"type": "Speak",
-		"text": deepgramTTSSpeakText(text),
-	}
-	return s.writeJSONData(msg)
+		"text": speakText,
+	})
 }
 
 func (s *deepgramTTSStream) consumePendingToken(token string) {
@@ -541,8 +543,8 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	flushErr := s.writeJSONData(map[string]interface{}{"type": "Flush"})
-	closeErr := s.writeJSONData(map[string]interface{}{"type": "Close"})
+	flushErr := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"})
+	closeErr := s.writeTextData(deepgramTTSCloseMessage, map[string]interface{}{"type": "Close"})
 	if flushErr == nil && closeErr == nil {
 		s.waitForFlushedAckLocked()
 	}
@@ -574,6 +576,16 @@ func (s *deepgramTTSStream) writeJSONData(v any) error {
 
 func (s *deepgramTTSStream) writeJSONMessage(v any) error {
 	return s.conn.WriteJSON(v)
+}
+
+func (s *deepgramTTSStream) writeTextData(payload string, fallback any) error {
+	if s.writeText != nil {
+		return s.writeText(payload)
+	}
+	if s.conn != nil {
+		return s.conn.WriteMessage(websocket.TextMessage, []byte(payload))
+	}
+	return s.writeJSONData(fallback)
 }
 
 func (s *deepgramTTSStream) closeConnection() error {

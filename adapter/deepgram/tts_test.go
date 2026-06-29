@@ -574,13 +574,8 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	var writes []string
 	closed := false
 	stream := &deepgramTTSStream{
-		writeJSON: func(v any) error {
-			msg, ok := v.(map[string]interface{})
-			if !ok {
-				t.Fatalf("writeJSON payload = %#v, want map", v)
-			}
-			msgType, _ := msg["type"].(string)
-			writes = append(writes, msgType)
+		writeText: func(payload string) error {
+			writes = append(writes, payload)
 			return nil
 		},
 		closeConn: func() error {
@@ -592,14 +587,46 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v, want nil", err)
 	}
-	if !reflect.DeepEqual(writes, []string{"Flush", "Close"}) {
-		t.Fatalf("writes = %#v, want Flush then Close", writes)
+	want := []string{deepgramTTSFlushMessage, deepgramTTSCloseMessage}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes = %#v, want reference Flush then Close %#v", writes, want)
 	}
 	if !closed {
 		t.Fatal("connection not closed")
 	}
 	if err := stream.PushText("later"); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushText after Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestDeepgramTTSControlMessagesMatchReferenceJSONDumps(t *testing.T) {
+	if deepgramTTSFlushMessage != `{"type": "Flush"}` {
+		t.Fatalf("Flush control message = %q, want Python json.dumps payload", deepgramTTSFlushMessage)
+	}
+	if deepgramTTSCloseMessage != `{"type": "Close"}` {
+		t.Fatalf("Close control message = %q, want Python json.dumps payload", deepgramTTSCloseMessage)
+	}
+}
+
+func TestDeepgramTTSStreamSendsReferenceJSONDumpsTextFrames(t *testing.T) {
+	var writes []string
+	stream := &deepgramTTSStream{
+		writeText: func(payload string) error {
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	want := []string{`{"type": "Speak", "text": "hello "}`, deepgramTTSFlushMessage}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("text frames = %#v, want reference json.dumps frames %#v", writes, want)
 	}
 }
 
@@ -1203,7 +1230,7 @@ func runDeepgramTTSFlushOnCloseWebsocketServer(conn net.Conn, sawClose chan<- st
 		if opcode != websocket.TextMessage {
 			continue
 		}
-		if strings.Contains(string(payload), `"type":"Close"`) {
+		if deepgramTestWebsocketMessageType(payload) == "Close" {
 			close(sawClose)
 			time.Sleep(50 * time.Millisecond)
 			if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
@@ -1235,7 +1262,7 @@ func runDeepgramTTSAudioSegmentWebsocketServer(conn net.Conn, errCh chan<- error
 			errCh <- err
 			return
 		}
-		if opcode == websocket.TextMessage && strings.Contains(string(payload), `"type":"Flush"`) {
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "Flush" {
 			sawFlush = true
 		}
 	}
@@ -1248,6 +1275,15 @@ func runDeepgramTTSAudioSegmentWebsocketServer(conn net.Conn, errCh chan<- error
 		return
 	}
 	errCh <- nil
+}
+
+func deepgramTestWebsocketMessageType(payload []byte) string {
+	var msg map[string]any
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		return ""
+	}
+	msgType, _ := msg["type"].(string)
+	return msgType
 }
 
 func readDeepgramTestClientWebsocketFrame(r *bufio.Reader) (int, []byte, error) {
