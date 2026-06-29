@@ -339,6 +339,61 @@ func TestNewAzureOpenAITTSUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAITTSUsesReferenceEntraTokenProvider(t *testing.T) {
+	var gotAPIKey string
+	var gotAuth string
+	tokenCalls := 0
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotAuth = r.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com",
+		"tts-deployment",
+		"2024-06-01",
+		"",
+		"",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+		WithOpenAITTSAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if tokenCalls != 1 {
+		t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+	}
+	if gotAPIKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token provider auth", gotAPIKey)
+	}
+	if gotAuth != "Bearer provider-token" {
+		t.Fatalf("Authorization = %q, want provider bearer token", gotAuth)
+	}
+}
+
 func TestOpenAITTSBuildSpeechRequestUsesReferenceOptions(t *testing.T) {
 	provider := mustNewOpenAITTS(t, "test-key", "", "",
 		WithOpenAITTSInstructions("speak warmly"),

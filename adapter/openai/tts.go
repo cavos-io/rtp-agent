@@ -30,21 +30,22 @@ import (
 
 type OpenAITTS struct {
 	tts.MetricsEmitter
-	client         *openai.Client
-	httpClient     openai.HTTPDoer
-	apiKey         string
-	model          openai.SpeechModel
-	voice          openai.SpeechVoice
-	baseURL        string
-	baseURLSet     bool
-	speed          float64
-	instructions   string
-	responseFormat openai.SpeechResponseFormat
-	mu             sync.Mutex
-	closed         bool
-	streams        map[*openaiTTSChunkedStream]struct{}
-	prewarmCancel  context.CancelFunc
-	prewarmDone    chan struct{}
+	client               *openai.Client
+	httpClient           openai.HTTPDoer
+	apiKey               string
+	azureADTokenProvider func(context.Context) (string, error)
+	model                openai.SpeechModel
+	voice                openai.SpeechVoice
+	baseURL              string
+	baseURLSet           bool
+	speed                float64
+	instructions         string
+	responseFormat       openai.SpeechResponseFormat
+	mu                   sync.Mutex
+	closed               bool
+	streams              map[*openaiTTSChunkedStream]struct{}
+	prewarmCancel        context.CancelFunc
+	prewarmDone          chan struct{}
 }
 
 const (
@@ -107,6 +108,12 @@ func withOpenAITTSHTTPClient(client openai.HTTPDoer) OpenAITTSOption {
 	}
 }
 
+func WithOpenAITTSAzureADTokenProvider(provider func(context.Context) (string, error)) OpenAITTSOption {
+	return func(t *OpenAITTS) {
+		t.azureADTokenProvider = provider
+	}
+}
+
 func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) (*OpenAITTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -143,7 +150,7 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	if azureEndpoint == "" && !preflight.baseURLSet {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI TTS", azureOpenAIEndpointEnv)
 	}
-	if apiKey == "" && azureADToken == "" {
+	if apiKey == "" && azureADToken == "" && preflight.azureADTokenProvider == nil {
 		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI TTS", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
 	}
 	if azureDeployment == "" {
@@ -184,6 +191,12 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 		config.HTTPClient = &azureADTokenHTTPClient{
 			base:  config.HTTPClient,
 			token: azureADToken,
+		}
+	}
+	if provider.azureADTokenProvider != nil {
+		config.HTTPClient = &azureADTokenProviderHTTPClient{
+			base:     config.HTTPClient,
+			provider: provider.azureADTokenProvider,
 		}
 	}
 	provider.client = openai.NewClientWithConfig(config)
