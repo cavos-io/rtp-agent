@@ -313,6 +313,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 		sampleRate:  s.sampleRate,
 		numChannels: s.numChannels,
 		language:    languageStr,
+		connStart:   time.Now(),
 	}
 	if !s.registerStream(stream) {
 		cancel()
@@ -606,6 +607,8 @@ type deepgramStream struct {
 	requestID     string
 	start         float64
 	offset        float64
+	connStart     time.Time
+	reportedAudio float64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -912,6 +915,14 @@ func (s *deepgramStream) sendRecognitionUsage(frame *model.AudioFrame) {
 	if duration <= 0 {
 		return
 	}
+	s.reportedAudio += duration
+	s.sendRecognitionUsageDuration(duration)
+}
+
+func (s *deepgramStream) sendRecognitionUsageDuration(duration float64) {
+	if s.ctx == nil || s.events == nil || duration <= 0 {
+		return
+	}
 	s.sendEvent(&stt.SpeechEvent{
 		Type:      stt.SpeechEventRecognitionUsage,
 		RequestID: s.requestID,
@@ -1015,6 +1026,18 @@ func (s *deepgramStream) Flush() error {
 	return nil
 }
 
+func (s *deepgramStream) sendConnectionUsageRemainderLocked() {
+	if s.connStart.IsZero() {
+		return
+	}
+	remainder := time.Since(s.connStart).Seconds() - s.reportedAudio
+	s.connStart = time.Time{}
+	s.reportedAudio = 0
+	if remainder > 0 {
+		s.sendRecognitionUsageDuration(remainder)
+	}
+}
+
 func (s *deepgramStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1025,6 +1048,7 @@ func (s *deepgramStream) Close() error {
 	_ = s.writeJSONData(map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
+	s.sendConnectionUsageRemainderLocked()
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -1068,6 +1092,8 @@ func (s *deepgramStream) reconnectLocked() error {
 	}
 	oldConn := s.conn
 	s.conn = conn
+	s.sendConnectionUsageRemainderLocked()
+	s.connStart = time.Now()
 	_ = oldConn.Close()
 	go s.readLoop(conn)
 	return nil

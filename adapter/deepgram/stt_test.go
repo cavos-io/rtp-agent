@@ -1474,6 +1474,57 @@ func TestDeepgramSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.0125)
 }
 
+func TestDeepgramSTTStreamCloseEmitsReferenceRecognitionUsageRemainder(t *testing.T) {
+	closed := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramHoldOpenWebsocketServer(serverConn, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket close")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want recognition usage remainder", err)
+	}
+	if event.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("event type = %s, want %s", event.Type, stt.SpeechEventRecognitionUsage)
+	}
+	if event.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil")
+	}
+	if event.RecognitionUsage.AudioDuration <= 0 {
+		t.Fatalf("AudioDuration = %v, want positive connection-lifetime remainder", event.RecognitionUsage.AudioDuration)
+	}
+}
+
 func TestDeepgramSTTStreamChunksReferenceAudioUsingStreamFormat(t *testing.T) {
 	var binaryWrites [][]byte
 	stream := &deepgramStream{
