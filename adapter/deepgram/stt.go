@@ -784,6 +784,50 @@ type dgResponse struct {
 	Metadata struct {
 		RequestID string `json:"request_id"`
 	} `json:"metadata"`
+	parsedJSON      bool
+	isFinalSeen     bool
+	speechFinalSeen bool
+	requestIDSeen   bool
+}
+
+func (r *dgResponse) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Type        string `json:"type"`
+		IsFinal     bool   `json:"is_final"`
+		SpeechFinal bool   `json:"speech_final"`
+		Channel     struct {
+			Alternatives []dgAlternative `json:"alternatives"`
+		} `json:"channel"`
+		Start    float64 `json:"start"`
+		Duration float64 `json:"duration"`
+		Metadata struct {
+			RequestID string `json:"request_id"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var metadataFields map[string]json.RawMessage
+	if metadataRaw, ok := fields["metadata"]; ok {
+		_ = json.Unmarshal(metadataRaw, &metadataFields)
+	}
+
+	r.Type = raw.Type
+	r.IsFinal = raw.IsFinal
+	r.SpeechFinal = raw.SpeechFinal
+	r.Channel = raw.Channel
+	r.Start = raw.Start
+	r.Duration = raw.Duration
+	r.Metadata = raw.Metadata
+	r.parsedJSON = true
+	_, r.isFinalSeen = fields["is_final"]
+	_, r.speechFinalSeen = fields["speech_final"]
+	_, r.requestIDSeen = metadataFields["request_id"]
+	return nil
 }
 
 func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
@@ -997,6 +1041,9 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 
 		case "Results":
+			if resp.malformedReferenceResults() {
+				continue
+			}
 			s.setRequestID(resp.Metadata.RequestID)
 			if event := deepgramSpeechEventForLanguageOffset(resp, s.language, s.StartTimeOffset()); event != nil {
 				if !s.speaking {
@@ -1012,6 +1059,10 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			}
 		}
 	}
+}
+
+func (r dgResponse) malformedReferenceResults() bool {
+	return r.parsedJSON && (!r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen)
 }
 
 func deepgramSTTUnexpectedCloseError(err error) error {
