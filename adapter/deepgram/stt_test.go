@@ -2097,16 +2097,24 @@ func TestDeepgramSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
-func TestDeepgramSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
-	closed := make(chan struct{})
+func TestDeepgramSTTStreamReconnectsAfterUnexpectedProviderClose(t *testing.T) {
+	requests := make(chan struct{}, 2)
 	closeAfterHandshake := make(chan struct{})
-	clientConn, serverConn := net.Pipe()
-	serverErr := make(chan error, 1)
-	go runDeepgramClosingWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+	closeSeen := make(chan struct{})
+	serverErr := make(chan error, 2)
+	attempt := 0
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			attempt++
+			requests <- struct{}{}
+			if attempt == 1 {
+				go runDeepgramClosingWebsocketServer(serverConn, closeAfterHandshake, make(chan struct{}), serverErr)
+			} else {
+				go runDeepgramSTTReconnectTranscriptWebsocketServer(serverConn, closeSeen, serverErr)
+			}
 			return clientConn, nil
 		},
 		Proxy: nil,
@@ -2121,44 +2129,60 @@ func TestDeepgramSTTStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	<-requests
 	close(closeAfterHandshake)
 
 	select {
-	case <-closed:
+	case <-requests:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for test websocket close")
-	}
-	select {
-	case err := <-serverErr:
-		if err != nil {
-			t.Fatalf("test websocket server error: %v", err)
-		}
-	default:
+		t.Fatal("Deepgram STT stream did not reconnect after unexpected provider close")
 	}
 
-	_, err = stream.Next()
-	if err == nil {
-		t.Fatal("Next() error = nil, want APIStatusError")
+	start := nextDeepgramNonUsageTestSpeechEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event after reconnect = %s, want start_of_speech", start.Type)
 	}
-	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("Next() error = %T %v, want APIStatusError", err, err)
+	final := nextDeepgramNonUsageTestSpeechEvent(t, stream)
+	if final.Type != stt.SpeechEventFinalTranscript || len(final.Alternatives) != 1 || final.Alternatives[0].Text != "hello again" {
+		t.Fatalf("transcript after reconnect = %+v, want final hello again", final)
 	}
-	if statusErr.StatusCode == 0 {
-		t.Fatalf("status code = %d, want close status or -1", statusErr.StatusCode)
+	end := nextDeepgramNonUsageTestSpeechEvent(t, stream)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event after reconnect = %s, want end_of_speech", end.Type)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream on reconnected websocket")
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-serverErr; err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
 	}
 }
 
-func TestDeepgramSTTStreamUnexpectedNormalCloseReturnsAPIStatusError(t *testing.T) {
-	closed := make(chan struct{})
+func TestDeepgramSTTStreamReconnectsAfterUnexpectedNormalClose(t *testing.T) {
+	requests := make(chan struct{}, 2)
 	closeAfterHandshake := make(chan struct{})
-	clientConn, serverConn := net.Pipe()
-	serverErr := make(chan error, 1)
-	go runDeepgramSTTNormalCloseWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+	closeSeen := make(chan struct{})
+	serverErr := make(chan error, 2)
+	attempt := 0
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			attempt++
+			requests <- struct{}{}
+			if attempt == 1 {
+				go runDeepgramSTTNormalCloseWebsocketServer(serverConn, closeAfterHandshake, make(chan struct{}), serverErr)
+			} else {
+				go runDeepgramSTTReconnectTranscriptWebsocketServer(serverConn, closeSeen, serverErr)
+			}
 			return clientConn, nil
 		},
 		Proxy: nil,
@@ -2173,31 +2197,30 @@ func TestDeepgramSTTStreamUnexpectedNormalCloseReturnsAPIStatusError(t *testing.
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	<-requests
 	close(closeAfterHandshake)
 
 	select {
-	case <-closed:
+	case <-requests:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for test websocket normal close")
+		t.Fatal("Deepgram STT stream did not reconnect after unexpected normal provider close")
+	}
+	start := nextDeepgramNonUsageTestSpeechEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event after normal-close reconnect = %s, want start_of_speech", start.Type)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 	select {
-	case err := <-serverErr:
-		if err != nil {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream on normal-close reconnect")
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-serverErr; err != nil {
 			t.Fatalf("test websocket server error: %v", err)
 		}
-	default:
-	}
-
-	_, err = stream.Next()
-	if err == nil {
-		t.Fatal("Next() error = nil, want APIStatusError")
-	}
-	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("Next() error = %T %v, want APIStatusError", err, err)
-	}
-	if statusErr.StatusCode != websocket.CloseNormalClosure {
-		t.Fatalf("status code = %d, want normal close code", statusErr.StatusCode)
 	}
 }
 
@@ -3034,6 +3057,41 @@ func runDeepgramSTTNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake
 	errCh <- nil
 }
 
+func runDeepgramSTTReconnectTranscriptWebsocketServer(conn net.Conn, closeSeen chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for _, message := range []string{
+		`{"type":"SpeechStarted"}`,
+		`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-reconnect"},"channel":{"alternatives":[{"transcript":"hello again","confidence":0.9,"words":[]}]}}`,
+	} {
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
+			errCh <- err
+			return
+		}
+	}
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && string(payload) == deepgramSTTCloseStreamMessage {
+			close(closeSeen)
+			errCh <- nil
+			return
+		}
+	}
+}
+
 func runDeepgramSTTCloseAfterCloseStreamServer(conn net.Conn, closeSeen chan<- struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -3474,6 +3532,16 @@ func nextDeepgramTestSpeechEvent(t *testing.T, stream stt.RecognizeStream) *stt.
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Deepgram STT event")
 		return nil
+	}
+}
+
+func nextDeepgramNonUsageTestSpeechEvent(t *testing.T, stream stt.RecognizeStream) *stt.SpeechEvent {
+	t.Helper()
+	for {
+		event := nextDeepgramTestSpeechEvent(t, stream)
+		if event.Type != stt.SpeechEventRecognitionUsage {
+			return event
+		}
 	}
 }
 

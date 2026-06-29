@@ -1116,8 +1116,12 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() && !s.hasInputEnded() {
-				logger.Logger.Errorw("Deepgram WebSocket read error", err)
-				s.sendError(deepgramSTTUnexpectedCloseError(err))
+				if reconnectErr := s.reconnectAfterUnexpectedClose(conn); reconnectErr == nil {
+					return
+				} else {
+					logger.Logger.Errorw("Deepgram WebSocket reconnect error", reconnectErr)
+					s.sendError(reconnectErr)
+				}
 			}
 			return
 		}
@@ -1184,15 +1188,6 @@ func (r dgResponse) malformedReferenceLanguage(languageStr string) bool {
 		}
 	}
 	return false
-}
-
-func deepgramSTTUnexpectedCloseError(err error) error {
-	statusCode := -1
-	var closeErr *websocket.CloseError
-	if errors.As(err, &closeErr) && closeErr.Code != 0 {
-		statusCode = closeErr.Code
-	}
-	return llm.NewAPIStatusError("deepgram connection closed unexpectedly", statusCode, "", err.Error())
 }
 
 // keepAliveLoop sends a native KeepAlive payload to prevent Deepgram from dropping idle streams.
@@ -1674,6 +1669,34 @@ func (s *deepgramStream) reconnectLocked() error {
 	_ = oldConn.Close()
 	go s.readLoop(conn)
 	return nil
+}
+
+func (s *deepgramStream) reconnectAfterUnexpectedClose(conn *websocket.Conn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputEnded || conn != s.conn {
+		return nil
+	}
+	s.advanceTimingForReconnectLocked(time.Now())
+	s.audioBStream = nil
+	if err := s.reconnectLocked(); err != nil {
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		_ = s.closeConnection()
+		return err
+	}
+	s.reconnectNext = false
+	return nil
+}
+
+func (s *deepgramStream) advanceTimingForReconnectLocked(now time.Time) {
+	nowSeconds := float64(now.UnixNano()) / 1e9
+	if s.start > 0 && nowSeconds > s.start {
+		s.offset += nowSeconds - s.start
+	}
+	s.start = nowSeconds
 }
 
 func (s *deepgramStream) reconnectNow() {
