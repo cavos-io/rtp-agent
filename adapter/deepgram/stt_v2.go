@@ -496,6 +496,10 @@ func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
 		}
 		s.sendTranscriptEvent(stt.SpeechEventPreflightTranscript, resp)
 	case "TurnResumed":
+		if !s.speaking {
+			s.speaking = true
+			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+		}
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "EndOfTurn":
 		if !s.speaking {

@@ -83,6 +83,39 @@ func TestDeepgramSTTv2TurnInfoEmitsReferenceEvents(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2TurnResumedStartsReferenceSpeech(t *testing.T) {
+	stream := &deepgramV2Stream{
+		events:   make(chan *stt.SpeechEvent, 8),
+		language: "en",
+	}
+
+	events := []deepgramV2Response{
+		deepgramV2Turn("TurnResumed", "req-1", "hello again", []deepgramV2Word{{Word: "hello", Start: 0.1, End: 0.4, Confidence: 0.8}, {Word: "again", Start: 0.5, End: 0.8, Confidence: 0.9}}),
+		deepgramV2Turn("EndOfTurn", "req-1", "hello again", []deepgramV2Word{{Word: "hello", Start: 0.1, End: 0.4, Confidence: 0.8}, {Word: "again", Start: 0.5, End: 0.8, Confidence: 0.9}}),
+	}
+	for _, event := range events {
+		if err := stream.processEvent(event); err != nil {
+			t.Fatalf("processEvent(%s) error = %v", event.Event, err)
+		}
+	}
+
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	for i, wantType := range wantTypes {
+		got := nextDeepgramV2TestEvent(t, stream)
+		if got.Type != wantType {
+			t.Fatalf("event %d type = %s, want %s", i, got.Type, wantType)
+		}
+		if len(got.Alternatives) > 0 && got.RequestID != "req-1" {
+			t.Fatalf("event %d request id = %q, want req-1", i, got.RequestID)
+		}
+	}
+}
+
 func TestDeepgramSTTv2StreamRejectsNegativeTimingAnchors(t *testing.T) {
 	stream := &deepgramV2Stream{}
 	assertDeepgramPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
