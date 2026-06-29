@@ -262,6 +262,60 @@ func TestDeepgramSTTv2RejectsReferenceInvalidTurnOptions(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2UpdateOptionsMatchesReferenceFutureStreams(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("https://deepgram.example/v2/listen"),
+		WithDeepgramSTTv2EOTThreshold(0.7),
+		WithDeepgramSTTv2Tags([]string{"initial"}),
+	)
+
+	if err := provider.UpdateOptions(
+		WithDeepgramSTTv2BaseURL("https://updated.deepgram.example/v2/listen"),
+		WithDeepgramSTTv2Model("flux-general-multi"),
+		WithDeepgramSTTv2SampleRate(48000),
+		WithDeepgramSTTv2MipOptOut(true),
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+		WithDeepgramSTTv2EOTTimeout(1500),
+		WithDeepgramSTTv2Keyterms([]string{"LiveKit"}),
+		WithDeepgramSTTv2Tags([]string{"agent"}),
+		WithDeepgramSTTv2LanguageHints([]string{"en", "es"}),
+	); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL: %v", err)
+	}
+	if parsed.Host != "updated.deepgram.example" || parsed.Scheme != "wss" {
+		t.Fatalf("stream URL = %s, want updated wss endpoint", parsed.String())
+	}
+	query := parsed.Query()
+	assertDeepgramQuery(t, query, "model", "flux-general-multi")
+	assertDeepgramQuery(t, query, "sample_rate", "48000")
+	assertDeepgramQuery(t, query, "mip_opt_out", "true")
+	assertDeepgramQuery(t, query, "eager_eot_threshold", "0.6")
+	assertDeepgramQuery(t, query, "eot_threshold", "0.8")
+	assertDeepgramQuery(t, query, "eot_timeout_ms", "1500")
+	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit"})
+	assertDeepgramQueryValues(t, query, "tag", []string{"agent"})
+	assertDeepgramQueryValues(t, query, "language_hint", []string{"en", "es"})
+}
+
+func TestDeepgramSTTv2UpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2EOTThreshold(0.8))
+	before := buildDeepgramSTTv2StreamURL(provider)
+
+	err := provider.UpdateOptions(WithDeepgramSTTv2EagerEOTThreshold(0.9))
+	if err == nil || !strings.Contains(err.Error(), "eager_eot_threshold (0.9) must be less than or equal to eot_threshold (0.8)") {
+		t.Fatalf("UpdateOptions() error = %v, want invalid eager threshold", err)
+	}
+	if after := buildDeepgramSTTv2StreamURL(provider); after != before {
+		t.Fatalf("stream URL after failed update = %s, want unchanged %s", after, before)
+	}
+}
+
 func TestDeepgramSTTv2NextAfterCloseDrainsQueuedEvent(t *testing.T) {
 	want := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,

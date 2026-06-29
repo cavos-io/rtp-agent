@@ -150,6 +150,45 @@ func (s *DeepgramSTTv2) Recognize(context.Context, []*model.AudioFrame, string) 
 	return nil, fmt.Errorf("V2 API does not support non-streaming recognize. Use with a StreamAdapter")
 }
 
+func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	next := &DeepgramSTTv2{
+		apiKey:     s.apiKey,
+		model:      s.model,
+		sampleRate: s.sampleRate,
+		baseURL:    s.baseURL,
+		mipOptOut:  s.mipOptOut,
+		language:   s.language,
+		eagerEOT:   s.eagerEOT,
+		eot:        s.eot,
+		eotTimeout: s.eotTimeout,
+		keyterms:   append([]string(nil), s.keyterms...),
+		tags:       append([]string(nil), s.tags...),
+		langHints:  append([]string(nil), s.langHints...),
+	}
+	for _, opt := range opts {
+		opt(next)
+	}
+	if err := validateDeepgramSTTv2Options(next); err != nil {
+		return err
+	}
+
+	s.model = next.model
+	s.sampleRate = next.sampleRate
+	s.baseURL = next.baseURL
+	s.mipOptOut = next.mipOptOut
+	s.language = next.language
+	s.eagerEOT = next.eagerEOT
+	s.eot = next.eot
+	s.eotTimeout = next.eotTimeout
+	s.keyterms = next.keyterms
+	s.tags = next.tags
+	s.langHints = next.langHints
+	return nil
+}
+
 func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
