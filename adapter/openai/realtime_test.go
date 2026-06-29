@@ -1268,6 +1268,65 @@ func TestRealtimeUpdateOptionsSnapshotsMutableReasoning(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsSnapshotsTypedMutableInputAudioTranscription(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeWebsocketDialer(dialer))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	assertRealtimeMessage(t, <-messages, "session.update", "")
+
+	transcription := map[string]string{"model": "gpt-4o-mini-transcribe"}
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		InputAudioTranscription:    transcription,
+		InputAudioTranscriptionSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions first input transcription error = %v", err)
+	}
+	first := <-messages
+	assertRealtimeMessage(t, first, "session.update", "")
+
+	transcription["model"] = "gpt-4o-transcribe"
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		InputAudioTranscription:    transcription,
+		InputAudioTranscriptionSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions mutated input transcription error = %v", err)
+	}
+	var second string
+	select {
+	case second = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for session.update after mutating reused input_audio_transcription map")
+	}
+	assertRealtimeMessage(t, second, "session.update", "")
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(second), &payload); err != nil {
+		t.Fatalf("decode mutated update: %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	got := input["transcription"].(map[string]any)
+	if got["model"] != "gpt-4o-transcribe" {
+		t.Fatalf("transcription model = %#v, want mutated update gpt-4o-transcribe", got["model"])
+	}
+}
+
 func TestRealtimeModelConstructorTextModalitiesApplyToInitialSession(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {

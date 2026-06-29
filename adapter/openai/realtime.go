@@ -1548,23 +1548,80 @@ func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 }
 
 func openAIRealtimeCloneOptionValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		clone := make(map[string]any, len(typed))
-		for key, entry := range typed {
-			clone[key] = openAIRealtimeCloneOptionValue(entry)
-		}
-		return clone
-	case []any:
-		clone := make([]any, len(typed))
-		for i, entry := range typed {
-			clone[i] = openAIRealtimeCloneOptionValue(entry)
-		}
-		return clone
-	case []string:
-		return append([]string(nil), typed...)
-	default:
+	if value == nil {
+		return nil
+	}
+	clone, ok := openAIRealtimeCloneReflectValue(reflect.ValueOf(value))
+	if !ok {
 		return value
+	}
+	return clone.Interface()
+}
+
+func openAIRealtimeCloneReflectValue(value reflect.Value) (reflect.Value, bool) {
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return value, true
+		}
+		clone, ok := openAIRealtimeCloneReflectValue(value.Elem())
+		if !ok {
+			return value, false
+		}
+		if clone.Type().AssignableTo(value.Type()) {
+			return clone, true
+		}
+		if clone.Type().ConvertibleTo(value.Type()) {
+			return clone.Convert(value.Type()), true
+		}
+		return value, false
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type()), true
+		}
+		clone := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			entry := iter.Value()
+			clonedEntry, ok := openAIRealtimeCloneReflectValue(entry)
+			if !ok {
+				clonedEntry = entry
+			}
+			if clonedEntry.Type().AssignableTo(value.Type().Elem()) {
+				clone.SetMapIndex(iter.Key(), clonedEntry)
+				continue
+			}
+			if clonedEntry.Type().ConvertibleTo(value.Type().Elem()) {
+				clone.SetMapIndex(iter.Key(), clonedEntry.Convert(value.Type().Elem()))
+				continue
+			}
+			clone.SetMapIndex(iter.Key(), entry)
+		}
+		return clone, true
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type()), true
+		}
+		clone := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			entry := value.Index(i)
+			clonedEntry, ok := openAIRealtimeCloneReflectValue(entry)
+			if !ok {
+				clonedEntry = entry
+			}
+			if clonedEntry.Type().AssignableTo(value.Type().Elem()) {
+				clone.Index(i).Set(clonedEntry)
+				continue
+			}
+			if clonedEntry.Type().ConvertibleTo(value.Type().Elem()) {
+				clone.Index(i).Set(clonedEntry.Convert(value.Type().Elem()))
+				continue
+			}
+			clone.Index(i).Set(entry)
+		}
+		return clone, true
+	default:
+		return value, false
 	}
 }
 
