@@ -22,6 +22,8 @@ import (
 const defaultDeepgramSTTv2BaseURL = "wss://api.deepgram.com/v2/listen"
 const deepgramSTTv2CloseMessage = `{"type": "CloseStream"}`
 
+var deepgramSTTv2HeartbeatInterval = 30 * time.Second
+
 type DeepgramSTTv2 struct {
 	apiKey     string
 	model      string
@@ -234,6 +236,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStre
 		return nil, io.ErrClosedPipe
 	}
 	go stream.readLoop(conn)
+	go stream.heartbeatLoop()
 	return stream, nil
 }
 
@@ -424,6 +427,32 @@ func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 			return
 		}
 	}
+}
+
+func (s *deepgramV2Stream) heartbeatLoop() {
+	ticker := time.NewTicker(deepgramSTTv2HeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done():
+			return
+		case <-ticker.C:
+			if err := s.sendHeartbeat(); err != nil {
+				s.sendError(err)
+				return
+			}
+		}
+	}
+}
+
+func (s *deepgramV2Stream) sendHeartbeat() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.conn == nil {
+		return nil
+	}
+	return s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
 }
 
 func (s *deepgramV2Stream) processEvent(resp deepgramV2Response) error {
