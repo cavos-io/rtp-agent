@@ -3225,6 +3225,98 @@ func TestOpenAIChatAppliesExtraParamPromptCacheOptions(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatForwardsReferenceExtraContent(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		responseBody: "data: [DONE]\n\n",
+	}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		ID:   "assistant-turn",
+		Role: llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{
+			Text: "checking",
+		}},
+		Extra: map[string]any{
+			"google": map[string]any{"thought_signature": "msg-sig"},
+			"debug":  "drop-message-extra",
+		},
+	})
+	chatCtx.Append(&llm.FunctionCall{
+		ID:        "assistant-turn/tool",
+		CallID:    "call_lookup",
+		Name:      "lookup",
+		Arguments: `{"city":"Paris"}`,
+		Extra: map[string]any{
+			"livekit": map[string]any{"turn_id": "turn-1"},
+			"xai":     map[string]any{"trace": "tool-trace"},
+			"debug":   "drop-tool-extra",
+		},
+	})
+	chatCtx.Append(&llm.FunctionCallOutput{
+		ID:     "lookup-output",
+		CallID: "call_lookup",
+		Name:   "lookup",
+		Output: "sunny",
+	})
+
+	stream, err := model.Chat(context.Background(), chatCtx, llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	if err != nil {
+		t.Fatalf("Chat returned error: %v", err)
+	}
+	if stream != nil {
+		_ = stream.Close()
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.requestBody), &body); err != nil {
+		t.Fatalf("Unmarshal request body returned error: %v", err)
+	}
+	messages, ok := body["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		t.Fatalf("messages = %#v, want non-empty array; body %s", body["messages"], capture.requestBody)
+	}
+	assistant, ok := messages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("messages[0] = %#v, want object", messages[0])
+	}
+	messageExtra, ok := assistant["extra_content"].(map[string]any)
+	if !ok {
+		t.Fatalf("assistant extra_content = %#v, want object; body %s", assistant["extra_content"], capture.requestBody)
+	}
+	if _, ok := messageExtra["google"].(map[string]any); !ok {
+		t.Fatalf("assistant extra_content = %#v, want google payload", messageExtra)
+	}
+	if _, ok := messageExtra["debug"]; ok {
+		t.Fatalf("assistant extra_content = %#v, want filtered unsupported key", messageExtra)
+	}
+
+	toolCalls, ok := assistant["tool_calls"].([]any)
+	if !ok || len(toolCalls) != 1 {
+		t.Fatalf("tool_calls = %#v, want one tool call; body %s", assistant["tool_calls"], capture.requestBody)
+	}
+	toolCall, ok := toolCalls[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_calls[0] = %#v, want object", toolCalls[0])
+	}
+	toolExtra, ok := toolCall["extra_content"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool extra_content = %#v, want object; body %s", toolCall["extra_content"], capture.requestBody)
+	}
+	if _, ok := toolExtra["livekit"].(map[string]any); !ok {
+		t.Fatalf("tool extra_content = %#v, want livekit payload", toolExtra)
+	}
+	if _, ok := toolExtra["xai"].(map[string]any); !ok {
+		t.Fatalf("tool extra_content = %#v, want xai payload", toolExtra)
+	}
+	if _, ok := toolExtra["debug"]; ok {
+		t.Fatalf("tool extra_content = %#v, want filtered unsupported key", toolExtra)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestDropsUnsupportedReasoningParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("openai/gpt-5", llm.NewChatContext(), &llm.ChatOptions{
 		ParallelToolCalls: true,
