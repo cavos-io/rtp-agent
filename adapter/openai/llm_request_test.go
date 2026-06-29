@@ -2252,6 +2252,33 @@ func TestOpenAIChatDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestOpenAILLMProviderCloseClosesLazyStreamsBeforeRequest(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK, `data: {"id":"chatcmpl-openai","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}`+"\n\n"+"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	if err := llm.Close(model); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if chunk, err := stream.Next(); chunk != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close = (%#v, %v), want nil EOF", chunk, err)
+	}
+	if capture.calls != 0 {
+		t.Fatalf("HTTP calls after provider Close before Next = %d, want 0", capture.calls)
+	}
+}
+
 func TestOpenAIChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{err: context.DeadlineExceeded}
 	config := openaisdk.DefaultConfig("test-key")
@@ -3021,7 +3048,7 @@ func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
 }
 
 func TestOpenAIStreamNextAfterCloseReturnsEOF(t *testing.T) {
-	body := &readErrorAfterClose{}
+	body := newBlockingReadErrorAfterClose()
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = &sequenceHTTPClient{responses: []*http.Response{{
 		StatusCode: http.StatusOK,
@@ -3039,11 +3066,29 @@ func TestOpenAIStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+	select {
+	case <-body.reading:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OpenAI stream read")
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("blocked Next after Close error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked Next did not return after Close")
 	}
 }
 
