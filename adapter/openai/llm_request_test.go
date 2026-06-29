@@ -60,6 +60,19 @@ func (requestOptionalSchemaTool) Parameters() map[string]any {
 }
 func (requestOptionalSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
 
+type requestNoArgSchemaTool struct{}
+
+func (requestNoArgSchemaTool) ID() string          { return "transfer_call" }
+func (requestNoArgSchemaTool) Name() string        { return "transfer_call" }
+func (requestNoArgSchemaTool) Description() string { return "transfer call" }
+func (requestNoArgSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+func (requestNoArgSchemaTool) Execute(context.Context, string) (string, error) { return "", nil }
+
 type requestUnionSchemaTool struct{}
 
 func (requestUnionSchemaTool) ID() string          { return "lookup" }
@@ -2910,6 +2923,37 @@ func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchema(t *testing.T
 	}
 	if len(types) != 2 || types[0] != "string" || types[1] != "null" {
 		t.Fatalf("properties.variant.type = %#v, want [string null]", types)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestKeepsStrictNoArgToolPropertiesObject(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4.1-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestNoArgSchemaTool{}},
+	})
+
+	if len(req.Tools) != 1 || req.Tools[0].Function == nil {
+		t.Fatalf("tool = %#v, want one function tool", req.Tools)
+	}
+	paramsJSON, err := json.Marshal(req.Tools[0].Function.Parameters)
+	if err != nil {
+		t.Fatalf("tool parameters marshal error = %v", err)
+	}
+	if strings.Contains(string(paramsJSON), `"properties":null`) {
+		t.Fatalf("tool parameters = %s, want properties object not null", paramsJSON)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		t.Fatalf("tool parameters json error = %v", err)
+	}
+	if got := params["additionalProperties"]; got != false {
+		t.Fatalf("additionalProperties = %#v, want false", got)
+	}
+	properties, ok := params["properties"].(map[string]any)
+	if !ok || len(properties) != 0 {
+		t.Fatalf("properties = %#v, want empty object", params["properties"])
+	}
+	if _, ok := params["required"]; ok {
+		t.Fatalf("required = %#v, want omitted for no-arg tool", params["required"])
 	}
 }
 
