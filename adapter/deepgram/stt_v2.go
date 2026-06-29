@@ -157,6 +157,9 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 	if s.apiKey == "" {
 		return nil, fmt.Errorf("Deepgram API key is required")
 	}
+	if err := validateDeepgramSTTv2Options(s); err != nil {
+		return nil, err
+	}
 	if language == "" {
 		language = s.language
 	}
@@ -273,6 +276,22 @@ func buildDeepgramSTTv2StreamURL(s *DeepgramSTTv2) string {
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+func validateDeepgramSTTv2Options(s *DeepgramSTTv2) error {
+	eot := s.eot
+	if eot == 0 {
+		eot = 0.7
+	}
+	if s.eagerEOT > 0 && s.eagerEOT > eot {
+		return fmt.Errorf("eager_eot_threshold (%v) must be less than or equal to eot_threshold (%v)", s.eagerEOT, eot)
+	}
+	for _, tag := range s.tags {
+		if len(tag) > 128 {
+			return fmt.Errorf("tag must be no more than 128 characters")
+		}
+	}
+	return nil
 }
 
 type deepgramV2Stream struct {

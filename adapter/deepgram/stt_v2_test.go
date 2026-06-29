@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,6 +223,43 @@ func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
 	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "rtp-agent"})
 	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
 	assertDeepgramQueryValues(t, query, "language_hint", []string{"en", "es"})
+}
+
+func TestDeepgramSTTv2RejectsReferenceInvalidTurnOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []DeepgramSTTv2Option
+		want string
+	}{
+		{
+			name: "eager end of turn above default end of turn",
+			opts: []DeepgramSTTv2Option{WithDeepgramSTTv2EagerEOTThreshold(0.9)},
+			want: "eager_eot_threshold (0.9) must be less than or equal to eot_threshold (0.7)",
+		},
+		{
+			name: "eager end of turn above configured end of turn",
+			opts: []DeepgramSTTv2Option{
+				WithDeepgramSTTv2EagerEOTThreshold(0.8),
+				WithDeepgramSTTv2EOTThreshold(0.6),
+			},
+			want: "eager_eot_threshold (0.8) must be less than or equal to eot_threshold (0.6)",
+		},
+		{
+			name: "long tag",
+			opts: []DeepgramSTTv2Option{WithDeepgramSTTv2Tags([]string{strings.Repeat("x", 129)})},
+			want: "tag must be no more than 128 characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewDeepgramSTTv2("test-key", tt.opts...)
+			_, err := provider.Stream(context.Background(), "")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Stream() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
 }
 
 func TestDeepgramSTTv2ErrorMessageReturnsAPIStatusError(t *testing.T) {
