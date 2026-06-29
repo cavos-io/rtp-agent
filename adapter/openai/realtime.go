@@ -216,6 +216,18 @@ func WithOpenAIRealtimeSessionCloseMetricsHook(hook OpenAIRealtimeSessionCloseMe
 }
 
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
+	return newRealtimeModel(apiKey, model, openAIRealtimeApplyModelOptions(opts...))
+}
+
+func openAIRealtimeApplyModelOptions(opts ...OpenAIRealtimeOption) openAIRealtimeModelOptions {
+	options := openAIRealtimeModelOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	return options
+}
+
+func newRealtimeModel(apiKey, model string, options openAIRealtimeModelOptions) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
 	}
@@ -225,10 +237,6 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	baseURL := os.Getenv("OPENAI_BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
-	}
-	options := openAIRealtimeModelOptions{}
-	for _, opt := range opts {
-		opt(&options)
 	}
 	if options.baseURL != "" {
 		baseURL = options.baseURL
@@ -263,6 +271,7 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 }
 
 func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAIRealtimeOption) (*RealtimeModel, error) {
+	options := openAIRealtimeApplyModelOptions(opts...)
 	if model == "" {
 		model = "gpt-realtime"
 	}
@@ -278,7 +287,7 @@ func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersi
 	if azureADToken == "" {
 		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
 	}
-	if azureEndpoint == "" {
+	if azureEndpoint == "" && options.baseURL == "" {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI realtime", azureOpenAIEndpointEnv)
 	}
 	if apiKey == "" && azureADToken == "" {
@@ -287,9 +296,13 @@ func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersi
 	if azureDeployment == "" {
 		azureDeployment = model
 	}
-	provider := NewRealtimeModel(apiKey, model, opts...)
+	provider := newRealtimeModel(apiKey, model, options)
 	provider.apiKey = apiKey
-	provider.baseURL = openAIRealtimeAzureBaseURL(azureEndpoint)
+	if options.baseURL != "" {
+		provider.baseURL = openAIRealtimeWebsocketBaseURL(options.baseURL)
+	} else {
+		provider.baseURL = openAIRealtimeAzureBaseURL(azureEndpoint)
+	}
 	provider.azureADToken = azureADToken
 	provider.azureDeployment = azureDeployment
 	provider.apiVersion = apiVersion
@@ -735,6 +748,20 @@ func openAIRealtimeBaseURL(rawURL string) string {
 
 func openAIRealtimeAzureBaseURL(rawURL string) string {
 	u, err := url.Parse(strings.TrimRight(rawURL, "/") + "/openai")
+	if err != nil {
+		return rawURL
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	return u.String()
+}
+
+func openAIRealtimeWebsocketBaseURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimRight(rawURL, "/"))
 	if err != nil {
 		return rawURL
 	}

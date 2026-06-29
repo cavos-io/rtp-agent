@@ -552,6 +552,53 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAIRealtimeUsesConstructorBaseURL(t *testing.T) {
+	connected := make(chan *http.Request, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		connected <- r
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeBaseURL("http://azure-gateway.openai.test/openai"),
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := <-connected
+	if req.Host != "azure-gateway.openai.test" || req.URL.Path != "/openai/realtime" {
+		t.Fatalf("url = %s, want constructor Azure base URL route", req.URL.String())
+	}
+	if req.URL.Query().Get("api-version") != "2024-10-01-preview" {
+		t.Fatalf("api-version query = %q, want 2024-10-01-preview", req.URL.Query().Get("api-version"))
+	}
+	if req.URL.Query().Get("deployment") != "voice-deployment" {
+		t.Fatalf("deployment query = %q, want voice-deployment", req.URL.Query().Get("deployment"))
+	}
+	if req.Header.Get("api-key") != "azure-key" {
+		t.Fatalf("api-key header = %q, want Azure API key", req.Header.Get("api-key"))
+	}
+}
+
 func TestAzureOpenAIRealtimeSessionDialFailureReturnsAPIConnectionError(t *testing.T) {
 	realtimeModel, err := NewAzureOpenAIRealtimeModel(
 		"",
