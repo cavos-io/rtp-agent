@@ -3488,6 +3488,35 @@ func TestOpenAISTTUpdateOptionsPropagatesLanguageToActiveStream(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTUpdateOptionsDetectLanguageKeepsActiveStreamLanguage(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe", WithOpenAISTTRealtime(true))
+	stream := &openAIRealtimeSTTStream{
+		state: &openAIRealtimeSTTMessageState{language: "en"},
+	}
+	provider.registerRealtimeSTTStream(stream)
+	provider.UpdateOptions(WithOpenAISTTDetectLanguage(true))
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
+		"type":"conversation.item.input_audio_transcription.delta",
+		"item_id":"item-1",
+		"delta":"hello"
+	}`), stream.state)
+	if err != nil {
+		t.Fatalf("events from message: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want interim transcript", events)
+	}
+	if got := events[0].Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want active stream language unchanged after detect_language update", got)
+	}
+
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+	if req.Language != "" {
+		t.Fatalf("future request language = %q, want empty after detect_language update", req.Language)
+	}
+}
+
 func TestOpenAISTTUpdateOptionsReconnectsActiveStreamLikeReference(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
