@@ -575,6 +575,19 @@ func TestOpenAISTTDetectLanguageOmitsLanguage(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTDetectLanguageOverridesConstructorLanguage(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTDetectLanguage(true),
+		WithOpenAISTTLanguage("id"),
+	)
+
+	req := openAIAudioRequest(provider, strings.NewReader("audio"), "")
+
+	if req.Language != "" {
+		t.Fatalf("language = %q, want empty when detect_language is enabled", req.Language)
+	}
+}
+
 func TestOpenAISTTUpdateOptionsMatchesReference(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe")
 
@@ -1499,6 +1512,7 @@ func TestOpenAIRealtimeSTTEndInputFlushesAndCommitsAudioBuffer(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
 		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTTurnDetection(nil),
 	)
 	started := make(chan struct{})
 	releaseServer := make(chan struct{})
@@ -1562,6 +1576,69 @@ func TestOpenAIRealtimeSTTEndInputFlushesAndCommitsAudioBuffer(t *testing.T) {
 	if err := stream.Flush(); err == nil {
 		t.Fatal("Flush after EndInput returned nil, want error")
 	}
+}
+
+func TestOpenAIRealtimeSTTEndInputWithServerVADFlushesWithoutCommit(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x03}, 480))); err != nil {
+		t.Fatalf("PushFrame remainder error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "10ms remainder should stay buffered before EndInput")
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	remainder := assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	if len(remainder) != 480 {
+		t.Fatalf("remainder bytes = %d, want 480", len(remainder))
+	}
+	assertNoRealtimeMessage(t, messages, "server VAD should own endpointing; EndInput must not commit audio buffer")
 }
 
 func TestOpenAIRealtimeSTTEndInputWithoutAudioDoesNotCommit(t *testing.T) {
@@ -2608,6 +2685,30 @@ func TestOpenAIRealtimeSTTDetectLanguageOmitsLanguage(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
 		WithOpenAISTTDetectLanguage(true),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode session update: %v", err)
+	}
+	session := message["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if _, ok := transcription["language"]; ok {
+		t.Fatalf("language = %#v, want omitted when detect_language is enabled", transcription["language"])
+	}
+}
+
+func TestOpenAIRealtimeSTTDetectLanguageOverridesConstructorLanguage(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTDetectLanguage(true),
+		WithOpenAISTTLanguage("id"),
 	)
 
 	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)

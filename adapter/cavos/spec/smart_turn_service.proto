@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package smart_turn;
+
+option go_package = "github.com/cavos-io/rtp-agent/adapter/cavos/spec";
+
+// SmartTurnServiceV1 predicts turn-completeness from pre-extracted mel features.
+// Plan A: Python runs WhisperFeatureExtractor and ships the mel spectrogram;
+// Go runs ONNX inference only.
+service SmartTurnServiceV1 {
+  rpc Predict (SmartTurnRequest) returns (SmartTurnResponse);
+}
+
+message SmartTurnRequest {
+  bytes features = 1;          // mel spectrogram, float32 little-endian, mel-major flattened (mel_bins * time_steps)
+  int32 mel_bins = 2;          // n_mels (e.g. 80)
+  int32 time_steps = 3;        // n_frames (e.g. 800)
+}
+
+message SmartTurnResponse {
+  bool is_complete = 1;        // probability >= threshold
+  float probability = 2;       // raw model output [0..1]
+  float inference_ms = 3;      // inference time in milliseconds
+}

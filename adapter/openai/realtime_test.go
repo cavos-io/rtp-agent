@@ -694,6 +694,48 @@ func TestAzureOpenAIRealtimeNormalizesAssistantTextForLegacyAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeLegacyAzureSessionOmitsNilReferenceClears(t *testing.T) {
+	session := map[string]any{
+		"type":              "realtime",
+		"truncation":        "disabled",
+		"tool_choice":       nil,
+		"max_output_tokens": nil,
+		"tracing":           nil,
+		"reasoning":         nil,
+		"audio": map[string]any{
+			"input": map[string]any{
+				"turn_detection":  nil,
+				"transcription":   nil,
+				"noise_reduction": nil,
+			},
+			"output": map[string]any{
+				"voice": nil,
+				"speed": nil,
+			},
+		},
+	}
+
+	mapped := openAIRealtimeLegacyAzureSession(session)
+
+	for _, key := range []string{
+		"type",
+		"truncation",
+		"tool_choice",
+		"max_response_output_tokens",
+		"tracing",
+		"reasoning",
+		"turn_detection",
+		"input_audio_transcription",
+		"input_audio_noise_reduction",
+		"voice",
+		"speed",
+	} {
+		if _, ok := mapped[key]; ok {
+			t.Fatalf("%s = %#v, want omitted like reference Azure converter", key, mapped[key])
+		}
+	}
+}
+
 func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
