@@ -256,6 +256,77 @@ func TestDeepgramSTTv2StreamResamplesInputAudioToReferenceRate(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2StreamResamplesInputAudioWithReferenceTiming(t *testing.T) {
+	closeSeen := make(chan struct{})
+	audioFrames := make(chan []byte, 2)
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2TurnInfoWebsocketServer(serverConn, closeSeen, audioFrames, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"),
+		WithDeepgramSTTv2SampleRate(16000),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	frame := deepgramTestInt16PCM(1)
+	for i := 0; i < 2204; i++ {
+		if err := stream.PushFrame(&model.AudioFrame{
+			Data:              frame,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("PushFrame frame %d error = %v", i, err)
+		}
+	}
+	select {
+	case got := <-audioFrames:
+		t.Fatalf("audio frame before 50ms source duration = %#v, want none", got)
+	default:
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame frame 2205 error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		if len(got) != 1600 {
+			t.Fatalf("audio frame length = %d, want 50ms 16k mono PCM", len(got))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for 50ms resampled audio frame")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTv2StreamRejectsReferenceSampleRateChange(t *testing.T) {
 	stream := &deepgramV2Stream{sampleRate: 16000}
 	if err := stream.PushFrame(&model.AudioFrame{

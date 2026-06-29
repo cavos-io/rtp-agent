@@ -358,6 +358,7 @@ type deepgramV2Stream struct {
 	offset         float64
 	sampleRate     int
 	rateGuard      stt.SampleRateGuard
+	inputAudio     deepgramSTTInputAudioNormalizer
 	audioBStream   *audio.AudioByteStream
 	streamURL      string
 	reconnectNext  bool
@@ -572,7 +573,7 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 	if err := s.rateGuard.Check(frame); err != nil {
 		return err
 	}
-	normalizedFrame, err := audio.ResampleAudioFrame(frame, uint32(s.sampleRate))
+	normalizedFrame, err := s.inputAudio.normalize(frame, uint32(s.sampleRate))
 	if err != nil {
 		return err
 	}
@@ -671,6 +672,16 @@ func (s *deepgramV2Stream) Flush() error {
 		return nil
 	}
 	flushedFrame := false
+	if tail := s.inputAudio.flush(); tail != nil {
+		for _, chunk := range s.audioBStream.Push(tail.Data) {
+			flushedFrame = true
+			if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {
+				s.closed = true
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
+	}
 	for _, chunk := range s.audioBStream.Flush() {
 		flushedFrame = true
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {

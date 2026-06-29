@@ -1793,6 +1793,49 @@ func TestDeepgramSTTStreamResamplesInputAudioToReferenceRate(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamResamplesInputAudioWithReferenceTiming(t *testing.T) {
+	var binaryWrites [][]byte
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func(data []byte) error {
+			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
+			return nil
+		},
+		writeJSON: func(any) error {
+			return nil
+		},
+	}
+	frame := deepgramTestInt16PCM(1)
+	for i := 0; i < 2204; i++ {
+		if err := stream.PushFrame(&model.AudioFrame{
+			Data:              frame,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("PushFrame frame %d error = %v", i, err)
+		}
+	}
+	if len(binaryWrites) != 0 {
+		t.Fatalf("binary writes after 2204 source samples = %d, want below one reference 50ms chunk", len(binaryWrites))
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame frame 2205 error = %v", err)
+	}
+	if len(binaryWrites) != 1 {
+		t.Fatalf("binary writes after 2205 source samples = %d, want one reference 50ms chunk", len(binaryWrites))
+	}
+	if got := len(binaryWrites[0]); got != 1600 {
+		t.Fatalf("binary write length = %d, want 50ms 16k mono PCM", got)
+	}
+}
+
 func TestDeepgramSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
 	stream := &deepgramStream{
 		sampleRate:  16000,
