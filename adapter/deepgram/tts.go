@@ -419,7 +419,7 @@ func deepgramTTSUnexpectedCloseError(err error) error {
 func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	var metadata map[string]interface{}
 	if err := json.Unmarshal(message, &metadata); err != nil {
-		return nil
+		return llm.NewAPIConnectionError(err.Error())
 	}
 	switch metadata["type"] {
 	case "Flushed":
