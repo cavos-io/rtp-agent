@@ -553,6 +553,34 @@ func TestNewAzureOpenAILLMUsesReferenceBaseURLOption(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAILLMUsesReferenceBaseURLWithoutEndpoint(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+
+	model, err := NewAzureOpenAILLM(
+		"gpt-4o",
+		"",
+		"chat-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAILLMHTTPClient(capture),
+		WithOpenAILLMAzureBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAILLM error = %v", err)
+	}
+
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	if !strings.HasPrefix(capture.requestURL, "https://gateway.openai.azure.test/custom/openai/deployments/chat-deployment/chat/completions") {
+		t.Fatalf("request URL = %s, want reference base_url route", capture.requestURL)
+	}
+}
+
 func TestNewAzureOpenAILLMUsesReferenceTimeoutOption(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{
 		statusCode:   http.StatusBadRequest,

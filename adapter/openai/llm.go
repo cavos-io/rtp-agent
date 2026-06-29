@@ -424,6 +424,12 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if model == "" {
 		model = defaultAzureOpenAILLMModel
 	}
+	defaultConnect := llm.DefaultAPIConnectOptions()
+	defaultConnect.MaxRetry = 0
+	provider := &OpenAILLM{model: model, defaultReasoning: true, strictToolSchema: true, defaultConnect: &defaultConnect}
+	for _, opt := range opts {
+		opt(provider)
+	}
 	if azureEndpoint == "" {
 		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
 	}
@@ -436,14 +442,8 @@ func NewAzureOpenAILLM(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if azureADToken == "" {
 		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
 	}
-	if azureEndpoint == "" {
+	if azureEndpoint == "" && provider.baseURL == "" {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI LLM", azureOpenAIEndpointEnv)
-	}
-	defaultConnect := llm.DefaultAPIConnectOptions()
-	defaultConnect.MaxRetry = 0
-	provider := &OpenAILLM{model: model, defaultReasoning: true, strictToolSchema: true, defaultConnect: &defaultConnect}
-	for _, opt := range opts {
-		opt(provider)
 	}
 	if apiKey == "" && azureADToken == "" && provider.azureADTokenProvider == nil {
 		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI LLM", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
