@@ -2571,6 +2571,38 @@ func TestOpenAIStreamPreservesAzureUsageOnlyChunk(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamPreservesUsageServiceTier(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-tier","choices":[],"service_tier":"priority","usage":{"completion_tokens":3,"prompt_tokens":2,"total_tokens":5}}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want usage chunk", err)
+	}
+	if chunk == nil || chunk.Usage == nil {
+		t.Fatalf("chunk = %#v, want usage chunk", chunk)
+	}
+	if chunk.Usage.ServiceTier != "priority" {
+		t.Fatalf("ServiceTier = %q, want priority", chunk.Usage.ServiceTier)
+	}
+}
+
 func TestOpenAIStreamSkipsEmptyChoicesWithoutUsage(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
@@ -3570,7 +3602,7 @@ func TestOpenAICompletionUsageHandlesMissingTokenDetails(t *testing.T) {
 		CompletionTokens: 7,
 		PromptTokens:     11,
 		TotalTokens:      18,
-	})
+	}, "")
 
 	if usage == nil {
 		t.Fatal("openAICompletionUsage() = nil, want usage")
@@ -3586,7 +3618,7 @@ func TestOpenAICompletionUsageHandlesMissingTokenDetails(t *testing.T) {
 func TestOpenAICompletionUsageMapsCachedPromptTokens(t *testing.T) {
 	usage := openAICompletionUsage(&openaisdk.Usage{
 		PromptTokensDetails: &openaisdk.PromptTokensDetails{CachedTokens: 5},
-	})
+	}, "")
 
 	if usage == nil {
 		t.Fatal("openAICompletionUsage() = nil, want usage")

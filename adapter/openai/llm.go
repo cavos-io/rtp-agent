@@ -2458,7 +2458,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 				continue
 			}
 			s.markEmitted()
-			return openAIUsageChunk(resp.ID, resp.Usage), nil
+			return openAIUsageChunk(resp.ID, resp.Usage, resp.ServiceTier), nil
 		}
 
 		chunks := make([]*llm.ChatChunk, 0, len(resp.Choices)+1)
@@ -2468,7 +2468,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 			}
 		}
 		if resp.Usage != nil {
-			chunks = append(chunks, openAIUsageChunk(resp.ID, resp.Usage))
+			chunks = append(chunks, openAIUsageChunk(resp.ID, resp.Usage, resp.ServiceTier))
 		}
 		if len(chunks) == 0 {
 			continue
@@ -2482,9 +2482,10 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 }
 
 type openAIStreamResponse struct {
-	ID      string               `json:"id"`
-	Choices []openAIStreamChoice `json:"choices"`
-	Usage   *openai.Usage        `json:"usage,omitempty"`
+	ID          string               `json:"id"`
+	Choices     []openAIStreamChoice `json:"choices"`
+	Usage       *openai.Usage        `json:"usage,omitempty"`
+	ServiceTier string               `json:"service_tier,omitempty"`
 }
 
 type openAIStreamChoice struct {
@@ -2693,7 +2694,7 @@ func openAIStreamRecvError(err error, retryable bool) error {
 	return mapped
 }
 
-func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
+func openAICompletionUsage(usage *openai.Usage, serviceTier string) *llm.CompletionUsage {
 	if usage == nil {
 		return nil
 	}
@@ -2701,6 +2702,7 @@ func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
 		CompletionTokens: usage.CompletionTokens,
 		PromptTokens:     usage.PromptTokens,
 		TotalTokens:      usage.TotalTokens,
+		ServiceTier:      serviceTier,
 	}
 	if usage.PromptTokensDetails != nil {
 		result.PromptCachedTokens = usage.PromptTokensDetails.CachedTokens
@@ -2708,8 +2710,8 @@ func openAICompletionUsage(usage *openai.Usage) *llm.CompletionUsage {
 	return result
 }
 
-func openAIUsageChunk(id string, usage *openai.Usage) *llm.ChatChunk {
-	return &llm.ChatChunk{ID: id, Usage: openAICompletionUsage(usage)}
+func openAIUsageChunk(id string, usage *openai.Usage, serviceTier string) *llm.ChatChunk {
+	return &llm.ChatChunk{ID: id, Usage: openAICompletionUsage(usage, serviceTier)}
 }
 
 func (s *openaiStream) Close() error {
