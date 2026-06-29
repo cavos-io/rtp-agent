@@ -791,6 +791,53 @@ func TestDeepgramSTTv2EndInputTreatsProviderCloseAsExpected(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2CloseAfterEndInputDoesNotSendDuplicateCloseStream(t *testing.T) {
+	closeCount := make(chan int, 1)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runDeepgramSTTv2CloseCountingWebsocketServer(serverConn, closeCount, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatalf("stream = %T, want stt.InputEnding", stream)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case got := <-closeCount:
+		if got != 1 {
+			t.Fatalf("CloseStream count = %d, want one reference close control", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream count")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTv2ReconnectsAfterUnexpectedProviderClose(t *testing.T) {
 	var dialCount atomic.Int32
 	requests := make(chan struct{}, 2)
@@ -1823,6 +1870,33 @@ func runDeepgramSTTv2CloseAfterCloseStreamServer(conn net.Conn, closeSeen chan<-
 		}
 		errCh <- nil
 		return
+	}
+}
+
+func runDeepgramSTTv2CloseCountingWebsocketServer(conn net.Conn, closeCount chan<- int, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	count := 0
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			closeCount <- count
+			errCh <- nil
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "CloseStream" {
+			count++
+		}
 	}
 }
 

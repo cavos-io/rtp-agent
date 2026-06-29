@@ -861,9 +861,10 @@ func (s *deepgramV2Stream) Close() error {
 	if s.closed {
 		return nil
 	}
+	shouldSendClose := !s.inputEnded
 	s.closed = true
 	s.inputEnded = true
-	if s.conn != nil {
+	if shouldSendClose && s.conn != nil {
 		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(deepgramSTTv2CloseMessage))
 	}
 	if s.provider != nil {
