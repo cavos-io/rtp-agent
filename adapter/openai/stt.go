@@ -986,6 +986,10 @@ func (s *openAIRealtimeSTTStream) Close() error {
 }
 
 func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
+	s.closeAfterTerminalFailureLocked()
+}
+
+func (s *openAIRealtimeSTTStream) closeAfterTerminalFailureLocked() {
 	if s.closed {
 		return
 	}
@@ -1223,6 +1227,7 @@ func (s *openAIRealtimeSTTStream) vadLoopFor(vadStream vad.VADStream) {
 			if err != io.EOF {
 				s.mu.Lock()
 				s.sendErrorLocked(err)
+				s.closeAfterTerminalFailureLocked()
 				s.mu.Unlock()
 			}
 			return
