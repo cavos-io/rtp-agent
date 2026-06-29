@@ -2473,6 +2473,52 @@ func TestOpenAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSProviderCloseCancelsPendingSynthesize(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		<-r.Context().Done()
+		close(requestCanceled)
+		return nil, r.Context().Err()
+	})
+	provider := mustNewOpenAITTS(t, "test-key", "", "",
+		withOpenAITTSHTTPClient(client),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		done <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("provider Close did not cancel pending OpenAI TTS request")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not return after provider Close")
+	}
+}
+
 func TestOpenAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	calls := 0
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
