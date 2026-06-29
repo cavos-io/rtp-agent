@@ -367,6 +367,7 @@ type deepgramTTSStream struct {
 	pendingText string
 	requestID   string
 	segmentID   string
+	segmentOpen bool
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -454,6 +455,7 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	s.segmentOpen = true
 	s.pendingText += text
 	return s.sendCompletedWordsLocked()
 }
@@ -471,7 +473,7 @@ func (s *deepgramTTSStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if strings.TrimSpace(s.pendingText) == "" {
+	if !s.segmentOpen {
 		s.pendingText = ""
 		return nil
 	}
@@ -486,6 +488,7 @@ func (s *deepgramTTSStream) Flush() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	s.segmentOpen = false
 	return nil
 }
 

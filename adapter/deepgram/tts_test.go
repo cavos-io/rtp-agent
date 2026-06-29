@@ -857,6 +857,16 @@ func TestDeepgramTTSStreamEmptyFlushIsReferenceNoop(t *testing.T) {
 	if writes != 2 {
 		t.Fatalf("writes after second empty Flush = %d, want unchanged", writes)
 	}
+
+	if err := stream.PushText("   "); err != nil {
+		t.Fatalf("PushText(whitespace) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(whitespace) error = %v", err)
+	}
+	if writes != 3 {
+		t.Fatalf("writes after whitespace Flush = %d, want one reference Flush", writes)
+	}
 }
 
 func TestDeepgramTTSStreamMarksFinalAudioOnReferenceFlushed(t *testing.T) {
