@@ -268,12 +268,62 @@ func (s *DeepgramSTT) Close() error {
 	return closeErr
 }
 
-func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) {
+func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) error {
 	s.mu.Lock()
+	next := &DeepgramSTT{
+		apiKey:            s.apiKey,
+		model:             s.model,
+		language:          s.language,
+		punctuate:         s.punctuate,
+		smartFormat:       s.smartFormat,
+		noDelay:           s.noDelay,
+		endpointingMS:     s.endpointingMS,
+		enableDiarization: s.enableDiarization,
+		fillerWords:       s.fillerWords,
+		sampleRate:        s.sampleRate,
+		numChannels:       s.numChannels,
+		interimResults:    s.interimResults,
+		vadEvents:         s.vadEvents,
+		detectLanguage:    s.detectLanguage,
+		profanityFilter:   s.profanityFilter,
+		numerals:          s.numerals,
+		mipOptOut:         s.mipOptOut,
+		keywords:          append([]DeepgramKeyword(nil), s.keywords...),
+		keyterms:          append([]string(nil), s.keyterms...),
+		redact:            append([]string(nil), s.redact...),
+		tags:              append([]string(nil), s.tags...),
+		baseURL:           s.baseURL,
+	}
 	oldLanguage := s.language
 	for _, opt := range opts {
-		opt(s)
+		opt(next)
 	}
+	if err := validateDeepgramSTTOptions(next); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.apiKey = next.apiKey
+	s.model = next.model
+	s.language = next.language
+	s.punctuate = next.punctuate
+	s.smartFormat = next.smartFormat
+	s.noDelay = next.noDelay
+	s.endpointingMS = next.endpointingMS
+	s.enableDiarization = next.enableDiarization
+	s.fillerWords = next.fillerWords
+	s.sampleRate = next.sampleRate
+	s.numChannels = next.numChannels
+	s.interimResults = next.interimResults
+	s.vadEvents = next.vadEvents
+	s.detectLanguage = next.detectLanguage
+	s.profanityFilter = next.profanityFilter
+	s.numerals = next.numerals
+	s.mipOptOut = next.mipOptOut
+	s.keywords = next.keywords
+	s.keyterms = next.keyterms
+	s.redact = next.redact
+	s.tags = next.tags
+	s.baseURL = next.baseURL
 	languageChanged := oldLanguage != s.language
 	streams := make([]*deepgramStream, 0, len(s.streams))
 	for stream := range s.streams {
@@ -283,6 +333,7 @@ func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) {
 	for _, stream := range streams {
 		stream.updateOptions(languageChanged)
 	}
+	return nil
 }
 
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {

@@ -1163,6 +1163,30 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTUpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "nova-2",
+		WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"),
+		WithDeepgramSTTTags([]string{"stable"}),
+	)
+	before := buildDeepgramStreamURL(provider, "en-US")
+
+	err := provider.UpdateOptions(WithDeepgramSTTTags([]string{strings.Repeat("x", 129)}))
+	if err == nil || !strings.Contains(err.Error(), "tag must be no more than 128 characters") {
+		t.Fatalf("UpdateOptions() error = %v, want invalid tag length", err)
+	}
+	if after := buildDeepgramStreamURL(provider, "en-US"); after != before {
+		t.Fatalf("stream URL after failed update = %s, want unchanged %s", after, before)
+	}
+
+	err = provider.UpdateOptions(WithDeepgramSTTModel("nova-3"), WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "bad", Boost: 1}}))
+	if err == nil || !strings.Contains(err.Error(), "keywords is only available") {
+		t.Fatalf("UpdateOptions() keyword error = %v, want invalid keywords for nova-3", err)
+	}
+	if after := buildDeepgramStreamURL(provider, "en-US"); after != before {
+		t.Fatalf("stream URL after failed keyword update = %s, want unchanged %s", after, before)
+	}
+}
+
 func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	requests := make(chan *url.URL, 2)
 	audioMessages := make(chan []byte, 1)
