@@ -686,6 +686,7 @@ func (s *deepgramTTSStream) EndInput() error {
 	s.inputEnded = true
 	if !s.flushPending {
 		s.closed = true
+		s.markInputSent()
 		if s.provider != nil {
 			s.provider.unregisterStream(s)
 		}

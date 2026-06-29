@@ -1422,9 +1422,10 @@ func TestDeepgramTTSStreamEndInputClosesIdleReferenceStream(t *testing.T) {
 			var writes []string
 			closeCalls := 0
 			stream := &deepgramTTSStream{
-				audio:   make(chan *tts.SynthesizedAudio, 1),
-				errCh:   make(chan error, 1),
-				flushed: make(chan struct{}, 1),
+				audio:     make(chan *tts.SynthesizedAudio, 1),
+				errCh:     make(chan error, 1),
+				flushed:   make(chan struct{}, 1),
+				inputSent: make(chan struct{}),
 				writeText: func(payload string) error {
 					writes = append(writes, payload)
 					return nil
@@ -1446,6 +1447,11 @@ func TestDeepgramTTSStreamEndInputClosesIdleReferenceStream(t *testing.T) {
 			}
 			if closeCalls != 1 {
 				t.Fatalf("close calls after idle EndInput = %d, want 1", closeCalls)
+			}
+			select {
+			case <-stream.inputSent:
+			default:
+				t.Fatal("idle EndInput did not release reference read gate")
 			}
 			if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
 				t.Fatalf("Next after idle EndInput = (%+v, %v), want EOF", audio, err)
