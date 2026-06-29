@@ -2709,6 +2709,24 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PushAudio after Close error = %v, want nil like reference closed send_event", err)
 	}
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt after Close error = %v, want nil like reference closed send_event", err)
+	}
+	transcript := "trimmed"
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:       "msg_123",
+		Modalities:      []string{"audio"},
+		AudioEndMillis:  100,
+		AudioTranscript: &transcript,
+	}); err != nil {
+		t.Fatalf("Truncate after Close error = %v, want nil like reference closed send_event", err)
+	}
 }
 
 func TestRealtimeSessionCloseIsIdempotent(t *testing.T) {
