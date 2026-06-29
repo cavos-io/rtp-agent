@@ -27,6 +27,7 @@ type GroqLLM struct {
 	llmOptions      []openai.OpenAILLMOption
 	mu              sync.Mutex
 	closed          bool
+	streams         map[*groqLLMStream]struct{}
 	httpClient      interface {
 		Do(*http.Request) (*http.Response, error)
 	}
@@ -133,13 +134,18 @@ func (l *GroqLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...ll
 		return nil, fmt.Errorf("groq llm is closed: %w", io.ErrClosedPipe)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	return &groqLLMStream{
+	stream := &groqLLMStream{
 		ctx:      streamCtx,
 		cancel:   cancel,
 		provider: l,
 		chatCtx:  chatCtx,
 		opts:     append([]llm.ChatOption(nil), opts...),
-	}, nil
+	}
+	if !l.registerStream(stream) {
+		_ = stream.Close()
+		return nil, fmt.Errorf("groq llm is closed: %w", io.ErrClosedPipe)
+	}
+	return stream, nil
 }
 
 func (l *GroqLLM) Close() error {
@@ -148,7 +154,15 @@ func (l *GroqLLM) Close() error {
 	}
 	l.mu.Lock()
 	l.closed = true
+	streams := make([]*groqLLMStream, 0, len(l.streams))
+	for stream := range l.streams {
+		streams = append(streams, stream)
+	}
+	l.streams = make(map[*groqLLMStream]struct{})
 	l.mu.Unlock()
+	for _, stream := range streams {
+		_ = stream.Close()
+	}
 	return l.inner.Close()
 }
 
@@ -156,6 +170,25 @@ func (l *GroqLLM) isClosed() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.closed
+}
+
+func (l *GroqLLM) registerStream(stream *groqLLMStream) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return false
+	}
+	if l.streams == nil {
+		l.streams = make(map[*groqLLMStream]struct{})
+	}
+	l.streams[stream] = struct{}{}
+	return true
+}
+
+func (l *GroqLLM) unregisterStream(stream *groqLLMStream) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.streams, stream)
 }
 
 type groqLLMStream struct {
@@ -205,7 +238,14 @@ func (s *groqLLMStream) Close() error {
 		cancel()
 	}
 	if stream != nil {
-		return stream.Close()
+		err := stream.Close()
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return err
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
 	}
 	return nil
 }
