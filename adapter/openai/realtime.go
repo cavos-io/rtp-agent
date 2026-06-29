@@ -2244,15 +2244,6 @@ func (s *realtimeSession) eventLoop() {
 			}
 
 			if openAIRealtimeString(ev["type"]) == "response.done" && s.generation == nil {
-				if response, _ := ev["response"].(map[string]any); response != nil {
-					if clientEventID, ok := openAIRealtimeResponseClientEventID(response); ok {
-						s.clearPendingRealtimeResponse(clientEventID)
-					} else {
-						s.clearPendingRealtimeResponse("")
-					}
-				} else {
-					s.clearPendingRealtimeResponse("")
-				}
 				continue
 			}
 

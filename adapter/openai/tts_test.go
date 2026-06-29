@@ -714,6 +714,45 @@ func TestOpenAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		if !ok {
+			t.Fatal("request context has no deadline, want reference total timeout")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 29*time.Second || remaining > 30*time.Second {
+			t.Fatalf("request timeout remaining = %v, want about 30s", remaining)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{1, 2, 3, 4})),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSBaseURL("https://openai.test/v1"),
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || len(audio.Frame.Data) == 0 {
+		t.Fatalf("audio = %#v, want synthesized audio after timed request", audio)
+	}
+}
+
 func TestOpenAITTSChunkedStreamCloseCancelsReferenceRequestStartup(t *testing.T) {
 	requestStarted := make(chan struct{})
 	requestCanceled := make(chan struct{})
@@ -1173,6 +1212,63 @@ func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSRawAudioEmitsReferenceMetrics(t *testing.T) {
+	const requestID = "req_raw_metrics"
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/octet-stream"}, "X-Request-Id": []string{requestID}},
+			Body:       io.NopCloser(bytes.NewReader(bytes.Repeat([]byte{1, 2}, 1200))),
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := provider.Synthesize(context.Background(), "raw metrics")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("audio Next error = %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.RequestID != requestID {
+		t.Fatalf("audio = %#v, want raw PCM frame with request id", audio)
+	}
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("metrics emitted before final marker: %#v", metrics)
+	default:
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != requestID {
+		t.Fatalf("final = %#v, want final marker with request id", final)
+	}
+	select {
+	case metrics := <-metricsCh:
+		if metrics.RequestID != requestID || metrics.InputTokens != 0 || metrics.OutputTokens != 0 {
+			t.Fatalf("metrics = %#v, want request id and zero token usage", metrics)
+		}
+		if metrics.AudioDuration <= 0 || metrics.TTFB < 0 {
+			t.Fatalf("metrics audio/ttfb = %f/%f, want synthesized audio timing", metrics.AudioDuration, metrics.TTFB)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for raw audio reference metrics")
+	}
+}
+
 func TestOpenAITTSSSEPCMEmitsFinalMarkerAfterDone(t *testing.T) {
 	wantAudio := []byte{0x01, 0x00, 0x02, 0x00}
 	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
@@ -1312,6 +1408,11 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	if audio.RequestID != requestID {
 		t.Fatalf("audio request id = %q, want provider request id", audio.RequestID)
 	}
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("metrics emitted before final marker: %#v", metrics)
+	default:
+	}
 	final, err := stream.Next()
 	if err != nil {
 		t.Fatalf("final Next error = %v", err)
@@ -1385,7 +1486,7 @@ func TestOpenAITTSSSEDoneDoesNotEndBeforeLaterAudio(t *testing.T) {
 	}
 }
 
-func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
+func TestOpenAITTSSSEDoneUsageWithoutAudioSuppressesReferenceMetrics(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
 		return &http.Response{
@@ -1400,9 +1501,7 @@ func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
 	)
 	metricsCh := make(chan *telemetry.TTSMetrics, 1)
 	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
-		if metrics.InputTokens == 7 && metrics.OutputTokens == 11 {
-			metricsCh <- metrics
-		}
+		metricsCh <- metrics
 	})
 
 	stream, err := provider.Synthesize(context.Background(), "hello tokens")
@@ -1424,14 +1523,54 @@ func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
 
 	select {
 	case metrics := <-metricsCh:
-		if metrics.AudioDuration != 0 {
-			t.Fatalf("AudioDuration = %f, want 0 without audio frames", metrics.AudioDuration)
+		t.Fatalf("metrics = %#v, want none for no-audio APIError", metrics)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	audio, err = stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio APIError = (%#v, %v), want nil io.EOF", audio, err)
+	}
+}
+
+func TestOpenAITTSSSEBlankInputNoAudioEmitsReferenceMetrics(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":3,"output_tokens":5}}` + "\n\n"
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"req_blank_no_audio"}},
+			Body:       io.NopCloser(strings.NewReader(sse)),
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := provider.Synthesize(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next = (%#v, %v), want clean EOF without audio for blank input", audio, err)
+	}
+
+	select {
+	case metrics := <-metricsCh:
+		if metrics.RequestID != "req_blank_no_audio" || metrics.InputTokens != 3 || metrics.OutputTokens != 5 {
+			t.Fatalf("metrics = %#v, want reference usage metrics for blank no-audio success", metrics)
 		}
-		if metrics.TTFB != -1 {
-			t.Fatalf("TTFB = %f, want -1 without audio frames", metrics.TTFB)
+		if metrics.AudioDuration != 0 || metrics.TTFB != -1 {
+			t.Fatalf("metrics audio/ttfb = %f/%f, want no-audio timing", metrics.AudioDuration, metrics.TTFB)
 		}
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("timed out waiting for reference usage metrics without audio")
+		t.Fatal("timed out waiting for blank no-audio reference metrics")
 	}
 }
 
@@ -1732,6 +1871,46 @@ func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterDone(t *testing.T) {
 		frames++
 	}
 	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
+}
+
+func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterCleanEOF(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(mp3Data) + `"}` + "\n\n"
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(strings.NewReader(sse)),
+		responseFormat: goopenai.SpeechResponseFormatMp3,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	frames := 0
+	for i := 0; i < 5000; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned %v before clean-EOF final marker after %d frames", err, frames)
+		}
+		if audio == nil {
+			t.Fatalf("Next returned nil audio after %d frames", frames)
+		}
+		if audio.IsFinal {
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded MP3 frames")
+			}
+			_, err = stream.Next()
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("Next after final = %v, want io.EOF", err)
+			}
+			return
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("audio = %#v, want decoded MP3 frame or final marker", audio)
+		}
+		frames++
+	}
+	t.Fatalf("read %d decoded MP3 frames without clean-EOF final marker", frames)
 }
 
 func TestOpenAITTSRawAudioStreamEmitsReferenceFinalMarker(t *testing.T) {
@@ -2168,6 +2347,33 @@ func TestOpenAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Next to unblock after Close")
+	}
+}
+
+func TestOpenAITTSDecodedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	body := newBlockingEOFReadCloser(nil)
+	stream := &openaiTTSChunkedStream{
+		resp:           body,
+		responseFormat: goopenai.SpeechResponseFormatMp3,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after decoded Close during read error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for decoded Next to unblock after Close")
 	}
 }
 

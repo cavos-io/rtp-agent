@@ -50,6 +50,7 @@ const (
 	openAITTSStreamFormatAudio = "audio"
 	openAITTSStreamFormatSSE   = "sse"
 	openAITTSMaxSSELineBytes   = 16 * 1024 * 1024
+	openAITTSRequestTimeout    = 30 * time.Second
 )
 
 type OpenAITTSOption func(*OpenAITTS)
@@ -398,38 +399,42 @@ func (t *OpenAITTS) isClosed() bool {
 }
 
 type openaiTTSChunkedStream struct {
-	ctx            context.Context
-	cancel         context.CancelFunc
-	request        openai.CreateSpeechRequest
-	resp           io.ReadCloser
-	responseFormat openai.SpeechResponseFormat
-	streamFormat   string
-	provider       *OpenAITTS
-	inputText      string
-	requestID      string
-	startOnce      sync.Once
-	startErr       error
-	scanner        *bufio.Scanner
-	decoder        codecs.AudioStreamDecoder
-	decodeStarted  bool
-	decodeErrCh    chan error
-	wavBuffer      []byte
-	wavDone        bool
-	wavHeaderDone  bool
-	wavDataLeft    int
-	wavSampleRate  uint32
-	wavChannels    uint32
-	pcmRemainder   []byte
-	closed         bool
-	audioSawAudio  bool
-	audioFinalSent bool
-	audioReadErr   error
-	sseDone        bool
-	sseSawAudio    bool
-	sseFinalSent   bool
-	metricsStarted time.Time
-	metricsFirst   time.Time
-	metricsAudio   float64
+	ctx             context.Context
+	cancel          context.CancelFunc
+	requestCancel   context.CancelFunc
+	request         openai.CreateSpeechRequest
+	resp            io.ReadCloser
+	responseFormat  openai.SpeechResponseFormat
+	streamFormat    string
+	provider        *OpenAITTS
+	inputText       string
+	requestID       string
+	startOnce       sync.Once
+	startErr        error
+	scanner         *bufio.Scanner
+	decoder         codecs.AudioStreamDecoder
+	decodeStarted   bool
+	decodeErrCh     chan error
+	wavBuffer       []byte
+	wavDone         bool
+	wavHeaderDone   bool
+	wavDataLeft     int
+	wavSampleRate   uint32
+	wavChannels     uint32
+	pcmRemainder    []byte
+	closed          bool
+	audioSawAudio   bool
+	audioFinalSent  bool
+	audioReadErr    error
+	sseDone         bool
+	sseSawAudio     bool
+	sseFinalSent    bool
+	metricsStarted  time.Time
+	metricsFirst    time.Time
+	metricsAudio    float64
+	metricsEmitted  bool
+	sseInputTokens  int
+	sseOutputTokens int
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -458,7 +463,9 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 			s.startErr = fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
 			return
 		}
-		resp, err := s.provider.client.CreateSpeech(s.ctx, s.request)
+		requestCtx, requestCancel := context.WithTimeout(s.ctx, openAITTSRequestTimeout)
+		s.requestCancel = requestCancel
+		resp, err := s.provider.client.CreateSpeech(requestCtx, s.request)
 		if err != nil {
 			if s.closed {
 				s.startErr = io.EOF
@@ -678,7 +685,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			s.sseSawAudio = true
 			return audio, nil
 		case "speech.audio.done":
-			s.emitSSEUsageMetrics(event)
+			s.recordSSEUsage(event)
 			continue
 		}
 	}
@@ -738,6 +745,7 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 }
 
 func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
+	s.emitTTSMetrics()
 	defer func() { _ = s.Close() }()
 	return &tts.SynthesizedAudio{IsFinal: true, RequestID: s.requestID}
 }
@@ -745,6 +753,7 @@ func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
 func (s *openaiTTSChunkedStream) noAudioError() error {
 	defer func() { _ = s.Close() }()
 	if strings.TrimSpace(s.inputText) == "" {
+		s.emitTTSMetrics()
 		return io.EOF
 	}
 	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
@@ -1016,7 +1025,7 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 			}
 			s.decoder.Push(audioData)
 		case "speech.audio.done":
-			s.emitSSEUsageMetrics(event)
+			s.recordSSEUsage(event)
 			continue
 		}
 	}
@@ -1078,16 +1087,22 @@ func (s *openaiTTSChunkedStream) decodeReadError() error {
 	}
 }
 
-func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
-	if s.provider == nil {
-		return
-	}
+func (s *openaiTTSChunkedStream) recordSSEUsage(event map[string]any) {
 	usage, _ := event["usage"].(map[string]any)
 	inputTokens := openAIInt(usage["input_tokens"])
 	outputTokens := openAIInt(usage["output_tokens"])
 	if inputTokens == 0 && outputTokens == 0 {
 		return
 	}
+	s.sseInputTokens = inputTokens
+	s.sseOutputTokens = outputTokens
+}
+
+func (s *openaiTTSChunkedStream) emitTTSMetrics() {
+	if s.provider == nil || s.metricsEmitted {
+		return
+	}
+	s.metricsEmitted = true
 	duration := 0.0
 	if !s.metricsStarted.IsZero() {
 		duration = time.Since(s.metricsStarted).Seconds()
@@ -1106,8 +1121,8 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 		TTFB:            ttfb,
 		Duration:        duration,
 		CharactersCount: utf8.RuneCountInString(s.inputText),
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
+		InputTokens:     s.sseInputTokens,
+		OutputTokens:    s.sseOutputTokens,
 		AudioDuration:   s.metricsAudio,
 		Streamed:        false,
 		Metadata: &telemetry.Metadata{
@@ -1127,6 +1142,9 @@ func (s *openaiTTSChunkedStream) Close() error {
 	s.closed = true
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if s.requestCancel != nil {
+		s.requestCancel()
 	}
 	if s.decoder != nil {
 		_ = s.decoder.Close()

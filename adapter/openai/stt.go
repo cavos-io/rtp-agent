@@ -35,6 +35,7 @@ const (
 	openAIRealtimeSTTPrefixPaddingMS   = 600
 	openAIRealtimeSTTSilenceDurationMS = 350
 	openAIRealtimeSTTDeltaInterval     = 500 * time.Millisecond
+	openAISTTRecognizeTimeout          = 30 * time.Second
 	openAIAPIKeyEnv                    = "OPENAI_API_KEY"
 	ovhcloudAPIKeyEnv                  = "OVHCLOUD_API_KEY"
 	defaultOVHCloudOpenAIBaseURL       = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
@@ -227,7 +228,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 
 	provider := &OpenAISTT{
 		apiKey:        apiKey,
-		baseURL:       azureEndpoint,
+		baseURL:       openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment),
 		model:         model,
 		language:      "en",
 		connect:       llm.DefaultAPIConnectOptions(),
@@ -260,6 +261,10 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
+}
+
+func openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment string) string {
+	return strings.TrimRight(azureEndpoint, "/") + "/openai/deployments/" + url.PathEscape(azureDeployment)
 }
 
 func NewOVHCloudOpenAISTT(model, apiKey string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
@@ -606,7 +611,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if s.isClosed() {
 		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithTimeout(ctx, openAISTTRecognizeTimeout)
 	requestID, ok := s.registerRequest(cancel)
 	if !ok {
 		cancel()
@@ -756,24 +761,25 @@ func openAITimedStrings(words []struct {
 }
 
 type openAIRealtimeSTTStream struct {
-	conn        *websocket.Conn
-	ctx         context.Context
-	cancel      context.CancelFunc
-	events      chan *stt.SpeechEvent
-	eventStream *openAIRealtimeQueuedStream[*stt.SpeechEvent]
-	errCh       chan error
-	pendingErr  error
-	mu          sync.Mutex
-	closed      bool
-	inputEnded  bool
-	committed   bool
-	hasAudio    bool
-	pushedSR    uint32
-	audio       *audio.AudioByteStream
-	normalizer  openAIRealtimeInputAudioNormalizer
-	state       *openAIRealtimeSTTMessageState
-	owner       *OpenAISTT
-	vadStream   vad.VADStream
+	conn          *websocket.Conn
+	ctx           context.Context
+	cancel        context.CancelFunc
+	events        chan *stt.SpeechEvent
+	eventStream   *openAIRealtimeQueuedStream[*stt.SpeechEvent]
+	errCh         chan error
+	pendingErr    error
+	mu            sync.Mutex
+	closed        bool
+	inputEnded    bool
+	vadInputEnded bool
+	committed     bool
+	hasAudio      bool
+	pushedSR      uint32
+	audio         *audio.AudioByteStream
+	normalizer    openAIRealtimeInputAudioNormalizer
+	state         *openAIRealtimeSTTMessageState
+	owner         *OpenAISTT
+	vadStream     vad.VADStream
 }
 
 func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -806,20 +812,6 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	vadStream := s.vadStream
 	vadFrame := frame
-	for _, chunk := range s.audio.Push(normalizedFrame.Data) {
-		message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
-		if err != nil {
-			s.mu.Unlock()
-			return err
-		}
-		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
-			s.closeAfterWriteFailureLocked()
-			s.mu.Unlock()
-			return err
-		}
-		s.hasAudio = true
-		s.committed = false
-	}
 	s.mu.Unlock()
 	if vadStream != nil && vadFrame != nil && len(vadFrame.Data) > 0 {
 		if err := vadStream.PushFrame(vadFrame); err != nil {
@@ -835,34 +827,43 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		s.mu.Unlock()
+		return openAIRealtimeSTTInputEndedError()
+	}
+	for _, chunk := range s.audio.Push(normalizedFrame.Data) {
+		message, err := buildOpenAIRealtimeSTTAudioAppendMessage(chunk)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		if err := s.conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			s.closeAfterWriteFailureLocked()
+			s.mu.Unlock()
+			return err
+		}
+		s.hasAudio = true
+		s.committed = false
+	}
+	s.mu.Unlock()
 	return nil
 }
 
 func (s *openAIRealtimeSTTStream) Flush() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.inputEnded {
-		s.mu.Unlock()
 		return openAIRealtimeSTTInputEndedError()
 	}
 	if s.closed {
-		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
-	err := s.flushAudioLocked()
-	vadStream := s.vadStream
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if vadStream != nil {
-		if err := vadStream.Flush(); err != nil {
-			s.mu.Lock()
-			s.closeAfterTerminalFailureLocked()
-			s.mu.Unlock()
-			return err
-		}
-	}
-	return nil
+	return s.flushAudioLocked()
 }
 
 func (s *openAIRealtimeSTTStream) EndInput() error {
@@ -880,6 +881,7 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 	s.inputEnded = true
 	var vadErr error
 	if s.vadStream != nil {
+		s.vadInputEnded = true
 		vadErr = s.vadStream.EndInput()
 		if vadErr != nil {
 			s.closeAfterTerminalFailureLocked()
@@ -992,7 +994,7 @@ func (s *openAIRealtimeSTTStream) Close() error {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
-	s.closeVADStreamLocked()
+	s.closeVADStreamLocked(true)
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
@@ -1010,7 +1012,7 @@ func (s *openAIRealtimeSTTStream) closeAfterTerminalFailureLocked() {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
-	s.closeVADStreamLocked()
+	s.closeVADStreamLocked(false)
 	_ = s.conn.Close()
 }
 
@@ -1018,14 +1020,18 @@ func openAIRealtimeSTTInputEndedError() error {
 	return fmt.Errorf("stream input ended")
 }
 
-func (s *openAIRealtimeSTTStream) closeVADStreamLocked() {
+func (s *openAIRealtimeSTTStream) closeVADStreamLocked(endInput bool) {
 	if s.vadStream == nil {
 		return
 	}
 	vadStream := s.vadStream
+	shouldEndInput := endInput && !s.vadInputEnded
+	s.vadInputEnded = true
 	s.vadStream = nil
 	go func() {
-		_ = vadStream.EndInput()
+		if shouldEndInput {
+			_ = vadStream.EndInput()
+		}
 		_ = vadStream.Close()
 	}()
 }
@@ -1155,7 +1161,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 			s.owner.unregisterRealtimeSTTStream(s)
 		}
 		s.mu.Lock()
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		s.mu.Unlock()
 		s.closeEventStream()
 	}()
@@ -1290,18 +1296,18 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	_ = s.conn.Close()
 	conn, _, err := s.owner.dialRealtimeSTTWebsocket(s.ctx)
 	if err != nil {
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		return mapOpenAIError(err)
 	}
 	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
 	if err != nil {
 		_ = conn.Close()
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		return err
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
 		_ = conn.Close()
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		return mapOpenAIError(err)
 	}
 	s.conn = conn
@@ -1311,13 +1317,14 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	s.hasAudio = false
 	s.committed = false
 	if s.owner.vad != nil {
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		vadStream, err := s.owner.vad.Stream(s.ctx)
 		if err != nil {
 			_ = conn.Close()
 			return err
 		}
 		s.vadStream = vadStream
+		s.vadInputEnded = false
 		if vadStream != nil {
 			go s.vadLoopFor(vadStream)
 		}
