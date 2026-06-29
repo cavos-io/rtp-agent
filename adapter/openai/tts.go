@@ -398,38 +398,41 @@ func (t *OpenAITTS) isClosed() bool {
 }
 
 type openaiTTSChunkedStream struct {
-	ctx            context.Context
-	cancel         context.CancelFunc
-	request        openai.CreateSpeechRequest
-	resp           io.ReadCloser
-	responseFormat openai.SpeechResponseFormat
-	streamFormat   string
-	provider       *OpenAITTS
-	inputText      string
-	requestID      string
-	startOnce      sync.Once
-	startErr       error
-	scanner        *bufio.Scanner
-	decoder        codecs.AudioStreamDecoder
-	decodeStarted  bool
-	decodeErrCh    chan error
-	wavBuffer      []byte
-	wavDone        bool
-	wavHeaderDone  bool
-	wavDataLeft    int
-	wavSampleRate  uint32
-	wavChannels    uint32
-	pcmRemainder   []byte
-	closed         bool
-	audioSawAudio  bool
-	audioFinalSent bool
-	audioReadErr   error
-	sseDone        bool
-	sseSawAudio    bool
-	sseFinalSent   bool
-	metricsStarted time.Time
-	metricsFirst   time.Time
-	metricsAudio   float64
+	ctx             context.Context
+	cancel          context.CancelFunc
+	request         openai.CreateSpeechRequest
+	resp            io.ReadCloser
+	responseFormat  openai.SpeechResponseFormat
+	streamFormat    string
+	provider        *OpenAITTS
+	inputText       string
+	requestID       string
+	startOnce       sync.Once
+	startErr        error
+	scanner         *bufio.Scanner
+	decoder         codecs.AudioStreamDecoder
+	decodeStarted   bool
+	decodeErrCh     chan error
+	wavBuffer       []byte
+	wavDone         bool
+	wavHeaderDone   bool
+	wavDataLeft     int
+	wavSampleRate   uint32
+	wavChannels     uint32
+	pcmRemainder    []byte
+	closed          bool
+	audioSawAudio   bool
+	audioFinalSent  bool
+	audioReadErr    error
+	sseDone         bool
+	sseSawAudio     bool
+	sseFinalSent    bool
+	metricsStarted  time.Time
+	metricsFirst    time.Time
+	metricsAudio    float64
+	sseInputTokens  int
+	sseOutputTokens int
+	sseUsagePending bool
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -678,7 +681,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			s.sseSawAudio = true
 			return audio, nil
 		case "speech.audio.done":
-			s.emitSSEUsageMetrics(event)
+			s.recordSSEUsage(event)
 			continue
 		}
 	}
@@ -738,6 +741,7 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 }
 
 func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
+	s.emitPendingSSEUsageMetrics()
 	defer func() { _ = s.Close() }()
 	return &tts.SynthesizedAudio{IsFinal: true, RequestID: s.requestID}
 }
@@ -1016,7 +1020,7 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 			}
 			s.decoder.Push(audioData)
 		case "speech.audio.done":
-			s.emitSSEUsageMetrics(event)
+			s.recordSSEUsage(event)
 			continue
 		}
 	}
@@ -1078,16 +1082,23 @@ func (s *openaiTTSChunkedStream) decodeReadError() error {
 	}
 }
 
-func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
-	if s.provider == nil {
-		return
-	}
+func (s *openaiTTSChunkedStream) recordSSEUsage(event map[string]any) {
 	usage, _ := event["usage"].(map[string]any)
 	inputTokens := openAIInt(usage["input_tokens"])
 	outputTokens := openAIInt(usage["output_tokens"])
 	if inputTokens == 0 && outputTokens == 0 {
 		return
 	}
+	s.sseInputTokens = inputTokens
+	s.sseOutputTokens = outputTokens
+	s.sseUsagePending = true
+}
+
+func (s *openaiTTSChunkedStream) emitPendingSSEUsageMetrics() {
+	if s.provider == nil || !s.sseUsagePending {
+		return
+	}
+	s.sseUsagePending = false
 	duration := 0.0
 	if !s.metricsStarted.IsZero() {
 		duration = time.Since(s.metricsStarted).Seconds()
@@ -1106,8 +1117,8 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 		TTFB:            ttfb,
 		Duration:        duration,
 		CharactersCount: utf8.RuneCountInString(s.inputText),
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
+		InputTokens:     s.sseInputTokens,
+		OutputTokens:    s.sseOutputTokens,
 		AudioDuration:   s.metricsAudio,
 		Streamed:        false,
 		Metadata: &telemetry.Metadata{

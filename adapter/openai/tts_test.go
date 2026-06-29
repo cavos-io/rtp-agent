@@ -1312,6 +1312,11 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	if audio.RequestID != requestID {
 		t.Fatalf("audio request id = %q, want provider request id", audio.RequestID)
 	}
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("metrics emitted before final marker: %#v", metrics)
+	default:
+	}
 	final, err := stream.Next()
 	if err != nil {
 		t.Fatalf("final Next error = %v", err)
@@ -1385,7 +1390,7 @@ func TestOpenAITTSSSEDoneDoesNotEndBeforeLaterAudio(t *testing.T) {
 	}
 }
 
-func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
+func TestOpenAITTSSSEDoneUsageWithoutAudioSuppressesReferenceMetrics(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
 		return &http.Response{
@@ -1400,9 +1405,7 @@ func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
 	)
 	metricsCh := make(chan *telemetry.TTSMetrics, 1)
 	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
-		if metrics.InputTokens == 7 && metrics.OutputTokens == 11 {
-			metricsCh <- metrics
-		}
+		metricsCh <- metrics
 	})
 
 	stream, err := provider.Synthesize(context.Background(), "hello tokens")
@@ -1424,14 +1427,13 @@ func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
 
 	select {
 	case metrics := <-metricsCh:
-		if metrics.AudioDuration != 0 {
-			t.Fatalf("AudioDuration = %f, want 0 without audio frames", metrics.AudioDuration)
-		}
-		if metrics.TTFB != -1 {
-			t.Fatalf("TTFB = %f, want -1 without audio frames", metrics.TTFB)
-		}
+		t.Fatalf("metrics = %#v, want none for no-audio APIError", metrics)
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("timed out waiting for reference usage metrics without audio")
+	}
+
+	audio, err = stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio APIError = (%#v, %v), want nil io.EOF", audio, err)
 	}
 }
 
