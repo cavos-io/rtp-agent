@@ -384,6 +384,45 @@ func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2UpdateOptionsDoesNotHoldProviderLockWhileUpdatingStream(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key")
+	stream := &deepgramV2Stream{provider: provider, streamURL: buildDeepgramSTTv2StreamURL(provider)}
+	provider.streams[stream] = struct{}{}
+
+	stream.mu.Lock()
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- provider.UpdateOptions(WithDeepgramSTTv2Model("flux-general-multi"))
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case err := <-updateDone:
+			stream.mu.Unlock()
+			t.Fatalf("UpdateOptions returned before stream lock released: %v", err)
+		case <-deadline:
+			stream.mu.Unlock()
+			t.Fatal("provider lock stayed held while UpdateOptions waited for stream lock")
+		default:
+		}
+
+		if provider.mu.TryLock() {
+			updated := provider.model == "flux-general-multi"
+			provider.mu.Unlock()
+			if updated {
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	stream.mu.Unlock()
+	if err := <-updateDone; err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+}
+
 func TestDeepgramSTTv2StreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	requests := make(chan *url.URL, 1)
 	audioMessages := make(chan []byte, 2)

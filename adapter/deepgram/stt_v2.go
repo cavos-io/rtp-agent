@@ -153,8 +153,6 @@ func (s *DeepgramSTTv2) Recognize(context.Context, []*model.AudioFrame, string) 
 
 func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	next := &DeepgramSTTv2{
 		apiKey:     s.apiKey,
 		model:      s.model,
@@ -173,6 +171,7 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 		opt(next)
 	}
 	if err := validateDeepgramSTTv2Options(next); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 
@@ -191,6 +190,8 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
+	s.mu.Unlock()
+
 	for _, stream := range streams {
 		stream.updateOptions()
 	}
