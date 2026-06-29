@@ -1499,6 +1499,49 @@ func TestDeepgramSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.0625)
 }
 
+func TestDeepgramSTTStreamFlushWithoutBufferedFrameIsReferenceNoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var textWrites []string
+	stream := &deepgramStream{
+		ctx:         ctx,
+		events:      make(chan *stt.SpeechEvent, 1),
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(empty) error = %v", err)
+	}
+	if len(textWrites) != 0 {
+		t.Fatalf("text writes after empty Flush = %d, want 0", len(textWrites))
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame(exact chunk) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(exact chunk) error = %v", err)
+	}
+	if len(textWrites) != 0 {
+		t.Fatalf("text writes after exact-chunk Flush = %d, want 0", len(textWrites))
+	}
+	assertNoDeepgramRecognitionUsageEvent(t, stream.events)
+}
+
 func TestDeepgramSTTStreamCloseEmitsReferenceRecognitionUsageRemainder(t *testing.T) {
 	closed := make(chan struct{})
 	clientConn, serverConn := net.Pipe()

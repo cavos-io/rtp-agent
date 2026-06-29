@@ -1045,14 +1045,19 @@ func (s *deepgramStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	flushedFrame := false
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
+			flushedFrame = true
 			if err := s.writeBinaryData(chunk.Data); err != nil {
 				s.closeAfterWriteFailureLocked()
 				return err
 			}
 			s.sendRecognitionUsage(chunk)
 		}
+	}
+	if !flushedFrame {
+		return nil
 	}
 	s.flushRecognitionUsageLocked()
 	if err := s.writeTextData(`{"type":"Finalize"}`, map[string]string{"type": "Finalize"}); err != nil {
