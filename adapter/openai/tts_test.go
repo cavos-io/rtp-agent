@@ -1494,6 +1494,47 @@ func TestOpenAITTSSSEDoneUsageWithoutAudioSuppressesReferenceMetrics(t *testing.
 	}
 }
 
+func TestOpenAITTSSSEBlankInputNoAudioEmitsReferenceMetrics(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":3,"output_tokens":5}}` + "\n\n"
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"req_blank_no_audio"}},
+			Body:       io.NopCloser(strings.NewReader(sse)),
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := provider.Synthesize(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next = (%#v, %v), want clean EOF without audio for blank input", audio, err)
+	}
+
+	select {
+	case metrics := <-metricsCh:
+		if metrics.RequestID != "req_blank_no_audio" || metrics.InputTokens != 3 || metrics.OutputTokens != 5 {
+			t.Fatalf("metrics = %#v, want reference usage metrics for blank no-audio success", metrics)
+		}
+		if metrics.AudioDuration != 0 || metrics.TTFB != -1 {
+			t.Fatalf("metrics audio/ttfb = %f/%f, want no-audio timing", metrics.AudioDuration, metrics.TTFB)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for blank no-audio reference metrics")
+	}
+}
+
 func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {

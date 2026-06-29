@@ -749,6 +749,7 @@ func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
 func (s *openaiTTSChunkedStream) noAudioError() error {
 	defer func() { _ = s.Close() }()
 	if strings.TrimSpace(s.inputText) == "" {
+		s.emitTTSMetrics()
 		return io.EOF
 	}
 	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
