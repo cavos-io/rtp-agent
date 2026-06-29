@@ -198,7 +198,7 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 	return nil
 }
 
-func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -208,10 +208,6 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 	if err := validateDeepgramSTTv2Options(s); err != nil {
 		return nil, err
 	}
-	if language == "" {
-		language = s.language
-	}
-
 	header := make(http.Header)
 	header.Set("Authorization", "Token "+s.apiKey)
 	streamURL := buildDeepgramSTTv2StreamURL(s)
@@ -229,7 +225,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 		streamURL:  streamURL,
 		events:     make(chan *stt.SpeechEvent, 100),
 		errCh:      make(chan error, 1),
-		language:   language,
+		language:   s.language,
 		sampleRate: s.sampleRate,
 	}
 	if !s.registerStream(stream) {
