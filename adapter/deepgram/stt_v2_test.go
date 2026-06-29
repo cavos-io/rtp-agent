@@ -83,6 +83,16 @@ func TestDeepgramSTTv2TurnInfoEmitsReferenceEvents(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2StreamRejectsNegativeTimingAnchors(t *testing.T) {
+	stream := &deepgramV2Stream{}
+	assertDeepgramPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		stream.SetStartTimeOffset(-0.01)
+	})
+	assertDeepgramPanicsWithMessage(t, "start_time must be non-negative", func() {
+		stream.SetStartTime(-0.01)
+	})
+}
+
 func TestDeepgramSTTv2StreamHandlesReferenceTurnAndClose(t *testing.T) {
 	closeSeen := make(chan struct{})
 	audioFrames := make(chan []byte, 2)
