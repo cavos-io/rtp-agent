@@ -961,7 +961,7 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 	)
 	var dialCount atomic.Int32
 	secondConnected := make(chan struct{})
-	sendFinal := make(chan struct{})
+	sendAfterReconnect := make(chan struct{})
 	releaseSecond := make(chan struct{})
 	defer close(releaseSecond)
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -973,6 +973,13 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 			}
 			if attempt == 1 {
 				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"conversation.item.input_audio_transcription.delta",
+					"item_id":"item-1",
+					"delta":"old"
+				}`)); err != nil {
+					t.Errorf("write first interim: %v", err)
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
 					"type":"error",
 					"error":{"message":"temporary provider error","code":"server_error"}
 				}`)); err != nil {
@@ -981,7 +988,14 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 				return
 			}
 			close(secondConnected)
-			<-sendFinal
+			<-sendAfterReconnect
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"conversation.item.input_audio_transcription.delta",
+				"item_id":"item-2",
+				"delta":"new"
+			}`)); err != nil {
+				t.Errorf("write post-reconnect interim: %v", err)
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
 				"type":"conversation.item.input_audio_transcription.completed",
 				"item_id":"item-2",
@@ -1000,16 +1014,35 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 	}
 	defer stream.Close()
 
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first interim error = %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || event.Alternatives[0].Text != "old" {
+		t.Fatalf("first interim = %+v, want old", event)
+	}
+
 	select {
 	case <-secondConnected:
 	case <-time.After(time.Second):
 		t.Fatal("stream did not reconnect after provider error")
 	}
-	close(sendFinal)
+	close(sendAfterReconnect)
 
-	event, err := stream.Next()
+	event, err = stream.Next()
 	if err != nil {
-		t.Fatalf("Next error after provider error reconnect = %v", err)
+		t.Fatalf("post-reconnect interim error = %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("post-reconnect event type = %v, want INTERIM_TRANSCRIPT", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "new" {
+		t.Fatalf("post-reconnect interim = %q, want fresh transcript", got)
+	}
+
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("final after provider error reconnect = %v", err)
 	}
 	if event.Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("event type = %v, want FINAL_TRANSCRIPT", event.Type)

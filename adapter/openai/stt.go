@@ -1249,6 +1249,7 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	s.conn = conn
 	s.audio = nil
 	s.normalizer.reset()
+	s.resetMessageStateAfterReconnectLocked()
 	s.hasAudio = false
 	s.committed = false
 	if s.owner.vad != nil {
@@ -1264,6 +1265,17 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 		}
 	}
 	return nil
+}
+
+func (s *openAIRealtimeSTTStream) resetMessageStateAfterReconnectLocked() {
+	if s.state == nil {
+		s.state = &openAIRealtimeSTTMessageState{}
+		return
+	}
+	s.state.currentItemID = ""
+	s.state.currentText = ""
+	s.state.lastInterimAt = time.Time{}
+	s.state.timing = map[string]openAIRealtimeSTTTiming{}
 }
 
 func openAIRealtimeSTTChunkBytes() int {
