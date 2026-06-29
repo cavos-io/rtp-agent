@@ -2713,6 +2713,49 @@ func TestOpenAISTTRecognizeAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTProviderCloseCancelsPendingRecognize(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	client := openAITestHTTPDoer(func(req *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		<-req.Context().Done()
+		close(requestCanceled)
+		return nil, req.Context().Err()
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en")
+		done <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for transcription request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("provider Close did not cancel pending Recognize request")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Recognize error after provider Close = %v, want io.ErrClosedPipe", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recognize did not return after provider Close")
+	}
+}
+
 func TestOpenAIRealtimeSTTNextAfterCloseReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &openAIRealtimeSTTStream{
