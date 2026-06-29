@@ -1359,6 +1359,18 @@ func (s *deepgramStream) sendConnectionUsageRemainderLocked() {
 	}
 }
 
+func (s *deepgramStream) cancelIfUsageDeliveryWouldBlockLocked() {
+	if s.cancel == nil || s.events == nil {
+		return
+	}
+	if s.usageTotal <= 0 && s.connStart.IsZero() {
+		return
+	}
+	if cap(s.events) == 0 || len(s.events) >= cap(s.events) {
+		s.cancel()
+	}
+}
+
 func (s *deepgramStream) Close() error {
 	if !s.mu.TryLock() {
 		if s.cancel != nil {
@@ -1374,6 +1386,7 @@ func (s *deepgramStream) Close() error {
 	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
+	s.cancelIfUsageDeliveryWouldBlockLocked()
 	s.sendConnectionUsageRemainderLocked()
 	if s.cancel != nil {
 		s.cancel()

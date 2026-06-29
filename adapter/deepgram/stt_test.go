@@ -2351,6 +2351,35 @@ func TestDeepgramSTTCloseUnblocksBackpressuredEventSend(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTCloseUnblocksBackpressuredUsageRemainder(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &deepgramStream{
+		ctx:       ctx,
+		cancel:    cancel,
+		events:    make(chan *stt.SpeechEvent, 1),
+		errCh:     make(chan error, 1),
+		connStart: time.Now().Add(-time.Second),
+		writeText: func(string) error {
+			return nil
+		},
+	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() blocked while emitting usage remainder to a full event queue")
+	}
+}
+
 func TestDeepgramSTTStreamNextAfterCloseDrainsQueuedEvent(t *testing.T) {
 	want := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
