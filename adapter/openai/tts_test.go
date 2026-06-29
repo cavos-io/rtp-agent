@@ -339,6 +339,61 @@ func TestNewAzureOpenAITTSUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAITTSUsesReferenceEntraTokenProvider(t *testing.T) {
+	var gotAPIKey string
+	var gotAuth string
+	tokenCalls := 0
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotAuth = r.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com",
+		"tts-deployment",
+		"2024-06-01",
+		"",
+		"",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+		WithOpenAITTSAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if tokenCalls != 1 {
+		t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+	}
+	if gotAPIKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token provider auth", gotAPIKey)
+	}
+	if gotAuth != "Bearer provider-token" {
+		t.Fatalf("Authorization = %q, want provider bearer token", gotAuth)
+	}
+}
+
 func TestOpenAITTSBuildSpeechRequestUsesReferenceOptions(t *testing.T) {
 	provider := mustNewOpenAITTS(t, "test-key", "", "",
 		WithOpenAITTSInstructions("speak warmly"),
@@ -498,6 +553,122 @@ func TestOpenAITTSPrewarmSendsReferenceRootRequest(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("timed out waiting for OpenAI TTS prewarm request")
+	}
+}
+
+func TestAzureOpenAITTSPrewarmUsesReferenceAPIKeyHeader(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		return nil, errors.New("prewarm failed")
+	})
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com/",
+		"tts-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	tts.Prewarm(provider)
+
+	select {
+	case req := <-reqCh:
+		if got := req.URL.String(); got != "https://resource.openai.azure.com/" {
+			t.Fatalf("prewarm URL = %q, want Azure resource root", got)
+		}
+		if got := req.Header.Get("api-key"); got != "azure-key" {
+			t.Fatalf("api-key = %q, want Azure API key", got)
+		}
+		if got := req.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q, want no bearer auth for Azure API key", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Azure OpenAI TTS prewarm request")
+	}
+}
+
+func TestAzureOpenAITTSPrewarmUsesReferenceEntraTokenProvider(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		return nil, errors.New("prewarm failed")
+	})
+	tokenCalls := 0
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com/",
+		"tts-deployment",
+		"2024-06-01",
+		"",
+		"",
+		WithOpenAITTSAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	tts.Prewarm(provider)
+
+	select {
+	case req := <-reqCh:
+		if tokenCalls != 1 {
+			t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+		}
+		if got := req.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("Authorization = %q, want provider bearer token", got)
+		}
+		if got := req.Header.Get("api-key"); got != "" {
+			t.Fatalf("api-key = %q, want no Azure API key header", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Azure OpenAI TTS prewarm request")
+	}
+}
+
+func TestAzureOpenAITTSPrewarmUsesReferenceEntraToken(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		return nil, errors.New("prewarm failed")
+	})
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com/",
+		"tts-deployment",
+		"2024-06-01",
+		"",
+		"entra-token",
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	tts.Prewarm(provider)
+
+	select {
+	case req := <-reqCh:
+		if got := req.Header.Get("Authorization"); got != "Bearer entra-token" {
+			t.Fatalf("Authorization = %q, want Entra bearer token", got)
+		}
+		if got := req.Header.Get("api-key"); got != "" {
+			t.Fatalf("api-key = %q, want no Azure API key header", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Azure OpenAI TTS prewarm request")
 	}
 }
 
@@ -732,7 +903,7 @@ func TestOpenAITTSSynthesizeSnapshotsReferenceOptions(t *testing.T) {
 	}
 }
 
-func TestOpenAITTSSynthesizeUsesUnknownRequestIDFallback(t *testing.T) {
+func TestOpenAITTSSynthesizeUsesEmptyRequestIDFallback(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -760,15 +931,24 @@ func TestOpenAITTSSynthesizeUsesUnknownRequestIDFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if audio.RequestID != "unknown" {
-		t.Fatalf("audio request id = %q, want reference unknown fallback", audio.RequestID)
+	if audio.RequestID != "" {
+		t.Fatalf("audio request id = %q, want reference empty fallback", audio.RequestID)
 	}
 	final, err := stream.Next()
 	if err != nil {
 		t.Fatalf("final Next error = %v", err)
 	}
-	if final == nil || !final.IsFinal || final.RequestID != "unknown" {
-		t.Fatalf("final = %#v, want final marker with reference unknown request id", final)
+	if final == nil || !final.IsFinal || final.RequestID != "" {
+		t.Fatalf("final = %#v, want final marker with reference empty request id", final)
+	}
+}
+
+func TestOpenAITTSRequestIDMissingHeadersMatchReferenceEmpty(t *testing.T) {
+	if got := openAITTSRequestID(nil); got != "" {
+		t.Fatalf("nil header request id = %q, want reference empty fallback", got)
+	}
+	if got := openAITTSRequestID(http.Header{}); got != "" {
+		t.Fatalf("empty header request id = %q, want reference empty fallback", got)
 	}
 }
 

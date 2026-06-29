@@ -539,6 +539,54 @@ func TestNewAzureOpenAISTTUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAISTTUsesReferenceEntraTokenProvider(t *testing.T) {
+	var gotAPIKey string
+	var gotAuth string
+	tokenCalls := 0
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotAuth = r.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com",
+		"stt-deployment",
+		"2024-06-01",
+		"",
+		"",
+		withOpenAISTTHTTPClient(client),
+		WithOpenAISTTAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if tokenCalls != 1 {
+		t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+	}
+	if gotAPIKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token provider auth", gotAPIKey)
+	}
+	if gotAuth != "Bearer provider-token" {
+		t.Fatalf("Authorization = %q, want provider bearer token", gotAuth)
+	}
+}
+
 func TestAzureOpenAIRealtimeSTTWebsocketRequestMatchesReference(t *testing.T) {
 	provider, err := NewAzureOpenAISTT(
 		"gpt-4o-mini-transcribe",
@@ -584,6 +632,45 @@ func TestAzureOpenAIRealtimeSTTWebsocketUsesEntraToken(t *testing.T) {
 	headers := buildOpenAIRealtimeSTTHeaders(provider)
 	if headers.Get("Authorization") != "Bearer entra-token" {
 		t.Fatalf("authorization = %q, want Entra bearer token", headers.Get("Authorization"))
+	}
+}
+
+func TestAzureOpenAIRealtimeSTTWebsocketDoesNotUseReferenceEntraTokenProvider(t *testing.T) {
+	tokenCalls := 0
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com/",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	var gotAuth, gotUserAgent string
+	provider.dialWebsocket = func(_ context.Context, _ string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		gotAuth = headers.Get("Authorization")
+		gotUserAgent = headers.Get("User-Agent")
+		return nil, nil, errors.New("stop")
+	}
+
+	_, _, _ = provider.dialRealtimeSTTWebsocketAttempt(context.Background())
+
+	if tokenCalls != 0 {
+		t.Fatalf("token provider calls = %d, want 0 for reference realtime websocket auth", tokenCalls)
+	}
+	if gotAuth != "Bearer azure-key" {
+		t.Fatalf("authorization = %q, want reference API-key bearer token", gotAuth)
+	}
+	if gotUserAgent != "LiveKit Agents" {
+		t.Fatalf("user-agent = %q, want LiveKit Agents", gotUserAgent)
 	}
 }
 
@@ -1730,6 +1817,57 @@ func TestOpenAISTTStreamReconnectsAfterUnexpectedNormalClose(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTStreamExposesReferenceTimingAnchors(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	release := make(chan struct{})
+	defer close(release)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			<-release
+		})
+		return dialer(endpoint, headers)
+	}
+
+	before := time.Now().Add(-time.Second)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatalf("stream does not implement reference timing anchors")
+	}
+	if got := timing.StartTimeOffset(); got != 0 {
+		t.Fatalf("StartTimeOffset = %v, want reference zero default", got)
+	}
+	if got := timing.StartTime(); got < float64(before.UnixNano())/1e9 {
+		t.Fatalf("StartTime = %v, want stream creation wall-clock anchor", got)
+	}
+	timing.SetStartTimeOffset(2.5)
+	timing.SetStartTime(123.5)
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing = offset %v start %v, want reference values", timing.StartTimeOffset(), timing.StartTime())
+	}
+	assertOpenAISTTPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-0.01)
+	})
+	assertOpenAISTTPanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-0.01)
+	})
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing changed after rejected update: offset %v start %v", timing.StartTimeOffset(), timing.StartTime())
+	}
+}
+
 func TestOpenAISTTStreamRecyclesAfterMaxSessionDuration(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -1783,6 +1921,75 @@ func TestOpenAISTTStreamRecyclesAfterMaxSessionDuration(t *testing.T) {
 	}
 	if got := dialCount.Load(); got != 2 {
 		t.Fatalf("dial count = %d, want recycled connection", got)
+	}
+}
+
+func TestOpenAISTTStreamUnexpectedCloseResetsMaxSessionTimer(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	provider.maxSession = 80 * time.Millisecond
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	thirdConnected := make(chan struct{})
+	var thirdConnectedOnce sync.Once
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			switch attempt {
+			case 1:
+				time.Sleep(70 * time.Millisecond)
+				return
+			case 2:
+				close(secondConnected)
+				time.Sleep(20 * time.Millisecond)
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"conversation.item.input_audio_transcription.completed",
+					"item_id":"item-1",
+					"transcript":"after reconnect"
+				}`)); err != nil {
+					t.Errorf("write final transcript: %v", err)
+				}
+				<-releaseSecond
+			default:
+				thirdConnectedOnce.Do(func() { close(thirdConnected) })
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not reconnect after unexpected close")
+	}
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error after reconnect = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || event.Alternatives[0].Text != "after reconnect" {
+		t.Fatalf("event = %+v, want final transcript after reconnect", event)
+	}
+	select {
+	case <-thirdConnected:
+		t.Fatal("stream recycled immediately after reconnect final, want max-session timer reset per websocket")
+	case <-time.After(40 * time.Millisecond):
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want no immediate recycle after reconnect", got)
 	}
 }
 
@@ -2618,7 +2825,7 @@ func TestOpenAIRealtimeSTTEndInputWithVADWaitsForEndOfSpeech(t *testing.T) {
 	}
 }
 
-func TestOpenAIRealtimeSTTCloseEndsVADInput(t *testing.T) {
+func TestOpenAIRealtimeSTTCloseClosesVADWithoutEndInput(t *testing.T) {
 	vadStream := newFakeOpenAISTTVADStream()
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
 		WithOpenAISTTRealtime(true),
@@ -2653,9 +2860,12 @@ func TestOpenAIRealtimeSTTCloseEndsVADInput(t *testing.T) {
 		t.Fatalf("Close error = %v", err)
 	}
 	select {
-	case <-vadStream.endInputCh:
+	case <-vadStream.closeCh:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for VAD EndInput on close")
+		t.Fatal("timed out waiting for VAD Close on stream close")
+	}
+	if got := vadStream.endInputCalls(); got != 0 {
+		t.Fatalf("VAD EndInput calls = %d, want close without EndInput", got)
 	}
 }
 
@@ -4040,8 +4250,8 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech stopped without start: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want timing-only speech stop", events)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "missing-start" {
+		t.Fatalf("events = %+v, want boundary-only end-of-speech without timing", events)
 	}
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"missing-start","transcript":"","usage":{}}`), state)
 	if err != nil {
@@ -4056,15 +4266,15 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech started before missing stop id: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want timing-only speech start", events)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech || events[0].RequestID != "item-without-stop-id" {
+		t.Fatalf("events = %+v, want start-of-speech boundary", events)
 	}
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","audio_end_ms":900}`), missingStopIDState)
 	if err != nil {
 		t.Fatalf("speech stopped missing id: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want missing-id speech stop ignored", events)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "" {
+		t.Fatalf("events = %+v, want missing-id end-of-speech boundary", events)
 	}
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-without-stop-id","transcript":"","usage":{}}`), missingStopIDState)
 	if err != nil {
@@ -4078,8 +4288,8 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech started: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want timing-only speech start", events)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech || events[0].RequestID != "item-1" {
+		t.Fatalf("events = %+v, want start-of-speech boundary", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"hel"}`), state)
@@ -4112,8 +4322,8 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech stopped: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want timing-only speech stop", events)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "item-1" {
+		t.Fatalf("events = %+v, want end-of-speech boundary", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-1","transcript":"hello","usage":{"input_tokens":3,"output_tokens":0}}`), state)
@@ -4131,6 +4341,35 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTServerVADEmitsSpeechBoundaryEvents(t *testing.T) {
+	state := &openAIRealtimeSTTMessageState{}
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"turn-1","audio_start_ms":1200}`), state)
+	if err != nil {
+		t.Fatalf("speech started: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want start-of-speech event", events)
+	}
+	if events[0].Type != stt.SpeechEventStartOfSpeech || events[0].RequestID != "turn-1" || events[0].SpeechStartTime == nil || *events[0].SpeechStartTime != 1.2 {
+		t.Fatalf("start event = %+v, want request id and speech start time", events[0])
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"turn-1","audio_end_ms":1950}`), state)
+	if err != nil {
+		t.Fatalf("speech stopped: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want end-of-speech event", events)
+	}
+	if events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "turn-1" {
+		t.Fatalf("end event = %+v, want request id", events[0])
+	}
+	if len(events[0].Alternatives) != 1 || events[0].Alternatives[0].EndTime != 1.95 {
+		t.Fatalf("end alternatives = %+v, want end_time from provider audio_end_ms", events[0].Alternatives)
+	}
+}
+
 func TestOpenAIRealtimeSTTCompletedEmptyTranscriptEmitsUsageOnly(t *testing.T) {
 	state := &openAIRealtimeSTTMessageState{}
 
@@ -4138,16 +4377,16 @@ func TestOpenAIRealtimeSTTCompletedEmptyTranscriptEmitsUsageOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech started: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want timing-only speech start", events)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech || events[0].RequestID != "silent" {
+		t.Fatalf("events = %+v, want start-of-speech boundary", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"silent","audio_end_ms":900}`), state)
 	if err != nil {
 		t.Fatalf("speech stopped: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("events = %+v, want timing-only speech stop", events)
+	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "silent" {
+		t.Fatalf("events = %+v, want end-of-speech boundary", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"silent","transcript":"","usage":{"input_tokens":2,"output_tokens":0}}`), state)
@@ -4545,4 +4784,18 @@ func (f *fakeOpenAISTTVADStream) Next() (*vad.VADEvent, error) {
 		}
 		return ev, nil
 	}
+}
+
+func assertOpenAISTTPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Fatalf("expected panic %q", want)
+		}
+		if fmt.Sprint(got) != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }

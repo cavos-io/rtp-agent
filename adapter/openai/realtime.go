@@ -2725,20 +2725,30 @@ func (s *realtimeSession) persistRealtimeAudioTranscripts() {
 
 func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent, bool) {
 	status, _ := response["status"].(string)
-	if status != "failed" {
+	if status != "failed" && status != "incomplete" {
 		return llm.RealtimeEvent{}, false
 	}
-	statusDetails, _ := response["status_details"].(map[string]any)
+	rawDetails, detailsPresent := response["status_details"]
+	statusDetails, hasDetails := rawDetails.(map[string]any)
+	if status == "incomplete" && detailsPresent && !hasDetails {
+		return llm.RealtimeEvent{}, false
+	}
 	errorBody, hasError := statusDetails["error"].(map[string]any)
-	message := "OpenAI Realtime API response failed with unknown error"
+	message := fmt.Sprintf("OpenAI Realtime API response %s with unknown error", status)
 	var body any
 	if hasError {
 		errorType := openAIRealtimeString(errorBody["type"])
 		if errorType == "" {
 			errorType = "unknown"
 		}
-		message = fmt.Sprintf("OpenAI Realtime API response failed with error type: %s", errorType)
+		if errorCode := openAIRealtimeString(errorBody["code"]); errorCode != "" {
+			message = fmt.Sprintf("OpenAI Realtime API response %s: [%s] %s", status, errorType, errorCode)
+		} else {
+			message = fmt.Sprintf("OpenAI Realtime API response %s with error type: %s", status, errorType)
+		}
 		body = errorBody
+	} else if reason := openAIRealtimeString(statusDetails["reason"]); reason != "" {
+		message = fmt.Sprintf("OpenAI Realtime API response %s: %s", status, reason)
 	}
 	return llm.RealtimeEvent{
 		Type:  llm.RealtimeEventTypeError,
@@ -2937,7 +2947,7 @@ func (s *realtimeSession) defaultRealtimeMessageModalities() []string {
 	if s != nil && s.model != nil && len(s.model.modalities) > 0 {
 		return append([]string(nil), s.model.modalities...)
 	}
-	return []string{"audio", "text"}
+	return []string{"text", "audio"}
 }
 
 func (s *realtimeSession) closeRealtimeGeneration() {

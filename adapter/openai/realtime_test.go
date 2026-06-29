@@ -3945,11 +3945,20 @@ func TestRealtimeSessionResolvesDefaultModalitiesWhenItemDone(t *testing.T) {
 		if !ok {
 			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
 		}
-		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
-			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+			t.Fatalf("modalities = %#v, want default text and audio", modalities)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for default modalities")
+	}
+}
+
+func TestRealtimeSessionDefaultModalitiesUseReferenceOrder(t *testing.T) {
+	session := &realtimeSession{}
+
+	modalities := session.defaultRealtimeMessageModalities()
+	if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+		t.Fatalf("modalities = %#v, want default text and audio", modalities)
 	}
 }
 
@@ -4226,8 +4235,8 @@ func TestRealtimeSessionCloseClosesActiveGenerationStreams(t *testing.T) {
 		if !ok {
 			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
 		}
-		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
-			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+			t.Fatalf("modalities = %#v, want default text and audio", modalities)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for default modalities")
@@ -4334,8 +4343,8 @@ func TestRealtimeSessionDisconnectClosesActiveGenerationStreams(t *testing.T) {
 		if !ok {
 			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
 		}
-		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
-			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+			t.Fatalf("modalities = %#v, want default text and audio", modalities)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for default modalities")
@@ -5598,8 +5607,8 @@ func TestRealtimeSessionResolvesDefaultModalitiesWhenResponseDone(t *testing.T) 
 		if !ok {
 			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
 		}
-		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
-			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+			t.Fatalf("modalities = %#v, want default text and audio", modalities)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for default modalities")
@@ -7619,7 +7628,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	if !errors.As(errorEvent.Error, &apiErr) {
 		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
 	}
-	if apiErr.Message != "OpenAI Realtime API response failed with error type: invalid_request_error" {
+	if apiErr.Message != "OpenAI Realtime API response failed: [invalid_request_error] inference_rate_limit_exceeded" {
 		t.Fatalf("APIError message = %q", apiErr.Message)
 	}
 	if !apiErr.Retryable {
@@ -7667,7 +7676,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	}
 }
 
-func TestRealtimeResponseDoneIncompleteClosesGenerationWithoutError(t *testing.T) {
+func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -7690,8 +7699,78 @@ func TestRealtimeResponseDoneIncompleteClosesGenerationWithoutError(t *testing.T
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if ok {
-		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want incomplete response logged only", errorEvent)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	}
+	if errorEvent.Type != llm.RealtimeEventTypeError {
+		t.Fatalf("event type = %q, want error", errorEvent.Type)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
+	}
+	if session.generation != nil {
+		t.Fatal("generation still active, want incomplete response to close streams")
+	}
+	select {
+	case _, ok := <-messageCh:
+		if ok {
+			t.Fatal("message stream still open, want incomplete response to close it")
+		}
+	default:
+		t.Fatal("message stream not closed")
+	}
+	select {
+	case _, ok := <-functionCh:
+		if ok {
+			t.Fatal("function stream still open, want incomplete response to close it")
+		}
+	default:
+		t.Fatal("function stream not closed")
+	}
+}
+
+func TestRealtimeResponseDoneIncompleteWithoutDetailsReportsRecoverableError(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_incomplete",
+			"status": "incomplete",
+			"usage":  map[string]any{"total_tokens": 3.0},
+		},
+	}
+
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  messageCh,
+			functionCh: functionCh,
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
+	}
+	if errorEvent.Type != llm.RealtimeEventTypeError {
+		t.Fatalf("event type = %q, want error", errorEvent.Type)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response incomplete with unknown error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
 	}
 	if session.generation != nil {
 		t.Fatal("generation still active, want incomplete response to close streams")

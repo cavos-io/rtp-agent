@@ -30,21 +30,24 @@ import (
 
 type OpenAITTS struct {
 	tts.MetricsEmitter
-	client         *openai.Client
-	httpClient     openai.HTTPDoer
-	apiKey         string
-	model          openai.SpeechModel
-	voice          openai.SpeechVoice
-	baseURL        string
-	baseURLSet     bool
-	speed          float64
-	instructions   string
-	responseFormat openai.SpeechResponseFormat
-	mu             sync.Mutex
-	closed         bool
-	streams        map[*openaiTTSChunkedStream]struct{}
-	prewarmCancel  context.CancelFunc
-	prewarmDone    chan struct{}
+	client               *openai.Client
+	httpClient           openai.HTTPDoer
+	apiKey               string
+	azureADTokenProvider func(context.Context) (string, error)
+	azureADToken         string
+	azureAPIKeyAuth      bool
+	model                openai.SpeechModel
+	voice                openai.SpeechVoice
+	baseURL              string
+	baseURLSet           bool
+	speed                float64
+	instructions         string
+	responseFormat       openai.SpeechResponseFormat
+	mu                   sync.Mutex
+	closed               bool
+	streams              map[*openaiTTSChunkedStream]struct{}
+	prewarmCancel        context.CancelFunc
+	prewarmDone          chan struct{}
 }
 
 const (
@@ -107,6 +110,12 @@ func withOpenAITTSHTTPClient(client openai.HTTPDoer) OpenAITTSOption {
 	}
 }
 
+func WithOpenAITTSAzureADTokenProvider(provider func(context.Context) (string, error)) OpenAITTSOption {
+	return func(t *OpenAITTS) {
+		t.azureADTokenProvider = provider
+	}
+}
+
 func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) (*OpenAITTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -143,7 +152,7 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	if azureEndpoint == "" && !preflight.baseURLSet {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI TTS", azureOpenAIEndpointEnv)
 	}
-	if apiKey == "" && azureADToken == "" {
+	if apiKey == "" && azureADToken == "" && preflight.azureADTokenProvider == nil {
 		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI TTS", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
 	}
 	if azureDeployment == "" {
@@ -151,13 +160,15 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	}
 
 	provider := &OpenAITTS{
-		apiKey:         apiKey,
-		model:          model,
-		voice:          voice,
-		baseURL:        azureEndpoint,
-		speed:          1.0,
-		responseFormat: openai.SpeechResponseFormatMp3,
-		streams:        make(map[*openaiTTSChunkedStream]struct{}),
+		apiKey:          apiKey,
+		azureADToken:    azureADToken,
+		azureAPIKeyAuth: apiKey != "",
+		model:           model,
+		voice:           voice,
+		baseURL:         azureEndpoint,
+		speed:           1.0,
+		responseFormat:  openai.SpeechResponseFormatMp3,
+		streams:         make(map[*openaiTTSChunkedStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -184,6 +195,12 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 		config.HTTPClient = &azureADTokenHTTPClient{
 			base:  config.HTTPClient,
 			token: azureADToken,
+		}
+	}
+	if provider.azureADTokenProvider != nil {
+		config.HTTPClient = &azureADTokenProviderHTTPClient{
+			base:     config.HTTPClient,
+			provider: provider.azureADTokenProvider,
 		}
 	}
 	provider.client = openai.NewClientWithConfig(config)
@@ -323,7 +340,17 @@ func (t *OpenAITTS) Prewarm() {
 		if err != nil {
 			return
 		}
-		if t.apiKey != "" {
+		if t.azureADTokenProvider != nil {
+			token, err := t.azureADTokenProvider(ctx)
+			if err != nil {
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+		} else if t.azureADToken != "" {
+			req.Header.Set("Authorization", "Bearer "+t.azureADToken)
+		} else if t.azureAPIKeyAuth && t.apiKey != "" {
+			req.Header.Set("api-key", t.apiKey)
+		} else if t.apiKey != "" {
 			req.Header.Set("Authorization", "Bearer "+t.apiKey)
 		}
 		client := t.httpClient
@@ -504,7 +531,7 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 
 func openAITTSRequestID(header http.Header) string {
 	if header == nil {
-		return "unknown"
+		return ""
 	}
 	if requestID := header.Get("X-Request-Id"); requestID != "" {
 		return requestID
@@ -512,7 +539,7 @@ func openAITTSRequestID(header http.Header) string {
 	if requestID := header.Get("Openai-Request-Id"); requestID != "" {
 		return requestID
 	}
-	return "unknown"
+	return ""
 }
 
 func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {

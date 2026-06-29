@@ -43,34 +43,35 @@ const (
 )
 
 type OpenAISTT struct {
-	client           *openai.Client
-	httpClient       openai.HTTPDoer
-	apiKey           string
-	azureADToken     string
-	baseURL          string
-	baseURLSet       bool
-	realtimeBaseURL  string
-	model            string
-	language         string
-	languageSet      bool
-	languageValue    string
-	detectLanguage   bool
-	detectOptionSet  bool
-	prompt           string
-	turnDetection    map[string]interface{}
-	turnDetectionSet bool
-	noiseReduction   string
-	useRealtime      bool
-	connect          llm.APIConnectOptions
-	maxSession       time.Duration
-	dialWebsocket    openAIRealtimeSTTWebsocketDialer
-	vad              vad.VAD
-	vadSet           bool
-	streamsMu        sync.Mutex
-	streams          map[*openAIRealtimeSTTStream]struct{}
-	nextRequestID    uint64
-	requestCancels   map[uint64]context.CancelFunc
-	closed           bool
+	client               *openai.Client
+	httpClient           openai.HTTPDoer
+	apiKey               string
+	azureADToken         string
+	azureADTokenProvider func(context.Context) (string, error)
+	baseURL              string
+	baseURLSet           bool
+	realtimeBaseURL      string
+	model                string
+	language             string
+	languageSet          bool
+	languageValue        string
+	detectLanguage       bool
+	detectOptionSet      bool
+	prompt               string
+	turnDetection        map[string]interface{}
+	turnDetectionSet     bool
+	noiseReduction       string
+	useRealtime          bool
+	connect              llm.APIConnectOptions
+	maxSession           time.Duration
+	dialWebsocket        openAIRealtimeSTTWebsocketDialer
+	vad                  vad.VAD
+	vadSet               bool
+	streamsMu            sync.Mutex
+	streams              map[*openAIRealtimeSTTStream]struct{}
+	nextRequestID        uint64
+	requestCancels       map[uint64]context.CancelFunc
+	closed               bool
 }
 
 type OpenAISTTOption func(*OpenAISTT)
@@ -169,6 +170,12 @@ func withOpenAISTTHTTPClient(client openai.HTTPDoer) OpenAISTTOption {
 	}
 }
 
+func WithOpenAISTTAzureADTokenProvider(provider func(context.Context) (string, error)) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.azureADTokenProvider = provider
+	}
+}
+
 func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -227,7 +234,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if azureEndpoint == "" && !preflight.baseURLSet {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI STT", azureOpenAIEndpointEnv)
 	}
-	if apiKey == "" && azureADToken == "" {
+	if apiKey == "" && azureADToken == "" && preflight.azureADTokenProvider == nil {
 		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI STT", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
 	}
 	if azureDeployment == "" {
@@ -236,15 +243,16 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	realtimeBaseURL := openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment)
 
 	provider := &OpenAISTT{
-		apiKey:          apiKey,
-		azureADToken:    azureADToken,
-		baseURL:         realtimeBaseURL,
-		realtimeBaseURL: realtimeBaseURL,
-		model:           model,
-		language:        "en",
-		connect:         llm.DefaultAPIConnectOptions(),
-		maxSession:      10 * time.Minute,
-		dialWebsocket:   defaultOpenAIRealtimeSTTWebsocketDialer,
+		apiKey:               apiKey,
+		azureADToken:         azureADToken,
+		azureADTokenProvider: preflight.azureADTokenProvider,
+		baseURL:              realtimeBaseURL,
+		realtimeBaseURL:      realtimeBaseURL,
+		model:                model,
+		language:             "en",
+		connect:              llm.DefaultAPIConnectOptions(),
+		maxSession:           10 * time.Minute,
+		dialWebsocket:        defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -274,6 +282,12 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		config.HTTPClient = &azureADTokenHTTPClient{
 			base:  config.HTTPClient,
 			token: azureADToken,
+		}
+	}
+	if provider.azureADTokenProvider != nil {
+		config.HTTPClient = &azureADTokenProviderHTTPClient{
+			base:     config.HTTPClient,
+			provider: provider.azureADTokenProvider,
 		}
 	}
 	provider.client = openai.NewClientWithConfig(config)
@@ -488,6 +502,7 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		},
 		owner: s,
 	}
+	stream.startTime = float64(time.Now().UnixNano()) / 1e9
 	s.registerRealtimeSTTStream(stream)
 	go stream.readLoop()
 	if vadStream != nil {
@@ -785,25 +800,57 @@ func openAITimedStrings(words []struct {
 }
 
 type openAIRealtimeSTTStream struct {
-	conn          *websocket.Conn
-	ctx           context.Context
-	cancel        context.CancelFunc
-	events        chan *stt.SpeechEvent
-	eventStream   *openAIRealtimeQueuedStream[*stt.SpeechEvent]
-	errCh         chan error
-	pendingErr    error
-	mu            sync.Mutex
-	closed        bool
-	inputEnded    bool
-	vadInputEnded bool
-	committed     bool
-	hasAudio      bool
-	pushedSR      uint32
-	audio         *audio.AudioByteStream
-	normalizer    openAIRealtimeInputAudioNormalizer
-	state         *openAIRealtimeSTTMessageState
-	owner         *OpenAISTT
-	vadStream     vad.VADStream
+	conn            *websocket.Conn
+	ctx             context.Context
+	cancel          context.CancelFunc
+	events          chan *stt.SpeechEvent
+	eventStream     *openAIRealtimeQueuedStream[*stt.SpeechEvent]
+	errCh           chan error
+	pendingErr      error
+	mu              sync.Mutex
+	closed          bool
+	inputEnded      bool
+	vadInputEnded   bool
+	committed       bool
+	hasAudio        bool
+	pushedSR        uint32
+	audio           *audio.AudioByteStream
+	normalizer      openAIRealtimeInputAudioNormalizer
+	state           *openAIRealtimeSTTMessageState
+	owner           *OpenAISTT
+	vadStream       vad.VADStream
+	startTimeOffset float64
+	startTime       float64
+}
+
+func (s *openAIRealtimeSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *openAIRealtimeSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTimeOffset = offset
+}
+
+func (s *openAIRealtimeSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+
+func (s *openAIRealtimeSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTime = startTime
 }
 
 func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -1018,7 +1065,7 @@ func (s *openAIRealtimeSTTStream) Close() error {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
-	s.closeVADStreamLocked(true)
+	s.closeVADStreamLocked(false)
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
@@ -1204,6 +1251,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 				s.errCh <- reconnectErr
 				return
 			}
+			connectedAt = time.Now()
 			continue
 		}
 		if msgType != websocket.TextMessage {
@@ -1402,16 +1450,30 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		itemID := openAIString(message["item_id"])
 		state.currentItemID = itemID
 		state.timing[itemID] = openAIRealtimeSTTTiming{startMS: openAIInt(message["audio_start_ms"])}
-		return nil, nil
+		startTime := float64(openAIInt(message["audio_start_ms"])) / 1000
+		return []*stt.SpeechEvent{{
+			Type:            stt.SpeechEventStartOfSpeech,
+			RequestID:       itemID,
+			SpeechStartTime: &startTime,
+		}}, nil
 	case "input_audio_buffer.speech_stopped":
 		itemID := openAIString(message["item_id"])
 		timing, ok := state.timing[itemID]
 		if !ok {
-			return nil, nil
+			return []*stt.SpeechEvent{{
+				Type:      stt.SpeechEventEndOfSpeech,
+				RequestID: itemID,
+			}}, nil
 		}
 		timing.endMS = openAIInt(message["audio_end_ms"])
 		state.timing[itemID] = timing
-		return nil, nil
+		return []*stt.SpeechEvent{{
+			Type:      stt.SpeechEventEndOfSpeech,
+			RequestID: itemID,
+			Alternatives: []stt.SpeechData{{
+				EndTime: float64(timing.endMS) / 1000,
+			}},
+		}}, nil
 	case "conversation.item.input_audio_transcription.delta":
 		itemID := openAIString(message["item_id"])
 		if itemID == "" {
