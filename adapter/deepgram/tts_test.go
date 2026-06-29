@@ -759,6 +759,37 @@ func TestDeepgramTTSFinalCloseDrainsQueuedAudio(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSManualCloseAfterEndInputDropsQueuedAudio(t *testing.T) {
+	stream := &deepgramTTSStream{
+		audio:      make(chan *tts.SynthesizedAudio, 2),
+		errCh:      make(chan error, 1),
+		inputEnded: true,
+		writeJSON: func(any) error {
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+	stream.audio <- &tts.SynthesizedAudio{RequestID: "req-cancel"}
+	stream.audio <- &tts.SynthesizedAudio{IsFinal: true, RequestID: "req-cancel"}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	stream.closeAfterFinal()
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() after manual Close error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("Next() after manual Close = %#v, want final marker without queued audio", audio)
+	}
+	if next, err := stream.Next(); next != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next() after manual Close = (%#v, %v), want nil EOF", next, err)
+	}
+}
+
 func TestDeepgramTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	providerErr := errors.New("provider failed after audio")
 	for i := range 200 {

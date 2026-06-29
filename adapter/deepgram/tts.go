@@ -706,7 +706,6 @@ func (s *deepgramTTSStream) closeAfterFinal() {
 		return
 	}
 	if s.closed {
-		s.drainClosed = true
 		return
 	}
 	s.closed = true
