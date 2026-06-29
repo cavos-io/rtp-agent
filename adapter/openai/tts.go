@@ -1033,6 +1033,7 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 	s.provider.EmitMetricsCollected(&telemetry.TTSMetrics{
 		Label:           s.provider.Label(),
 		Timestamp:       time.Now(),
+		RequestID:       s.requestID,
 		CharactersCount: len(s.inputText),
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,

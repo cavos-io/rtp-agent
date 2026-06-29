@@ -1162,11 +1162,13 @@ func TestOpenAITTSSSEPCMEmitsFinalMarkerAfterCleanEOF(t *testing.T) {
 }
 
 func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
+	const requestID = "req_sse_usage"
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
-		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
+		sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4}) + `"}` + "\n\n" +
+			`data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{requestID}},
 			Body:       io.NopCloser(strings.NewReader(sse)),
 		}, nil
 	})
@@ -1177,6 +1179,9 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	metricsCh := make(chan int, 1)
 	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
 		if metrics.InputTokens == 7 && metrics.OutputTokens == 11 {
+			if metrics.RequestID != requestID {
+				t.Errorf("metrics request id = %q, want provider request id", metrics.RequestID)
+			}
 			metricsCh <- metrics.CharactersCount
 		}
 	})
@@ -1186,8 +1191,19 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
-	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF after done event", err)
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.RequestID != requestID {
+		t.Fatalf("audio request id = %q, want provider request id", audio.RequestID)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != requestID {
+		t.Fatalf("final = %#v, want final marker with provider request id", final)
 	}
 
 	select {
