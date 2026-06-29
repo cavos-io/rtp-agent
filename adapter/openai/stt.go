@@ -863,12 +863,29 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 	if s.vadStream != nil {
 		vadErr = s.vadStream.EndInput()
 	}
-	if s.vadStream == nil {
+	if s.vadStream == nil && s.shouldCommitOnEndInputLocked() {
 		if err := s.commitAudioLocked(); err != nil {
 			return err
 		}
 	}
 	return vadErr
+}
+
+func (s *openAIRealtimeSTTStream) shouldCommitOnEndInputLocked() bool {
+	if s.owner == nil {
+		return true
+	}
+	return !s.owner.usesRealtimeSTTServerTurnDetection()
+}
+
+func (s *OpenAISTT) usesRealtimeSTTServerTurnDetection() bool {
+	if s == nil || openAIRealtimeIsWhisperModel(s.model) {
+		return false
+	}
+	if s.turnDetectionSet && s.turnDetection == nil {
+		return false
+	}
+	return true
 }
 
 func (s *openAIRealtimeSTTStream) flushAudioLocked() error {
