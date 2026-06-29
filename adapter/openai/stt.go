@@ -228,7 +228,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 
 	provider := &OpenAISTT{
 		apiKey:        apiKey,
-		baseURL:       azureEndpoint,
+		baseURL:       openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment),
 		model:         model,
 		language:      "en",
 		connect:       llm.DefaultAPIConnectOptions(),
@@ -261,6 +261,10 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
+}
+
+func openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment string) string {
+	return strings.TrimRight(azureEndpoint, "/") + "/openai/deployments/" + url.PathEscape(azureDeployment)
 }
 
 func NewOVHCloudOpenAISTT(model, apiKey string, opts ...OpenAISTTOption) (*OpenAISTT, error) {

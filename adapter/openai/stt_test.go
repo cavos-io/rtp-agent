@@ -463,6 +463,34 @@ func TestNewAzureOpenAISTTUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeSTTWebsocketRequestMatchesReference(t *testing.T) {
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com/",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAISTTRealtime(true),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	wsURL := buildOpenAIRealtimeSTTWebsocketURL(provider)
+	if wsURL.Scheme != "wss" || wsURL.Host != "resource.openai.azure.com" || wsURL.Path != "/openai/deployments/stt-deployment/realtime" {
+		t.Fatalf("websocket URL = %q, want Azure deployment realtime endpoint", wsURL.String())
+	}
+	if wsURL.Query().Get("intent") != "transcription" {
+		t.Fatalf("intent query = %q, want transcription", wsURL.Query().Get("intent"))
+	}
+
+	headers := buildOpenAIRealtimeSTTHeaders(provider)
+	if headers.Get("Authorization") != "Bearer azure-key" {
+		t.Fatalf("authorization = %q, want reference bearer token", headers.Get("Authorization"))
+	}
+}
+
 func TestAzureOpenAIRealtimeWhisperUsesDefaultSileroVAD(t *testing.T) {
 	provider, err := NewAzureOpenAISTT(
 		"gpt-realtime-whisper",
