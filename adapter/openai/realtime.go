@@ -1381,7 +1381,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 		input["transcription"] = options.InputAudioTranscription
 	}
 	if options.InputAudioNoiseReductionSet || options.InputAudioNoiseReduction != nil {
-		input["noise_reduction"] = options.InputAudioNoiseReduction
+		input["noise_reduction"] = openAIRealtimeNoiseReduction(options.InputAudioNoiseReduction)
 	}
 	output := make(map[string]any)
 	if options.Voice != "" {
@@ -1411,6 +1411,16 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 		msg["event_id"] = eventID
 	}
 	return msg
+}
+
+func openAIRealtimeNoiseReduction(noiseReduction any) any {
+	if noiseReduction == nil {
+		return nil
+	}
+	if kind, ok := noiseReduction.(string); ok {
+		return map[string]any{"type": kind}
+	}
+	return noiseReduction
 }
 
 func openAIRealtimeChangedOptionsSession(session map[string]any, current map[string]any) (map[string]any, map[string]any) {

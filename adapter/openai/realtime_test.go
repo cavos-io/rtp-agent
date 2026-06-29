@@ -1098,6 +1098,23 @@ func TestRealtimeModelConstructorInputAudioNoiseReductionAppliesToInitialSession
 	}
 }
 
+func TestRealtimeInputAudioNoiseReductionStringMapsToObject(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		InputAudioNoiseReduction: "far_field",
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	noiseReduction := input["noise_reduction"].(map[string]any)
+	if noiseReduction["type"] != "far_field" {
+		t.Fatalf("noise_reduction = %#v, want type far_field", noiseReduction)
+	}
+}
+
 func TestRealtimeModelConstructorTurnDetectionAppliesToInitialSession(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
