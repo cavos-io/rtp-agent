@@ -142,6 +142,12 @@ func TestDeepgramTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 
 	if err := tts.Close(provider); err != nil {
 		t.Fatalf("tts.Close(provider) error = %v", err)
@@ -794,6 +800,34 @@ func TestDeepgramTTSStreamURLUsesConfiguredBaseURL(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamDefersReferenceWebsocketDialUntilInput(t *testing.T) {
+	dialCalls := 0
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("unexpected dial before input")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v, want no provider dial before input", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("dial calls after Stream() = %d, want 0", dialCalls)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() before input error = %v", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("dial calls after pre-input Close() = %d, want 0", dialCalls)
+	}
+}
+
 func TestDeepgramTTSStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -806,13 +840,23 @@ func TestDeepgramTTSStreamReturnsAPITimeoutErrorOnDialFailure(t *testing.T) {
 
 	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
 
-	_, err := provider.Stream(context.Background())
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	err = stream.Flush()
 	if err == nil {
-		t.Fatal("Stream error = nil, want APITimeoutError")
+		t.Fatal("Flush error = nil, want APITimeoutError")
 	}
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Flush error = %T %v, want APITimeoutError", err, err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams after failed dial = %d, want 0", len(provider.streams))
 	}
 }
 
@@ -828,13 +872,23 @@ func TestDeepgramTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 
 	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
 
-	_, err := provider.Stream(context.Background())
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	err = stream.Flush()
 	if err == nil {
-		t.Fatal("Stream error = nil, want APIConnectionError")
+		t.Fatal("Flush error = nil, want APIConnectionError")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams after failed dial = %d, want 0", len(provider.streams))
 	}
 }
 
@@ -920,24 +974,30 @@ func TestDeepgramTTSStreamCallerCancelReturnsContextCanceled(t *testing.T) {
 
 	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
 	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Stream(ctx)
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := provider.Stream(ctx)
-		errCh <- err
+		errCh <- stream.Flush()
 	}()
 	cancel()
 
 	select {
 	case err := <-errCh:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("Stream canceled error = %T %v, want context.Canceled", err, err)
+			t.Fatalf("Flush canceled error = %T %v, want context.Canceled", err, err)
 		}
 		var connectionErr *llm.APIConnectionError
 		if errors.As(err, &connectionErr) {
-			t.Fatalf("Stream canceled error = %T, want raw context cancellation", err)
+			t.Fatalf("Flush canceled error = %T, want raw context cancellation", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Stream remained blocked after caller cancellation")
+		t.Fatal("Flush remained blocked after caller cancellation")
 	}
 }
 
@@ -1255,6 +1315,12 @@ func TestDeepgramTTSStreamCloseWaitsForReferenceFlushedAck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
 	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 	closeDone := make(chan error, 1)
 	go func() {
 		closeDone <- stream.Close()
@@ -1324,6 +1390,12 @@ func TestDeepgramTTSStreamCloseUsesReferenceAnyMessageAck(t *testing.T) {
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
 	}
 	closeDone := make(chan error, 1)
 	go func() {
