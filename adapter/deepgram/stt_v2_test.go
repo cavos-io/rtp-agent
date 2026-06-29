@@ -1284,22 +1284,55 @@ func TestDeepgramSTTv2UsageFlushDoesNotBlockConsumer(t *testing.T) {
 	}
 }
 
-func TestDeepgramSTTv2ErrorMessageReturnsAPIStatusError(t *testing.T) {
-	stream := &deepgramV2Stream{}
+func TestDeepgramSTTv2ErrorMessageDoesNotAbortReferenceStream(t *testing.T) {
+	closeSeen := make(chan struct{})
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runDeepgramSTTv2ErrorThenTurnInfoWebsocketServer(serverConn, closeSeen, serverErr)
 
-	err := stream.processEvent(deepgramV2Response{
-		Type:        "Error",
-		Description: "bad turn",
-	})
-	if err == nil {
-		t.Fatal("processEvent Error returned nil, want APIStatusError")
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
 	}
-	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("error = %T %v, want APIStatusError", err, err)
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
 	}
-	if statusErr.StatusCode != -1 {
-		t.Fatalf("status error = %+v, want status -1", statusErr)
+	defer stream.Close()
+
+	start, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() after provider Error = %T %v, want start_of_speech", err, err)
+	}
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %s, want start_of_speech", start.Type)
+	}
+	transcript, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() transcript after provider Error = %v", err)
+	}
+	if transcript.Type != stt.SpeechEventInterimTranscript || len(transcript.Alternatives) != 1 || transcript.Alternatives[0].Text != "hello" {
+		t.Fatalf("transcript = %+v, want hello interim after provider Error", transcript)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
 	}
 }
 
@@ -1368,6 +1401,41 @@ func runDeepgramSTTv2TurnInfoWebsocketServer(conn net.Conn, closeSeen chan<- str
 				errCh <- nil
 				return
 			}
+		}
+	}
+}
+
+func runDeepgramSTTv2ErrorThenTurnInfoWebsocketServer(conn net.Conn, closeSeen chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for _, msg := range []string{
+		`{"type":"Error","description":"bad turn"}`,
+		`{"type":"TurnInfo","event":"StartOfTurn","request_id":"req-v2","transcript":"hello","audio_window_start":0.1,"audio_window_end":0.4,"words":[{"word":"hello","start":0.1,"end":0.4,"confidence":0.9}]}`,
+	} {
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(msg)); err != nil {
+			errCh <- err
+			return
+		}
+	}
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "CloseStream" {
+			close(closeSeen)
+			errCh <- nil
+			return
 		}
 	}
 }

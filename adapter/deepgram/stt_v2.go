@@ -429,8 +429,7 @@ func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 			continue
 		}
 		if err := s.processEvent(resp); err != nil {
-			s.sendError(err)
-			return
+			continue
 		}
 	}
 }
