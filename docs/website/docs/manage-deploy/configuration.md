@@ -47,6 +47,7 @@ Common variables include:
 - `RTP_AGENT_REALTIME_MODEL`
 - `RTP_AGENT_AVATAR_PROVIDER`
 - `RTP_AGENT_TURN_DETECTOR_PROVIDER`
+- `RTP_AGENT_SMART_TURN_GRPC_ADDR` (gRPC inference endpoint when provider is `cavos`; defaults to `localhost:9001`)
 
 Provider API keys are provider-specific, for example `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, and `LIVEKIT_API_KEY`.
 

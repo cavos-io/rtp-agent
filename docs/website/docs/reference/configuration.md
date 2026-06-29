@@ -28,6 +28,7 @@ Use this page as a compact map for common environment-backed settings. It is not
 | `RealtimeModel` | `RTP_AGENT_REALTIME_MODEL` |
 | `AvatarProvider` | `RTP_AGENT_AVATAR_PROVIDER` |
 | `TurnDetectorProvider` | `RTP_AGENT_TURN_DETECTOR_PROVIDER` |
+| Smart turn gRPC endpoint (when provider `cavos`) | `RTP_AGENT_SMART_TURN_GRPC_ADDR` |
 
 ## LiveKit and transport
 
