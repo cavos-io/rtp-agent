@@ -1123,6 +1123,7 @@ func openAIRealtimeSyncedChatContext(chatCtx *llm.ChatContext) *llm.ChatContext 
 		return llm.NewChatContext()
 	}
 	synced := chatCtx.Copy(llm.ChatContextCopyOptions{
+		ExcludeFunctionCall: true,
 		ExcludeHandoff:      true,
 		ExcludeConfigUpdate: true,
 	})

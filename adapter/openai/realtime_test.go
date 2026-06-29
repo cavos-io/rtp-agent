@@ -6632,6 +6632,27 @@ func TestRealtimeChatContextCreateMessagesMapUserTextMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeChatContextCreateMessagesExcludeFunctionItems(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "msg_123", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.FunctionCall{ID: "call_123", CallID: "call_lookup", Name: "lookup", Arguments: "{}"},
+		&llm.FunctionCallOutput{ID: "out_123", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+	}
+
+	msgs, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err != nil {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %v, want nil", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want only user message after function filter", len(msgs))
+	}
+	item := msgs[0]["item"].(map[string]any)
+	if item["id"] != "msg_123" {
+		t.Fatalf("item id = %#v, want msg_123", item["id"])
+	}
+}
+
 func TestRealtimeChatContextCreateMessagesPreserveEmptyTextContent(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	chatCtx.AddMessage(llm.ChatMessageArgs{
