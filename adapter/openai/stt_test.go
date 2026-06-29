@@ -1038,6 +1038,7 @@ func TestOpenAIRealtimeSTTVADPushErrorClosesStreamLikeReference(t *testing.T) {
 		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
 	)
 	release := make(chan struct{})
+	messages := make(chan string, 1)
 	defer close(release)
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -1051,8 +1052,10 @@ func TestOpenAIRealtimeSTTVADPushErrorClosesStreamLikeReference(t *testing.T) {
 					return
 				default:
 				}
-				if _, _, err := conn.ReadMessage(); err != nil {
+				if _, payload, err := conn.ReadMessage(); err != nil {
 					return
+				} else {
+					messages <- string(payload)
 				}
 			}
 		})
@@ -1074,6 +1077,7 @@ func TestOpenAIRealtimeSTTVADPushErrorClosesStreamLikeReference(t *testing.T) {
 	if err == nil || err.Error() != "vad push failed" {
 		t.Fatalf("PushFrame error = %T %v, want VAD push error", err, err)
 	}
+	assertNoRealtimeMessage(t, messages, "VAD push failure should stop provider audio append")
 	err = stream.PushFrame(&model.AudioFrame{
 		Data:              make([]byte, 4800),
 		SampleRate:        24000,
