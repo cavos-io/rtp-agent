@@ -1426,6 +1426,9 @@ func ensureOpenAIStrictJSONSchemaWithRoot(schema map[string]any, root map[string
 		if _, ok := schema["additionalProperties"]; !ok {
 			schema["additionalProperties"] = false
 		}
+		if properties, ok := schema["properties"].(map[string]any); !ok || properties == nil {
+			schema["properties"] = map[string]any{}
+		}
 	}
 
 	if properties, ok := schema["properties"].(map[string]any); ok {
