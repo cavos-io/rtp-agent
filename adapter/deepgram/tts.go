@@ -422,7 +422,7 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == 499 {
 			resp.Body.Close()
 			s.cancelRequestLocked()

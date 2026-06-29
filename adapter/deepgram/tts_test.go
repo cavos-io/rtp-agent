@@ -404,6 +404,55 @@ func TestDeepgramTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeAcceptsReferenceSuccessStatusClass(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		body   []byte
+	}{
+		{name: "partial-content", status: http.StatusPartialContent, body: []byte{0x01, 0x02}},
+		{name: "no-content", status: http.StatusNoContent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			oldClient := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: tt.status,
+					Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+					Body:       io.NopCloser(bytes.NewReader(tt.body)),
+					Request:    r,
+				}, nil
+			})}
+			t.Cleanup(func() { http.DefaultClient = oldClient })
+
+			provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+			stream, err := provider.Synthesize(context.Background(), "hello")
+			if err != nil {
+				t.Fatalf("Synthesize() error = %v", err)
+			}
+			defer stream.Close()
+
+			if len(tt.body) > 0 {
+				audio, err := stream.Next()
+				if err != nil {
+					t.Fatalf("audio Next() error = %v, want successful 2xx audio", err)
+				}
+				if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, tt.body) {
+					t.Fatalf("audio Next() = %+v, want body bytes %v", audio, tt.body)
+				}
+			}
+
+			final, err := stream.Next()
+			if err != nil {
+				t.Fatalf("final Next() error = %v, want final marker for 2xx response", err)
+			}
+			if final == nil || !final.IsFinal || final.Frame != nil {
+				t.Fatalf("final Next() = %+v, want boundary-only final marker", final)
+			}
+		})
+	}
+}
+
 func TestDeepgramTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
