@@ -846,10 +846,11 @@ type dgResponse struct {
 	Metadata struct {
 		RequestID string `json:"request_id"`
 	} `json:"metadata"`
-	parsedJSON      bool
-	isFinalSeen     bool
-	speechFinalSeen bool
-	requestIDSeen   bool
+	parsedJSON       bool
+	isFinalSeen      bool
+	speechFinalSeen  bool
+	requestIDSeen    bool
+	alternativesSeen bool
 }
 
 func (r *dgResponse) UnmarshalJSON(data []byte) error {
@@ -877,6 +878,10 @@ func (r *dgResponse) UnmarshalJSON(data []byte) error {
 	if metadataRaw, ok := fields["metadata"]; ok {
 		_ = json.Unmarshal(metadataRaw, &metadataFields)
 	}
+	var channelFields map[string]json.RawMessage
+	if channelRaw, ok := fields["channel"]; ok {
+		_ = json.Unmarshal(channelRaw, &channelFields)
+	}
 
 	r.Type = raw.Type
 	r.IsFinal = raw.IsFinal
@@ -889,6 +894,7 @@ func (r *dgResponse) UnmarshalJSON(data []byte) error {
 	_, r.isFinalSeen = fields["is_final"]
 	_, r.speechFinalSeen = fields["speech_final"]
 	_, r.requestIDSeen = metadataFields["request_id"]
+	_, r.alternativesSeen = channelFields["alternatives"]
 	return nil
 }
 
@@ -1145,7 +1151,7 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 }
 
 func (r dgResponse) malformedReferenceResults() bool {
-	return r.parsedJSON && (!r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen)
+	return r.parsedJSON && (!r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen || !r.alternativesSeen)
 }
 
 func deepgramSTTUnexpectedCloseError(err error) error {
