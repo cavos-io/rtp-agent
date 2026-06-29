@@ -206,6 +206,10 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if model == "" {
 		model = "gpt-4o-mini-transcribe"
 	}
+	preflight := &OpenAISTT{}
+	for _, opt := range opts {
+		opt(preflight)
+	}
 	if azureEndpoint == "" {
 		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
 	}
@@ -218,7 +222,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if azureADToken == "" {
 		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
 	}
-	if azureEndpoint == "" {
+	if azureEndpoint == "" && !preflight.baseURLSet {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI STT", azureOpenAIEndpointEnv)
 	}
 	if apiKey == "" && azureADToken == "" {
