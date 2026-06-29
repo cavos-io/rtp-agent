@@ -260,6 +260,61 @@ func TestDeepgramTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"err_msg":"client closed"}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next = (%#v, %v), want nil, io.EOF for reference client-closed status", audio, err)
+	}
+}
+
+func TestDeepgramTTSSynthesizeClientClosedStatusSkipsBodyRead(t *testing.T) {
+	oldClient := http.DefaultClient
+	body := &deepgramTTSReadTrackingCloser{}
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF for reference client-closed status", err)
+	}
+	if body.reads != 0 {
+		t.Fatalf("body reads = %d, want 0 for client-closed status cleanup", body.reads)
+	}
+	if !body.closed {
+		t.Fatal("body was not closed")
+	}
+}
+
 func TestDeepgramTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1395,6 +1450,21 @@ func (r deepgramTTSReadCloser) Read([]byte) (int, error) {
 }
 
 func (r deepgramTTSReadCloser) Close() error {
+	return nil
+}
+
+type deepgramTTSReadTrackingCloser struct {
+	reads  int
+	closed bool
+}
+
+func (r *deepgramTTSReadTrackingCloser) Read([]byte) (int, error) {
+	r.reads++
+	return 0, io.EOF
+}
+
+func (r *deepgramTTSReadTrackingCloser) Close() error {
+	r.closed = true
 	return nil
 }
 

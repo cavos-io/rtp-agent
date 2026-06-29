@@ -158,6 +158,10 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 499 {
+			resp.Body.Close()
+			return &deepgramTTSChunkedStream{requestID: uuid.NewString()}, nil
+		}
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
