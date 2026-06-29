@@ -729,11 +729,13 @@ type dgWord struct {
 }
 
 type dgAlternative struct {
-	Transcript    string
-	Confidence    float64
-	Languages     []string
-	languagesSeen bool
-	Words         []dgWord
+	Transcript     string
+	Confidence     float64
+	confidenceSeen bool
+	Languages      []string
+	languagesSeen  bool
+	parsedJSON     bool
+	Words          []dgWord
 }
 
 func (a *dgAlternative) UnmarshalJSON(data []byte) error {
@@ -754,6 +756,8 @@ func (a *dgAlternative) UnmarshalJSON(data []byte) error {
 	a.Confidence = raw.Confidence
 	a.Languages = raw.Languages
 	a.Words = raw.Words
+	a.parsedJSON = true
+	_, a.confidenceSeen = fields["confidence"]
 	_, a.languagesSeen = fields["languages"]
 	return nil
 }
@@ -893,6 +897,9 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 
 	var transcriptBuilder string
 	for _, alt := range resp.Channel.Alternatives {
+		if deepgramLiveMalformedAlternative(alt) {
+			return nil
+		}
 		if deepgramLiveMissingDetectedLanguage(languageStr, alt) {
 			return nil
 		}
@@ -914,6 +921,10 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	}
 
 	return event
+}
+
+func deepgramLiveMalformedAlternative(alt dgAlternative) bool {
+	return alt.parsedJSON && !alt.confidenceSeen
 }
 
 func deepgramLiveMissingDetectedLanguage(languageStr string, alt dgAlternative) bool {
