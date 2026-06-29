@@ -1768,6 +1768,42 @@ func TestOpenAITTSChunkedStreamReturnsAPITimeoutErrorOnReadTimeout(t *testing.T)
 	}
 }
 
+func TestOpenAITTSChunkedStreamReadFailureUnregistersReferenceStream(t *testing.T) {
+	body := &countingFailingReadCloser{err: errors.New("socket closed")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after terminal read failure", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want failed stream unregistered", streamCount)
+	}
+}
+
 func TestOpenAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &countingOpenAIReadCloser{}
 	stream := &openaiTTSChunkedStream{resp: body}
@@ -1945,6 +1981,18 @@ type failingReadCloser struct {
 func (r failingReadCloser) Read([]byte) (int, error) { return 0, r.err }
 
 func (r failingReadCloser) Close() error { return nil }
+
+type countingFailingReadCloser struct {
+	err    error
+	closed int
+}
+
+func (r *countingFailingReadCloser) Read([]byte) (int, error) { return 0, r.err }
+
+func (r *countingFailingReadCloser) Close() error {
+	r.closed++
+	return nil
+}
 
 type closeErrorReadCloser struct {
 	err error
