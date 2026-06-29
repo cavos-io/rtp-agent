@@ -8738,6 +8738,96 @@ func TestDeepgramSTTFallbackPassesReferenceDetectLanguage(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTFallbackSelectsReferenceV2Options(t *testing.T) {
+	t.Setenv("DEEPGRAM_API_KEY", "test-deepgram-key")
+	type wsRecord struct {
+		authorization string
+		query         map[string][]string
+	}
+	records := make(chan wsRecord, 1)
+	upgrader := websocket.Upgrader{}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		records <- wsRecord{
+			authorization: r.Header.Get("Authorization"),
+			query:         map[string][]string(r.URL.Query()),
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen test websocket server: %v", err)
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
+	server.Start()
+	defer server.Close()
+
+	sampleRate := 48000
+	mipOptOut := true
+	provider, err := fallbackSTTFromProvider(AppConfig{
+		STTVersion:        "v2",
+		STTBaseURL:        "ws" + strings.TrimPrefix(server.URL, "http") + "/v2/listen",
+		STTModel:          "flux-general-multi",
+		STTSampleRate:     &sampleRate,
+		STTMIPOptOut:      &mipOptOut,
+		STTKeytermsPrompt: []string{"LiveKit", "rtp-agent"},
+		STTTags:           []string{"agent", "fallback"},
+	}, providerDeepgram)
+	if err != nil {
+		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
+	}
+
+	if _, ok := provider.(*deepgram.DeepgramSTTv2); !ok {
+		t.Fatalf("provider type = %T, want *deepgram.DeepgramSTTv2", provider)
+	}
+	if got, want := provider.Label(), "deepgram.STTv2"; got != want {
+		t.Fatalf("Label() = %q, want %q", got, want)
+	}
+	if got, want := stt.Model(provider), "flux-general-multi"; got != want {
+		t.Fatalf("stt.Model() = %q, want %q", got, want)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case record := <-records:
+		if got, want := record.authorization, "Token test-deepgram-key"; got != want {
+			t.Fatalf("Authorization = %q, want %q", got, want)
+		}
+		expectedQuery := map[string]string{
+			"model":       "flux-general-multi",
+			"encoding":    "linear16",
+			"sample_rate": "48000",
+			"mip_opt_out": "true",
+		}
+		for key, want := range expectedQuery {
+			if got := firstQueryValue(record.query, key); got != want {
+				t.Fatalf("query %s = %q, want %q", key, got, want)
+			}
+		}
+		if got, want := record.query["keyterm"], []string{"LiveKit", "rtp-agent"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("keyterm = %#v, want %#v", got, want)
+		}
+		if got, want := record.query["tag"], []string{"agent", "fallback"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("tag = %#v, want %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Deepgram STTv2 websocket request")
+	}
+}
+
 func TestRtzrSTTFallbackPassesReferenceOptions(t *testing.T) {
 	type wsRecord struct {
 		authorization string

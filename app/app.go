@@ -2453,6 +2453,95 @@ func configureSTTFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func deepgramSTTFromConfig(cfg AppConfig) corestt.STT {
+	version := strings.TrimSpace(strings.ToLower(cfg.STTVersion))
+	if version == "v2" || version == "2" {
+		sttOpts := []deepgram.DeepgramSTTv2Option{}
+		if cfg.STTBaseURL != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2BaseURL(cfg.STTBaseURL))
+		}
+		if cfg.STTModel != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2Model(cfg.STTModel))
+		}
+		if cfg.STTSampleRate != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2SampleRate(*cfg.STTSampleRate))
+		}
+		if cfg.STTMIPOptOut != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2MipOptOut(*cfg.STTMIPOptOut))
+		}
+		if len(cfg.STTKeytermsPrompt) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2Keyterms(cfg.STTKeytermsPrompt))
+		}
+		if len(cfg.STTTags) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2Tags(cfg.STTTags))
+		}
+		return deepgram.NewDeepgramSTTv2("", sttOpts...)
+	}
+
+	sttOpts := []deepgram.DeepgramSTTOption{}
+	if cfg.STTBaseURL != "" {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
+	}
+	if cfg.STTLanguage != "" {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTLanguage(cfg.STTLanguage))
+	}
+	if cfg.STTDetectLanguage {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDetectLanguage(true))
+	}
+	if cfg.STTInterimResults != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
+	}
+	if cfg.STTPunctuate != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTPunctuate(*cfg.STTPunctuate))
+	}
+	if cfg.STTSmartFormat != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSmartFormat(*cfg.STTSmartFormat))
+	}
+	if cfg.STTNoDelay != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNoDelay(*cfg.STTNoDelay))
+	}
+	if cfg.STTEndpointingMS != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTEndpointing(*cfg.STTEndpointingMS))
+	}
+	if cfg.STTDiarization != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDiarization(*cfg.STTDiarization))
+	}
+	if cfg.STTFillerWords != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTFillerWords(*cfg.STTFillerWords))
+	}
+	if cfg.STTSampleRate != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSampleRate(*cfg.STTSampleRate))
+	}
+	if cfg.STTNumberOfChannels != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumChannels(*cfg.STTNumberOfChannels))
+	}
+	if cfg.STTVADEvents != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTVADEvents(*cfg.STTVADEvents))
+	}
+	if cfg.STTProfanityFilter != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTProfanityFilter(*cfg.STTProfanityFilter))
+	}
+	if cfg.STTNumerals != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumerals(*cfg.STTNumerals))
+	}
+	if cfg.STTMIPOptOut != nil {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTMipOptOut(*cfg.STTMIPOptOut))
+	}
+	if len(cfg.STTKeywords) > 0 {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeywords(cfg.STTKeywords))
+	}
+	if len(cfg.STTKeytermsPrompt) > 0 {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeyterms(cfg.STTKeytermsPrompt))
+	}
+	if len(cfg.STTRedact) > 0 {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTRedact(cfg.STTRedact))
+	}
+	if len(cfg.STTTags) > 0 {
+		sttOpts = append(sttOpts, deepgram.WithDeepgramSTTTags(cfg.STTTags))
+	}
+	return deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...)
+}
+
 func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error) {
 	switch normalizeProvider(provider) {
 	case providerAWS:
@@ -2466,68 +2555,7 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 	case providerSpitch:
 		return spitch.NewSpitchSTT(cfg.SpitchAPIKey), nil
 	case providerDeepgram:
-		sttOpts := []deepgram.DeepgramSTTOption{}
-		if cfg.STTBaseURL != "" {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
-		}
-		if cfg.STTLanguage != "" {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTLanguage(cfg.STTLanguage))
-		}
-		if cfg.STTDetectLanguage {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDetectLanguage(true))
-		}
-		if cfg.STTInterimResults != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
-		}
-		if cfg.STTPunctuate != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTPunctuate(*cfg.STTPunctuate))
-		}
-		if cfg.STTSmartFormat != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSmartFormat(*cfg.STTSmartFormat))
-		}
-		if cfg.STTNoDelay != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNoDelay(*cfg.STTNoDelay))
-		}
-		if cfg.STTEndpointingMS != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTEndpointing(*cfg.STTEndpointingMS))
-		}
-		if cfg.STTDiarization != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDiarization(*cfg.STTDiarization))
-		}
-		if cfg.STTFillerWords != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTFillerWords(*cfg.STTFillerWords))
-		}
-		if cfg.STTSampleRate != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSampleRate(*cfg.STTSampleRate))
-		}
-		if cfg.STTNumberOfChannels != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumChannels(*cfg.STTNumberOfChannels))
-		}
-		if cfg.STTVADEvents != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTVADEvents(*cfg.STTVADEvents))
-		}
-		if cfg.STTProfanityFilter != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTProfanityFilter(*cfg.STTProfanityFilter))
-		}
-		if cfg.STTNumerals != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumerals(*cfg.STTNumerals))
-		}
-		if cfg.STTMIPOptOut != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTMipOptOut(*cfg.STTMIPOptOut))
-		}
-		if len(cfg.STTKeywords) > 0 {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeywords(cfg.STTKeywords))
-		}
-		if len(cfg.STTKeytermsPrompt) > 0 {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeyterms(cfg.STTKeytermsPrompt))
-		}
-		if len(cfg.STTRedact) > 0 {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTRedact(cfg.STTRedact))
-		}
-		if len(cfg.STTTags) > 0 {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTTags(cfg.STTTags))
-		}
-		return deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...), nil
+		return deepgramSTTFromConfig(cfg), nil
 	case providerCavos:
 		return cavosSTTFromConfig(cfg), nil
 	case providerOpenAI:
@@ -4931,68 +4959,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = ensureSTTStreaming(clova.NewClovaSTT(cfg.ClovaSTTSecret, cfg.ClovaSTTInvokeURL, sttOpts...), a.VAD)
 	case providerDeepgram:
-		sttOpts := []deepgram.DeepgramSTTOption{}
-		if cfg.STTBaseURL != "" {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTBaseURL(cfg.STTBaseURL))
-		}
-		if cfg.STTLanguage != "" {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTLanguage(cfg.STTLanguage))
-		}
-		if cfg.STTDetectLanguage {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDetectLanguage(true))
-		}
-		if cfg.STTInterimResults != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTInterimResults(*cfg.STTInterimResults))
-		}
-		if cfg.STTPunctuate != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTPunctuate(*cfg.STTPunctuate))
-		}
-		if cfg.STTSmartFormat != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSmartFormat(*cfg.STTSmartFormat))
-		}
-		if cfg.STTNoDelay != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNoDelay(*cfg.STTNoDelay))
-		}
-		if cfg.STTEndpointingMS != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTEndpointing(*cfg.STTEndpointingMS))
-		}
-		if cfg.STTDiarization != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTDiarization(*cfg.STTDiarization))
-		}
-		if cfg.STTFillerWords != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTFillerWords(*cfg.STTFillerWords))
-		}
-		if cfg.STTSampleRate != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTSampleRate(*cfg.STTSampleRate))
-		}
-		if cfg.STTNumberOfChannels != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumChannels(*cfg.STTNumberOfChannels))
-		}
-		if cfg.STTVADEvents != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTVADEvents(*cfg.STTVADEvents))
-		}
-		if cfg.STTProfanityFilter != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTProfanityFilter(*cfg.STTProfanityFilter))
-		}
-		if cfg.STTNumerals != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTNumerals(*cfg.STTNumerals))
-		}
-		if cfg.STTMIPOptOut != nil {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTMipOptOut(*cfg.STTMIPOptOut))
-		}
-		if len(cfg.STTKeywords) > 0 {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeywords(cfg.STTKeywords))
-		}
-		if len(cfg.STTKeytermsPrompt) > 0 {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTKeyterms(cfg.STTKeytermsPrompt))
-		}
-		if len(cfg.STTRedact) > 0 {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTRedact(cfg.STTRedact))
-		}
-		if len(cfg.STTTags) > 0 {
-			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTTags(cfg.STTTags))
-		}
-		a.STT = deepgram.NewDeepgramSTT("", cfg.STTModel, sttOpts...)
+		a.STT = deepgramSTTFromConfig(cfg)
 	case providerFal:
 		a.STT = falSTTFromConfig(cfg)
 	case providerFireworks:
