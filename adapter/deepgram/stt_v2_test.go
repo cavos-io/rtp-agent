@@ -116,6 +116,42 @@ func TestDeepgramSTTv2TurnResumedStartsReferenceSpeech(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2TurnUpdatesStartReferenceSpeech(t *testing.T) {
+	tests := []struct {
+		name      string
+		event     string
+		wantEvent stt.SpeechEventType
+	}{
+		{name: "update", event: "Update", wantEvent: stt.SpeechEventInterimTranscript},
+		{name: "eager_end", event: "EagerEndOfTurn", wantEvent: stt.SpeechEventPreflightTranscript},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stream := &deepgramV2Stream{
+				events:   make(chan *stt.SpeechEvent, 8),
+				language: "en",
+			}
+
+			resp := deepgramV2Turn(tt.event, "req-1", "hello", []deepgramV2Word{{Word: "hello", Start: 0.1, End: 0.4, Confidence: 0.8}})
+			if err := stream.processEvent(resp); err != nil {
+				t.Fatalf("processEvent(%s) error = %v", tt.event, err)
+			}
+
+			start := nextDeepgramV2TestEvent(t, stream)
+			if start.Type != stt.SpeechEventStartOfSpeech {
+				t.Fatalf("event 0 type = %s, want %s", start.Type, stt.SpeechEventStartOfSpeech)
+			}
+			transcript := nextDeepgramV2TestEvent(t, stream)
+			if transcript.Type != tt.wantEvent {
+				t.Fatalf("event 1 type = %s, want %s", transcript.Type, tt.wantEvent)
+			}
+			if len(transcript.Alternatives) != 1 || transcript.Alternatives[0].Text != "hello" {
+				t.Fatalf("alternatives = %+v, want transcript hello", transcript.Alternatives)
+			}
+		})
+	}
+}
+
 func TestDeepgramSTTv2TurnInfoPreservesReferenceTranscriptWithoutWords(t *testing.T) {
 	stream := &deepgramV2Stream{
 		events:   make(chan *stt.SpeechEvent, 8),

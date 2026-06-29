@@ -487,33 +487,43 @@ func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "Update":
 		if !s.speaking {
-			return nil
+			if !s.startSpeakingIfTranscript(resp) {
+				return nil
+			}
 		}
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "EagerEndOfTurn":
 		if !s.speaking {
-			return nil
+			if !s.startSpeakingIfTranscript(resp) {
+				return nil
+			}
 		}
 		s.sendTranscriptEvent(stt.SpeechEventPreflightTranscript, resp)
 	case "TurnResumed":
 		if !s.speaking {
-			s.speaking = true
-			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+			s.startSpeakingIfTranscript(resp)
 		}
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "EndOfTurn":
 		if !s.speaking {
-			if !deepgramV2HasTranscript(resp) {
+			if !s.startSpeakingIfTranscript(resp) {
 				return nil
 			}
-			s.speaking = true
-			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		}
 		s.speaking = false
 		s.sendTranscriptEvent(stt.SpeechEventFinalTranscript, resp)
 		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	}
 	return nil
+}
+
+func (s *deepgramV2Stream) startSpeakingIfTranscript(resp deepgramV2Response) bool {
+	if !deepgramV2HasTranscript(resp) {
+		return false
+	}
+	s.speaking = true
+	s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+	return true
 }
 
 func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, resp deepgramV2Response) {
