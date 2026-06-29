@@ -1426,6 +1426,20 @@ func (s *deepgramStream) hasInputEnded() bool {
 }
 
 func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	default:
+	}
+
 	if s.isClosed() {
 		select {
 		case event, ok := <-s.events:
@@ -1444,6 +1458,13 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 
 	select {
 	case <-s.ctx.Done():
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, io.EOF
 	case err := <-s.errCh:
 		select {

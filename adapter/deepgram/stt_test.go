@@ -1992,6 +1992,33 @@ func TestDeepgramSTTStreamNextAfterCloseDrainsQueuedEvent(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTNextDrainsQueuedEventBeforeCanceledContext(t *testing.T) {
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued final",
+		}},
+	}
+
+	for i := 0; i < 256; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stream := &deepgramStream{
+			ctx:    ctx,
+			events: make(chan *stt.SpeechEvent, 1),
+		}
+		stream.events <- want
+
+		got, err := stream.Next()
+		if err != nil {
+			t.Fatalf("iteration %d: Next() error = %v, want queued event before canceled context", i, err)
+		}
+		if got != want {
+			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
+		}
+	}
+}
+
 func TestDeepgramSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	want := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
