@@ -3036,6 +3036,51 @@ func TestOpenAILLMProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestOpenAILLMProviderCloseCancelsPendingChat(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = openAITestHTTPDoer(func(req *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		<-req.Context().Done()
+		close(requestCanceled)
+		return nil, req.Context().Err()
+	})
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := model.Chat(
+			context.Background(),
+			llm.NewChatContext(),
+			llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		)
+		done <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for chat request")
+	}
+	if err := llm.Close(model); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("llm.Close did not cancel pending OpenAI chat request")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Chat error after provider Close = %T %v, want io.ErrClosedPipe", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Chat did not return after provider Close")
+	}
+}
+
 func TestOpenAILLMChatAfterCloseIsRejected(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK, "data: [DONE]\n\n"),
