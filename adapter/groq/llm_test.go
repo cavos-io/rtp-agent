@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -282,6 +283,41 @@ func TestGroqLLMStartupErrorUnregistersLazyStream(t *testing.T) {
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("registered streams after startup error = %d, want unregistered", len(provider.streams))
+	}
+}
+
+func TestGroqLLMStreamEOFReleasesInnerStream(t *testing.T) {
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"id":"chatcmpl-groq","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}` + "\n\n" +
+					"data: [DONE]\n\n")),
+			Request: r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+
+	stream, err := provider.Chat(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("first Next error = %v, want assistant chunk", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %T %v, want EOF", err, err)
+	}
+	if got := reflect.ValueOf(provider.inner).Elem().FieldByName("streams").Len(); got != 0 {
+		t.Fatalf("inner registered streams after EOF = %d, want released", got)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("registered Groq streams after EOF = %d, want released", len(provider.streams))
 	}
 }
 

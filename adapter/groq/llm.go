@@ -220,7 +220,7 @@ func (s *groqLLMStream) Next() (*llm.ChatChunk, error) {
 		return nil, io.EOF
 	}
 	if err != nil {
-		s.unregister()
+		_ = s.Close()
 	}
 	return chunk, err
 }
