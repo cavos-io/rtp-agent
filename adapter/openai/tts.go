@@ -253,6 +253,7 @@ func (t *OpenAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		streamFormat:   openAITTSStreamFormatForModel(t.model),
 		provider:       t,
 		inputText:      text,
+		metricsStarted: time.Now(),
 	}
 	if !t.registerStream(stream) {
 		stream.Close()
@@ -424,6 +425,9 @@ type openaiTTSChunkedStream struct {
 	sseDone        bool
 	sseSawAudio    bool
 	sseFinalSent   bool
+	metricsStarted time.Time
+	metricsFirst   time.Time
+	metricsAudio   float64
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -726,6 +730,15 @@ func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
 }
 
 func (s *openaiTTSChunkedStream) audioFrame(frame *model.AudioFrame) *tts.SynthesizedAudio {
+	if frame != nil {
+		if s.metricsStarted.IsZero() {
+			s.metricsStarted = time.Now()
+		}
+		if s.metricsFirst.IsZero() {
+			s.metricsFirst = time.Now()
+		}
+		s.metricsAudio += coreaudio.CalculateAudioDuration([]*model.AudioFrame{frame})
+	}
 	return &tts.SynthesizedAudio{Frame: frame, RequestID: s.requestID}
 }
 
@@ -847,15 +860,12 @@ func (s *openaiTTSChunkedStream) audioFrameFromPCMChunk(data []byte) (*tts.Synth
 	if len(data) == 0 {
 		return nil, nil
 	}
-	return &tts.SynthesizedAudio{
-		RequestID: s.requestID,
-		Frame: &model.AudioFrame{
-			Data:              data,
-			SampleRate:        sampleRate,
-			NumChannels:       channels,
-			SamplesPerChannel: uint32(len(data)) / max(channels*2, 1),
-		},
-	}, nil
+	return s.audioFrame(&model.AudioFrame{
+		Data:              data,
+		SampleRate:        sampleRate,
+		NumChannels:       channels,
+		SamplesPerChannel: uint32(len(data)) / max(channels*2, 1),
+	}), nil
 }
 
 func (s *openaiTTSChunkedStream) nextWAVFrame(data []byte) (*model.AudioFrame, bool, error) {
@@ -1030,13 +1040,24 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 	if inputTokens == 0 && outputTokens == 0 {
 		return
 	}
+	duration := 0.0
+	if !s.metricsStarted.IsZero() {
+		duration = time.Since(s.metricsStarted).Seconds()
+	}
+	ttfb := 0.0
+	if !s.metricsStarted.IsZero() && !s.metricsFirst.IsZero() {
+		ttfb = s.metricsFirst.Sub(s.metricsStarted).Seconds()
+	}
 	s.provider.EmitMetricsCollected(&telemetry.TTSMetrics{
 		Label:           s.provider.Label(),
 		Timestamp:       time.Now(),
 		RequestID:       s.requestID,
+		TTFB:            ttfb,
+		Duration:        duration,
 		CharactersCount: len(s.inputText),
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
+		AudioDuration:   s.metricsAudio,
 		Streamed:        false,
 		Metadata: &telemetry.Metadata{
 			ModelName:     s.provider.Model(),

@@ -1176,13 +1176,13 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
 		withOpenAITTSHTTPClient(client),
 	)
-	metricsCh := make(chan int, 1)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
 	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
 		if metrics.InputTokens == 7 && metrics.OutputTokens == 11 {
 			if metrics.RequestID != requestID {
 				t.Errorf("metrics request id = %q, want provider request id", metrics.RequestID)
 			}
-			metricsCh <- metrics.CharactersCount
+			metricsCh <- metrics
 		}
 	})
 
@@ -1207,9 +1207,15 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	}
 
 	select {
-	case chars := <-metricsCh:
-		if chars != len("hello tokens") {
-			t.Fatalf("CharactersCount = %d, want input text length", chars)
+	case metrics := <-metricsCh:
+		if metrics.CharactersCount != len("hello tokens") {
+			t.Fatalf("CharactersCount = %d, want input text length", metrics.CharactersCount)
+		}
+		if metrics.AudioDuration <= 0 {
+			t.Fatalf("AudioDuration = %f, want synthesized audio duration", metrics.AudioDuration)
+		}
+		if metrics.TTFB < 0 {
+			t.Fatalf("TTFB = %f, want non-negative time to first byte", metrics.TTFB)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for SSE done usage metrics")
