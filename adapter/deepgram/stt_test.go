@@ -74,11 +74,11 @@ func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	if len(alt.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(alt.Words))
 	}
-	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 1.5 || got.EndTime != 1.8 || got.Confidence != 0.99 || got.SpeakerID != "" {
-		t.Fatalf("first word = %+v, want hello timing without word speaker ID", got)
+	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 1.5 || got.EndTime != 1.8 || got.Confidence != 0 || got.SpeakerID != "" {
+		t.Fatalf("first word = %+v, want hello timing without reference word confidence or speaker ID", got)
 	}
-	if got := alt.Words[1]; got.Text != "world" || got.StartTime != 1.9 || got.EndTime != 2.4 || got.Confidence != 0.97 || got.SpeakerID != "" {
-		t.Fatalf("second word = %+v, want world timing without word speaker ID", got)
+	if got := alt.Words[1]; got.Text != "world" || got.StartTime != 1.9 || got.EndTime != 2.4 || got.Confidence != 0 || got.SpeakerID != "" {
+		t.Fatalf("second word = %+v, want world timing without reference word confidence or speaker ID", got)
 	}
 }
 
@@ -173,6 +173,25 @@ func TestDeepgramSpeechEventOmitsReferenceWordSpeakerIDs(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Words[0].SpeakerID; got != "" {
 		t.Fatalf("word speaker id = %q, want empty like reference TimedString", got)
+	}
+}
+
+func TestDeepgramSpeechEventOmitsReferenceWordConfidence(t *testing.T) {
+	resp := dgResponse{Type: "Results", IsFinal: true}
+	resp.Channel.Alternatives = []dgAlternative{
+		{
+			Transcript: "hello",
+			Confidence: 0.98,
+			Words:      []dgWord{{Word: "hello", Start: 1.5, End: 1.8, Confidence: 0.99}},
+		},
+	}
+
+	event := deepgramSpeechEvent(resp)
+	if event == nil || len(event.Alternatives) != 1 || len(event.Alternatives[0].Words) != 1 {
+		t.Fatalf("event = %+v, want one live alternative with one word", event)
+	}
+	if got := event.Alternatives[0].Words[0].Confidence; got != 0 {
+		t.Fatalf("live word confidence = %v, want 0 because reference TimedString omits confidence", got)
 	}
 }
 
@@ -350,11 +369,34 @@ func TestDeepgramRecognizeSpeechEventPreservesAlternativeWords(t *testing.T) {
 	if len(alt.Words) != 2 {
 		t.Fatalf("words = %d, want 2", len(alt.Words))
 	}
-	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.93 || got.SpeakerID != "" {
-		t.Fatalf("first word = %+v, want hello timing without word speaker ID", got)
+	if got := alt.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0 || got.SpeakerID != "" {
+		t.Fatalf("first word = %+v, want hello timing without reference word confidence or speaker ID", got)
 	}
-	if got := alt.Words[1]; got.Text != "offline" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.9 || got.SpeakerID != "" {
-		t.Fatalf("second word = %+v, want offline timing without word speaker ID", got)
+	if got := alt.Words[1]; got.Text != "offline" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0 || got.SpeakerID != "" {
+		t.Fatalf("second word = %+v, want offline timing without reference word confidence or speaker ID", got)
+	}
+}
+
+func TestDeepgramRecognizeSpeechEventOmitsReferenceWordConfidence(t *testing.T) {
+	resp := dgRecognitionResponse{}
+	resp.Results.Channels = []dgRecognitionChannel{
+		{
+			Alternatives: []dgAlternative{
+				{
+					Transcript: "hello",
+					Confidence: 0.91,
+					Words:      []dgWord{{Word: "hello", Start: 0.1, End: 0.3, Confidence: 0.93}},
+				},
+			},
+		},
+	}
+
+	event := deepgramRecognizeSpeechEvent(resp)
+	if event == nil || len(event.Alternatives) != 1 || len(event.Alternatives[0].Words) != 1 {
+		t.Fatalf("event = %+v, want one offline alternative with one word", event)
+	}
+	if got := event.Alternatives[0].Words[0].Confidence; got != 0 {
+		t.Fatalf("offline word confidence = %v, want 0 because reference TimedString omits confidence", got)
 	}
 }
 

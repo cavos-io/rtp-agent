@@ -916,7 +916,6 @@ func deepgramTimedStringsOffset(words []dgWord, startTimeOffset float64) []stt.T
 			Text:            word.Word,
 			StartTime:       word.Start + startTimeOffset,
 			EndTime:         word.End + startTimeOffset,
-			Confidence:      word.Confidence,
 			StartTimeOffset: startTimeOffset,
 		})
 	}
