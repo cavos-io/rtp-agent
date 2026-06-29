@@ -2142,8 +2142,11 @@ func openAIRealtimeLegacyAzureContent(content []map[string]any) []map[string]any
 
 func openAIRealtimeLegacyAzureSession(session map[string]any) map[string]any {
 	mapped := make(map[string]any)
-	for key, value := range session {
-		if key != "audio" && key != "output_modalities" && key != "max_output_tokens" {
+	for _, key := range []string{"model", "instructions", "tools", "tool_choice", "tracing", "reasoning"} {
+		if value, ok := session[key]; ok {
+			if value == nil {
+				continue
+			}
 			mapped[key] = value
 		}
 	}
@@ -2153,25 +2156,37 @@ func openAIRealtimeLegacyAzureSession(session map[string]any) map[string]any {
 		mapped["output_audio_format"] = "pcm16"
 	}
 	if maxTokens, ok := session["max_output_tokens"]; ok {
-		mapped["max_response_output_tokens"] = maxTokens
+		if maxTokens != nil {
+			mapped["max_response_output_tokens"] = maxTokens
+		}
 	}
 	audio, _ := session["audio"].(map[string]any)
 	input, _ := audio["input"].(map[string]any)
 	if value, ok := input["noise_reduction"]; ok {
-		mapped["input_audio_noise_reduction"] = value
+		if value != nil {
+			mapped["input_audio_noise_reduction"] = value
+		}
 	}
 	if value, ok := input["transcription"]; ok {
-		mapped["input_audio_transcription"] = value
+		if value != nil {
+			mapped["input_audio_transcription"] = value
+		}
 	}
 	if value, ok := input["turn_detection"]; ok {
-		mapped["turn_detection"] = value
+		if value != nil {
+			mapped["turn_detection"] = value
+		}
 	}
 	output, _ := audio["output"].(map[string]any)
 	if value, ok := output["voice"]; ok {
-		mapped["voice"] = value
+		if value != nil {
+			mapped["voice"] = value
+		}
 	}
 	if value, ok := output["speed"]; ok {
-		mapped["speed"] = value
+		if value != nil {
+			mapped["speed"] = value
+		}
 	}
 	return mapped
 }
