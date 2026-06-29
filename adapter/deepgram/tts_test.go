@@ -630,6 +630,28 @@ func TestDeepgramTTSStreamSendsReferenceJSONDumpsTextFrames(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamSpeakTextUsesReferenceJSONEscaping(t *testing.T) {
+	var writes []string
+	stream := &deepgramTTSStream{
+		writeText: func(payload string) error {
+			writes = append(writes, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("café"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	want := `{"type": "Speak", "text": "caf\u00e9 "}`
+	if len(writes) == 0 || writes[0] != want {
+		t.Fatalf("Speak text frame = %#v, want Python json.dumps escaping %q", writes, want)
+	}
+}
+
 func TestDeepgramTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	stream := &deepgramTTSStream{
 		audio: make(chan *tts.SynthesizedAudio, 1),

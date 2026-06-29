@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -520,12 +521,47 @@ func (s *deepgramTTSStream) sendPendingWordsLocked() error {
 
 func (s *deepgramTTSStream) sendSpeakLocked(text string) error {
 	speakText := deepgramTTSSpeakText(text)
-	textJSON, _ := json.Marshal(speakText)
-	payload := fmt.Sprintf(`{"type": "Speak", "text": %s}`, textJSON)
+	payload := fmt.Sprintf(`{"type": "Speak", "text": %s}`, deepgramTTSPythonJSONString(speakText))
 	return s.writeTextData(payload, map[string]interface{}{
 		"type": "Speak",
 		"text": speakText,
 	})
+}
+
+func deepgramTTSPythonJSONString(value string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range value {
+		switch r {
+		case '\\', '"':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			switch {
+			case r < 0x20:
+				fmt.Fprintf(&b, `\u%04x`, r)
+			case r < utf8.RuneSelf:
+				b.WriteRune(r)
+			case r <= 0xffff:
+				fmt.Fprintf(&b, `\u%04x`, r)
+			default:
+				r -= 0x10000
+				fmt.Fprintf(&b, `\u%04x\u%04x`, 0xd800+(r>>10), 0xdc00+(r&0x3ff))
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func (s *deepgramTTSStream) consumePendingToken(token string) {
