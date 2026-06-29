@@ -714,6 +714,38 @@ func TestOpenAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSProviderCloseClosesLazyStreamsBeforeRequest(t *testing.T) {
+	requests := 0
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+	provider, err := NewOpenAITTS("test-key", "", "", withOpenAITTSHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if err := tts.Close(provider); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close = (%#v, %v), want nil EOF", audio, err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests after provider Close before Next = %d, want none", requests)
+	}
+}
+
 func TestOpenAITTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		deadline, ok := r.Context().Deadline()
