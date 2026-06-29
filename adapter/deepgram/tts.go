@@ -487,6 +487,7 @@ type deepgramTTSStream struct {
 	errCh       chan error
 	mu          sync.Mutex
 	closed      bool
+	inputClosed bool
 	inputEnded  bool
 	drainClosed bool
 	readDone    bool
@@ -737,6 +738,9 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputClosed {
+		return nil
+	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -762,6 +766,9 @@ func deepgramTTSSpeakText(text string) string {
 func (s *deepgramTTSStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputClosed {
+		return nil
+	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -793,6 +800,9 @@ func (s *deepgramTTSStream) Flush() error {
 func (s *deepgramTTSStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputClosed {
+		return nil
+	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
@@ -922,6 +932,7 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.inputClosed = true
 	if !s.hasConnectionLocked() {
 		s.markInputSent()
 		if s.provider != nil {

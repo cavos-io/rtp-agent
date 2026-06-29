@@ -159,8 +159,8 @@ func TestDeepgramTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for provider close to close active stream")
 	}
-	if err := stream.PushText("later"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after provider close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("later"); err != nil {
+		t.Fatalf("PushText after provider close error = %v, want nil like reference closed input", err)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
@@ -1141,8 +1141,14 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	if !closed {
 		t.Fatal("connection not closed")
 	}
-	if err := stream.PushText("later"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("later"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput after Close error = %v, want nil like reference closed input", err)
 	}
 }
 
