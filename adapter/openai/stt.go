@@ -186,6 +186,7 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.applyDetectLanguage()
 	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
 		provider.vad = silero.NewSileroVAD()
 	}
@@ -236,6 +237,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.applyDetectLanguage()
 	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
 		provider.vad = silero.NewSileroVAD()
 	}
@@ -276,6 +278,12 @@ func NewOVHCloudOpenAISTT(model, apiKey string, opts ...OpenAISTTOption) (*OpenA
 }
 
 func (s *OpenAISTT) Label() string { return "openai.STT" }
+func (s *OpenAISTT) applyDetectLanguage() {
+	if s != nil && s.detectLanguage {
+		s.language = ""
+	}
+}
+
 func (s *OpenAISTT) Provider() string {
 	u, err := url.Parse(s.baseURL)
 	if err != nil || u.Host == "" {
