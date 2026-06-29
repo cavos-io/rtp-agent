@@ -60,6 +60,14 @@ type DeepgramKeyword struct {
 
 type DeepgramSTTOption func(*DeepgramSTT)
 
+func WithDeepgramSTTModel(model string) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		if model != "" {
+			s.model = model
+		}
+	}
+}
+
 const deepgramSTTKeepAliveInterval = 5 * time.Second
 const deepgramSTTUsageInterval = 5 * time.Second
 const deepgramSTTKeepAliveMessage = `{"type": "KeepAlive"}`

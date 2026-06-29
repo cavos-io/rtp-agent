@@ -928,6 +928,7 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "nova-2")
 
 	provider.UpdateOptions(
+		WithDeepgramSTTModel("nova-3"),
 		WithDeepgramSTTBaseURL("https://updated.deepgram.example/v1/listen"),
 		WithDeepgramSTTInterimResults(false),
 		WithDeepgramSTTPunctuate(false),
@@ -963,6 +964,7 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 		t.Fatalf("stream url = %q, want updated websocket URL", streamURL.String())
 	}
 	streamQuery := streamURL.Query()
+	assertDeepgramQuery(t, streamQuery, "model", "nova-3")
 	assertDeepgramQuery(t, streamQuery, "interim_results", "false")
 	assertDeepgramQuery(t, streamQuery, "punctuate", "false")
 	assertDeepgramQuery(t, streamQuery, "smart_format", "true")
@@ -988,6 +990,7 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 		t.Fatalf("recognize url = %q, want updated HTTPS URL", recognizeURL.String())
 	}
 	recognizeQuery := recognizeURL.Query()
+	assertDeepgramQuery(t, recognizeQuery, "model", "nova-3")
 	assertDeepgramQuery(t, recognizeQuery, "punctuate", "false")
 	assertDeepgramQuery(t, recognizeQuery, "smart_format", "true")
 	assertDeepgramQuery(t, recognizeQuery, "profanity_filter", "true")
@@ -1029,12 +1032,14 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	assertDeepgramQuery(t, firstURL.Query(), "endpointing", "25")
 
 	provider.UpdateOptions(
+		WithDeepgramSTTModel("nova-3"),
 		WithDeepgramSTTLanguage("id"),
 		WithDeepgramSTTInterimResults(false),
 		WithDeepgramSTTEndpointing(0),
 	)
 
 	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "model", "nova-3")
 	assertDeepgramQuery(t, secondURL.Query(), "language", "id")
 	assertDeepgramQuery(t, secondURL.Query(), "interim_results", "false")
 	assertDeepgramQuery(t, secondURL.Query(), "endpointing", "false")
