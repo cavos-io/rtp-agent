@@ -802,6 +802,68 @@ func TestDeepgramSTTRecognizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := provider.Recognize(ctx, []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Recognize did not start provider request")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Recognize canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Recognize canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recognize remained blocked after caller cancellation")
+	}
+}
+
+func TestDeepgramSTTRecognizeReadCancelReturnsContextCanceled(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       deepgramSTTReadCloser{err: context.Canceled},
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Recognize read canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize read canceled error = %T, want raw context cancellation", err)
+	}
+}
+
 func TestDeepgramSTTStreamReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -850,6 +912,40 @@ func TestDeepgramSTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestDeepgramSTTStreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := provider.Stream(ctx, "en-US")
+		errCh <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Stream canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Stream canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stream remained blocked after caller cancellation")
 	}
 }
 
@@ -2465,6 +2561,18 @@ func assertDeepgramPanicsWithMessage(t *testing.T, want string, fn func()) {
 		}
 	}()
 	fn()
+}
+
+type deepgramSTTReadCloser struct {
+	err error
+}
+
+func (r deepgramSTTReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r deepgramSTTReadCloser) Close() error {
+	return nil
 }
 
 type deepgramRoundTripFunc func(*http.Request) (*http.Response, error)

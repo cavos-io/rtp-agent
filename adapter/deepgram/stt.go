@@ -351,6 +351,9 @@ func (s *DeepgramSTT) isClosed() bool {
 func openDeepgramStreamConnection(ctx context.Context, s *DeepgramSTT, streamURL string, header http.Header) (*websocket.Conn, error) {
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
 	}
 	return conn, nil
@@ -400,6 +403,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError(err.Error())
 		}
@@ -414,6 +420,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	var result dgRecognitionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 

@@ -567,6 +567,22 @@ func TestDeepgramTTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testi
 	}
 }
 
+func TestDeepgramTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: deepgramTTSReadCloser{err: context.Canceled}},
+		sampleRate: 24000,
+	}
+
+	_, err := stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
+	}
+}
+
 func TestDeepgramTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &deepgramTTSCountingReadCloser{}
 	stream := &deepgramTTSChunkedStream{
@@ -779,6 +795,40 @@ func TestDeepgramTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestDeepgramTTSStreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := provider.Stream(ctx)
+		errCh <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Stream canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Stream canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stream remained blocked after caller cancellation")
 	}
 }
 
@@ -1079,6 +1129,96 @@ func TestDeepgramTTSStreamCloseWaitsForReferenceFlushedAck(t *testing.T) {
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramTTSStreamCloseUsesReferenceAnyMessageAck(t *testing.T) {
+	sawClose := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSBinaryAckOnCloseWebsocketServer(serverConn, sawClose, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case <-sawClose:
+	case <-time.After(time.Second):
+		t.Fatal("server did not receive Close message")
+	}
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close() waited for Flushed instead of reference any-message ack")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramTTSStreamCloseIgnoresStaleReferenceAck(t *testing.T) {
+	closeAck := make(chan struct{}, 1)
+	closeAck <- struct{}{}
+	flushWritten := make(chan struct{}, 1)
+	stream := &deepgramTTSStream{
+		closeAck: closeAck,
+		writeText: func(payload string) error {
+			if payload == deepgramTTSFlushMessage {
+				flushWritten <- struct{}{}
+			}
+			return nil
+		},
+		closeConn: func() error {
+			return nil
+		},
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case <-flushWritten:
+	case <-time.After(time.Second):
+		t.Fatal("Flush was not written")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close() returned before post-close provider ack: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	stream.signalCloseAck()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close() did not return after post-close provider ack")
 	}
 }
 
@@ -1839,6 +1979,39 @@ func runDeepgramTTSFlushOnCloseWebsocketServer(conn net.Conn, sawClose chan<- st
 			close(sawClose)
 			time.Sleep(50 * time.Millisecond)
 			if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+				errCh <- err
+				return
+			}
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func runDeepgramTTSBinaryAckOnCloseWebsocketServer(conn net.Conn, sawClose chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode != websocket.TextMessage {
+			continue
+		}
+		if deepgramTestWebsocketMessageType(payload) == "Close" {
+			close(sawClose)
+			if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{0x01, 0x02}); err != nil {
 				errCh <- err
 				return
 			}
