@@ -729,6 +729,7 @@ func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
 }
 
 func (s *openaiTTSChunkedStream) noAudioError() error {
+	defer func() { _ = s.Close() }()
 	if strings.TrimSpace(s.inputText) == "" {
 		return io.EOF
 	}

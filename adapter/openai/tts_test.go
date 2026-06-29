@@ -1673,6 +1673,45 @@ func TestOpenAITTSRawAudioStreamReturnsEOFWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSNoAudioErrorUnregistersReferenceStream(t *testing.T) {
+	body := &countingOpenAIReadCloser{}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want nil for silent provider response", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after terminal no-audio error", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want no-audio stream unregistered", streamCount)
+	}
+}
+
 func TestOpenAITTSRawAudioStreamKeepsAudioBeforeReadFailure(t *testing.T) {
 	stream := &openaiTTSChunkedStream{
 		resp:           &dataThenErrorReader{data: []byte{1, 2, 3, 4}, err: errors.New("socket closed")},
