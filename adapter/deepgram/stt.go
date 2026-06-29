@@ -736,6 +736,7 @@ type dgAlternative struct {
 	languagesSeen  bool
 	parsedJSON     bool
 	Words          []dgWord
+	wordsSeen      bool
 }
 
 func (a *dgAlternative) UnmarshalJSON(data []byte) error {
@@ -759,6 +760,7 @@ func (a *dgAlternative) UnmarshalJSON(data []byte) error {
 	a.parsedJSON = true
 	_, a.confidenceSeen = fields["confidence"]
 	_, a.languagesSeen = fields["languages"]
+	_, a.wordsSeen = fields["words"]
 	return nil
 }
 
@@ -924,7 +926,7 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 }
 
 func deepgramLiveMalformedAlternative(alt dgAlternative) bool {
-	return alt.parsedJSON && !alt.confidenceSeen
+	return alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen)
 }
 
 func deepgramLiveMissingDetectedLanguage(languageStr string, alt dgAlternative) bool {
