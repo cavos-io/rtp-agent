@@ -690,6 +690,44 @@ func TestDeepgramSTTRecognizeUploadsReferenceWAV(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeAppliesReferenceRequestTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want Deepgram reference 30s request timeout")
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want bounded by Deepgram reference 30s timeout", remaining)
+	}
+}
+
 func TestDeepgramSTTRecognizeDetectLanguageMatchesReference(t *testing.T) {
 	var query url.Values
 	oldClient := http.DefaultClient
