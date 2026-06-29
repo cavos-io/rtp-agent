@@ -4857,7 +4857,7 @@ func TestRealtimeSessionIgnoresResponseDoneWithoutGeneration(t *testing.T) {
 	}
 }
 
-func TestRealtimeSessionClearsPendingResponseOnStaleResponseDone(t *testing.T) {
+func TestRealtimeSessionKeepsPendingResponseOnStaleResponseDone(t *testing.T) {
 	messages := make(chan string, 10)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
 		if _, _, err := conn.ReadMessage(); err != nil {
@@ -4916,7 +4916,12 @@ func TestRealtimeSessionClearsPendingResponseOnStaleResponseDone(t *testing.T) {
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
-	assertNoRealtimeMessage(t, messages, "stale response.done should clear pending response")
+	select {
+	case msg := <-messages:
+		assertRealtimeMessage(t, msg, "response.cancel", "")
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for response.cancel after stale response.done")
+	}
 }
 
 func TestRealtimeSessionPersistsAudioTranscriptOnResponseDone(t *testing.T) {
