@@ -855,7 +855,12 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 		return err
 	}
 	if vadStream != nil {
-		return vadStream.Flush()
+		if err := vadStream.Flush(); err != nil {
+			s.mu.Lock()
+			s.closeAfterTerminalFailureLocked()
+			s.mu.Unlock()
+			return err
+		}
 	}
 	return nil
 }

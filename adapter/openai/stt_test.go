@@ -1142,6 +1142,61 @@ func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T
 	}
 }
 
+func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.flushErr = errors.New("vad flush failed")
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	release := make(chan struct{})
+	defer close(release)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			for {
+				select {
+				case <-release:
+					return
+				default:
+				}
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.Flush(); err == nil || err.Error() != "vad flush failed" {
+		t.Fatalf("Flush error = %T %v, want VAD flush error", err, err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after VAD Flush error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after VAD Flush error")
+	}
+}
+
 func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -4062,6 +4117,7 @@ type fakeOpenAISTTVADStream struct {
 	releasePushCh         chan struct{}
 	pushErr               error
 	endInputErr           error
+	flushErr              error
 	suppressEndOfSpeech   bool
 	flushEmitsEndOfSpeech bool
 	frames                []*model.AudioFrame
@@ -4117,6 +4173,9 @@ func (f *fakeOpenAISTTVADStream) pushedFrames() []*model.AudioFrame {
 
 func (f *fakeOpenAISTTVADStream) Flush() error {
 	f.flushOnce.Do(func() { close(f.flushCh) })
+	if f.flushErr != nil {
+		return f.flushErr
+	}
 	if f.flushEmitsEndOfSpeech {
 		f.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
 	}
