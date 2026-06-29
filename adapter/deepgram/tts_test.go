@@ -825,6 +825,40 @@ func TestDeepgramTTSStreamIgnoresReferenceEmptyText(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamEmptyFlushIsReferenceNoop(t *testing.T) {
+	writes := 0
+	stream := &deepgramTTSStream{
+		writeJSON: func(any) error {
+			writes++
+			return nil
+		},
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(empty) error = %v", err)
+	}
+	if writes != 0 {
+		t.Fatalf("writes after empty Flush = %d, want 0", writes)
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(text) error = %v", err)
+	}
+	if writes != 2 {
+		t.Fatalf("writes after text Flush = %d, want Speak and Flush", writes)
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(after segment) error = %v", err)
+	}
+	if writes != 2 {
+		t.Fatalf("writes after second empty Flush = %d, want unchanged", writes)
+	}
+}
+
 func TestDeepgramTTSStreamMarksFinalAudioOnReferenceFlushed(t *testing.T) {
 	stream := &deepgramTTSStream{
 		audio: make(chan *tts.SynthesizedAudio, 1),

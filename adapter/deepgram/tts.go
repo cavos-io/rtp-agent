@@ -471,6 +471,10 @@ func (s *deepgramTTSStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if strings.TrimSpace(s.pendingText) == "" {
+		s.pendingText = ""
+		return nil
+	}
 	if err := s.sendPendingWordsLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
