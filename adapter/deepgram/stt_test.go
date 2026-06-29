@@ -1732,9 +1732,9 @@ func TestDeepgramSTTStreamChunksReferenceAudioUsingStreamFormat(t *testing.T) {
 	audioData := make([]byte, 2000)
 	if err := stream.PushFrame(&model.AudioFrame{
 		Data:              audioData,
-		SampleRate:        48000,
-		NumChannels:       2,
-		SamplesPerChannel: 500,
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
 	}); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
@@ -1752,6 +1752,74 @@ func TestDeepgramSTTStreamChunksReferenceAudioUsingStreamFormat(t *testing.T) {
 	}
 	if got := len(binaryWrites[1]); got != 400 {
 		t.Fatalf("flush binary write length = %d, want 400 from stream 16k mono format", got)
+	}
+}
+
+func TestDeepgramSTTStreamResamplesInputAudioToReferenceRate(t *testing.T) {
+	var binaryWrites [][]byte
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func(data []byte) error {
+			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
+			return nil
+		},
+		writeJSON: func(any) error {
+			return nil
+		},
+	}
+	audioData := deepgramTestInt16PCM(480)
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              audioData,
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(binaryWrites) != 0 {
+		t.Fatalf("binary writes after PushFrame = %d, want resampled frame buffered below stream chunk size", len(binaryWrites))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	if len(binaryWrites) != 1 {
+		t.Fatalf("binary writes after Flush = %d, want one resampled remainder chunk", len(binaryWrites))
+	}
+	want := deepgramEveryNthInt16PCM(480, 3)
+	if got := binaryWrites[0]; !bytes.Equal(got, want) {
+		t.Fatalf("flushed binary data = %#v, want 48k->16k reference resampled PCM", got)
+	}
+}
+
+func TestDeepgramSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeJSON: func(any) error {
+			return nil
+		},
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              deepgramTestInt16PCM(160),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              deepgramTestInt16PCM(160),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	})
+	if err == nil || err.Error() != "the sample rate of the input frames must be consistent" {
+		t.Fatalf("second PushFrame() error = %v, want reference sample-rate consistency error", err)
 	}
 }
 
@@ -2248,6 +2316,27 @@ func assertNoDeepgramRecognitionUsageEvent(t *testing.T, events <-chan *stt.Spee
 		t.Fatalf("unexpected event before reference usage flush: %+v", event)
 	case <-time.After(20 * time.Millisecond):
 	}
+}
+
+func deepgramTestInt16PCM(samples int) []byte {
+	data := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:], uint16(int16(i)))
+	}
+	return data
+}
+
+func deepgramEveryNthInt16PCM(samples int, step int) []byte {
+	if step <= 0 {
+		return nil
+	}
+	data := make([]byte, 0, ((samples+step-1)/step)*2)
+	for i := 0; i < samples; i += step {
+		var sample [2]byte
+		binary.LittleEndian.PutUint16(sample[:], uint16(int16(i)))
+		data = append(data, sample[:]...)
+	}
+	return data
 }
 
 func assertDeepgramQuery(t *testing.T, query url.Values, key string, want string) {

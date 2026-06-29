@@ -631,6 +631,7 @@ type deepgramStream struct {
 	sampleRate   int
 	numChannels  int
 	language     string
+	rateGuard    stt.SampleRateGuard
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
 	writeJSON    func(any) error
@@ -1041,10 +1042,17 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		s.reconnectNext = false
 	}
+	if err := s.rateGuard.Check(frame); err != nil {
+		return err
+	}
+	normalizedFrame, err := audio.ResampleAudioFrame(frame, uint32(s.sampleRate))
+	if err != nil {
+		return err
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = newDeepgramSTTAudioByteStream(s)
 	}
-	for _, chunk := range s.audioBStream.Push(frame.Data) {
+	for _, chunk := range s.audioBStream.Push(normalizedFrame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
