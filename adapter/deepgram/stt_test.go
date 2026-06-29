@@ -65,8 +65,8 @@ func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	if alt.Text != "hello world" {
 		t.Fatalf("text = %q, want hello world", alt.Text)
 	}
-	if alt.StartTime != 1.5 || alt.EndTime != 2.4 {
-		t.Fatalf("time range = %v-%v, want reference result range 1.5-2.4", alt.StartTime, alt.EndTime)
+	if alt.StartTime != 1.5 || alt.EndTime != 1.8 {
+		t.Fatalf("time range = %v-%v, want reference first word range 1.5-1.8", alt.StartTime, alt.EndTime)
 	}
 	if alt.SpeakerID != "S2" {
 		t.Fatalf("speaker id = %q, want S2", alt.SpeakerID)
@@ -97,11 +97,39 @@ func TestDeepgramSpeechEventUsesReferenceResultTimingWithoutWords(t *testing.T) 
 		t.Fatalf("event = %+v, want one alternative", event)
 	}
 	alt := event.Alternatives[0]
-	if math.Abs(alt.StartTime-3.7) > 1e-9 || math.Abs(alt.EndTime-4.8) > 1e-9 {
-		t.Fatalf("time range = %v-%v, want reference result range with offset 3.7-4.8", alt.StartTime, alt.EndTime)
+	if math.Abs(alt.StartTime-0.5) > 1e-9 || math.Abs(alt.EndTime-0.5) > 1e-9 {
+		t.Fatalf("time range = %v-%v, want reference empty word timing with offset 0.5-0.5", alt.StartTime, alt.EndTime)
 	}
 	if len(alt.Words) != 0 {
 		t.Fatalf("words = %+v, want none", alt.Words)
+	}
+}
+
+func TestDeepgramSpeechEventUsesReferenceWordTimingOverResultWindow(t *testing.T) {
+	resp := dgResponse{
+		Type:     "Results",
+		IsFinal:  true,
+		Start:    10,
+		Duration: 5,
+	}
+	resp.Channel.Alternatives = []dgAlternative{
+		{
+			Transcript: "word timing",
+			Confidence: 0.9,
+			Words: []dgWord{
+				{Word: "word", Start: 1.2, End: 1.4, Confidence: 0.8},
+				{Word: "timing", Start: 1.6, End: 2.0, Confidence: 0.9},
+			},
+		},
+	}
+
+	event := deepgramSpeechEventForLanguageOffset(resp, "en-US", 0.25)
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one alternative", event)
+	}
+	alt := event.Alternatives[0]
+	if math.Abs(alt.StartTime-1.45) > 1e-9 || math.Abs(alt.EndTime-1.65) > 1e-9 {
+		t.Fatalf("time range = %v-%v, want first reference word timing with offset 1.45-1.65", alt.StartTime, alt.EndTime)
 	}
 }
 

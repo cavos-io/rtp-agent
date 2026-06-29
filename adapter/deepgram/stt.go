@@ -847,9 +847,6 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 }
 
 func deepgramLiveTranscriptTimes(resp dgResponse, words []dgWord) (float64, float64) {
-	if resp.Start != 0 || resp.Duration != 0 {
-		return resp.Start, resp.Start + resp.Duration
-	}
 	return deepgramFirstWordStart(words), deepgramFirstWordEnd(words)
 }
 
