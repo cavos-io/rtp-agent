@@ -413,6 +413,45 @@ func TestNewAzureOpenAISTTFallsBackToReferenceEnvironment(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAISTTUsesReferenceBaseURLOption(t *testing.T) {
+	var requestURL string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requestURL = r.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAISTTHTTPClient(client),
+		WithOpenAISTTBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if got := provider.Provider(); got != "gateway.openai.azure.test" {
+		t.Fatalf("Provider() = %q, want base_url host", got)
+	}
+	if !strings.HasPrefix(requestURL, "https://gateway.openai.azure.test/custom/openai/deployments/stt-deployment/audio/transcriptions") {
+		t.Fatalf("request URL = %s, want reference base_url route", requestURL)
+	}
+}
+
 func TestNewAzureOpenAISTTRequiresEndpoint(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
 	t.Setenv("AZURE_OPENAI_API_KEY", "key")

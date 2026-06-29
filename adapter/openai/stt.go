@@ -47,6 +47,7 @@ type OpenAISTT struct {
 	httpClient       openai.HTTPDoer
 	apiKey           string
 	baseURL          string
+	baseURLSet       bool
 	model            string
 	language         string
 	languageSet      bool
@@ -149,6 +150,7 @@ func WithOpenAISTTBaseURL(baseURL string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
+			s.baseURLSet = true
 		}
 	}
 }
@@ -252,6 +254,9 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
+	}
+	if provider.baseURLSet {
+		config.BaseURL = provider.baseURL
 	}
 	if apiKey == "" && azureADToken != "" {
 		config.HTTPClient = &azureADTokenHTTPClient{
