@@ -755,6 +755,38 @@ func TestOpenAISTTRecognizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTRecognizeAppliesReferenceTotalTimeout(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		if !ok {
+			t.Fatal("request context has no deadline, want reference total timeout")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 29*time.Second || remaining > 30*time.Second {
+			t.Fatalf("request timeout remaining = %v, want about 30s", remaining)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "whisper-1",
+		WithOpenAISTTBaseURL("https://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %+v, want final hello transcript", event)
+	}
+}
+
 func TestOpenAISTTStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),

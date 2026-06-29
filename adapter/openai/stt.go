@@ -35,6 +35,7 @@ const (
 	openAIRealtimeSTTPrefixPaddingMS   = 600
 	openAIRealtimeSTTSilenceDurationMS = 350
 	openAIRealtimeSTTDeltaInterval     = 500 * time.Millisecond
+	openAISTTRecognizeTimeout          = 30 * time.Second
 	openAIAPIKeyEnv                    = "OPENAI_API_KEY"
 	ovhcloudAPIKeyEnv                  = "OVHCLOUD_API_KEY"
 	defaultOVHCloudOpenAIBaseURL       = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
@@ -606,7 +607,7 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if s.isClosed() {
 		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithTimeout(ctx, openAISTTRecognizeTimeout)
 	requestID, ok := s.registerRequest(cancel)
 	if !ok {
 		cancel()
