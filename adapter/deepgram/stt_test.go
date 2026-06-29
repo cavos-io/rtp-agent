@@ -932,6 +932,30 @@ func TestDeepgramSTTRecognizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeMalformedResponseReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"malformed"},"results":{"channels":[{"alternatives":[{"transcript":"bad","words":[]}]}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestDeepgramSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	oldClient := http.DefaultClient
 	requests := make(chan *http.Request, 1)

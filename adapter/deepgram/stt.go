@@ -482,6 +482,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	if err := deepgramRecognizeValidateReferenceResponse(result); err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
 
 	return deepgramRecognizeSpeechEventForLanguage(result, languageStr), nil
 }
@@ -838,6 +841,17 @@ func (r *dgResponse) UnmarshalJSON(data []byte) error {
 
 func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 	return deepgramRecognizeSpeechEventForLanguage(resp, "")
+}
+
+func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) error {
+	for _, channel := range resp.Results.Channels {
+		for _, alt := range channel.Alternatives {
+			if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen) {
+				return fmt.Errorf("malformed deepgram recognition alternative")
+			}
+		}
+	}
+	return nil
 }
 
 func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languageStr string) *stt.SpeechEvent {
