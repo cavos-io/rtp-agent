@@ -28,6 +28,12 @@ type DeepgramSTTv2 struct {
 	baseURL    string
 	mipOptOut  bool
 	language   string
+	eagerEOT   float64
+	eot        float64
+	eotTimeout int
+	keyterms   []string
+	tags       []string
+	langHints  []string
 	mu         sync.Mutex
 	streams    map[*deepgramV2Stream]struct{}
 	closed     bool
@@ -80,6 +86,48 @@ func WithDeepgramSTTv2SampleRate(sampleRate int) DeepgramSTTv2Option {
 func WithDeepgramSTTv2MipOptOut(mipOptOut bool) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
 		s.mipOptOut = mipOptOut
+	}
+}
+
+func WithDeepgramSTTv2EagerEOTThreshold(threshold float64) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		if threshold > 0 {
+			s.eagerEOT = threshold
+		}
+	}
+}
+
+func WithDeepgramSTTv2EOTThreshold(threshold float64) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		if threshold > 0 {
+			s.eot = threshold
+		}
+	}
+}
+
+func WithDeepgramSTTv2EOTTimeout(timeoutMS int) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		if timeoutMS > 0 {
+			s.eotTimeout = timeoutMS
+		}
+	}
+}
+
+func WithDeepgramSTTv2Keyterms(keyterms []string) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		s.keyterms = append([]string(nil), keyterms...)
+	}
+}
+
+func WithDeepgramSTTv2Tags(tags []string) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		s.tags = append([]string(nil), tags...)
+	}
+}
+
+func WithDeepgramSTTv2LanguageHints(hints []string) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		s.langHints = append([]string(nil), hints...)
 	}
 }
 
@@ -199,6 +247,30 @@ func buildDeepgramSTTv2StreamURL(s *DeepgramSTTv2) string {
 	q.Set("sample_rate", strconv.Itoa(s.sampleRate))
 	q.Set("encoding", "linear16")
 	q.Set("mip_opt_out", strconv.FormatBool(s.mipOptOut))
+	if s.eagerEOT > 0 {
+		q.Set("eager_eot_threshold", strconv.FormatFloat(s.eagerEOT, 'f', -1, 64))
+	}
+	if s.eot > 0 {
+		q.Set("eot_threshold", strconv.FormatFloat(s.eot, 'f', -1, 64))
+	}
+	if s.eotTimeout > 0 {
+		q.Set("eot_timeout_ms", strconv.Itoa(s.eotTimeout))
+	}
+	for _, keyterm := range s.keyterms {
+		if keyterm != "" {
+			q.Add("keyterm", keyterm)
+		}
+	}
+	for _, tag := range s.tags {
+		if tag != "" {
+			q.Add("tag", tag)
+		}
+	}
+	for _, hint := range s.langHints {
+		if hint != "" {
+			q.Add("language_hint", hint)
+		}
+	}
 	u.RawQuery = q.Encode()
 	return u.String()
 }

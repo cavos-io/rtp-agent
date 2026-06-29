@@ -190,6 +190,40 @@ func TestDeepgramSTTv2StreamHandlesReferenceTurnAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("https://deepgram.example/v2/listen"),
+		WithDeepgramSTTv2Model("flux-general-multi"),
+		WithDeepgramSTTv2SampleRate(48000),
+		WithDeepgramSTTv2MipOptOut(true),
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+		WithDeepgramSTTv2EOTTimeout(1500),
+		WithDeepgramSTTv2Keyterms([]string{"LiveKit", "rtp-agent"}),
+		WithDeepgramSTTv2Tags([]string{"agent", "test"}),
+		WithDeepgramSTTv2LanguageHints([]string{"en", "es"}),
+	)
+
+	parsed, err := url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL: %v", err)
+	}
+	query := parsed.Query()
+	if parsed.Scheme != "wss" {
+		t.Fatalf("scheme = %q, want wss", parsed.Scheme)
+	}
+	assertDeepgramQuery(t, query, "model", "flux-general-multi")
+	assertDeepgramQuery(t, query, "sample_rate", "48000")
+	assertDeepgramQuery(t, query, "encoding", "linear16")
+	assertDeepgramQuery(t, query, "mip_opt_out", "true")
+	assertDeepgramQuery(t, query, "eager_eot_threshold", "0.6")
+	assertDeepgramQuery(t, query, "eot_threshold", "0.8")
+	assertDeepgramQuery(t, query, "eot_timeout_ms", "1500")
+	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "rtp-agent"})
+	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
+	assertDeepgramQueryValues(t, query, "language_hint", []string{"en", "es"})
+}
+
 func TestDeepgramSTTv2ErrorMessageReturnsAPIStatusError(t *testing.T) {
 	stream := &deepgramV2Stream{}
 
