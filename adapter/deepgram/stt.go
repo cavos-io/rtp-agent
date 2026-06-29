@@ -482,6 +482,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
+	if err := deepgramRecognizeValidateReferenceResponse(result); err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
 
 	return deepgramRecognizeSpeechEventForLanguage(result, languageStr), nil
 }
@@ -729,11 +732,14 @@ type dgWord struct {
 }
 
 type dgAlternative struct {
-	Transcript    string
-	Confidence    float64
-	Languages     []string
-	languagesSeen bool
-	Words         []dgWord
+	Transcript     string
+	Confidence     float64
+	confidenceSeen bool
+	Languages      []string
+	languagesSeen  bool
+	parsedJSON     bool
+	Words          []dgWord
+	wordsSeen      bool
 }
 
 func (a *dgAlternative) UnmarshalJSON(data []byte) error {
@@ -754,13 +760,35 @@ func (a *dgAlternative) UnmarshalJSON(data []byte) error {
 	a.Confidence = raw.Confidence
 	a.Languages = raw.Languages
 	a.Words = raw.Words
+	a.parsedJSON = true
+	_, a.confidenceSeen = fields["confidence"]
 	_, a.languagesSeen = fields["languages"]
+	_, a.wordsSeen = fields["words"]
 	return nil
 }
 
 type dgRecognitionChannel struct {
-	Alternatives     []dgAlternative `json:"alternatives"`
-	DetectedLanguage string          `json:"detected_language"`
+	Alternatives     []dgAlternative
+	DetectedLanguage string
+	alternativesSeen bool
+}
+
+func (c *dgRecognitionChannel) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Alternatives     []dgAlternative `json:"alternatives"`
+		DetectedLanguage string          `json:"detected_language"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	c.Alternatives = raw.Alternatives
+	c.DetectedLanguage = raw.DetectedLanguage
+	_, c.alternativesSeen = fields["alternatives"]
+	return nil
 }
 
 type dgRecognitionResponse struct {
@@ -770,6 +798,40 @@ type dgRecognitionResponse struct {
 	Results struct {
 		Channels []dgRecognitionChannel `json:"channels"`
 	} `json:"results"`
+	requestIDSeen bool
+	channelsSeen  bool
+}
+
+func (r *dgRecognitionResponse) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Metadata struct {
+			RequestID string `json:"request_id"`
+		} `json:"metadata"`
+		Results struct {
+			Channels []dgRecognitionChannel `json:"channels"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var metadataFields map[string]json.RawMessage
+	if metadataRaw, ok := fields["metadata"]; ok {
+		_ = json.Unmarshal(metadataRaw, &metadataFields)
+	}
+	var resultFields map[string]json.RawMessage
+	if resultsRaw, ok := fields["results"]; ok {
+		_ = json.Unmarshal(resultsRaw, &resultFields)
+	}
+
+	r.Metadata = raw.Metadata
+	r.Results = raw.Results
+	_, r.requestIDSeen = metadataFields["request_id"]
+	_, r.channelsSeen = resultFields["channels"]
+	return nil
 }
 
 type dgResponse struct {
@@ -784,17 +846,82 @@ type dgResponse struct {
 	Metadata struct {
 		RequestID string `json:"request_id"`
 	} `json:"metadata"`
+	parsedJSON       bool
+	isFinalSeen      bool
+	speechFinalSeen  bool
+	requestIDSeen    bool
+	alternativesSeen bool
+}
+
+func (r *dgResponse) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Type        string `json:"type"`
+		IsFinal     bool   `json:"is_final"`
+		SpeechFinal bool   `json:"speech_final"`
+		Channel     struct {
+			Alternatives []dgAlternative `json:"alternatives"`
+		} `json:"channel"`
+		Start    float64 `json:"start"`
+		Duration float64 `json:"duration"`
+		Metadata struct {
+			RequestID string `json:"request_id"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var metadataFields map[string]json.RawMessage
+	if metadataRaw, ok := fields["metadata"]; ok {
+		_ = json.Unmarshal(metadataRaw, &metadataFields)
+	}
+	var channelFields map[string]json.RawMessage
+	if channelRaw, ok := fields["channel"]; ok {
+		_ = json.Unmarshal(channelRaw, &channelFields)
+	}
+
+	r.Type = raw.Type
+	r.IsFinal = raw.IsFinal
+	r.SpeechFinal = raw.SpeechFinal
+	r.Channel = raw.Channel
+	r.Start = raw.Start
+	r.Duration = raw.Duration
+	r.Metadata = raw.Metadata
+	r.parsedJSON = true
+	_, r.isFinalSeen = fields["is_final"]
+	_, r.speechFinalSeen = fields["speech_final"]
+	_, r.requestIDSeen = metadataFields["request_id"]
+	_, r.alternativesSeen = channelFields["alternatives"]
+	return nil
 }
 
 func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 	return deepgramRecognizeSpeechEventForLanguage(resp, "")
 }
 
+func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) error {
+	if !resp.requestIDSeen || !resp.channelsSeen || len(resp.Results.Channels) == 0 {
+		return fmt.Errorf("malformed deepgram recognition response")
+	}
+	channel := resp.Results.Channels[0]
+	if !channel.alternativesSeen {
+		return fmt.Errorf("malformed deepgram recognition channel")
+	}
+	for _, alt := range channel.Alternatives {
+		if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen) {
+			return fmt.Errorf("malformed deepgram recognition alternative")
+		}
+	}
+	return nil
+}
+
 func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languageStr string) *stt.SpeechEvent {
 	event := &stt.SpeechEvent{
-		Type:         stt.SpeechEventFinalTranscript,
-		RequestID:    resp.Metadata.RequestID,
-		Alternatives: []stt.SpeechData{{Language: languageStr}},
+		Type:      stt.SpeechEventFinalTranscript,
+		RequestID: resp.Metadata.RequestID,
 	}
 
 	if len(resp.Results.Channels) == 0 || len(resp.Results.Channels[0].Alternatives) == 0 {
@@ -802,7 +929,6 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 	}
 
 	channel := resp.Results.Channels[0]
-	event.Alternatives = event.Alternatives[:0]
 	for _, alt := range channel.Alternatives {
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
 			Language:   deepgramRecognizeLanguage(languageStr, channel.DetectedLanguage),
@@ -849,6 +975,9 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 
 	var transcriptBuilder string
 	for _, alt := range resp.Channel.Alternatives {
+		if deepgramLiveMalformedAlternative(alt) {
+			return nil
+		}
 		if deepgramLiveMissingDetectedLanguage(languageStr, alt) {
 			return nil
 		}
@@ -870,6 +999,10 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	}
 
 	return event
+}
+
+func deepgramLiveMalformedAlternative(alt dgAlternative) bool {
+	return alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen)
 }
 
 func deepgramLiveMissingDetectedLanguage(languageStr string, alt dgAlternative) bool {
@@ -997,6 +1130,9 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 
 		case "Results":
+			if resp.malformedReferenceResults() {
+				continue
+			}
 			s.setRequestID(resp.Metadata.RequestID)
 			if event := deepgramSpeechEventForLanguageOffset(resp, s.language, s.StartTimeOffset()); event != nil {
 				if !s.speaking {
@@ -1012,6 +1148,21 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			}
 		}
 	}
+}
+
+func (r dgResponse) malformedReferenceResults() bool {
+	if !r.parsedJSON {
+		return false
+	}
+	if !r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen || !r.alternativesSeen {
+		return true
+	}
+	for _, alt := range r.Channel.Alternatives {
+		if deepgramLiveMalformedAlternative(alt) {
+			return true
+		}
+	}
+	return false
 }
 
 func deepgramSTTUnexpectedCloseError(err error) error {

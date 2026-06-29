@@ -385,10 +385,35 @@ type deepgramV2Response struct {
 }
 
 type deepgramV2Word struct {
-	Word       string  `json:"word"`
-	Start      float64 `json:"start"`
-	End        float64 `json:"end"`
-	Confidence float64 `json:"confidence"`
+	Word           string  `json:"word"`
+	Start          float64 `json:"start"`
+	End            float64 `json:"end"`
+	Confidence     float64 `json:"confidence"`
+	parsedJSON     bool
+	confidenceSeen bool
+}
+
+func (w *deepgramV2Word) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Word       string  `json:"word"`
+		Start      float64 `json:"start"`
+		End        float64 `json:"end"`
+		Confidence float64 `json:"confidence"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	w.Word = raw.Word
+	w.Start = raw.Start
+	w.End = raw.End
+	w.Confidence = raw.Confidence
+	w.parsedJSON = true
+	_, w.confidenceSeen = fields["confidence"]
+	return nil
 }
 
 func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
@@ -534,6 +559,9 @@ func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOff
 	confidence := 0.0
 	words := make([]stt.TimedString, 0, len(resp.Words))
 	for _, word := range resp.Words {
+		if word.parsedJSON && !word.confidenceSeen {
+			return nil
+		}
 		confidence += word.Confidence
 		words = append(words, stt.TimedString{
 			Text:            word.Word,
