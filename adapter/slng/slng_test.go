@@ -651,6 +651,21 @@ func TestSLNGTTSRimeArcanaNormalCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSRimeCodaNormalCloseReturnsEOF(t *testing.T) {
+	stream := &ttsStream{
+		model:           "rime/coda:0-id",
+		audioFrames:     0,
+		audioBytes:      0,
+		textMessages:    1,
+		lastMessageType: "text",
+	}
+
+	err := stream.readError(&websocket.CloseError{Code: websocket.CloseNormalClosure, Text: ""})
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("readError() = %v, want io.EOF", err)
+	}
+}
+
 func TestSLNGTTSRimeArcanaFlushSendsCancel(t *testing.T) {
 	messages := make(chan map[string]any, 3)
 	upgrader := websocket.Upgrader{}

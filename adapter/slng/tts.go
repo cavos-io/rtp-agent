@@ -657,7 +657,7 @@ func (s *ttsStream) readError(err error) error {
 	if !errors.As(err, &closeErr) {
 		return err
 	}
-	if closeErr.Code == websocket.CloseNormalClosure && (s.audioFrames > 0 || isRimeArcanaModel(s.model)) {
+	if closeErr.Code == websocket.CloseNormalClosure && (s.audioFrames > 0 || isRimeArcanaModel(s.model) || isRimeCodaModel(s.model)) {
 		return io.EOF
 	}
 	message := fmt.Sprintf(
