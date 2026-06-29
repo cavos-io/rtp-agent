@@ -943,6 +943,35 @@ func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2ReconnectCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &deepgramV2Stream{
+		ctx:       ctx,
+		provider:  NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen")),
+		streamURL: "ws://deepgram.test/v2/listen",
+	}
+
+	err := stream.reconnectLocked()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("reconnect canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		t.Fatalf("reconnect canceled error = %T, want raw context cancellation", err)
+	}
+}
+
 func TestDeepgramSTTv2UpdateOptionsDoesNotHoldProviderLockWhileUpdatingStream(t *testing.T) {
 	provider := NewDeepgramSTTv2("test-key")
 	stream := &deepgramV2Stream{provider: provider, streamURL: buildDeepgramSTTv2StreamURL(provider)}

@@ -650,6 +650,9 @@ func (s *deepgramV2Stream) reconnectLocked() error {
 	header.Set("Authorization", "Token "+s.provider.apiKey)
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, header)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		return llm.NewAPIConnectionError("failed to connect to deepgram")
 	}
 	oldConn := s.conn
