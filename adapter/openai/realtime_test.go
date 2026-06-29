@@ -4554,6 +4554,73 @@ func TestRealtimeSessionReconnectClearsPendingResponse(t *testing.T) {
 	assertNoRealtimeMessage(t, secondMessages, "reconnect should discard pending response")
 }
 
+func TestRealtimeSessionReconnectClearsInputTranscriptionPartials(t *testing.T) {
+	var dialCount atomic.Int32
+	closeFirst := make(chan struct{})
+	secondConnected := make(chan struct{})
+	sendFailure := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			<-closeFirst
+			_ = conn.Close()
+			return
+		}
+		close(secondConnected)
+		<-sendFailure
+		if err := conn.WriteJSON(map[string]any{
+			"type":    "conversation.item.input_audio_transcription.failed",
+			"item_id": "item_before_reconnect",
+		}); err != nil {
+			t.Errorf("Write input transcription failure error = %v", err)
+			return
+		}
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	rs := session.(*realtimeSession)
+	rs.trackRealtimeEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     "item_before_reconnect",
+			Transcript: "stale partial",
+			IsFinal:    false,
+		},
+	})
+	close(closeFirst)
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after websocket disconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+
+	close(sendFailure)
+	select {
+	case ev := <-session.EventCh():
+		t.Fatalf("unexpected event after stale transcription failure: %#v", ev)
+	case <-time.After(25 * time.Millisecond):
+	}
+}
+
 func TestRealtimeSessionInitialConnectRetriesDialFailure(t *testing.T) {
 	var dialCount atomic.Int32
 	connected := make(chan struct{})

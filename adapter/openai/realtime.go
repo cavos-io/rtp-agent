@@ -2408,6 +2408,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	}
 	s.conn = conn
 	s.pendingResponses = make(map[string]struct{})
+	s.inputTranscripts = nil
 	s.startMaxSessionRecycle(conn)
 	s.mu.Unlock()
 
