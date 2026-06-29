@@ -996,7 +996,7 @@ func (s *openAIRealtimeSTTStream) Close() error {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
-	s.closeVADStreamLocked()
+	s.closeVADStreamLocked(true)
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
@@ -1014,7 +1014,7 @@ func (s *openAIRealtimeSTTStream) closeAfterTerminalFailureLocked() {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
-	s.closeVADStreamLocked()
+	s.closeVADStreamLocked(false)
 	_ = s.conn.Close()
 }
 
@@ -1022,12 +1022,12 @@ func openAIRealtimeSTTInputEndedError() error {
 	return fmt.Errorf("stream input ended")
 }
 
-func (s *openAIRealtimeSTTStream) closeVADStreamLocked() {
+func (s *openAIRealtimeSTTStream) closeVADStreamLocked(endInput bool) {
 	if s.vadStream == nil {
 		return
 	}
 	vadStream := s.vadStream
-	shouldEndInput := !s.vadInputEnded
+	shouldEndInput := endInput && !s.vadInputEnded
 	s.vadInputEnded = true
 	s.vadStream = nil
 	go func() {
@@ -1163,7 +1163,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 			s.owner.unregisterRealtimeSTTStream(s)
 		}
 		s.mu.Lock()
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		s.mu.Unlock()
 		s.closeEventStream()
 	}()
@@ -1298,18 +1298,18 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	_ = s.conn.Close()
 	conn, _, err := s.owner.dialRealtimeSTTWebsocket(s.ctx)
 	if err != nil {
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		return mapOpenAIError(err)
 	}
 	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
 	if err != nil {
 		_ = conn.Close()
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		return err
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
 		_ = conn.Close()
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		return mapOpenAIError(err)
 	}
 	s.conn = conn
@@ -1319,7 +1319,7 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	s.hasAudio = false
 	s.committed = false
 	if s.owner.vad != nil {
-		s.closeVADStreamLocked()
+		s.closeVADStreamLocked(false)
 		vadStream, err := s.owner.vad.Stream(s.ctx)
 		if err != nil {
 			_ = conn.Close()

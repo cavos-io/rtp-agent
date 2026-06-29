@@ -1092,6 +1092,9 @@ func TestOpenAIRealtimeSTTVADPushErrorClosesStreamLikeReference(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("VAD stream was not closed after VAD push error")
 	}
+	if got := vadStream.endInputCalls(); got != 0 {
+		t.Fatalf("VAD EndInput calls = %d, want cleanup close without EndInput after PushFrame error", got)
+	}
 }
 
 func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T) {
@@ -1209,6 +1212,9 @@ func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
 	case <-vadStream.closeCh:
 	case <-time.After(time.Second):
 		t.Fatal("VAD stream was not closed after VAD Flush error")
+	}
+	if got := vadStream.endInputCalls(); got != 0 {
+		t.Fatalf("VAD EndInput calls = %d, want cleanup close without EndInput after Flush error", got)
 	}
 }
 
