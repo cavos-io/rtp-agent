@@ -13398,6 +13398,7 @@ func TestDefaultConfigFromEnvMapsGroqLLMOptions(t *testing.T) {
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
 	)
 	if stream != nil {
+		_, _ = stream.Next()
 		_ = stream.Close()
 	}
 
@@ -13449,6 +13450,7 @@ func TestDefaultConfigFromEnvMapsGroqLLMMetadata(t *testing.T) {
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
 	)
 	if stream != nil {
+		_, _ = stream.Next()
 		_ = stream.Close()
 	}
 
@@ -13507,11 +13509,12 @@ func TestDefaultConfigFromEnvMapsGroqLLMMaxRetriesOption(t *testing.T) {
 		t.Fatalf("NewApp() error = %v", err)
 	}
 	stream, err := app.Session.LLM.Chat(context.Background(), llm.NewChatContext())
-	if stream != nil {
+	if err == nil {
+		_, err = stream.Next()
 		_ = stream.Close()
 	}
 	if err == nil {
-		t.Fatal("Chat error is nil, want failures to stop after configured one retry")
+		t.Fatal("Next error is nil, want failures to stop after configured one retry")
 	}
 	if attempts != 2 {
 		t.Fatalf("Groq LLM startup attempts = %d, want initial request plus one configured retry", attempts)
