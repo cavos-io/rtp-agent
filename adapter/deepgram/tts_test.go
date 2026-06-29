@@ -214,6 +214,44 @@ func TestDeepgramTTSSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeDecodesReferenceTelephonyAudio(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/octet-stream"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x00, 0xff})),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSAudioFormat("mulaw", 8000),
+		WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next() audio = %#v, want decoded PCM frame", audio)
+	}
+	if got, want := audio.Frame.Data, []byte{0x84, 0x82, 0x00, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("decoded audio = %v, want %v", got, want)
+	}
+	if audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("samples per channel = %d, want one PCM16 sample per mu-law byte", audio.Frame.SamplesPerChannel)
+	}
+}
+
 func TestDeepgramTTSSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "",
 		WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"),
@@ -1300,6 +1338,58 @@ func TestDeepgramTTSStreamAnnotatesReferenceAudioSegment(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamDecodesReferenceTelephonyAudio(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSTelephonyAudioWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSAudioFormat("mulaw", 8000),
+		WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next() audio = %#v, want decoded PCM frame", audio)
+	}
+	if got, want := audio.Frame.Data, []byte{0x84, 0x82, 0x00, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("decoded audio = %v, want %v", got, want)
+	}
+	if audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("samples per channel = %d, want one PCM16 sample per mu-law byte", audio.Frame.SamplesPerChannel)
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSStreamPropagatesReferenceErrorMessage(t *testing.T) {
 	stream := &deepgramTTSStream{
 		audio: make(chan *tts.SynthesizedAudio, 1),
@@ -1640,6 +1730,39 @@ func runDeepgramTTSAudioSegmentWebsocketServer(conn net.Conn, errCh chan<- error
 		}
 	}
 	if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{0x01, 0x02, 0x03, 0x04}); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
+func runDeepgramTTSTelephonyAudioWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "Flush" {
+			break
+		}
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{0x00, 0xff}); err != nil {
 		errCh <- err
 		return
 	}

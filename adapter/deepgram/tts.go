@@ -170,6 +170,7 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	return &deepgramTTSChunkedStream{
 		resp:       resp,
 		sampleRate: t.sampleRate,
+		encoding:   t.encoding,
 		requestID:  uuid.NewString(),
 	}, nil
 }
@@ -217,6 +218,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		errCh:      make(chan error, 1),
 		flushed:    make(chan struct{}, 1),
 		sampleRate: t.sampleRate,
+		encoding:   t.encoding,
 		requestID:  uuid.NewString(),
 		segmentID:  uuid.NewString(),
 	}
@@ -289,6 +291,7 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 type deepgramTTSChunkedStream struct {
 	resp         *http.Response
 	sampleRate   int
+	encoding     string
 	requestID    string
 	pendingFinal bool
 	finalSent    bool
@@ -322,13 +325,14 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 
+	frameData := deepgramTTSTelephonyToPCM(s.encoding, buf[:n])
 	return &tts.SynthesizedAudio{
 		RequestID: s.requestID,
 		Frame: &model.AudioFrame{
-			Data:              buf[:n],
+			Data:              frameData,
 			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
+			SamplesPerChannel: uint32(len(frameData) / 2),
 		},
 	}, nil
 }
@@ -370,6 +374,7 @@ type deepgramTTSStream struct {
 	drainClosed bool
 
 	sampleRate   int
+	encoding     string
 	writeJSON    func(any) error
 	writeText    func(string) error
 	closeConn    func() error
@@ -394,12 +399,13 @@ func (s *deepgramTTSStream) readLoop() {
 		}
 
 		if msgType == websocket.BinaryMessage {
+			frameData := deepgramTTSTelephonyToPCM(s.encoding, message)
 			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
-					Data:              message,
+					Data:              frameData,
 					SampleRate:        uint32(s.sampleRate),
 					NumChannels:       1,
-					SamplesPerChannel: uint32(len(message) / 2),
+					SamplesPerChannel: uint32(len(frameData) / 2),
 				},
 			}
 			s.annotateAudio(audio)
@@ -442,6 +448,58 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
+}
+
+func deepgramTTSTelephonyToPCM(encoding string, data []byte) []byte {
+	switch strings.ToLower(encoding) {
+	case "mulaw", "mu-law", "ulaw", "u-law":
+		return deepgramTTSDecodeMuLaw(data)
+	case "alaw", "a-law":
+		return deepgramTTSDecodeALaw(data)
+	default:
+		return bytes.Clone(data)
+	}
+}
+
+func deepgramTTSDecodeMuLaw(data []byte) []byte {
+	pcm := make([]byte, len(data)*2)
+	for i, encoded := range data {
+		u := ^encoded
+		sign := 1
+		if u&0x80 != 0 {
+			sign = -1
+		}
+		exponent := int((u >> 4) & 0x07)
+		mantissa := int(u & 0x0f)
+		sample := ((mantissa << 3) + 0x84) << exponent
+		value := int16(sign * (sample - 0x84))
+		pcm[i*2] = byte(value)
+		pcm[i*2+1] = byte(value >> 8)
+	}
+	return pcm
+}
+
+func deepgramTTSDecodeALaw(data []byte) []byte {
+	pcm := make([]byte, len(data)*2)
+	for i, encoded := range data {
+		a := encoded ^ 0x55
+		sign := -1
+		if a&0x80 != 0 {
+			sign = 1
+		}
+		exponent := int((a >> 4) & 0x07)
+		mantissa := int(a & 0x0f)
+		sample := 0
+		if exponent == 0 {
+			sample = (mantissa << 4) + 8
+		} else {
+			sample = ((mantissa << 4) + 0x108) << (exponent - 1)
+		}
+		value := int16(sign * sample)
+		pcm[i*2] = byte(value)
+		pcm[i*2+1] = byte(value >> 8)
+	}
+	return pcm
 }
 
 func (s *deepgramTTSStream) annotateAudio(audio *tts.SynthesizedAudio) {
