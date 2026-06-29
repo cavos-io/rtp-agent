@@ -1267,21 +1267,21 @@ func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveStreamMetadata(t *testing.T
 		WithDeepgramSTTDiarization(true),
 	)
 
-	select {
-	case got := <-requests:
-		t.Fatalf("metadata-only update opened websocket %s, want reference active stream unchanged", got.String())
-	case <-time.After(100 * time.Millisecond):
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "metadata-only update websocket request")
+	assertDeepgramQueryValues(t, secondURL.Query(), "tag", []string{"initial"})
+	if got := secondURL.Query().Get("diarize"); got != "" {
+		t.Fatalf("metadata-only active stream diarize query = %q, want absent like reference", got)
 	}
 
 	provider.UpdateOptions(WithDeepgramSTTModel("nova-3"))
-	secondURL := receiveDeepgramTestRequestURL(t, requests, "model update websocket request")
-	assertDeepgramQueryValues(t, secondURL.Query(), "tag", []string{"initial"})
-	if got := secondURL.Query().Get("diarize"); got != "" {
+	thirdURL := receiveDeepgramTestRequestURL(t, requests, "model update websocket request")
+	assertDeepgramQueryValues(t, thirdURL.Query(), "tag", []string{"initial"})
+	if got := thirdURL.Query().Get("diarize"); got != "" {
 		t.Fatalf("updated active stream diarize query = %q, want absent like reference", got)
 	}
 }
 
-func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveAudioBuffer(t *testing.T) {
+func TestDeepgramSTTUpdateOptionsDropsReferenceActiveAudioBufferOnReconnect(t *testing.T) {
 	requests := make(chan *url.URL, 2)
 	audioMessages := make(chan []byte, 1)
 	serverErr := make(chan error, 2)
@@ -1322,12 +1322,7 @@ func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveAudioBuffer(t *testing.T) {
 	}
 
 	provider.UpdateOptions(WithDeepgramSTTTags([]string{"updated"}))
-
-	select {
-	case got := <-requests:
-		t.Fatalf("metadata-only update opened websocket %s, want active stream unchanged", got.String())
-	case <-time.After(100 * time.Millisecond):
-	}
+	_ = receiveDeepgramTestRequestURL(t, requests, "metadata-only update websocket request")
 
 	if err := stream.PushFrame(&model.AudioFrame{
 		Data:              make([]byte, 1280),
@@ -1339,11 +1334,25 @@ func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveAudioBuffer(t *testing.T) {
 	}
 	select {
 	case audio := <-audioMessages:
+		t.Fatalf("second partial frame emitted %d bytes, want reference reconnect buffer drop", len(audio))
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("third PushFrame error = %v", err)
+	}
+	select {
+	case audio := <-audioMessages:
 		if len(audio) != 1600 {
-			t.Fatalf("audio chunk bytes = %d, want buffered 50ms reference chunk", len(audio))
+			t.Fatalf("audio chunk bytes = %d, want new 50ms reference chunk", len(audio))
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for buffered audio after metadata-only update")
+		t.Fatal("timed out waiting for new audio chunk after reconnect")
 	}
 }
 

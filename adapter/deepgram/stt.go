@@ -1338,18 +1338,12 @@ func (s *deepgramStream) updateOptions(languageChanged bool) {
 		s.language = s.provider.language
 	}
 	nextURL := buildDeepgramStreamURL(s.activeConfigLocked(), s.language)
-	reconnectNow := false
-	if nextURL != s.streamURL {
-		s.streamURL = nextURL
-		s.reconnectNext = true
-		reconnectNow = s.conn != nil
-	}
-	formatChanged := s.sampleRate != s.provider.sampleRate || s.numChannels != s.provider.numChannels
+	s.streamURL = nextURL
+	s.reconnectNext = true
+	reconnectNow := s.conn != nil
 	s.sampleRate = s.provider.sampleRate
 	s.numChannels = s.provider.numChannels
-	if formatChanged {
-		s.audioBStream = nil
-	}
+	s.audioBStream = nil
 	s.mu.Unlock()
 
 	if reconnectNow {
