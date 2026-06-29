@@ -268,12 +268,62 @@ func (s *DeepgramSTT) Close() error {
 	return closeErr
 }
 
-func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) {
+func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) error {
 	s.mu.Lock()
+	next := &DeepgramSTT{
+		apiKey:            s.apiKey,
+		model:             s.model,
+		language:          s.language,
+		punctuate:         s.punctuate,
+		smartFormat:       s.smartFormat,
+		noDelay:           s.noDelay,
+		endpointingMS:     s.endpointingMS,
+		enableDiarization: s.enableDiarization,
+		fillerWords:       s.fillerWords,
+		sampleRate:        s.sampleRate,
+		numChannels:       s.numChannels,
+		interimResults:    s.interimResults,
+		vadEvents:         s.vadEvents,
+		detectLanguage:    s.detectLanguage,
+		profanityFilter:   s.profanityFilter,
+		numerals:          s.numerals,
+		mipOptOut:         s.mipOptOut,
+		keywords:          append([]DeepgramKeyword(nil), s.keywords...),
+		keyterms:          append([]string(nil), s.keyterms...),
+		redact:            append([]string(nil), s.redact...),
+		tags:              append([]string(nil), s.tags...),
+		baseURL:           s.baseURL,
+	}
 	oldLanguage := s.language
 	for _, opt := range opts {
-		opt(s)
+		opt(next)
 	}
+	if err := validateDeepgramSTTOptions(next); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.apiKey = next.apiKey
+	s.model = next.model
+	s.language = next.language
+	s.punctuate = next.punctuate
+	s.smartFormat = next.smartFormat
+	s.noDelay = next.noDelay
+	s.endpointingMS = next.endpointingMS
+	s.enableDiarization = next.enableDiarization
+	s.fillerWords = next.fillerWords
+	s.sampleRate = next.sampleRate
+	s.numChannels = next.numChannels
+	s.interimResults = next.interimResults
+	s.vadEvents = next.vadEvents
+	s.detectLanguage = next.detectLanguage
+	s.profanityFilter = next.profanityFilter
+	s.numerals = next.numerals
+	s.mipOptOut = next.mipOptOut
+	s.keywords = next.keywords
+	s.keyterms = next.keyterms
+	s.redact = next.redact
+	s.tags = next.tags
+	s.baseURL = next.baseURL
 	languageChanged := oldLanguage != s.language
 	streams := make([]*deepgramStream, 0, len(s.streams))
 	for stream := range s.streams {
@@ -283,6 +333,7 @@ func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) {
 	for _, stream := range streams {
 		stream.updateOptions(languageChanged)
 	}
+	return nil
 }
 
 func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.RecognizeStream, error) {
@@ -316,17 +367,19 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &deepgramStream{
-		provider:    s,
-		conn:        conn,
-		streamURL:   streamURL,
-		events:      make(chan *stt.SpeechEvent, 100),
-		errCh:       make(chan error, 1),
-		ctx:         streamCtx,
-		cancel:      cancel,
-		sampleRate:  s.sampleRate,
-		numChannels: s.numChannels,
-		language:    languageStr,
-		connStart:   time.Now(),
+		provider:          s,
+		conn:              conn,
+		streamURL:         streamURL,
+		events:            make(chan *stt.SpeechEvent, 100),
+		errCh:             make(chan error, 1),
+		ctx:               streamCtx,
+		cancel:            cancel,
+		sampleRate:        s.sampleRate,
+		numChannels:       s.numChannels,
+		language:          languageStr,
+		enableDiarization: s.enableDiarization,
+		tags:              append([]string(nil), s.tags...),
+		connStart:         time.Now(),
 	}
 	if !s.registerStream(stream) {
 		cancel()
@@ -564,7 +617,7 @@ func buildDeepgramRecognizeURL(s *DeepgramSTT, languageStr string) string {
 	if languageStr != "" {
 		q.Set("language", languageStr)
 	}
-	addDeepgramSTTAdvancedQuery(q, s)
+	addDeepgramSTTRecognizeAdvancedQuery(q, s)
 	u.RawQuery = q.Encode()
 	return u.String()
 }
@@ -588,6 +641,19 @@ func addDeepgramSTTAdvancedQuery(q url.Values, s *DeepgramSTT) {
 	for _, tag := range s.tags {
 		if tag != "" {
 			q.Add("tag", tag)
+		}
+	}
+}
+
+func addDeepgramSTTRecognizeAdvancedQuery(q url.Values, s *DeepgramSTT) {
+	for _, keyword := range s.keywords {
+		if keyword.Keyword != "" {
+			q.Add("keywords", keyword.Keyword+":"+strconv.FormatFloat(keyword.Boost, 'f', -1, 64))
+		}
+	}
+	for _, redact := range s.redact {
+		if redact != "" {
+			q.Add("redact", redact)
 		}
 	}
 }
@@ -641,15 +707,17 @@ type deepgramStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	sampleRate   int
-	numChannels  int
-	language     string
-	rateGuard    stt.SampleRateGuard
-	inputAudio   deepgramSTTInputAudioNormalizer
-	audioBStream *audio.AudioByteStream
-	writeBinary  func([]byte) error
-	writeJSON    func(any) error
-	writeText    func(string) error
+	sampleRate        int
+	numChannels       int
+	language          string
+	enableDiarization bool
+	tags              []string
+	rateGuard         stt.SampleRateGuard
+	inputAudio        deepgramSTTInputAudioNormalizer
+	audioBStream      *audio.AudioByteStream
+	writeBinary       func([]byte) error
+	writeJSON         func(any) error
+	writeText         func(string) error
 }
 
 type dgWord struct {
@@ -1291,8 +1359,25 @@ func (s *deepgramStream) sendConnectionUsageRemainderLocked() {
 	}
 }
 
+func (s *deepgramStream) cancelIfUsageDeliveryWouldBlockLocked() {
+	if s.cancel == nil || s.events == nil {
+		return
+	}
+	if s.usageTotal <= 0 && s.connStart.IsZero() {
+		return
+	}
+	if cap(s.events) == 0 || len(s.events) >= cap(s.events) {
+		s.cancel()
+	}
+}
+
 func (s *deepgramStream) Close() error {
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.mu.Lock()
+	}
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil
@@ -1301,6 +1386,7 @@ func (s *deepgramStream) Close() error {
 	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
+	s.cancelIfUsageDeliveryWouldBlockLocked()
 	s.sendConnectionUsageRemainderLocked()
 	if s.cancel != nil {
 		s.cancel()
@@ -1320,13 +1406,10 @@ func (s *deepgramStream) updateOptions(languageChanged bool) {
 	if languageChanged {
 		s.language = s.provider.language
 	}
-	nextURL := buildDeepgramStreamURL(s.provider, s.language)
-	reconnectNow := false
-	if nextURL != s.streamURL {
-		s.streamURL = nextURL
-		s.reconnectNext = true
-		reconnectNow = s.conn != nil
-	}
+	nextURL := buildDeepgramStreamURL(s.activeConfigLocked(), s.language)
+	s.streamURL = nextURL
+	s.reconnectNext = true
+	reconnectNow := s.conn != nil
 	s.sampleRate = s.provider.sampleRate
 	s.numChannels = s.provider.numChannels
 	s.audioBStream = nil
@@ -1334,6 +1417,31 @@ func (s *deepgramStream) updateOptions(languageChanged bool) {
 
 	if reconnectNow {
 		go s.reconnectNow()
+	}
+}
+
+func (s *deepgramStream) activeConfigLocked() *DeepgramSTT {
+	return &DeepgramSTT{
+		model:             s.provider.model,
+		language:          s.provider.language,
+		punctuate:         s.provider.punctuate,
+		smartFormat:       s.provider.smartFormat,
+		noDelay:           s.provider.noDelay,
+		endpointingMS:     s.provider.endpointingMS,
+		enableDiarization: s.enableDiarization,
+		fillerWords:       s.provider.fillerWords,
+		sampleRate:        s.provider.sampleRate,
+		numChannels:       s.provider.numChannels,
+		interimResults:    s.provider.interimResults,
+		vadEvents:         s.provider.vadEvents,
+		profanityFilter:   s.provider.profanityFilter,
+		numerals:          s.provider.numerals,
+		mipOptOut:         s.provider.mipOptOut,
+		keywords:          append([]DeepgramKeyword(nil), s.provider.keywords...),
+		keyterms:          append([]string(nil), s.provider.keyterms...),
+		redact:            append([]string(nil), s.provider.redact...),
+		tags:              append([]string(nil), s.tags...),
+		baseURL:           s.provider.baseURL,
 	}
 }
 

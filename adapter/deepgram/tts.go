@@ -454,6 +454,7 @@ type deepgramTTSStream struct {
 	closed      bool
 	inputEnded  bool
 	drainClosed bool
+	readDone    bool
 
 	sampleRate    int
 	encoding      string
@@ -485,6 +486,7 @@ func (s *deepgramTTSStream) readLoop() {
 		msgType, message, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
+				s.markReadDone()
 				s.errCh <- deepgramTTSReadError(err)
 			}
 			return
@@ -505,11 +507,18 @@ func (s *deepgramTTSStream) readLoop() {
 			s.audio <- audio
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
+				s.markReadDone()
 				s.errCh <- err
 				return
 			}
 		}
 	}
+}
+
+func (s *deepgramTTSStream) markReadDone() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.readDone = true
 }
 
 func deepgramTTSReadError(err error) error {
@@ -832,7 +841,7 @@ func (s *deepgramTTSStream) Close() error {
 	flushErr := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"})
 	closeErr := s.writeTextData(deepgramTTSCloseMessage, map[string]interface{}{"type": "Close"})
 	s.markInputSent()
-	if flushErr == nil && closeErr == nil {
+	if flushErr == nil && closeErr == nil && !s.readDone {
 		s.waitForFlushedAckLocked()
 	}
 	if s.provider != nil {

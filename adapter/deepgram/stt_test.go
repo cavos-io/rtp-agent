@@ -1154,9 +1154,37 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	assertDeepgramQuery(t, recognizeQuery, "profanity_filter", "true")
 	assertDeepgramQuery(t, recognizeQuery, "numerals", "true")
 	assertDeepgramQuery(t, recognizeQuery, "mip_opt_out", "true")
-	assertDeepgramQueryValues(t, recognizeQuery, "keyterm", []string{"LiveKit"})
 	assertDeepgramQueryValues(t, recognizeQuery, "redact", []string{"pci"})
-	assertDeepgramQueryValues(t, recognizeQuery, "tag", []string{"agent"})
+	if got := recognizeQuery["keyterm"]; len(got) != 0 {
+		t.Fatalf("recognize keyterm query = %#v, want absent like reference", got)
+	}
+	if got := recognizeQuery["tag"]; len(got) != 0 {
+		t.Fatalf("recognize tag query = %#v, want absent like reference", got)
+	}
+}
+
+func TestDeepgramSTTUpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "nova-2",
+		WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"),
+		WithDeepgramSTTTags([]string{"stable"}),
+	)
+	before := buildDeepgramStreamURL(provider, "en-US")
+
+	err := provider.UpdateOptions(WithDeepgramSTTTags([]string{strings.Repeat("x", 129)}))
+	if err == nil || !strings.Contains(err.Error(), "tag must be no more than 128 characters") {
+		t.Fatalf("UpdateOptions() error = %v, want invalid tag length", err)
+	}
+	if after := buildDeepgramStreamURL(provider, "en-US"); after != before {
+		t.Fatalf("stream URL after failed update = %s, want unchanged %s", after, before)
+	}
+
+	err = provider.UpdateOptions(WithDeepgramSTTModel("nova-3"), WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "bad", Boost: 1}}))
+	if err == nil || !strings.Contains(err.Error(), "keywords is only available") {
+		t.Fatalf("UpdateOptions() keyword error = %v, want invalid keywords for nova-3", err)
+	}
+	if after := buildDeepgramStreamURL(provider, "en-US"); after != before {
+		t.Fatalf("stream URL after failed keyword update = %s, want unchanged %s", after, before)
+	}
 }
 
 func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
@@ -1221,6 +1249,134 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 			t.Fatalf("test websocket server error: %v", err)
 		}
 	default:
+	}
+}
+
+func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveStreamMetadata(t *testing.T) {
+	requests := make(chan *url.URL, 3)
+	audioMessages := make(chan []byte, 1)
+	serverErr := make(chan error, 3)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "nova-2",
+		WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"),
+		WithDeepgramSTTTags([]string{"initial"}),
+	)
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstURL := receiveDeepgramTestRequestURL(t, requests, "first websocket request")
+	assertDeepgramQueryValues(t, firstURL.Query(), "tag", []string{"initial"})
+	if got := firstURL.Query().Get("diarize"); got != "" {
+		t.Fatalf("initial diarize query = %q, want absent", got)
+	}
+
+	provider.UpdateOptions(
+		WithDeepgramSTTTags([]string{"updated"}),
+		WithDeepgramSTTDiarization(true),
+	)
+
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "metadata-only update websocket request")
+	assertDeepgramQueryValues(t, secondURL.Query(), "tag", []string{"initial"})
+	if got := secondURL.Query().Get("diarize"); got != "" {
+		t.Fatalf("metadata-only active stream diarize query = %q, want absent like reference", got)
+	}
+
+	provider.UpdateOptions(WithDeepgramSTTModel("nova-3"))
+	thirdURL := receiveDeepgramTestRequestURL(t, requests, "model update websocket request")
+	assertDeepgramQueryValues(t, thirdURL.Query(), "tag", []string{"initial"})
+	if got := thirdURL.Query().Get("diarize"); got != "" {
+		t.Fatalf("updated active stream diarize query = %q, want absent like reference", got)
+	}
+}
+
+func TestDeepgramSTTUpdateOptionsDropsReferenceActiveAudioBufferOnReconnect(t *testing.T) {
+	requests := make(chan *url.URL, 2)
+	audioMessages := make(chan []byte, 1)
+	serverErr := make(chan error, 2)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "nova-2", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	_ = receiveDeepgramTestRequestURL(t, requests, "first websocket request")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	select {
+	case audio := <-audioMessages:
+		t.Fatalf("first partial frame emitted %d bytes, want buffered", len(audio))
+	default:
+	}
+
+	provider.UpdateOptions(WithDeepgramSTTTags([]string{"updated"}))
+	_ = receiveDeepgramTestRequestURL(t, requests, "metadata-only update websocket request")
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1280),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 640,
+	}); err != nil {
+		t.Fatalf("second PushFrame error = %v", err)
+	}
+	select {
+	case audio := <-audioMessages:
+		t.Fatalf("second partial frame emitted %d bytes, want reference reconnect buffer drop", len(audio))
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 320),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("third PushFrame error = %v", err)
+	}
+	select {
+	case audio := <-audioMessages:
+		if len(audio) != 1600 {
+			t.Fatalf("audio chunk bytes = %d, want new 50ms reference chunk", len(audio))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for new audio chunk after reconnect")
 	}
 }
 
@@ -2138,6 +2294,89 @@ func TestDeepgramSTTStreamCloseSendsReferenceCloseStreamText(t *testing.T) {
 	}
 	if got := textWrites[0]; got != deepgramSTTCloseStreamMessage {
 		t.Fatalf("CloseStream payload = %q, want exact reference payload", got)
+	}
+}
+
+func TestDeepgramSTTCloseUnblocksBackpressuredEventSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &deepgramStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		writeText: func(string) error {
+			return nil
+		},
+	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+
+	sendStarted := make(chan struct{})
+	sendDone := make(chan struct{})
+	go func() {
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		close(sendStarted)
+		stream.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript})
+		close(sendDone)
+	}()
+
+	select {
+	case <-sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked event send")
+	}
+	select {
+	case <-sendDone:
+		t.Fatal("sendEvent returned before Close canceled stream context")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not unblock backpressured event send")
+	}
+	select {
+	case <-sendDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked sendEvent did not exit after Close")
+	}
+}
+
+func TestDeepgramSTTCloseUnblocksBackpressuredUsageRemainder(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &deepgramStream{
+		ctx:       ctx,
+		cancel:    cancel,
+		events:    make(chan *stt.SpeechEvent, 1),
+		errCh:     make(chan error, 1),
+		connStart: time.Now().Add(-time.Second),
+		writeText: func(string) error {
+			return nil
+		},
+	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() blocked while emitting usage remainder to a full event queue")
 	}
 }
 
