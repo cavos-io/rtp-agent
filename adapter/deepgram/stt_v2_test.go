@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -770,6 +771,70 @@ func TestDeepgramSTTv2EndInputTreatsProviderCloseAsExpected(t *testing.T) {
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2ReconnectsAfterUnexpectedProviderClose(t *testing.T) {
+	var dialCount atomic.Int32
+	requests := make(chan struct{}, 2)
+	serverErr := make(chan error, 2)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			attempt := dialCount.Add(1)
+			requests <- struct{}{}
+			if attempt == 1 {
+				go runDeepgramSTTv2UnexpectedCloseWebsocketServer(serverConn, serverErr)
+			} else {
+				go runDeepgramSTTv2DefaultLanguageWebsocketServer(serverConn, make(chan struct{}), serverErr)
+			}
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	<-requests
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("STTv2 stream did not reconnect after unexpected provider close")
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() after reconnect error = %v, want transcript event", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event after reconnect = %+v, want start_of_speech", event)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("transcript Next() after reconnect error = %v", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
+		t.Fatalf("transcript after reconnect = %+v, want interim hello", event)
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-serverErr:
+			if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) && !strings.Contains(err.Error(), "closed pipe") {
+				t.Fatalf("test websocket server error: %v", err)
+			}
+		default:
+		}
 	}
 }
 
@@ -1680,6 +1745,26 @@ func runDeepgramSTTv2DefaultLanguageWebsocketServer(conn net.Conn, closeSeen cha
 			return
 		}
 	}
+}
+
+func runDeepgramSTTv2UnexpectedCloseWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	closePayload := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "transient")
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, closePayload); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
 }
 
 func runDeepgramSTTv2CloseAfterCloseStreamServer(conn net.Conn, closeSeen chan<- struct{}, errCh chan<- error) {

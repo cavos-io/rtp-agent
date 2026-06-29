@@ -442,7 +442,11 @@ func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 		msgType, message, err := conn.ReadMessage()
 		if err != nil {
 			if s.isCurrentConn(conn) && !s.isClosed() && !s.hasInputEnded() {
-				s.sendError(deepgramSTTUnexpectedCloseError(err))
+				if reconnectErr := s.reconnectAfterUnexpectedClose(conn); reconnectErr == nil {
+					return
+				} else {
+					s.sendError(reconnectErr)
+				}
 			}
 			return
 		}
@@ -706,6 +710,27 @@ func (s *deepgramV2Stream) reconnectNow() {
 	if err != nil {
 		s.sendError(err)
 	}
+}
+
+func (s *deepgramV2Stream) reconnectAfterUnexpectedClose(conn *websocket.Conn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputEnded || conn != s.conn {
+		return nil
+	}
+	s.audioBStream = nil
+	if err := s.reconnectLocked(); err != nil {
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.conn != nil {
+			_ = s.conn.Close()
+		}
+		return err
+	}
+	s.reconnectNext = false
+	return nil
 }
 
 func (s *deepgramV2Stream) Flush() error {
