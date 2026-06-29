@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -343,23 +344,25 @@ func validateDeepgramSTTv2Options(s *DeepgramSTTv2) error {
 }
 
 type deepgramV2Stream struct {
-	provider      *DeepgramSTTv2
-	conn          *websocket.Conn
-	events        chan *stt.SpeechEvent
-	errCh         chan error
-	mu            sync.Mutex
-	closed        bool
-	speaking      bool
-	requestID     string
-	language      string
-	start         float64
-	offset        float64
-	sampleRate    int
-	audioBStream  *audio.AudioByteStream
-	streamURL     string
-	reconnectNext bool
-	ctx           context.Context
-	cancel        context.CancelFunc
+	provider       *DeepgramSTTv2
+	conn           *websocket.Conn
+	events         chan *stt.SpeechEvent
+	errCh          chan error
+	mu             sync.Mutex
+	closed         bool
+	speaking       bool
+	requestID      string
+	language       string
+	start          float64
+	offset         float64
+	sampleRate     int
+	audioBStream   *audio.AudioByteStream
+	streamURL      string
+	reconnectNext  bool
+	usageTotal     float64
+	usageLastFlush time.Time
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 type deepgramV2Response struct {
@@ -543,6 +546,7 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 			s.closed = true
 			return err
 		}
+		s.sendRecognitionUsage(chunk)
 	}
 	return nil
 }
@@ -593,13 +597,53 @@ func (s *deepgramV2Stream) Flush() error {
 	if s.audioBStream == nil {
 		return nil
 	}
+	flushedFrame := false
 	for _, chunk := range s.audioBStream.Flush() {
+		flushedFrame = true
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {
 			s.closed = true
 			return err
 		}
+		s.sendRecognitionUsage(chunk)
+	}
+	if flushedFrame {
+		s.flushRecognitionUsageLocked()
 	}
 	return nil
+}
+
+func (s *deepgramV2Stream) sendRecognitionUsage(frame *model.AudioFrame) {
+	if s.ctx == nil || s.events == nil || frame == nil {
+		return
+	}
+	duration := audio.CalculateFrameDuration(frame)
+	if duration <= 0 {
+		return
+	}
+	s.usageTotal += duration
+	if s.usageLastFlush.IsZero() {
+		s.usageLastFlush = time.Now()
+		return
+	}
+	if time.Since(s.usageLastFlush) >= deepgramSTTUsageInterval {
+		s.flushRecognitionUsageLocked()
+	}
+}
+
+func (s *deepgramV2Stream) flushRecognitionUsageLocked() {
+	if s.usageTotal <= 0 {
+		return
+	}
+	duration := s.usageTotal
+	s.usageTotal = 0
+	s.usageLastFlush = time.Now()
+	s.sendEvent(&stt.SpeechEvent{
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: s.requestID,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: duration,
+		},
+	})
 }
 
 func (s *deepgramV2Stream) Close() error {

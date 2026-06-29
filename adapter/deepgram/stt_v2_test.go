@@ -384,6 +384,83 @@ func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2StreamEmitsReferenceRecognitionUsage(t *testing.T) {
+	requests := make(chan *url.URL, 1)
+	audioMessages := make(chan []byte, 2)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	rawStream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := rawStream.(*deepgramV2Stream)
+	stream.requestID = "req-usage"
+	defer stream.Close()
+
+	_ = receiveDeepgramTestRequestURL(t, requests, "usage STTv2 websocket request")
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 2000),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case <-audioMessages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for STTv2 audio frame")
+	}
+	assertNoDeepgramRecognitionUsageEvent(t, stream.events)
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case <-audioMessages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for flushed STTv2 audio frame")
+	}
+	select {
+	case event := <-stream.events:
+		if event.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %s, want %s", event.Type, stt.SpeechEventRecognitionUsage)
+		}
+		if event.RequestID != "req-usage" {
+			t.Fatalf("usage request id = %q, want req-usage", event.RequestID)
+		}
+		if event.RecognitionUsage == nil {
+			t.Fatal("RecognitionUsage = nil")
+		}
+		if event.RecognitionUsage.AudioDuration != 0.0625 {
+			t.Fatalf("AudioDuration = %v, want 0.0625", event.RecognitionUsage.AudioDuration)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recognition usage event")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) && !strings.Contains(err.Error(), "closed pipe") {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
 func TestDeepgramSTTv2NextAfterCloseDrainsQueuedEvent(t *testing.T) {
 	want := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
