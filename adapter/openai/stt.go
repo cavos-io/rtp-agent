@@ -876,9 +876,6 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.flushAudioLocked(); err != nil {
-		return err
-	}
 	s.inputEnded = true
 	var vadErr error
 	if s.vadStream != nil {
@@ -887,6 +884,9 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 			s.closeAfterTerminalFailureLocked()
 			return vadErr
 		}
+	}
+	if err := s.flushAudioLocked(); err != nil {
+		return err
 	}
 	if s.vadStream == nil && s.shouldCommitOnEndInputLocked() {
 		if err := s.commitAudioLocked(); err != nil {
