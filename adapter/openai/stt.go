@@ -1270,15 +1270,18 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	_ = s.conn.Close()
 	conn, _, err := s.owner.dialRealtimeSTTWebsocket(s.ctx)
 	if err != nil {
+		s.closeVADStreamLocked()
 		return mapOpenAIError(err)
 	}
 	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
 	if err != nil {
 		_ = conn.Close()
+		s.closeVADStreamLocked()
 		return err
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
 		_ = conn.Close()
+		s.closeVADStreamLocked()
 		return mapOpenAIError(err)
 	}
 	s.conn = conn
