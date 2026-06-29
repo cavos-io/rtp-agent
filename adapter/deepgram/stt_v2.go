@@ -198,7 +198,7 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 	return nil
 }
 
-func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -208,10 +208,6 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 	if err := validateDeepgramSTTv2Options(s); err != nil {
 		return nil, err
 	}
-	if language == "" {
-		language = s.language
-	}
-
 	header := make(http.Header)
 	header.Set("Authorization", "Token "+s.apiKey)
 	streamURL := buildDeepgramSTTv2StreamURL(s)
@@ -229,7 +225,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 		streamURL:  streamURL,
 		events:     make(chan *stt.SpeechEvent, 100),
 		errCh:      make(chan error, 1),
-		language:   language,
+		language:   s.language,
 		sampleRate: s.sampleRate,
 	}
 	if !s.registerStream(stream) {
@@ -351,6 +347,7 @@ type deepgramV2Stream struct {
 	errCh          chan error
 	mu             sync.Mutex
 	closed         bool
+	inputEnded     bool
 	speaking       bool
 	requestID      string
 	language       string
@@ -410,7 +407,7 @@ func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 	for {
 		msgType, message, err := conn.ReadMessage()
 		if err != nil {
-			if s.isCurrentConn(conn) && !s.isClosed() {
+			if s.isCurrentConn(conn) && !s.isClosed() && !s.hasInputEnded() {
 				s.sendError(deepgramSTTUnexpectedCloseError(err))
 			}
 			return
@@ -532,6 +529,9 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
 			s.closed = true
@@ -595,6 +595,9 @@ func (s *deepgramV2Stream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.audioBStream == nil {
 		return nil
 	}
@@ -610,6 +613,33 @@ func (s *deepgramV2Stream) Flush() error {
 	if flushedFrame {
 		s.flushRecognitionUsageLocked()
 	}
+	return nil
+}
+
+func (s *deepgramV2Stream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {
+				s.closed = true
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
+		s.flushRecognitionUsageLocked()
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, []byte(deepgramSTTv2CloseMessage)); err != nil {
+		s.closed = true
+		return err
+	}
+	s.inputEnded = true
 	return nil
 }
 
@@ -648,23 +678,42 @@ func (s *deepgramV2Stream) flushRecognitionUsageLocked() {
 }
 
 func (s *deepgramV2Stream) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
 	s.closed = true
-	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(deepgramSTTv2CloseMessage))
-	if s.cancel != nil {
-		s.cancel()
+	if s.conn != nil {
+		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(deepgramSTTv2CloseMessage))
 	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
+	}
+	if s.conn == nil {
+		return nil
 	}
 	return s.conn.Close()
 }
 
 func (s *deepgramV2Stream) Next() (*stt.SpeechEvent, error) {
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	default:
+	}
+
 	if s.isClosed() {
 		select {
 		case event, ok := <-s.events:
@@ -752,8 +801,8 @@ func (s *deepgramV2Stream) SetStartTime(startTime float64) {
 
 func (s *deepgramV2Stream) sendEvent(ev *stt.SpeechEvent) {
 	select {
+	case <-s.done():
 	case s.events <- ev:
-	default:
 	}
 }
 
@@ -768,6 +817,12 @@ func (s *deepgramV2Stream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *deepgramV2Stream) hasInputEnded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputEnded
 }
 
 func (s *deepgramV2Stream) isCurrentConn(conn *websocket.Conn) bool {

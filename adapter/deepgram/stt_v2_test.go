@@ -191,6 +191,185 @@ func TestDeepgramSTTv2StreamHandlesReferenceTurnAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2StreamUsesReferenceDefaultLanguage(t *testing.T) {
+	closeSeen := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2DefaultLanguageWebsocketServer(serverConn, closeSeen, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"),
+	)
+	stream, err := provider.Stream(context.Background(), "fr")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	start, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next start error = %v", err)
+	}
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = %s, want start_of_speech", start.Type)
+	}
+
+	interim, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next interim error = %v", err)
+	}
+	if interim.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event type = %s, want interim transcript", interim.Type)
+	}
+	if got := interim.Alternatives[0].Language; got != "en" {
+		t.Fatalf("transcript language = %q, want reference default en", got)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2EndInputFlushesTailAndClosesReferenceInput(t *testing.T) {
+	closeSeen := make(chan struct{})
+	audioFrames := make(chan []byte, 2)
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2TurnInfoWebsocketServer(serverConn, closeSeen, audioFrames, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"),
+		WithDeepgramSTTv2SampleRate(16000),
+	)
+	rawStream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := rawStream.(*deepgramV2Stream)
+	defer stream.Close()
+
+	if _, ok := rawStream.(stt.InputEnding); !ok {
+		t.Fatalf("stream = %T, want stt.InputEnding", rawStream)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 2400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1200,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		if len(got) != 1600 {
+			t.Fatalf("first audio frame length = %d, want 1600", len(got))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first audio frame")
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		if len(got) != 800 {
+			t.Fatalf("end input audio frame length = %d, want 800", len(got))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for end input audio tail")
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1}}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2EndInputTreatsProviderCloseAsExpected(t *testing.T) {
+	closeSeen := make(chan struct{})
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runDeepgramSTTv2CloseAfterCloseStreamServer(serverConn, closeSeen, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatalf("stream = %T, want stt.InputEnding", stream)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after provider close error = %T %v, want EOF", err, err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
 	provider := NewDeepgramSTTv2("test-key",
 		WithDeepgramSTTv2BaseURL("https://deepgram.example/v2/listen"),
@@ -557,6 +736,146 @@ func TestDeepgramSTTv2NextReturnsQueuedTranscriptBeforeStreamError(t *testing.T)
 	}
 }
 
+func TestDeepgramSTTv2SendEventWaitsForConsumer(t *testing.T) {
+	stream := &deepgramV2Stream{
+		ctx:    context.Background(),
+		events: make(chan *stt.SpeechEvent, 1),
+	}
+	first := &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+	second := &stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript}
+	stream.events <- first
+
+	sent := make(chan struct{})
+	go func() {
+		stream.sendEvent(second)
+		close(sent)
+	}()
+
+	select {
+	case <-sent:
+		t.Fatal("sendEvent returned while event queue was full; want reference non-lossy delivery")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	if got := <-stream.events; got != first {
+		t.Fatalf("first drained event = %+v, want %+v", got, first)
+	}
+	select {
+	case <-sent:
+	case <-time.After(time.Second):
+		t.Fatal("sendEvent did not unblock after consumer drained queue")
+	}
+	if got := <-stream.events; got != second {
+		t.Fatalf("second drained event = %+v, want %+v", got, second)
+	}
+}
+
+func TestDeepgramSTTv2CloseUnblocksBackpressuredEventSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &deepgramV2Stream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+
+	sendStarted := make(chan struct{})
+	sendDone := make(chan struct{})
+	go func() {
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		close(sendStarted)
+		stream.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript})
+		close(sendDone)
+	}()
+
+	select {
+	case <-sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked event send")
+	}
+	select {
+	case <-sendDone:
+		t.Fatal("sendEvent returned before Close canceled stream context")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not unblock backpressured event send")
+	}
+	select {
+	case <-sendDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked sendEvent did not exit after Close")
+	}
+}
+
+func TestDeepgramSTTv2UsageFlushDoesNotBlockConsumer(t *testing.T) {
+	stream := &deepgramV2Stream{
+		ctx:        context.Background(),
+		events:     make(chan *stt.SpeechEvent, 1),
+		errCh:      make(chan error, 1),
+		requestID:  "req-usage",
+		usageTotal: 0.25,
+	}
+	first := &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+	stream.events <- first
+
+	flushDone := make(chan struct{})
+	go func() {
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		stream.flushRecognitionUsageLocked()
+		close(flushDone)
+	}()
+
+	nextDone := make(chan *stt.SpeechEvent, 1)
+	nextErr := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		nextDone <- event
+		nextErr <- err
+	}()
+
+	select {
+	case event := <-nextDone:
+		if err := <-nextErr; err != nil {
+			t.Fatalf("Next() error = %v, want queued event", err)
+		}
+		if event != first {
+			t.Fatalf("Next() event = %+v, want first queued event %+v", event, first)
+		}
+	case <-time.After(200 * time.Millisecond):
+		<-stream.events
+		<-flushDone
+		t.Fatal("Next() blocked behind usage flush stream lock")
+	}
+
+	select {
+	case <-flushDone:
+	case <-time.After(time.Second):
+		t.Fatal("usage flush did not finish after consumer drained queue")
+	}
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() usage error = %v", err)
+	}
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RequestID != "req-usage" {
+		t.Fatalf("usage event = %+v, want recognition_usage for req-usage", usage)
+	}
+}
+
 func TestDeepgramSTTv2ErrorMessageReturnsAPIStatusError(t *testing.T) {
 	stream := &deepgramV2Stream{}
 
@@ -633,5 +952,70 @@ func runDeepgramSTTv2TurnInfoWebsocketServer(conn net.Conn, closeSeen chan<- str
 				return
 			}
 		}
+	}
+}
+
+func runDeepgramSTTv2DefaultLanguageWebsocketServer(conn net.Conn, closeSeen chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	msg := `{"type":"TurnInfo","event":"StartOfTurn","request_id":"req-v2","transcript":"hello","audio_window_start":0.1,"audio_window_end":0.4,"words":[{"word":"hello","start":0.1,"end":0.4,"confidence":0.9}]}`
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(msg)); err != nil {
+		errCh <- err
+		return
+	}
+
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "CloseStream" {
+			close(closeSeen)
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func runDeepgramSTTv2CloseAfterCloseStreamServer(conn net.Conn, closeSeen chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode != websocket.TextMessage || deepgramTestWebsocketMessageType(payload) != "CloseStream" {
+			continue
+		}
+		close(closeSeen)
+		closePayload := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done")
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, closePayload); err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+		return
 	}
 }

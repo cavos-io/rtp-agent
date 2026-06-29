@@ -748,16 +748,37 @@ func TestDeepgramTTSStreamCloseWaitsForReferenceFlushedAck(t *testing.T) {
 		t.Fatal("server did not receive Close message")
 	}
 
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next() error = %v, want Flushed final marker", err)
-	}
-	if audio == nil || !audio.IsFinal {
-		t.Fatalf("Next() = %+v, want final marker from Flushed ack", audio)
+	nextDone := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		nextDone <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	select {
+	case result := <-nextDone:
+		if result.err != nil {
+			t.Fatalf("Next() error = %v, want Flushed final marker", result.err)
+		}
+		if result.audio == nil || !result.audio.IsFinal {
+			t.Fatalf("Next() = %+v, want final marker from Flushed ack", result.audio)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next() did not receive Flushed final marker promptly")
 	}
 
-	if err := <-closeDone; err != nil {
-		t.Fatalf("Close() error = %v", err)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close() did not return promptly after Flushed ack")
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
@@ -854,6 +875,123 @@ func TestDeepgramTTSStreamTokenizesReferenceSpeakMessages(t *testing.T) {
 	want = []string{"Speak:hello ", "Speak:world ", "Speak:again ", "Flush"}
 	if !reflect.DeepEqual(writes, want) {
 		t.Fatalf("writes after split PushText = %#v, want %#v", writes, want)
+	}
+}
+
+func TestDeepgramTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
+	var writes []string
+	closeCalls := 0
+	stream := &deepgramTTSStream{
+		audio:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
+		flushed:   make(chan struct{}, 1),
+		requestID: "req-end",
+		segmentID: "seg-end",
+		writeText: func(payload string) error {
+			writes = append(writes, payload)
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+	}
+	wantWrites := []string{`{"type": "Speak", "text": "hello "}`, `{"type": "Speak", "text": "world "}`, deepgramTTSFlushMessage}
+	if !reflect.DeepEqual(writes, wantWrites) {
+		t.Fatalf("writes = %#v, want %#v", writes, wantWrites)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushText after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
+		t.Fatalf("handleTextMessage Flushed error = %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after Flushed = %d, want 1", closeCalls)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final marker", err)
+	}
+	if final.RequestID != "req-end" || final.SegmentID != "seg-end" || !final.IsFinal {
+		t.Fatalf("final audio = %+v, want request/segment final marker", final)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final = (%+v, %v), want EOF", audio, err)
+	}
+}
+
+func TestDeepgramTTSStreamEndInputClosesIdleReferenceStream(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup func(*testing.T, *deepgramTTSStream, *[]string)
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "after flushed segment",
+			setup: func(t *testing.T, stream *deepgramTTSStream, writes *[]string) {
+				t.Helper()
+				if err := stream.PushText("hello"); err != nil {
+					t.Fatalf("PushText() error = %v", err)
+				}
+				if err := stream.Flush(); err != nil {
+					t.Fatalf("Flush() error = %v", err)
+				}
+				if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
+					t.Fatalf("handleTextMessage Flushed error = %v", err)
+				}
+				if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
+					t.Fatalf("Next after setup Flushed = (%+v, %v), want final marker", final, err)
+				}
+				*writes = nil
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var writes []string
+			closeCalls := 0
+			stream := &deepgramTTSStream{
+				audio:   make(chan *tts.SynthesizedAudio, 1),
+				errCh:   make(chan error, 1),
+				flushed: make(chan struct{}, 1),
+				writeText: func(payload string) error {
+					writes = append(writes, payload)
+					return nil
+				},
+				closeConn: func() error {
+					closeCalls++
+					return nil
+				},
+			}
+			if tt.setup != nil {
+				tt.setup(t, stream, &writes)
+			}
+
+			if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+				t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+			}
+			if len(writes) != 0 {
+				t.Fatalf("writes after idle EndInput = %#v, want none", writes)
+			}
+			if closeCalls != 1 {
+				t.Fatalf("close calls after idle EndInput = %d, want 1", closeCalls)
+			}
+			if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+				t.Fatalf("Next after idle EndInput = (%+v, %v), want EOF", audio, err)
+			}
+		})
 	}
 }
 
