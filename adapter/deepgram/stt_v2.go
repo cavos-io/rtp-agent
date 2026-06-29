@@ -503,7 +503,11 @@ func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "EndOfTurn":
 		if !s.speaking {
-			return nil
+			if !deepgramV2HasTranscript(resp) {
+				return nil
+			}
+			s.speaking = true
+			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		}
 		s.speaking = false
 		s.sendTranscriptEvent(stt.SpeechEventFinalTranscript, resp)
@@ -524,8 +528,12 @@ func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, re
 	})
 }
 
+func deepgramV2HasTranscript(resp deepgramV2Response) bool {
+	return resp.Transcript != "" || len(resp.Words) > 0
+}
+
 func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOffset float64) []stt.SpeechData {
-	if len(resp.Words) == 0 {
+	if !deepgramV2HasTranscript(resp) {
 		return nil
 	}
 	confidence := 0.0
@@ -540,7 +548,9 @@ func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOff
 			StartTimeOffset: startTimeOffset,
 		})
 	}
-	confidence /= float64(len(resp.Words))
+	if len(resp.Words) > 0 {
+		confidence /= float64(len(resp.Words))
+	}
 	if len(resp.Languages) > 0 {
 		language = resp.Languages[0]
 	}

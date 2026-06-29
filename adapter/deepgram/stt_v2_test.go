@@ -116,6 +116,39 @@ func TestDeepgramSTTv2TurnResumedStartsReferenceSpeech(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2TurnInfoPreservesReferenceTranscriptWithoutWords(t *testing.T) {
+	stream := &deepgramV2Stream{
+		events:   make(chan *stt.SpeechEvent, 8),
+		language: "en",
+	}
+
+	resp := deepgramV2Turn("EndOfTurn", "req-1", "hello without words", nil)
+	resp.AudioWindowStart = 0.2
+	resp.AudioWindowEnd = 0.9
+	if err := stream.processEvent(resp); err != nil {
+		t.Fatalf("processEvent(EndOfTurn) error = %v", err)
+	}
+
+	start := nextDeepgramV2TestEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event 0 type = %s, want %s", start.Type, stt.SpeechEventStartOfSpeech)
+	}
+	final := nextDeepgramV2TestEvent(t, stream)
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event 1 type = %s, want %s", final.Type, stt.SpeechEventFinalTranscript)
+	}
+	if len(final.Alternatives) != 1 || final.Alternatives[0].Text != "hello without words" {
+		t.Fatalf("final alternatives = %+v, want transcript without word timings", final.Alternatives)
+	}
+	if final.Alternatives[0].StartTime != 0.2 || final.Alternatives[0].EndTime != 0.9 {
+		t.Fatalf("final timing = %.1f..%.1f, want audio window", final.Alternatives[0].StartTime, final.Alternatives[0].EndTime)
+	}
+	end := nextDeepgramV2TestEvent(t, stream)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event 2 type = %s, want %s", end.Type, stt.SpeechEventEndOfSpeech)
+	}
+}
+
 func TestDeepgramSTTv2StreamRejectsNegativeTimingAnchors(t *testing.T) {
 	stream := &deepgramV2Stream{}
 	assertDeepgramPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
