@@ -186,6 +186,13 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 	s.keyterms = next.keyterms
 	s.tags = next.tags
 	s.langHints = next.langHints
+	streams := make([]*deepgramV2Stream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	for _, stream := range streams {
+		stream.updateOptions()
+	}
 	return nil
 }
 
@@ -205,7 +212,8 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 
 	header := make(http.Header)
 	header.Set("Authorization", "Token "+s.apiKey)
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramSTTv2StreamURL(s), header)
+	streamURL := buildDeepgramSTTv2StreamURL(s)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
 	}
@@ -216,6 +224,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
+		streamURL:  streamURL,
 		events:     make(chan *stt.SpeechEvent, 100),
 		errCh:      make(chan error, 1),
 		language:   language,
@@ -226,7 +235,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 		cancel()
 		return nil, io.ErrClosedPipe
 	}
-	go stream.readLoop()
+	go stream.readLoop(conn)
 	return stream, nil
 }
 
@@ -334,21 +343,23 @@ func validateDeepgramSTTv2Options(s *DeepgramSTTv2) error {
 }
 
 type deepgramV2Stream struct {
-	provider     *DeepgramSTTv2
-	conn         *websocket.Conn
-	events       chan *stt.SpeechEvent
-	errCh        chan error
-	mu           sync.Mutex
-	closed       bool
-	speaking     bool
-	requestID    string
-	language     string
-	start        float64
-	offset       float64
-	sampleRate   int
-	audioBStream *audio.AudioByteStream
-	ctx          context.Context
-	cancel       context.CancelFunc
+	provider      *DeepgramSTTv2
+	conn          *websocket.Conn
+	events        chan *stt.SpeechEvent
+	errCh         chan error
+	mu            sync.Mutex
+	closed        bool
+	speaking      bool
+	requestID     string
+	language      string
+	start         float64
+	offset        float64
+	sampleRate    int
+	audioBStream  *audio.AudioByteStream
+	streamURL     string
+	reconnectNext bool
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 type deepgramV2Response struct {
@@ -370,16 +381,32 @@ type deepgramV2Word struct {
 	Confidence float64 `json:"confidence"`
 }
 
-func (s *deepgramV2Stream) readLoop() {
+func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 	defer func() {
-		_ = s.closeFromReadLoop()
-		close(s.events)
+		s.mu.Lock()
+		stale := conn != s.conn
+		if !stale && !s.closed {
+			s.closed = true
+			if s.cancel != nil {
+				s.cancel()
+			}
+			if s.provider != nil {
+				s.provider.unregisterStream(s)
+			}
+			if s.conn != nil {
+				_ = s.conn.Close()
+			}
+		}
+		s.mu.Unlock()
+		if !stale {
+			close(s.events)
+		}
 	}()
 
 	for {
-		msgType, message, err := s.conn.ReadMessage()
+		msgType, message, err := conn.ReadMessage()
 		if err != nil {
-			if !s.isClosed() {
+			if s.isCurrentConn(conn) && !s.isClosed() {
 				s.sendError(deepgramSTTUnexpectedCloseError(err))
 			}
 			return
@@ -501,6 +528,13 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.reconnectNext {
+		if err := s.reconnectLocked(); err != nil {
+			s.closed = true
+			return err
+		}
+		s.reconnectNext = false
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = audio.NewAudioByteStream(uint32(s.sampleRate), 1, uint32(s.sampleRate/20))
 	}
@@ -510,6 +544,43 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (s *deepgramV2Stream) updateOptions() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.provider == nil {
+		return
+	}
+	nextURL := buildDeepgramSTTv2StreamURL(s.provider)
+	if nextURL != s.streamURL {
+		s.streamURL = nextURL
+		s.reconnectNext = true
+	}
+	s.sampleRate = s.provider.sampleRate
+	s.audioBStream = nil
+}
+
+func (s *deepgramV2Stream) reconnectLocked() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.provider == nil {
+		return nil
+	}
+	header := make(http.Header)
+	header.Set("Authorization", "Token "+s.provider.apiKey)
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, header)
+	if err != nil {
+		return llm.NewAPIConnectionError("failed to connect to deepgram")
+	}
+	oldConn := s.conn
+	s.conn = conn
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	go s.readLoop(conn)
 	return nil
 }
 
@@ -654,23 +725,10 @@ func (s *deepgramV2Stream) isClosed() bool {
 	return s.closed
 }
 
-func (s *deepgramV2Stream) closeFromReadLoop() error {
+func (s *deepgramV2Stream) isCurrentConn(conn *websocket.Conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.provider != nil {
-		s.provider.unregisterStream(s)
-	}
-	if s.conn != nil {
-		return s.conn.Close()
-	}
-	return nil
+	return conn == s.conn
 }
 
 var _ stt.STT = (*DeepgramSTTv2)(nil)

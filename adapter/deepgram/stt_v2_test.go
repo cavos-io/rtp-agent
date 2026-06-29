@@ -316,6 +316,74 @@ func TestDeepgramSTTv2UpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
+	requests := make(chan *url.URL, 2)
+	audioMessages := make(chan []byte, 1)
+	serverErr := make(chan error, 2)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstURL := receiveDeepgramTestRequestURL(t, requests, "first STTv2 websocket request")
+	assertDeepgramQuery(t, firstURL.Query(), "model", "flux-general-en")
+	assertDeepgramQuery(t, firstURL.Query(), "sample_rate", "16000")
+
+	if err := provider.UpdateOptions(
+		WithDeepgramSTTv2Model("flux-general-multi"),
+		WithDeepgramSTTv2SampleRate(48000),
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+	); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	}); err != nil {
+		t.Fatalf("PushFrame after update error = %v", err)
+	}
+
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated STTv2 websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "model", "flux-general-multi")
+	assertDeepgramQuery(t, secondURL.Query(), "sample_rate", "48000")
+	assertDeepgramQuery(t, secondURL.Query(), "eager_eot_threshold", "0.6")
+	assertDeepgramQuery(t, secondURL.Query(), "eot_threshold", "0.8")
+	select {
+	case got := <-audioMessages:
+		if len(got) == 0 {
+			t.Fatal("updated stream audio is empty")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio on updated STTv2 websocket")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) && !strings.Contains(err.Error(), "closed pipe") {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
 func TestDeepgramSTTv2NextAfterCloseDrainsQueuedEvent(t *testing.T) {
 	want := &stt.SpeechEvent{
 		Type: stt.SpeechEventFinalTranscript,
