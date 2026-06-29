@@ -1974,15 +1974,35 @@ func TestRealtimeSessionResponseCreatedForeignClientEventIsNotUserInitiated(t *t
 	}
 }
 
-func TestRealtimeInterruptClearsPendingResponseBeforeCreated(t *testing.T) {
+func TestRealtimeInterruptKeepsPendingResponseBeforeCreated(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		var responseCreateEventID string
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
 				return
 			}
 			messages <- string(msg)
+			var payload map[string]any
+			if err := json.Unmarshal(msg, &payload); err != nil {
+				t.Errorf("decode realtime message: %v", err)
+				return
+			}
+			switch payload["type"] {
+			case "response.create":
+				responseCreateEventID, _ = payload["event_id"].(string)
+			case "response.cancel":
+				if err := conn.WriteJSON(map[string]any{
+					"type": "response.created",
+					"response": map[string]any{
+						"id":       "resp_cancelled_race",
+						"metadata": map[string]any{"client_event_id": responseCreateEventID},
+					},
+				}); err != nil {
+					t.Errorf("Write response.created error = %v", err)
+				}
+			}
 		}
 	})
 
@@ -2007,10 +2027,13 @@ func TestRealtimeInterruptClearsPendingResponseBeforeCreated(t *testing.T) {
 	}
 	assertRealtimeMessage(t, <-messages, "response.cancel", "")
 
-	if err := session.Interrupt(); err != nil {
-		t.Fatalf("second Interrupt error = %v", err)
+	created := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want generation-created payload")
 	}
-	assertNoRealtimeMessage(t, messages, "second interrupt after pending response cancel should be silent")
+	if !created.Generation.UserInitiated {
+		t.Fatalf("UserInitiated = false after interrupted pending response was created, want true")
+	}
 }
 
 func TestRealtimeSessionSpeechStoppedReflectsDisabledInputAudioTranscription(t *testing.T) {
