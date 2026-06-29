@@ -606,12 +606,9 @@ func (s *deepgramV2Stream) updateOptions() {
 		return
 	}
 	nextURL := buildDeepgramSTTv2StreamURL(s.provider)
-	reconnectNow := false
-	if nextURL != s.streamURL {
-		s.streamURL = nextURL
-		s.reconnectNext = true
-		reconnectNow = s.conn != nil
-	}
+	s.streamURL = nextURL
+	s.reconnectNext = true
+	reconnectNow := s.conn != nil
 	s.sampleRate = s.provider.sampleRate
 	s.audioBStream = nil
 	s.mu.Unlock()

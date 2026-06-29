@@ -1006,6 +1006,44 @@ func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2UpdateOptionsReconnectsReferenceActiveStreamWhenURLUnchanged(t *testing.T) {
+	requests := make(chan *url.URL, 2)
+	audioMessages := make(chan []byte, 1)
+	serverErr := make(chan error, 2)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"),
+		WithDeepgramSTTv2Tags([]string{"stable"}),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstURL := receiveDeepgramTestRequestURL(t, requests, "first STTv2 websocket request")
+	assertDeepgramQueryValues(t, firstURL.Query(), "tag", []string{"stable"})
+
+	if err := provider.UpdateOptions(WithDeepgramSTTv2Tags([]string{"stable"})); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "same-url STTv2 websocket request")
+	assertDeepgramQueryValues(t, secondURL.Query(), "tag", []string{"stable"})
+}
+
 func TestDeepgramSTTv2ReconnectCallerCancelReturnsContextCanceled(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
