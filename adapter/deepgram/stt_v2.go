@@ -483,50 +483,33 @@ func (s *deepgramV2Stream) processEvent(resp deepgramV2Response) error {
 func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
 	switch resp.Event {
 	case "StartOfTurn":
-		if !s.speaking {
-			s.speaking = true
-			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+		if s.speaking {
+			return nil
 		}
+		s.speaking = true
+		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "Update":
 		if !s.speaking {
-			if !s.startSpeakingIfTranscript(resp) {
-				return nil
-			}
+			return nil
 		}
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "EagerEndOfTurn":
 		if !s.speaking {
-			if !s.startSpeakingIfTranscript(resp) {
-				return nil
-			}
+			return nil
 		}
 		s.sendTranscriptEvent(stt.SpeechEventPreflightTranscript, resp)
 	case "TurnResumed":
-		if !s.speaking {
-			s.startSpeakingIfTranscript(resp)
-		}
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "EndOfTurn":
 		if !s.speaking {
-			if !s.startSpeakingIfTranscript(resp) {
-				return nil
-			}
+			return nil
 		}
 		s.speaking = false
 		s.sendTranscriptEvent(stt.SpeechEventFinalTranscript, resp)
 		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	}
 	return nil
-}
-
-func (s *deepgramV2Stream) startSpeakingIfTranscript(resp deepgramV2Response) bool {
-	if !deepgramV2HasTranscript(resp) {
-		return false
-	}
-	s.speaking = true
-	s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
-	return true
 }
 
 func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, resp deepgramV2Response) {
@@ -542,7 +525,7 @@ func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, re
 }
 
 func deepgramV2HasTranscript(resp deepgramV2Response) bool {
-	return resp.Transcript != "" || len(resp.Words) > 0
+	return len(resp.Words) > 0
 }
 
 func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOffset float64) []stt.SpeechData {
