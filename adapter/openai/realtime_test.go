@@ -7158,6 +7158,82 @@ func TestRealtimeSessionAddsReferenceTimingToResponseMetrics(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionResponseDoneMetricsKeepTimingAfterGenerationClose(t *testing.T) {
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		events := []map[string]any{
+			{
+				"type":     "response.created",
+				"response": map[string]any{"id": "resp_123"},
+			},
+			{
+				"type": "response.output_item.added",
+				"item": map[string]any{
+					"id":   "item_123",
+					"type": "message",
+				},
+			},
+			{
+				"type":    "response.output_audio.delta",
+				"item_id": "item_123",
+				"delta":   base64.StdEncoding.EncodeToString([]byte{0, 0}),
+			},
+			{
+				"type": "response.done",
+				"response": map[string]any{
+					"id":     "resp_123",
+					"status": "completed",
+					"usage": map[string]any{
+						"output_tokens": 4.0,
+						"total_tokens":  4.0,
+					},
+				},
+			},
+		}
+		for _, ev := range events {
+			if err := conn.WriteJSON(ev); err != nil {
+				t.Errorf("Write realtime event error = %v", err)
+				return
+			}
+		}
+		<-releaseServer
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer close(releaseServer)
+	defer session.Close()
+
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	metrics := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	if metrics.Metrics == nil {
+		t.Fatal("Metrics = nil, want response.done metrics")
+	}
+	if metrics.Metrics.Timestamp.IsZero() {
+		t.Fatal("metrics timestamp is zero, want response.created timestamp retained after generation close")
+	}
+	if metrics.Metrics.TTFT <= 0 {
+		t.Fatalf("metrics TTFT = %f, want first audio latency retained after generation close", metrics.Metrics.TTFT)
+	}
+	if metrics.Metrics.Duration <= metrics.Metrics.TTFT {
+		t.Fatalf("metrics duration/TTFT = %f/%f, want duration after first token", metrics.Metrics.Duration, metrics.Metrics.TTFT)
+	}
+	if metrics.Metrics.TokensPerSecond <= 0 {
+		t.Fatalf("metrics tokens_per_second = %f, want output tokens divided by duration", metrics.Metrics.TokensPerSecond)
+	}
+}
+
 func TestRealtimeSessionAddsReferenceMetadataToResponseMetrics(t *testing.T) {
 	model := NewRealtimeModel("test-key", "gpt-realtime")
 	model.baseURL = "wss://realtime.openai.test/v1/realtime"
