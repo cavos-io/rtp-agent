@@ -2873,6 +2873,9 @@ func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
 	var previousItemID *string
 	if ev.RemoteItem.PreviousItemID != "" {
 		previousItemID = &ev.RemoteItem.PreviousItemID
+	} else if items := s.remote.ToChatCtx().Items; len(items) > 0 {
+		itemID := items[len(items)-1].GetID()
+		previousItemID = &itemID
 	}
 	if err := s.remote.Insert(previousItemID, ev.RemoteItem.Item); err != nil {
 		logger.Logger.Warnw("failed to track OpenAI realtime remote item", err, "item_id", ev.RemoteItem.Item.GetID())
@@ -2908,6 +2911,11 @@ func (s *realtimeSession) trackRealtimeInputTranscription(ev llm.RealtimeEvent) 
 	}
 	if s.model != nil && s.model.inputTranscriptionFinalHook != nil {
 		s.model.inputTranscriptionFinalHook(msg, transcription)
+	}
+	if len(msg.Content) == 1 && msg.Content[0].Text == transcription.Transcript &&
+		msg.Content[0].Image == nil && msg.Content[0].Audio == nil && msg.Content[0].Instructions == nil {
+		msg.TranscriptConfidence = transcription.Confidence
+		return ev
 	}
 	msg.Content = append(msg.Content, llm.ChatContent{Text: transcription.Transcript})
 	msg.TranscriptConfidence = transcription.Confidence

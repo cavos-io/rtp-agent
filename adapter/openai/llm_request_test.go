@@ -2416,6 +2416,52 @@ func TestOpenAIStreamSkipsAzureNullDeltaWithFinishReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamSkipsAzureNullDeltaFinishBeforeToolCallComplete(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-null-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-null-tool","choices":[{"index":0,"delta":null,"finish_reason":"tool_calls"}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-null-tool","choices":[{"index":0,"delta":{"content":"after null"}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-null-tool","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	contentChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want content after skipped null delta finish", err)
+	}
+	if contentChunk == nil || contentChunk.Delta == nil || contentChunk.Delta.Content != "after null" {
+		t.Fatalf("first chunk = %#v, want content after skipped null delta finish", contentChunk)
+	}
+	if len(contentChunk.Delta.ToolCalls) != 0 {
+		t.Fatalf("first chunk tool calls = %#v, want pending tool call not completed by null delta", contentChunk.Delta.ToolCalls)
+	}
+
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want tool call after real finish chunk", err)
+	}
+	if toolChunk == nil || toolChunk.Delta == nil || len(toolChunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("second chunk = %#v, want completed tool call after real finish", toolChunk)
+	}
+	if call := toolChunk.Delta.ToolCalls[0]; call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != "{}" {
+		t.Fatalf("tool call = %+v, want accumulated call after real finish", call)
+	}
+}
+
 func TestOpenAIStreamContentDeltaDefaultsAssistantRole(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
@@ -2525,6 +2571,38 @@ func TestOpenAIStreamPreservesAzureUsageOnlyChunk(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamPreservesUsageServiceTier(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-tier","choices":[],"service_tier":"priority","usage":{"completion_tokens":3,"prompt_tokens":2,"total_tokens":5}}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want usage chunk", err)
+	}
+	if chunk == nil || chunk.Usage == nil {
+		t.Fatalf("chunk = %#v, want usage chunk", chunk)
+	}
+	if chunk.Usage.ServiceTier != "priority" {
+		t.Fatalf("ServiceTier = %q, want priority", chunk.Usage.ServiceTier)
+	}
+}
+
 func TestOpenAIStreamSkipsEmptyChoicesWithoutUsage(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
@@ -2593,6 +2671,40 @@ func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamAppliesToolCallTailBeforeFinish(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-tool-tail","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"query\":"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool-tail","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"weather\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want accumulated tool call chunk", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one accumulated tool call", chunk)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("tool call = %+v, want tail arguments applied before finish", call)
+	}
+}
+
 func TestOpenAIStreamSplitsUsageAfterToolCallFinish(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
@@ -2639,6 +2751,53 @@ func TestOpenAIStreamSplitsUsageAfterToolCallFinish(t *testing.T) {
 
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after usage = %v, want EOF", err)
+	}
+}
+
+func TestOpenAIStreamPreservesReferenceExtraContent(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-extra","choices":[{"index":0,"delta":{"extra_content":{"google":{"thought_signature":"sig-text"}}}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-extra","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"},"extra_content":{"google":{"thought_signature":"sig-tool"}}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-extra","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	extraChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("extra Next error = %v, want metadata chunk", err)
+	}
+	if extraChunk == nil || extraChunk.Delta == nil {
+		t.Fatalf("extra chunk = %#v, want delta", extraChunk)
+	}
+	googleExtra, ok := extraChunk.Delta.Extra["google"].(map[string]any)
+	if !ok || googleExtra["thought_signature"] != "sig-text" {
+		t.Fatalf("extra chunk extra = %#v, want google thought signature", extraChunk.Delta.Extra)
+	}
+
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("tool Next error = %v, want tool call chunk", err)
+	}
+	if toolChunk == nil || toolChunk.Delta == nil || len(toolChunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("tool chunk = %#v, want one tool call", toolChunk)
+	}
+	toolExtra, ok := toolChunk.Delta.ToolCalls[0].Extra["google"].(map[string]any)
+	if !ok || toolExtra["thought_signature"] != "sig-tool" {
+		t.Fatalf("tool extra = %#v, want google thought signature", toolChunk.Delta.ToolCalls[0].Extra)
 	}
 }
 
@@ -3443,7 +3602,7 @@ func TestOpenAICompletionUsageHandlesMissingTokenDetails(t *testing.T) {
 		CompletionTokens: 7,
 		PromptTokens:     11,
 		TotalTokens:      18,
-	})
+	}, "")
 
 	if usage == nil {
 		t.Fatal("openAICompletionUsage() = nil, want usage")
@@ -3459,7 +3618,7 @@ func TestOpenAICompletionUsageHandlesMissingTokenDetails(t *testing.T) {
 func TestOpenAICompletionUsageMapsCachedPromptTokens(t *testing.T) {
 	usage := openAICompletionUsage(&openaisdk.Usage{
 		PromptTokensDetails: &openaisdk.PromptTokensDetails{CachedTokens: 5},
-	})
+	}, "")
 
 	if usage == nil {
 		t.Fatal("openAICompletionUsage() = nil, want usage")

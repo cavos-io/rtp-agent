@@ -836,14 +836,24 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 
 func (s *openAIRealtimeSTTStream) Flush() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.inputEnded {
+		s.mu.Unlock()
 		return openAIRealtimeSTTInputEndedError()
 	}
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
-	return s.flushAudioLocked()
+	err := s.flushAudioLocked()
+	vadStream := s.vadStream
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if vadStream != nil {
+		return vadStream.Flush()
+	}
+	return nil
 }
 
 func (s *openAIRealtimeSTTStream) EndInput() error {
@@ -1249,6 +1259,7 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	s.conn = conn
 	s.audio = nil
 	s.normalizer.reset()
+	s.resetMessageStateAfterReconnectLocked()
 	s.hasAudio = false
 	s.committed = false
 	if s.owner.vad != nil {
@@ -1266,6 +1277,17 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	return nil
 }
 
+func (s *openAIRealtimeSTTStream) resetMessageStateAfterReconnectLocked() {
+	if s.state == nil {
+		s.state = &openAIRealtimeSTTMessageState{}
+		return
+	}
+	s.state.currentItemID = ""
+	s.state.currentText = ""
+	s.state.lastInterimAt = time.Time{}
+	s.state.timing = map[string]openAIRealtimeSTTTiming{}
+}
+
 func openAIRealtimeSTTChunkBytes() int {
 	return openAIRealtimeSTTSampleRate / 20 * openAIRealtimeSTTNumChannels * 2
 }
@@ -1279,25 +1301,18 @@ type openAIRealtimeSTTTiming struct {
 	endMS   int
 }
 
-type openAIRealtimeSTTPartial struct {
-	text          string
-	lastInterimAt time.Time
-}
-
 type openAIRealtimeSTTMessageState struct {
 	language      string
 	currentItemID string
+	currentText   string
+	lastInterimAt time.Time
 	now           func() time.Time
 	timing        map[string]openAIRealtimeSTTTiming
-	partials      map[string]openAIRealtimeSTTPartial
 }
 
 func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTTMessageState) ([]*stt.SpeechEvent, error) {
 	if state.timing == nil {
 		state.timing = map[string]openAIRealtimeSTTTiming{}
-	}
-	if state.partials == nil {
-		state.partials = map[string]openAIRealtimeSTTPartial{}
 	}
 	var message map[string]interface{}
 	if err := json.Unmarshal(payload, &message); err != nil {
@@ -1330,32 +1345,25 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		if delta == "" {
 			return nil, nil
 		}
-		partial := state.partials[itemID]
-		partial.text += delta
+		state.currentText += delta
 		now := openAIRealtimeSTTStateNow(state)
-		state.partials[itemID] = partial
-		if !partial.lastInterimAt.IsZero() && now.Sub(partial.lastInterimAt) <= openAIRealtimeSTTDeltaInterval {
+		if !state.lastInterimAt.IsZero() && now.Sub(state.lastInterimAt) <= openAIRealtimeSTTDeltaInterval {
 			return nil, nil
 		}
-		partial.lastInterimAt = now
-		state.partials[itemID] = partial
+		state.lastInterimAt = now
 		return []*stt.SpeechEvent{{
 			Type:      stt.SpeechEventInterimTranscript,
 			RequestID: itemID,
 			Alternatives: []stt.SpeechData{{
-				Text:       partial.text,
+				Text:       state.currentText,
 				Language:   state.language,
-				Confidence: stt.DefaultTranscriptConfidence(partial.text),
+				Confidence: stt.DefaultTranscriptConfidence(state.currentText),
 			}},
 		}}, nil
 	case "conversation.item.input_audio_transcription.completed":
 		itemID := openAIString(message["item_id"])
 		transcript := openAIString(message["transcript"])
-		delete(state.partials, itemID)
-		if itemID == "" && state.currentItemID != "" {
-			delete(state.partials, state.currentItemID)
-			state.currentItemID = ""
-		}
+		state.currentText = ""
 		events := []*stt.SpeechEvent{}
 		if transcript != "" {
 			events = append(events, &stt.SpeechEvent{

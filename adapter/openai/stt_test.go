@@ -961,7 +961,7 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 	)
 	var dialCount atomic.Int32
 	secondConnected := make(chan struct{})
-	sendFinal := make(chan struct{})
+	sendAfterReconnect := make(chan struct{})
 	releaseSecond := make(chan struct{})
 	defer close(releaseSecond)
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
@@ -973,6 +973,13 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 			}
 			if attempt == 1 {
 				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"conversation.item.input_audio_transcription.delta",
+					"item_id":"item-1",
+					"delta":"old"
+				}`)); err != nil {
+					t.Errorf("write first interim: %v", err)
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
 					"type":"error",
 					"error":{"message":"temporary provider error","code":"server_error"}
 				}`)); err != nil {
@@ -981,7 +988,14 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 				return
 			}
 			close(secondConnected)
-			<-sendFinal
+			<-sendAfterReconnect
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"conversation.item.input_audio_transcription.delta",
+				"item_id":"item-2",
+				"delta":"new"
+			}`)); err != nil {
+				t.Errorf("write post-reconnect interim: %v", err)
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
 				"type":"conversation.item.input_audio_transcription.completed",
 				"item_id":"item-2",
@@ -1000,16 +1014,35 @@ func TestOpenAIRealtimeSTTReconnectsAfterProviderError(t *testing.T) {
 	}
 	defer stream.Close()
 
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first interim error = %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || event.Alternatives[0].Text != "old" {
+		t.Fatalf("first interim = %+v, want old", event)
+	}
+
 	select {
 	case <-secondConnected:
 	case <-time.After(time.Second):
 		t.Fatal("stream did not reconnect after provider error")
 	}
-	close(sendFinal)
+	close(sendAfterReconnect)
 
-	event, err := stream.Next()
+	event, err = stream.Next()
 	if err != nil {
-		t.Fatalf("Next error after provider error reconnect = %v", err)
+		t.Fatalf("post-reconnect interim error = %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("post-reconnect event type = %v, want INTERIM_TRANSCRIPT", event.Type)
+	}
+	if got := event.Alternatives[0].Text; got != "new" {
+		t.Fatalf("post-reconnect interim = %q, want fresh transcript", got)
+	}
+
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("final after provider error reconnect = %v", err)
 	}
 	if event.Type != stt.SpeechEventFinalTranscript {
 		t.Fatalf("event type = %v, want FINAL_TRANSCRIPT", event.Type)
@@ -1829,6 +1862,70 @@ func TestOpenAIRealtimeSTTVADEndOfSpeechCommitsAudioBuffer(t *testing.T) {
 
 	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x04}, openAIRealtimeSTTChunkBytes()))); err != nil {
 		t.Fatalf("PushFrame error = %v", err)
+	}
+	_ = assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
+	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+}
+
+func TestOpenAIRealtimeSTTFlushFlushesLocalVAD(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.suppressEndOfSpeech = true
+	vadStream.flushEmitsEndOfSpeech = true
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	started := make(chan struct{})
+	releaseServer := make(chan struct{})
+	messages := make(chan string, 10)
+	defer close(releaseServer)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			close(started)
+			for {
+				select {
+				case <-releaseServer:
+					return
+				default:
+				}
+				if _, payload, err := conn.ReadMessage(); err != nil {
+					return
+				} else {
+					messages <- string(payload)
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not send initial session update")
+	}
+
+	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x04}, openAIRealtimeSTTChunkBytes()/2))); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "half chunk should wait for Flush before provider append")
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	select {
+	case <-vadStream.flushCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for VAD Flush")
 	}
 	_ = assertOpenAIRealtimeSTTAudioAppend(t, <-messages)
 	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
@@ -2926,16 +3023,18 @@ func TestOpenAIRealtimeSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 		WithOpenAISTTBaseURL("http://openai.test/v1"),
 	)
 	started := make(chan struct{})
+	var startedOnce sync.Once
 	closeServer := make(chan struct{})
 	serverDone := make(chan struct{})
+	var serverDoneOnce sync.Once
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
-			defer close(serverDone)
+			defer serverDoneOnce.Do(func() { close(serverDone) })
 			if _, _, err := conn.ReadMessage(); err != nil {
 				t.Errorf("session update read error = %v", err)
 				return
 			}
-			close(started)
+			startedOnce.Do(func() { close(started) })
 			<-closeServer
 			_ = conn.Close()
 		})
@@ -3398,7 +3497,7 @@ func TestOpenAIRealtimeSTTCompletedEmptyTranscriptEmitsUsageOnly(t *testing.T) {
 	}
 }
 
-func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
+func TestOpenAIRealtimeSTTInterleavedItemDeltasUseReferenceCurrentText(t *testing.T) {
 	now := time.Unix(100, 0)
 	state := &openAIRealtimeSTTMessageState{
 		language: "en",
@@ -3415,18 +3514,19 @@ func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
 		t.Fatalf("item-1 delta: %v", err)
 	}
 	if len(events) != 1 || events[0].RequestID != "item-1" || events[0].Alternatives[0].Text != "hello" {
-		t.Fatalf("item-1 events = %+v, want isolated hello interim", events)
+		t.Fatalf("item-1 events = %+v, want hello interim", events)
 	}
 
 	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-2","audio_start_ms":200}`), state); err != nil {
 		t.Fatalf("item-2 speech started: %v", err)
 	}
+	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-2","delta":"wo"}`), state)
 	if err != nil {
 		t.Fatalf("item-2 first delta: %v", err)
 	}
-	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "wo" {
-		t.Fatalf("item-2 first events = %+v, want fresh item transcript", events)
+	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "hellowo" {
+		t.Fatalf("item-2 first events = %+v, want reference current_text accumulation", events)
 	}
 
 	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
@@ -3434,8 +3534,8 @@ func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("item-1 second delta: %v", err)
 	}
-	if len(events) != 1 || events[0].RequestID != "item-1" || events[0].Alternatives[0].Text != "hello!" {
-		t.Fatalf("item-1 second events = %+v, want item-1 accumulated transcript only", events)
+	if len(events) != 1 || events[0].RequestID != "item-1" || events[0].Alternatives[0].Text != "hellowo!" {
+		t.Fatalf("item-1 second events = %+v, want shared current_text transcript", events)
 	}
 
 	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
@@ -3443,8 +3543,8 @@ func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("item-2 second delta: %v", err)
 	}
-	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "world" {
-		t.Fatalf("item-2 second events = %+v, want item-2 accumulated transcript only", events)
+	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "hellowo!rld" {
+		t.Fatalf("item-2 second events = %+v, want shared current_text transcript", events)
 	}
 }
 
@@ -3477,6 +3577,9 @@ func TestOpenAIRealtimeSTTSpeechStartedClearsStaleCurrentItemID(t *testing.T) {
 	if events[0].RequestID != "" {
 		t.Fatalf("RequestID = %q, want empty after empty-id speech_started clears stale item", events[0].RequestID)
 	}
+	if events[0].Alternatives[0].Text != "oldnew" {
+		t.Fatalf("interim text = %q, want reference current_text to persist until completed", events[0].Alternatives[0].Text)
+	}
 }
 
 func TestOpenAIRealtimeSTTCompletedWithoutItemIDClearsCurrentPartial(t *testing.T) {
@@ -3505,8 +3608,54 @@ func TestOpenAIRealtimeSTTCompletedWithoutItemIDClearsCurrentPartial(t *testing.
 	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
 		t.Fatalf("events = %+v, want fresh interim transcript", events)
 	}
+	if events[0].RequestID != "item-1" {
+		t.Fatalf("RequestID = %q, want previous item_id retained after id-less completion", events[0].RequestID)
+	}
 	if events[0].Alternatives[0].Text != "new" {
 		t.Fatalf("interim text = %q, want fresh transcript after completed reset", events[0].Alternatives[0].Text)
+	}
+}
+
+func TestOpenAIRealtimeSTTCompletionPreservesInterimThrottle(t *testing.T) {
+	now := time.Unix(100, 0)
+	state := &openAIRealtimeSTTMessageState{
+		now: func() time.Time {
+			return now
+		},
+	}
+
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state); err != nil {
+		t.Fatalf("first speech started: %v", err)
+	}
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"old"}`), state)
+	if err != nil {
+		t.Fatalf("first delta: %v", err)
+	}
+	if len(events) != 1 || events[0].Alternatives[0].Text != "old" {
+		t.Fatalf("first events = %+v, want old interim", events)
+	}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-1","transcript":"old","usage":{}}`), state); err != nil {
+		t.Fatalf("completed: %v", err)
+	}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-2","audio_start_ms":200}`), state); err != nil {
+		t.Fatalf("second speech started: %v", err)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-2","delta":"new"}`), state)
+	if err != nil {
+		t.Fatalf("second first delta: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want reference throttle to persist across completed event", events)
+	}
+
+	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-2","delta":" turn"}`), state)
+	if err != nil {
+		t.Fatalf("second post-throttle delta: %v", err)
+	}
+	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "new turn" {
+		t.Fatalf("events = %+v, want accumulated new turn after reference throttle", events)
 	}
 }
 
@@ -3582,17 +3731,20 @@ func (f *fakeOpenAISTTVAD) streamCount() int {
 }
 
 type fakeOpenAISTTVADStream struct {
-	mu                  sync.Mutex
-	events              chan *vad.VADEvent
-	endInputCh          chan struct{}
-	closeCh             chan struct{}
-	pushStartedCh       chan struct{}
-	releasePushCh       chan struct{}
-	suppressEndOfSpeech bool
-	frames              []*model.AudioFrame
-	closed              bool
-	endInputOnce        sync.Once
-	closeOnce           sync.Once
+	mu                    sync.Mutex
+	events                chan *vad.VADEvent
+	endInputCh            chan struct{}
+	closeCh               chan struct{}
+	flushCh               chan struct{}
+	pushStartedCh         chan struct{}
+	releasePushCh         chan struct{}
+	suppressEndOfSpeech   bool
+	flushEmitsEndOfSpeech bool
+	frames                []*model.AudioFrame
+	closed                bool
+	endInputOnce          sync.Once
+	closeOnce             sync.Once
+	flushOnce             sync.Once
 }
 
 func newFakeOpenAISTTVADStream() *fakeOpenAISTTVADStream {
@@ -3600,6 +3752,7 @@ func newFakeOpenAISTTVADStream() *fakeOpenAISTTVADStream {
 		events:     make(chan *vad.VADEvent, 1),
 		endInputCh: make(chan struct{}),
 		closeCh:    make(chan struct{}),
+		flushCh:    make(chan struct{}),
 	}
 }
 
@@ -3635,6 +3788,10 @@ func (f *fakeOpenAISTTVADStream) pushedFrames() []*model.AudioFrame {
 }
 
 func (f *fakeOpenAISTTVADStream) Flush() error {
+	f.flushOnce.Do(func() { close(f.flushCh) })
+	if f.flushEmitsEndOfSpeech {
+		f.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
+	}
 	return nil
 }
 
