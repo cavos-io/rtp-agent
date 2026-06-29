@@ -575,6 +575,73 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSynthesizeSnapshotsReferenceOptions(t *testing.T) {
+	requestBody := make(chan string, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		requestBody <- string(body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSSpeed(1.25),
+		WithOpenAITTSInstructions("speak warmly"),
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions(
+		WithOpenAITTSModel(goopenai.TTSModel1HD),
+		WithOpenAITTSVoice(goopenai.VoiceNova),
+		WithOpenAITTSSpeed(0.5),
+		WithOpenAITTSInstructions("speak slowly"),
+	)
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	var body string
+	select {
+	case body = <-requestBody:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech request")
+	}
+	for _, want := range []string{
+		`"model":"tts-1"`,
+		`"voice":"ash"`,
+		`"speed":1.25`,
+		`"instructions":"speak warmly"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("request body = %s, want snapshot field %s", body, want)
+		}
+	}
+	for _, stale := range []string{
+		`"model":"tts-1-hd"`,
+		`"voice":"nova"`,
+		`"speed":0.5`,
+		`"instructions":"speak slowly"`,
+	} {
+		if strings.Contains(body, stale) {
+			t.Fatalf("request body = %s, contains post-synthesize option %s", body, stale)
+		}
+	}
+}
+
 func TestOpenAITTSSynthesizeUsesUnknownRequestIDFallback(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -724,6 +791,41 @@ func TestOpenAITTSSynthesizeReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 	if !statusErr.Retryable {
 		t.Fatal("Retryable = false, want retryable rate-limit status")
+	}
+}
+
+func TestOpenAITTSStartupErrorUnregistersReferenceStream(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Status:     "429 Too Many Requests",
+			Header:     http.Header{"Content-Type": []string{"application/json"}, "X-Request-Id": []string{"req_tts"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limit","type":"rate_limit_error"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider, err := NewOpenAITTS("test-key", "", "", withOpenAITTSHTTPClient(client))
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	_, err = stream.Next()
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want startup-failed stream unregistered", streamCount)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after startup failure = (%#v, %v), want EOF", audio, err)
 	}
 }
 

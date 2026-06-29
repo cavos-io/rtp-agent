@@ -972,6 +972,231 @@ func TestOpenAIRealtimeSTTErrorClosesVADStreamLikeReference(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTVADErrorClosesStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.suppressEndOfSpeech = true
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	release := make(chan struct{})
+	defer close(release)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			for {
+				select {
+				case <-release:
+					return
+				default:
+				}
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	vadStream.nextErrCh <- errors.New("vad failed")
+	_, err = stream.Next()
+	if err == nil || err.Error() != "vad failed" {
+		t.Fatalf("Next error = %T %v, want VAD error", err, err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after VAD error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after VAD error")
+	}
+}
+
+func TestOpenAIRealtimeSTTVADPushErrorClosesStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.pushErr = errors.New("vad push failed")
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	release := make(chan struct{})
+	defer close(release)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			for {
+				select {
+				case <-release:
+					return
+				default:
+				}
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	})
+	if err == nil || err.Error() != "vad push failed" {
+		t.Fatalf("PushFrame error = %T %v, want VAD push error", err, err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after VAD push error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after VAD push error")
+	}
+}
+
+func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.suppressEndOfSpeech = true
+	vadStream.endInputErr = errors.New("vad end failed")
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	release := make(chan struct{})
+	defer close(release)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			<-release
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not implement stt.InputEnding")
+	}
+	err = ending.EndInput()
+	if err == nil || err.Error() != "vad end failed" {
+		t.Fatalf("EndInput error = %T %v, want VAD end error", err, err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	})
+	if err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("PushFrame after VAD EndInput error = %T %v, want input ended", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after VAD EndInput error")
+	}
+}
+
+func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	vadStream.flushErr = errors.New("vad flush failed")
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	release := make(chan struct{})
+	defer close(release)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			for {
+				select {
+				case <-release:
+					return
+				default:
+				}
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.Flush(); err == nil || err.Error() != "vad flush failed" {
+		t.Fatalf("Flush error = %T %v, want VAD flush error", err, err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after VAD Flush error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after VAD Flush error")
+	}
+}
+
 func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -3884,11 +4109,15 @@ func (f *fakeOpenAISTTVAD) streamCount() int {
 type fakeOpenAISTTVADStream struct {
 	mu                    sync.Mutex
 	events                chan *vad.VADEvent
+	nextErrCh             chan error
 	endInputCh            chan struct{}
 	closeCh               chan struct{}
 	flushCh               chan struct{}
 	pushStartedCh         chan struct{}
 	releasePushCh         chan struct{}
+	pushErr               error
+	endInputErr           error
+	flushErr              error
 	suppressEndOfSpeech   bool
 	flushEmitsEndOfSpeech bool
 	frames                []*model.AudioFrame
@@ -3901,6 +4130,7 @@ type fakeOpenAISTTVADStream struct {
 func newFakeOpenAISTTVADStream() *fakeOpenAISTTVADStream {
 	return &fakeOpenAISTTVADStream{
 		events:     make(chan *vad.VADEvent, 1),
+		nextErrCh:  make(chan error, 1),
 		endInputCh: make(chan struct{}),
 		closeCh:    make(chan struct{}),
 		flushCh:    make(chan struct{}),
@@ -3918,6 +4148,9 @@ func (f *fakeOpenAISTTVADStream) PushFrame(frame *model.AudioFrame) error {
 	defer f.mu.Unlock()
 	if f.closed {
 		return io.ErrClosedPipe
+	}
+	if f.pushErr != nil {
+		return f.pushErr
 	}
 	if frame != nil {
 		cloned := *frame
@@ -3940,6 +4173,9 @@ func (f *fakeOpenAISTTVADStream) pushedFrames() []*model.AudioFrame {
 
 func (f *fakeOpenAISTTVADStream) Flush() error {
 	f.flushOnce.Do(func() { close(f.flushCh) })
+	if f.flushErr != nil {
+		return f.flushErr
+	}
 	if f.flushEmitsEndOfSpeech {
 		f.events <- &vad.VADEvent{Type: vad.VADEventEndOfSpeech}
 	}
@@ -3949,6 +4185,9 @@ func (f *fakeOpenAISTTVADStream) Flush() error {
 func (f *fakeOpenAISTTVADStream) EndInput() error {
 	f.endInputOnce.Do(func() { close(f.endInputCh) })
 	f.closeEvents()
+	if f.endInputErr != nil {
+		return f.endInputErr
+	}
 	return nil
 }
 
@@ -3968,9 +4207,13 @@ func (f *fakeOpenAISTTVADStream) closeEvents() {
 }
 
 func (f *fakeOpenAISTTVADStream) Next() (*vad.VADEvent, error) {
-	ev, ok := <-f.events
-	if !ok {
-		return nil, io.EOF
+	select {
+	case err := <-f.nextErrCh:
+		return nil, err
+	case ev, ok := <-f.events:
+		if !ok {
+			return nil, io.EOF
+		}
+		return ev, nil
 	}
-	return ev, nil
 }

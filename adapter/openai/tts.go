@@ -468,9 +468,11 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 			var statusErr *llm.APIStatusError
 			if errors.As(mapped, &statusErr) && statusErr.StatusCode == 499 {
 				s.startErr = io.EOF
+				_ = s.Close()
 				return
 			}
 			s.startErr = mapped
+			_ = s.Close()
 			return
 		}
 		if s.closed || s.provider.isClosed() {

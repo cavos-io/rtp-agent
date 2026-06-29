@@ -2450,7 +2450,9 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 			if s.isClosed() {
 				return nil, io.EOF
 			}
-			return nil, openAIStreamRecvError(err, !s.hasEmitted())
+			mappedErr := openAIStreamRecvError(err, !s.hasEmitted())
+			_ = s.Close()
+			return nil, mappedErr
 		}
 
 		if len(resp.Choices) == 0 {

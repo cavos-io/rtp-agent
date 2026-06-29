@@ -825,6 +825,9 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		if err := vadStream.PushFrame(vadFrame); err != nil {
 			s.mu.Lock()
 			closed := s.closed
+			if !closed {
+				s.closeAfterTerminalFailureLocked()
+			}
 			s.mu.Unlock()
 			if closed {
 				return io.ErrClosedPipe
@@ -852,7 +855,12 @@ func (s *openAIRealtimeSTTStream) Flush() error {
 		return err
 	}
 	if vadStream != nil {
-		return vadStream.Flush()
+		if err := vadStream.Flush(); err != nil {
+			s.mu.Lock()
+			s.closeAfterTerminalFailureLocked()
+			s.mu.Unlock()
+			return err
+		}
 	}
 	return nil
 }
@@ -873,6 +881,10 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 	var vadErr error
 	if s.vadStream != nil {
 		vadErr = s.vadStream.EndInput()
+		if vadErr != nil {
+			s.closeAfterTerminalFailureLocked()
+			return vadErr
+		}
 	}
 	if s.vadStream == nil && s.shouldCommitOnEndInputLocked() {
 		if err := s.commitAudioLocked(); err != nil {
@@ -986,6 +998,10 @@ func (s *openAIRealtimeSTTStream) Close() error {
 }
 
 func (s *openAIRealtimeSTTStream) closeAfterWriteFailureLocked() {
+	s.closeAfterTerminalFailureLocked()
+}
+
+func (s *openAIRealtimeSTTStream) closeAfterTerminalFailureLocked() {
 	if s.closed {
 		return
 	}
@@ -1223,6 +1239,7 @@ func (s *openAIRealtimeSTTStream) vadLoopFor(vadStream vad.VADStream) {
 			if err != io.EOF {
 				s.mu.Lock()
 				s.sendErrorLocked(err)
+				s.closeAfterTerminalFailureLocked()
 				s.mu.Unlock()
 			}
 			return
