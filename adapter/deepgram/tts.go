@@ -356,12 +356,13 @@ func (s *deepgramTTSChunkedStream) Close() error {
 }
 
 type deepgramTTSStream struct {
-	provider *DeepgramTTS
-	conn     *websocket.Conn
-	audio    chan *tts.SynthesizedAudio
-	errCh    chan error
-	mu       sync.Mutex
-	closed   bool
+	provider   *DeepgramTTS
+	conn       *websocket.Conn
+	audio      chan *tts.SynthesizedAudio
+	errCh      chan error
+	mu         sync.Mutex
+	closed     bool
+	inputEnded bool
 
 	sampleRate  int
 	writeJSON   func(any) error
@@ -426,6 +427,7 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		s.audio <- audio
 		s.segmentID = uuid.NewString()
 		s.signalFlushed()
+		s.closeAfterFinal()
 	case "Error", "error":
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
@@ -459,6 +461,9 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	s.segmentOpen = true
 	s.pendingText += text
 	return s.sendCompletedWordsLocked()
@@ -477,6 +482,9 @@ func (s *deepgramTTSStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if !s.segmentOpen {
 		s.pendingText = ""
 		return nil
@@ -490,6 +498,31 @@ func (s *deepgramTTSStream) Flush() error {
 		return err
 	}
 	s.segmentOpen = false
+	return nil
+}
+
+func (s *deepgramTTSStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.segmentOpen {
+		if err := s.sendPendingWordsLocked(); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+		if err := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"}); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+		s.segmentOpen = false
+	}
+	s.pendingText = ""
+	s.inputEnded = true
 	return nil
 }
 
@@ -640,6 +673,22 @@ func (s *deepgramTTSStream) closeAfterWriteFailureLocked() {
 		return
 	}
 	s.closed = true
+	_ = s.closeConnection()
+}
+
+func (s *deepgramTTSStream) closeAfterFinal() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.inputEnded {
+		return
+	}
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 	_ = s.closeConnection()
 }
 

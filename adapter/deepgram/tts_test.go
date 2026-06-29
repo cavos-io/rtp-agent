@@ -857,6 +857,59 @@ func TestDeepgramTTSStreamTokenizesReferenceSpeakMessages(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
+	var writes []string
+	closeCalls := 0
+	stream := &deepgramTTSStream{
+		audio:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
+		flushed:   make(chan struct{}, 1),
+		requestID: "req-end",
+		segmentID: "seg-end",
+		writeText: func(payload string) error {
+			writes = append(writes, payload)
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello world"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+	}
+	wantWrites := []string{`{"type": "Speak", "text": "hello "}`, `{"type": "Speak", "text": "world "}`, deepgramTTSFlushMessage}
+	if !reflect.DeepEqual(writes, wantWrites) {
+		t.Fatalf("writes = %#v, want %#v", writes, wantWrites)
+	}
+	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushText after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
+		t.Fatalf("handleTextMessage Flushed error = %v", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after Flushed = %d, want 1", closeCalls)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final marker", err)
+	}
+	if final.RequestID != "req-end" || final.SegmentID != "seg-end" || !final.IsFinal {
+		t.Fatalf("final audio = %+v, want request/segment final marker", final)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after final = (%+v, %v), want EOF", audio, err)
+	}
+}
+
 func TestDeepgramTTSStreamIgnoresReferenceEmptyText(t *testing.T) {
 	writes := 0
 	stream := &deepgramTTSStream{
