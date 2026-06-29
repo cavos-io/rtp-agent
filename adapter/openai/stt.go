@@ -825,6 +825,9 @@ func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
 		if err := vadStream.PushFrame(vadFrame); err != nil {
 			s.mu.Lock()
 			closed := s.closed
+			if !closed {
+				s.closeAfterTerminalFailureLocked()
+			}
 			s.mu.Unlock()
 			if closed {
 				return io.ErrClosedPipe
