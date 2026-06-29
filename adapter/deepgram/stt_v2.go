@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -28,6 +29,12 @@ type DeepgramSTTv2 struct {
 	baseURL    string
 	mipOptOut  bool
 	language   string
+	eagerEOT   float64
+	eot        float64
+	eotTimeout int
+	keyterms   []string
+	tags       []string
+	langHints  []string
 	mu         sync.Mutex
 	streams    map[*deepgramV2Stream]struct{}
 	closed     bool
@@ -83,6 +90,48 @@ func WithDeepgramSTTv2MipOptOut(mipOptOut bool) DeepgramSTTv2Option {
 	}
 }
 
+func WithDeepgramSTTv2EagerEOTThreshold(threshold float64) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		if threshold > 0 {
+			s.eagerEOT = threshold
+		}
+	}
+}
+
+func WithDeepgramSTTv2EOTThreshold(threshold float64) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		if threshold > 0 {
+			s.eot = threshold
+		}
+	}
+}
+
+func WithDeepgramSTTv2EOTTimeout(timeoutMS int) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		if timeoutMS > 0 {
+			s.eotTimeout = timeoutMS
+		}
+	}
+}
+
+func WithDeepgramSTTv2Keyterms(keyterms []string) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		s.keyterms = append([]string(nil), keyterms...)
+	}
+}
+
+func WithDeepgramSTTv2Tags(tags []string) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		s.tags = append([]string(nil), tags...)
+	}
+}
+
+func WithDeepgramSTTv2LanguageHints(hints []string) DeepgramSTTv2Option {
+	return func(s *DeepgramSTTv2) {
+		s.langHints = append([]string(nil), hints...)
+	}
+}
+
 func (s *DeepgramSTTv2) Label() string { return "deepgram.STTv2" }
 
 func (s *DeepgramSTTv2) Capabilities() stt.STTCapabilities {
@@ -102,6 +151,53 @@ func (s *DeepgramSTTv2) Recognize(context.Context, []*model.AudioFrame, string) 
 	return nil, fmt.Errorf("V2 API does not support non-streaming recognize. Use with a StreamAdapter")
 }
 
+func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
+	s.mu.Lock()
+	next := &DeepgramSTTv2{
+		apiKey:     s.apiKey,
+		model:      s.model,
+		sampleRate: s.sampleRate,
+		baseURL:    s.baseURL,
+		mipOptOut:  s.mipOptOut,
+		language:   s.language,
+		eagerEOT:   s.eagerEOT,
+		eot:        s.eot,
+		eotTimeout: s.eotTimeout,
+		keyterms:   append([]string(nil), s.keyterms...),
+		tags:       append([]string(nil), s.tags...),
+		langHints:  append([]string(nil), s.langHints...),
+	}
+	for _, opt := range opts {
+		opt(next)
+	}
+	if err := validateDeepgramSTTv2Options(next); err != nil {
+		s.mu.Unlock()
+		return err
+	}
+
+	s.model = next.model
+	s.sampleRate = next.sampleRate
+	s.baseURL = next.baseURL
+	s.mipOptOut = next.mipOptOut
+	s.language = next.language
+	s.eagerEOT = next.eagerEOT
+	s.eot = next.eot
+	s.eotTimeout = next.eotTimeout
+	s.keyterms = next.keyterms
+	s.tags = next.tags
+	s.langHints = next.langHints
+	streams := make([]*deepgramV2Stream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateOptions()
+	}
+	return nil
+}
+
 func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
@@ -109,13 +205,17 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 	if s.apiKey == "" {
 		return nil, fmt.Errorf("Deepgram API key is required")
 	}
+	if err := validateDeepgramSTTv2Options(s); err != nil {
+		return nil, err
+	}
 	if language == "" {
 		language = s.language
 	}
 
 	header := make(http.Header)
 	header.Set("Authorization", "Token "+s.apiKey)
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramSTTv2StreamURL(s), header)
+	streamURL := buildDeepgramSTTv2StreamURL(s)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 	if err != nil {
 		return nil, llm.NewAPIConnectionError("failed to connect to deepgram")
 	}
@@ -126,6 +226,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 		conn:       conn,
 		ctx:        streamCtx,
 		cancel:     cancel,
+		streamURL:  streamURL,
 		events:     make(chan *stt.SpeechEvent, 100),
 		errCh:      make(chan error, 1),
 		language:   language,
@@ -136,7 +237,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, language string) (stt.Recogn
 		cancel()
 		return nil, io.ErrClosedPipe
 	}
-	go stream.readLoop()
+	go stream.readLoop(conn)
 	return stream, nil
 }
 
@@ -199,26 +300,70 @@ func buildDeepgramSTTv2StreamURL(s *DeepgramSTTv2) string {
 	q.Set("sample_rate", strconv.Itoa(s.sampleRate))
 	q.Set("encoding", "linear16")
 	q.Set("mip_opt_out", strconv.FormatBool(s.mipOptOut))
+	if s.eagerEOT > 0 {
+		q.Set("eager_eot_threshold", strconv.FormatFloat(s.eagerEOT, 'f', -1, 64))
+	}
+	if s.eot > 0 {
+		q.Set("eot_threshold", strconv.FormatFloat(s.eot, 'f', -1, 64))
+	}
+	if s.eotTimeout > 0 {
+		q.Set("eot_timeout_ms", strconv.Itoa(s.eotTimeout))
+	}
+	for _, keyterm := range s.keyterms {
+		if keyterm != "" {
+			q.Add("keyterm", keyterm)
+		}
+	}
+	for _, tag := range s.tags {
+		if tag != "" {
+			q.Add("tag", tag)
+		}
+	}
+	for _, hint := range s.langHints {
+		if hint != "" {
+			q.Add("language_hint", hint)
+		}
+	}
 	u.RawQuery = q.Encode()
 	return u.String()
 }
 
+func validateDeepgramSTTv2Options(s *DeepgramSTTv2) error {
+	eot := s.eot
+	if eot == 0 {
+		eot = 0.7
+	}
+	if s.eagerEOT > 0 && s.eagerEOT > eot {
+		return fmt.Errorf("eager_eot_threshold (%v) must be less than or equal to eot_threshold (%v)", s.eagerEOT, eot)
+	}
+	for _, tag := range s.tags {
+		if len(tag) > 128 {
+			return fmt.Errorf("tag must be no more than 128 characters")
+		}
+	}
+	return nil
+}
+
 type deepgramV2Stream struct {
-	provider     *DeepgramSTTv2
-	conn         *websocket.Conn
-	events       chan *stt.SpeechEvent
-	errCh        chan error
-	mu           sync.Mutex
-	closed       bool
-	speaking     bool
-	requestID    string
-	language     string
-	start        float64
-	offset       float64
-	sampleRate   int
-	audioBStream *audio.AudioByteStream
-	ctx          context.Context
-	cancel       context.CancelFunc
+	provider       *DeepgramSTTv2
+	conn           *websocket.Conn
+	events         chan *stt.SpeechEvent
+	errCh          chan error
+	mu             sync.Mutex
+	closed         bool
+	speaking       bool
+	requestID      string
+	language       string
+	start          float64
+	offset         float64
+	sampleRate     int
+	audioBStream   *audio.AudioByteStream
+	streamURL      string
+	reconnectNext  bool
+	usageTotal     float64
+	usageLastFlush time.Time
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 type deepgramV2Response struct {
@@ -240,16 +385,32 @@ type deepgramV2Word struct {
 	Confidence float64 `json:"confidence"`
 }
 
-func (s *deepgramV2Stream) readLoop() {
+func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 	defer func() {
-		_ = s.closeFromReadLoop()
-		close(s.events)
+		s.mu.Lock()
+		stale := conn != s.conn
+		if !stale && !s.closed {
+			s.closed = true
+			if s.cancel != nil {
+				s.cancel()
+			}
+			if s.provider != nil {
+				s.provider.unregisterStream(s)
+			}
+			if s.conn != nil {
+				_ = s.conn.Close()
+			}
+		}
+		s.mu.Unlock()
+		if !stale {
+			close(s.events)
+		}
 	}()
 
 	for {
-		msgType, message, err := s.conn.ReadMessage()
+		msgType, message, err := conn.ReadMessage()
 		if err != nil {
-			if !s.isClosed() {
+			if s.isCurrentConn(conn) && !s.isClosed() {
 				s.sendError(deepgramSTTUnexpectedCloseError(err))
 			}
 			return
@@ -371,6 +532,13 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.reconnectNext {
+		if err := s.reconnectLocked(); err != nil {
+			s.closed = true
+			return err
+		}
+		s.reconnectNext = false
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = audio.NewAudioByteStream(uint32(s.sampleRate), 1, uint32(s.sampleRate/20))
 	}
@@ -379,7 +547,45 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 			s.closed = true
 			return err
 		}
+		s.sendRecognitionUsage(chunk)
 	}
+	return nil
+}
+
+func (s *deepgramV2Stream) updateOptions() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.provider == nil {
+		return
+	}
+	nextURL := buildDeepgramSTTv2StreamURL(s.provider)
+	if nextURL != s.streamURL {
+		s.streamURL = nextURL
+		s.reconnectNext = true
+	}
+	s.sampleRate = s.provider.sampleRate
+	s.audioBStream = nil
+}
+
+func (s *deepgramV2Stream) reconnectLocked() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.provider == nil {
+		return nil
+	}
+	header := make(http.Header)
+	header.Set("Authorization", "Token "+s.provider.apiKey)
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, header)
+	if err != nil {
+		return llm.NewAPIConnectionError("failed to connect to deepgram")
+	}
+	oldConn := s.conn
+	s.conn = conn
+	if oldConn != nil {
+		_ = oldConn.Close()
+	}
+	go s.readLoop(conn)
 	return nil
 }
 
@@ -392,13 +598,53 @@ func (s *deepgramV2Stream) Flush() error {
 	if s.audioBStream == nil {
 		return nil
 	}
+	flushedFrame := false
 	for _, chunk := range s.audioBStream.Flush() {
+		flushedFrame = true
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {
 			s.closed = true
 			return err
 		}
+		s.sendRecognitionUsage(chunk)
+	}
+	if flushedFrame {
+		s.flushRecognitionUsageLocked()
 	}
 	return nil
+}
+
+func (s *deepgramV2Stream) sendRecognitionUsage(frame *model.AudioFrame) {
+	if s.ctx == nil || s.events == nil || frame == nil {
+		return
+	}
+	duration := audio.CalculateFrameDuration(frame)
+	if duration <= 0 {
+		return
+	}
+	s.usageTotal += duration
+	if s.usageLastFlush.IsZero() {
+		s.usageLastFlush = time.Now()
+		return
+	}
+	if time.Since(s.usageLastFlush) >= deepgramSTTUsageInterval {
+		s.flushRecognitionUsageLocked()
+	}
+}
+
+func (s *deepgramV2Stream) flushRecognitionUsageLocked() {
+	if s.usageTotal <= 0 {
+		return
+	}
+	duration := s.usageTotal
+	s.usageTotal = 0
+	s.usageLastFlush = time.Now()
+	s.sendEvent(&stt.SpeechEvent{
+		Type:      stt.SpeechEventRecognitionUsage,
+		RequestID: s.requestID,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: duration,
+		},
+	})
 }
 
 func (s *deepgramV2Stream) Close() error {
@@ -436,7 +682,23 @@ func (s *deepgramV2Stream) Next() (*stt.SpeechEvent, error) {
 	}
 
 	select {
+	case err := <-s.errCh:
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		return nil, err
 	case <-s.done():
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, io.EOF
 	case event, ok := <-s.events:
 		if ok {
@@ -448,8 +710,6 @@ func (s *deepgramV2Stream) Next() (*stt.SpeechEvent, error) {
 		default:
 			return nil, io.EOF
 		}
-	case err := <-s.errCh:
-		return nil, err
 	}
 }
 
@@ -510,23 +770,10 @@ func (s *deepgramV2Stream) isClosed() bool {
 	return s.closed
 }
 
-func (s *deepgramV2Stream) closeFromReadLoop() error {
+func (s *deepgramV2Stream) isCurrentConn(conn *websocket.Conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return nil
-	}
-	s.closed = true
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.provider != nil {
-		s.provider.unregisterStream(s)
-	}
-	if s.conn != nil {
-		return s.conn.Close()
-	}
-	return nil
+	return conn == s.conn
 }
 
 var _ stt.STT = (*DeepgramSTTv2)(nil)

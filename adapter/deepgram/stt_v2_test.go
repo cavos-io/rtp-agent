@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -187,6 +188,372 @@ func TestDeepgramSTTv2StreamHandlesReferenceTurnAndClose(t *testing.T) {
 	}
 	if parsed.Query().Get("model") != "flux-general-multi" || parsed.Query().Get("mip_opt_out") != "true" {
 		t.Fatalf("stream url query = %s, want updated model and mip_opt_out", parsed.RawQuery)
+	}
+}
+
+func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("https://deepgram.example/v2/listen"),
+		WithDeepgramSTTv2Model("flux-general-multi"),
+		WithDeepgramSTTv2SampleRate(48000),
+		WithDeepgramSTTv2MipOptOut(true),
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+		WithDeepgramSTTv2EOTTimeout(1500),
+		WithDeepgramSTTv2Keyterms([]string{"LiveKit", "rtp-agent"}),
+		WithDeepgramSTTv2Tags([]string{"agent", "test"}),
+		WithDeepgramSTTv2LanguageHints([]string{"en", "es"}),
+	)
+
+	parsed, err := url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL: %v", err)
+	}
+	query := parsed.Query()
+	if parsed.Scheme != "wss" {
+		t.Fatalf("scheme = %q, want wss", parsed.Scheme)
+	}
+	assertDeepgramQuery(t, query, "model", "flux-general-multi")
+	assertDeepgramQuery(t, query, "sample_rate", "48000")
+	assertDeepgramQuery(t, query, "encoding", "linear16")
+	assertDeepgramQuery(t, query, "mip_opt_out", "true")
+	assertDeepgramQuery(t, query, "eager_eot_threshold", "0.6")
+	assertDeepgramQuery(t, query, "eot_threshold", "0.8")
+	assertDeepgramQuery(t, query, "eot_timeout_ms", "1500")
+	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "rtp-agent"})
+	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
+	assertDeepgramQueryValues(t, query, "language_hint", []string{"en", "es"})
+}
+
+func TestDeepgramSTTv2RejectsReferenceInvalidTurnOptions(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []DeepgramSTTv2Option
+		want string
+	}{
+		{
+			name: "eager end of turn above default end of turn",
+			opts: []DeepgramSTTv2Option{WithDeepgramSTTv2EagerEOTThreshold(0.9)},
+			want: "eager_eot_threshold (0.9) must be less than or equal to eot_threshold (0.7)",
+		},
+		{
+			name: "eager end of turn above configured end of turn",
+			opts: []DeepgramSTTv2Option{
+				WithDeepgramSTTv2EagerEOTThreshold(0.8),
+				WithDeepgramSTTv2EOTThreshold(0.6),
+			},
+			want: "eager_eot_threshold (0.8) must be less than or equal to eot_threshold (0.6)",
+		},
+		{
+			name: "long tag",
+			opts: []DeepgramSTTv2Option{WithDeepgramSTTv2Tags([]string{strings.Repeat("x", 129)})},
+			want: "tag must be no more than 128 characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewDeepgramSTTv2("test-key", tt.opts...)
+			_, err := provider.Stream(context.Background(), "")
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Stream() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeepgramSTTv2UpdateOptionsMatchesReferenceFutureStreams(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("https://deepgram.example/v2/listen"),
+		WithDeepgramSTTv2EOTThreshold(0.7),
+		WithDeepgramSTTv2Tags([]string{"initial"}),
+	)
+
+	if err := provider.UpdateOptions(
+		WithDeepgramSTTv2BaseURL("https://updated.deepgram.example/v2/listen"),
+		WithDeepgramSTTv2Model("flux-general-multi"),
+		WithDeepgramSTTv2SampleRate(48000),
+		WithDeepgramSTTv2MipOptOut(true),
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+		WithDeepgramSTTv2EOTTimeout(1500),
+		WithDeepgramSTTv2Keyterms([]string{"LiveKit"}),
+		WithDeepgramSTTv2Tags([]string{"agent"}),
+		WithDeepgramSTTv2LanguageHints([]string{"en", "es"}),
+	); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL: %v", err)
+	}
+	if parsed.Host != "updated.deepgram.example" || parsed.Scheme != "wss" {
+		t.Fatalf("stream URL = %s, want updated wss endpoint", parsed.String())
+	}
+	query := parsed.Query()
+	assertDeepgramQuery(t, query, "model", "flux-general-multi")
+	assertDeepgramQuery(t, query, "sample_rate", "48000")
+	assertDeepgramQuery(t, query, "mip_opt_out", "true")
+	assertDeepgramQuery(t, query, "eager_eot_threshold", "0.6")
+	assertDeepgramQuery(t, query, "eot_threshold", "0.8")
+	assertDeepgramQuery(t, query, "eot_timeout_ms", "1500")
+	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit"})
+	assertDeepgramQueryValues(t, query, "tag", []string{"agent"})
+	assertDeepgramQueryValues(t, query, "language_hint", []string{"en", "es"})
+}
+
+func TestDeepgramSTTv2UpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2EOTThreshold(0.8))
+	before := buildDeepgramSTTv2StreamURL(provider)
+
+	err := provider.UpdateOptions(WithDeepgramSTTv2EagerEOTThreshold(0.9))
+	if err == nil || !strings.Contains(err.Error(), "eager_eot_threshold (0.9) must be less than or equal to eot_threshold (0.8)") {
+		t.Fatalf("UpdateOptions() error = %v, want invalid eager threshold", err)
+	}
+	if after := buildDeepgramSTTv2StreamURL(provider); after != before {
+		t.Fatalf("stream URL after failed update = %s, want unchanged %s", after, before)
+	}
+}
+
+func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
+	requests := make(chan *url.URL, 2)
+	audioMessages := make(chan []byte, 1)
+	serverErr := make(chan error, 2)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstURL := receiveDeepgramTestRequestURL(t, requests, "first STTv2 websocket request")
+	assertDeepgramQuery(t, firstURL.Query(), "model", "flux-general-en")
+	assertDeepgramQuery(t, firstURL.Query(), "sample_rate", "16000")
+
+	if err := provider.UpdateOptions(
+		WithDeepgramSTTv2Model("flux-general-multi"),
+		WithDeepgramSTTv2SampleRate(48000),
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+	); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 4800),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 2400,
+	}); err != nil {
+		t.Fatalf("PushFrame after update error = %v", err)
+	}
+
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated STTv2 websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "model", "flux-general-multi")
+	assertDeepgramQuery(t, secondURL.Query(), "sample_rate", "48000")
+	assertDeepgramQuery(t, secondURL.Query(), "eager_eot_threshold", "0.6")
+	assertDeepgramQuery(t, secondURL.Query(), "eot_threshold", "0.8")
+	select {
+	case got := <-audioMessages:
+		if len(got) == 0 {
+			t.Fatal("updated stream audio is empty")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for audio on updated STTv2 websocket")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) && !strings.Contains(err.Error(), "closed pipe") {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
+func TestDeepgramSTTv2UpdateOptionsDoesNotHoldProviderLockWhileUpdatingStream(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key")
+	stream := &deepgramV2Stream{provider: provider, streamURL: buildDeepgramSTTv2StreamURL(provider)}
+	provider.streams[stream] = struct{}{}
+
+	stream.mu.Lock()
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- provider.UpdateOptions(WithDeepgramSTTv2Model("flux-general-multi"))
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case err := <-updateDone:
+			stream.mu.Unlock()
+			t.Fatalf("UpdateOptions returned before stream lock released: %v", err)
+		case <-deadline:
+			stream.mu.Unlock()
+			t.Fatal("provider lock stayed held while UpdateOptions waited for stream lock")
+		default:
+		}
+
+		if provider.mu.TryLock() {
+			updated := provider.model == "flux-general-multi"
+			provider.mu.Unlock()
+			if updated {
+				break
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	stream.mu.Unlock()
+	if err := <-updateDone; err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+}
+
+func TestDeepgramSTTv2StreamEmitsReferenceRecognitionUsage(t *testing.T) {
+	requests := make(chan *url.URL, 1)
+	audioMessages := make(chan []byte, 2)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	rawStream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := rawStream.(*deepgramV2Stream)
+	stream.requestID = "req-usage"
+	defer stream.Close()
+
+	_ = receiveDeepgramTestRequestURL(t, requests, "usage STTv2 websocket request")
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 2000),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1000,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case <-audioMessages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for STTv2 audio frame")
+	}
+	assertNoDeepgramRecognitionUsageEvent(t, stream.events)
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case <-audioMessages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for flushed STTv2 audio frame")
+	}
+	select {
+	case event := <-stream.events:
+		if event.Type != stt.SpeechEventRecognitionUsage {
+			t.Fatalf("event type = %s, want %s", event.Type, stt.SpeechEventRecognitionUsage)
+		}
+		if event.RequestID != "req-usage" {
+			t.Fatalf("usage request id = %q, want req-usage", event.RequestID)
+		}
+		if event.RecognitionUsage == nil {
+			t.Fatal("RecognitionUsage = nil")
+		}
+		if event.RecognitionUsage.AudioDuration != 0.0625 {
+			t.Fatalf("AudioDuration = %v, want 0.0625", event.RecognitionUsage.AudioDuration)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for recognition usage event")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) && !strings.Contains(err.Error(), "closed pipe") {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
+func TestDeepgramSTTv2NextAfterCloseDrainsQueuedEvent(t *testing.T) {
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued final",
+		}},
+	}
+
+	for i := 0; i < 64; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stream := &deepgramV2Stream{
+			ctx:    ctx,
+			events: make(chan *stt.SpeechEvent, 1),
+			closed: true,
+		}
+		stream.events <- want
+
+		got, err := stream.Next()
+		if err != nil {
+			t.Fatalf("iteration %d: Next() error = %v, want queued event", i, err)
+		}
+		if got != want {
+			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
+		}
+	}
+}
+
+func TestDeepgramSTTv2NextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued final",
+		}},
+	}
+
+	for i := 0; i < 64; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		stream := &deepgramV2Stream{
+			ctx:    ctx,
+			events: make(chan *stt.SpeechEvent, 1),
+			errCh:  make(chan error, 1),
+		}
+		stream.events <- want
+		stream.errCh <- errors.New("stream failed")
+
+		got, err := stream.Next()
+		cancel()
+		if err != nil {
+			t.Fatalf("iteration %d: Next() error = %v, want queued event before stream error", i, err)
+		}
+		if got != want {
+			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
+		}
 	}
 }
 
