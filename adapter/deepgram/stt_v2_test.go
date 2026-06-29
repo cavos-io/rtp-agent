@@ -325,8 +325,8 @@ func TestDeepgramSTTv2StreamHandlesReferenceTurnAndClose(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for CloseStream")
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1}}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1}}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after Close error = %v, want stream input ended", err)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
@@ -338,6 +338,23 @@ func TestDeepgramSTTv2StreamHandlesReferenceTurnAndClose(t *testing.T) {
 	}
 	if parsed.Query().Get("model") != "flux-general-multi" || parsed.Query().Get("mip_opt_out") != "true" {
 		t.Fatalf("stream url query = %s, want updated model and mip_opt_out", parsed.RawQuery)
+	}
+}
+
+func TestDeepgramSTTv2StreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	stream := &deepgramV2Stream{}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after Close error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after Close error = %v, want stream input ended", err)
+	}
+	if err := stream.EndInput(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("EndInput after Close error = %v, want stream input ended", err)
 	}
 }
 

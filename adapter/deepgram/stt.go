@@ -470,7 +470,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, llm.NewAPIStatusError("Deepgram STT request failed", resp.StatusCode, "", string(respBody))
 	}
@@ -696,6 +696,8 @@ type deepgramStream struct {
 	errCh          chan error
 	mu             sync.Mutex
 	closed         bool
+	eventsClosed   bool
+	closeDraining  bool
 	inputEnded     bool
 	speaking       bool
 	reconnectNext  bool
@@ -1099,8 +1101,12 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			}
 			_ = s.closeConnection()
 		}
+		closeEvents := !stale && !s.closeDraining
+		if closeEvents {
+			s.eventsClosed = true
+		}
 		s.mu.Unlock()
-		if stale {
+		if stale || !closeEvents {
 			return
 		}
 		close(s.events)
@@ -1110,8 +1116,12 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() && !s.hasInputEnded() {
-				logger.Logger.Errorw("Deepgram WebSocket read error", err)
-				s.sendError(deepgramSTTUnexpectedCloseError(err))
+				if reconnectErr := s.reconnectAfterUnexpectedClose(conn); reconnectErr == nil {
+					return
+				} else {
+					logger.Logger.Errorw("Deepgram WebSocket reconnect error", reconnectErr)
+					s.sendError(reconnectErr)
+				}
 			}
 			return
 		}
@@ -1180,15 +1190,6 @@ func (r dgResponse) malformedReferenceLanguage(languageStr string) bool {
 	return false
 }
 
-func deepgramSTTUnexpectedCloseError(err error) error {
-	statusCode := -1
-	var closeErr *websocket.CloseError
-	if errors.As(err, &closeErr) && closeErr.Code != 0 {
-		statusCode = closeErr.Code
-	}
-	return llm.NewAPIStatusError("deepgram connection closed unexpectedly", statusCode, "", err.Error())
-}
-
 // keepAliveLoop sends a native KeepAlive payload to prevent Deepgram from dropping idle streams.
 func (s *deepgramStream) keepAliveLoop() {
 	ticker := time.NewTicker(deepgramSTTKeepAliveInterval)
@@ -1209,8 +1210,12 @@ func (s *deepgramStream) sendKeepAlive() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.closed {
-		_ = s.writeTextData(deepgramSTTKeepAliveMessage, map[string]string{"type": "KeepAlive"})
+		s.sendKeepAliveLocked()
 	}
+}
+
+func (s *deepgramStream) sendKeepAliveLocked() {
+	_ = s.writeTextData(deepgramSTTKeepAliveMessage, map[string]string{"type": "KeepAlive"})
 }
 
 func (s *deepgramStream) sendEvent(ev *stt.SpeechEvent) {
@@ -1311,11 +1316,11 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
@@ -1347,11 +1352,11 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 func (s *deepgramStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	flushedFrame := false
 	if tail := s.inputAudio.flush(); tail != nil {
@@ -1539,6 +1544,9 @@ func (s *deepgramStream) EndInput() error {
 }
 
 func (s *deepgramStream) sendConnectionUsageRemainderLocked() {
+	if s.eventsClosed {
+		return
+	}
 	if s.connStart.IsZero() {
 		return
 	}
@@ -1570,14 +1578,22 @@ func (s *deepgramStream) Close() error {
 		}
 		s.mu.Lock()
 	}
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
+	s.inputEnded = true
+	s.closeDraining = true
 	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
-	// Wait a tiny bit for the final transcript
+	s.mu.Unlock()
+
+	// Keep receive-side state unlocked so a final transcript can drain after CloseStream.
 	time.Sleep(50 * time.Millisecond)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closeDraining = false
 	s.cancelIfUsageDeliveryWouldBlockLocked()
 	s.sendConnectionUsageRemainderLocked()
 	if s.cancel != nil {
@@ -1656,7 +1672,36 @@ func (s *deepgramStream) reconnectLocked() error {
 	s.connStart = time.Now()
 	_ = oldConn.Close()
 	go s.readLoop(conn)
+	s.sendKeepAliveLocked()
 	return nil
+}
+
+func (s *deepgramStream) reconnectAfterUnexpectedClose(conn *websocket.Conn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputEnded || conn != s.conn {
+		return nil
+	}
+	s.advanceTimingForReconnectLocked(time.Now())
+	s.audioBStream = nil
+	if err := s.reconnectLocked(); err != nil {
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		_ = s.closeConnection()
+		return err
+	}
+	s.reconnectNext = false
+	return nil
+}
+
+func (s *deepgramStream) advanceTimingForReconnectLocked(now time.Time) {
+	nowSeconds := float64(now.UnixNano()) / 1e9
+	if s.start > 0 && nowSeconds > s.start {
+		s.offset += nowSeconds - s.start
+	}
+	s.start = nowSeconds
 }
 
 func (s *deepgramStream) reconnectNow() {

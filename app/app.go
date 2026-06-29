@@ -2472,8 +2472,26 @@ func deepgramSTTFromConfig(cfg AppConfig) corestt.STT {
 		if len(cfg.STTKeytermsPrompt) > 0 {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2Keyterms(cfg.STTKeytermsPrompt))
 		}
+		if eager := modelOptionFloat(cfg.STTModelOptions, "eager_eot_threshold"); eager != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2EagerEOTThreshold(*eager))
+		}
+		if eot := modelOptionFloat(cfg.STTModelOptions, "eot_threshold"); eot != nil {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2EOTThreshold(*eot))
+		}
+		if timeoutMS := modelOptionInt(cfg.STTModelOptions, "eot_timeout_ms"); timeoutMS > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2EOTTimeout(timeoutMS))
+		}
 		if len(cfg.STTTags) > 0 {
 			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2Tags(cfg.STTTags))
+		}
+		if hints := splitStringList(cfg.STTLanguageOptions); len(hints) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2LanguageHints(hints))
+		} else if hints := modelOptionStringList(cfg.STTModelOptions, "language_hint"); len(hints) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2LanguageHints(hints))
+		} else if hints := modelOptionStringList(cfg.STTModelOptions, "language_hints"); len(hints) > 0 {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2LanguageHints(hints))
+		} else if language := strings.TrimSpace(cfg.STTLanguage); language != "" {
+			sttOpts = append(sttOpts, deepgram.WithDeepgramSTTv2LanguageHints([]string{language}))
 		}
 		return deepgram.NewDeepgramSTTv2("", sttOpts...)
 	}

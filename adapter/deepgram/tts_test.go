@@ -159,8 +159,8 @@ func TestDeepgramTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for provider close to close active stream")
 	}
-	if err := stream.PushText("later"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after provider close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("later"); err != nil {
+		t.Fatalf("PushText after provider close error = %v, want nil like reference closed input", err)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
@@ -401,6 +401,55 @@ func TestDeepgramTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 	if statusErr.Body != `{"err_msg":"rate limited"}` {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestDeepgramTTSSynthesizeAcceptsReferenceSuccessStatusClass(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		body   []byte
+	}{
+		{name: "partial-content", status: http.StatusPartialContent, body: []byte{0x01, 0x02}},
+		{name: "no-content", status: http.StatusNoContent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			oldClient := http.DefaultClient
+			http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: tt.status,
+					Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+					Body:       io.NopCloser(bytes.NewReader(tt.body)),
+					Request:    r,
+				}, nil
+			})}
+			t.Cleanup(func() { http.DefaultClient = oldClient })
+
+			provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+			stream, err := provider.Synthesize(context.Background(), "hello")
+			if err != nil {
+				t.Fatalf("Synthesize() error = %v", err)
+			}
+			defer stream.Close()
+
+			if len(tt.body) > 0 {
+				audio, err := stream.Next()
+				if err != nil {
+					t.Fatalf("audio Next() error = %v, want successful 2xx audio", err)
+				}
+				if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, tt.body) {
+					t.Fatalf("audio Next() = %+v, want body bytes %v", audio, tt.body)
+				}
+			}
+
+			final, err := stream.Next()
+			if err != nil {
+				t.Fatalf("final Next() error = %v, want final marker for 2xx response", err)
+			}
+			if final == nil || !final.IsFinal || final.Frame != nil {
+				t.Fatalf("final Next() = %+v, want boundary-only final marker", final)
+			}
+		})
 	}
 }
 
@@ -1141,8 +1190,14 @@ func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {
 	if !closed {
 		t.Fatal("connection not closed")
 	}
-	if err := stream.PushText("later"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("later"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput after Close error = %v, want nil like reference closed input", err)
 	}
 }
 
@@ -1300,6 +1355,42 @@ func TestDeepgramTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 		if audio != want {
 			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
 		}
+	}
+}
+
+func TestDeepgramTTSSynthesizeReturnsPartialAudioBeforeReadError(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Body: &deepgramTTSErrorAfterDataReadCloser{
+				data: []byte{0x01, 0x00, 0x02, 0x00},
+				err:  io.ErrUnexpectedEOF,
+			},
+		},
+		sampleRate: 24000,
+		encoding:   "linear16",
+		requestID:  "req-audio",
+		started:    true,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v, want partial audio before read error", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first Next() audio = %#v, want partial audio frame", audio)
+	}
+	if got, want := audio.Frame.Data, []byte{0x01, 0x00, 0x02, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("audio data = %v, want %v", got, want)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("second Next() error = nil, want read error")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next() error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -1702,11 +1793,14 @@ func TestDeepgramTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	if !reflect.DeepEqual(writes, wantWrites) {
 		t.Fatalf("writes = %#v, want %#v", writes, wantWrites)
 	}
-	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "stream input ended") {
-		t.Fatalf("PushText after EndInput error = %v, want stream input ended", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want nil like reference closed input", err)
 	}
-	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
-		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want nil like reference closed input", err)
 	}
 	if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
 		t.Fatalf("handleTextMessage Flushed error = %v", err)
@@ -2305,6 +2399,24 @@ func (r deepgramTTSReadCloser) Read([]byte) (int, error) {
 }
 
 func (r deepgramTTSReadCloser) Close() error {
+	return nil
+}
+
+type deepgramTTSErrorAfterDataReadCloser struct {
+	data []byte
+	err  error
+	read bool
+}
+
+func (r *deepgramTTSErrorAfterDataReadCloser) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	return copy(p, r.data), r.err
+}
+
+func (r *deepgramTTSErrorAfterDataReadCloser) Close() error {
 	return nil
 }
 

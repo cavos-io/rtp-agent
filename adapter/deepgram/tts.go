@@ -288,6 +288,7 @@ type deepgramTTSChunkedStream struct {
 	cancel       context.CancelFunc
 	started      bool
 	pendingFinal bool
+	pendingErr   error
 	finalSent    bool
 	mu           sync.Mutex
 	readMu       sync.Mutex
@@ -323,6 +324,19 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.mu.Unlock()
 		return audio, err
 	}
+	if s.pendingErr != nil {
+		err := s.pendingErr
+		s.pendingErr = nil
+		s.finalSent = true
+		if s.resp != nil && s.resp.Body != nil {
+			body := s.resp.Body
+			s.resp = nil
+			_ = body.Close()
+		}
+		s.cancelRequestLocked()
+		s.mu.Unlock()
+		return nil, err
+	}
 	body := s.resp.Body
 	encoding := s.encoding
 	sampleRate := s.sampleRate
@@ -337,21 +351,18 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
 	}
-	if n > 0 && err == io.EOF {
-		s.pendingFinal = true
-	}
 	if err != nil {
-		if err == io.EOF && n == 0 {
-			return s.emitFinal()
-		}
-		if err != io.EOF && errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		if err != io.EOF && errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		if err != io.EOF {
-			return nil, llm.NewAPIConnectionError(err.Error())
+		if err == io.EOF {
+			if n == 0 {
+				return s.emitFinal()
+			}
+			s.pendingFinal = true
+		} else if n > 0 {
+			s.pendingErr = deepgramTTSChunkedReadError(err)
+		} else {
+			s.cancelRequestLocked()
+			s.finalSent = true
+			return nil, deepgramTTSChunkedReadError(err)
 		}
 	}
 
@@ -365,6 +376,16 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			SamplesPerChannel: uint32(len(frameData) / 2),
 		},
 	}, nil
+}
+
+func deepgramTTSChunkedReadError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(err.Error())
 }
 
 func (s *deepgramTTSChunkedStream) startRequestLocked() error {
@@ -401,7 +422,7 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		if resp.StatusCode == 499 {
 			resp.Body.Close()
 			s.cancelRequestLocked()
@@ -466,6 +487,7 @@ type deepgramTTSStream struct {
 	errCh       chan error
 	mu          sync.Mutex
 	closed      bool
+	inputClosed bool
 	inputEnded  bool
 	drainClosed bool
 	readDone    bool
@@ -716,6 +738,9 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputClosed {
+		return nil
+	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -741,6 +766,9 @@ func deepgramTTSSpeakText(text string) string {
 func (s *deepgramTTSStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputClosed {
+		return nil
+	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -772,6 +800,9 @@ func (s *deepgramTTSStream) Flush() error {
 func (s *deepgramTTSStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputClosed {
+		return nil
+	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
@@ -797,6 +828,7 @@ func (s *deepgramTTSStream) EndInput() error {
 	}
 	s.pendingText = ""
 	s.inputEnded = true
+	s.inputClosed = true
 	if !s.flushPending {
 		s.closed = true
 		s.markInputSent()
@@ -901,6 +933,7 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.inputClosed = true
 	if !s.hasConnectionLocked() {
 		s.markInputSent()
 		if s.provider != nil {
