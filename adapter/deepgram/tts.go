@@ -373,6 +373,7 @@ type deepgramTTSStream struct {
 	requestID    string
 	segmentID    string
 	segmentOpen  bool
+	segmentSent  bool
 	flushPending bool
 }
 
@@ -468,7 +469,11 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
+	if !s.segmentOpen && s.segmentSent {
+		return nil
+	}
 	s.segmentOpen = true
+	s.segmentSent = true
 	s.pendingText += text
 	return s.sendCompletedWordsLocked()
 }

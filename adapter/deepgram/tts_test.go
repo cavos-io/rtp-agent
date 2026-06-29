@@ -1045,14 +1045,59 @@ func TestDeepgramTTSStreamEmptyFlushIsReferenceNoop(t *testing.T) {
 		t.Fatalf("writes after second empty Flush = %d, want unchanged", writes)
 	}
 
+	writes = 0
+	stream = &deepgramTTSStream{
+		writeJSON: func(any) error {
+			writes++
+			return nil
+		},
+	}
 	if err := stream.PushText("   "); err != nil {
 		t.Fatalf("PushText(whitespace) error = %v", err)
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush(whitespace) error = %v", err)
 	}
-	if writes != 3 {
+	if writes != 1 {
 		t.Fatalf("writes after whitespace Flush = %d, want one reference Flush", writes)
+	}
+}
+
+func TestDeepgramTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
+	var writes []string
+	stream := &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			msgType, _ := msg["type"].(string)
+			if msgType == "Speak" {
+				text, _ := msg["text"].(string)
+				writes = append(writes, msgType+":"+text)
+				return nil
+			}
+			writes = append(writes, msgType)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v", err)
+	}
+
+	want := []string{"Speak:first ", "Flush"}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes = %#v, want reference first segment only %#v", writes, want)
 	}
 }
 
