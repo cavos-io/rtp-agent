@@ -779,6 +779,40 @@ type dgRecognitionResponse struct {
 	Results struct {
 		Channels []dgRecognitionChannel `json:"channels"`
 	} `json:"results"`
+	requestIDSeen bool
+	channelsSeen  bool
+}
+
+func (r *dgRecognitionResponse) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Metadata struct {
+			RequestID string `json:"request_id"`
+		} `json:"metadata"`
+		Results struct {
+			Channels []dgRecognitionChannel `json:"channels"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	var metadataFields map[string]json.RawMessage
+	if metadataRaw, ok := fields["metadata"]; ok {
+		_ = json.Unmarshal(metadataRaw, &metadataFields)
+	}
+	var resultFields map[string]json.RawMessage
+	if resultsRaw, ok := fields["results"]; ok {
+		_ = json.Unmarshal(resultsRaw, &resultFields)
+	}
+
+	r.Metadata = raw.Metadata
+	r.Results = raw.Results
+	_, r.requestIDSeen = metadataFields["request_id"]
+	_, r.channelsSeen = resultFields["channels"]
+	return nil
 }
 
 type dgResponse struct {
@@ -844,6 +878,9 @@ func deepgramRecognizeSpeechEvent(resp dgRecognitionResponse) *stt.SpeechEvent {
 }
 
 func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) error {
+	if !resp.requestIDSeen || !resp.channelsSeen || len(resp.Results.Channels) == 0 {
+		return fmt.Errorf("malformed deepgram recognition response")
+	}
 	for _, channel := range resp.Results.Channels {
 		for _, alt := range channel.Alternatives {
 			if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen) {

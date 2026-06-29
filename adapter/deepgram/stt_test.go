@@ -748,7 +748,7 @@ func TestDeepgramSTTRecognizeUploadsReferenceWAV(t *testing.T) {
 			t.Fatalf("content-type = %q, want audio/wav", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`))
+		_, _ = w.Write([]byte(`{"metadata":{"request_id":"req-wav"},"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`))
 	}))
 	defer server.Close()
 
@@ -795,7 +795,7 @@ func TestDeepgramSTTRecognizeAppliesReferenceRequestTimeout(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"req-timeout"},"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`)),
 			Request:    r,
 		}, nil
 	})}
@@ -828,7 +828,7 @@ func TestDeepgramSTTRecognizeDetectLanguageMatchesReference(t *testing.T) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"results":{"channels":[{"detected_language":"es","alternatives":[{"transcript":"hola","confidence":0.9,"words":[]}]}]}}`)),
+			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"req-detect"},"results":{"channels":[{"detected_language":"es","alternatives":[{"transcript":"hola","confidence":0.9,"words":[]}]}]}}`)),
 			Request:    r,
 		}, nil
 	})}
@@ -939,6 +939,30 @@ func TestDeepgramSTTRecognizeMalformedResponseReturnsAPIConnectionError(t *testi
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"malformed"},"results":{"channels":[{"alternatives":[{"transcript":"bad","words":[]}]}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestDeepgramSTTRecognizeMalformedEnvelopeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"metadata":{},"results":{"channels":[]}}`)),
 			Request:    r,
 		}, nil
 	})}
