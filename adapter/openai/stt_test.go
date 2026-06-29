@@ -4005,6 +4005,30 @@ func TestOpenAIRealtimeSTTCompletedEmptyTranscriptEmitsUsageOnly(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTCompletedMalformedUsageDropsReferenceUsage(t *testing.T) {
+	state := &openAIRealtimeSTTMessageState{}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state); err != nil {
+		t.Fatalf("speech started: %v", err)
+	}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"item-1","audio_end_ms":900}`), state); err != nil {
+		t.Fatalf("speech stopped: %v", err)
+	}
+
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-1","transcript":"hello","usage":null}`), state)
+	if err != nil {
+		t.Fatalf("completed: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %+v, want only final transcript for malformed usage", events)
+	}
+	if events[0].Type != stt.SpeechEventFinalTranscript || events[0].Alternatives[0].Text != "hello" {
+		t.Fatalf("event = %+v, want final transcript before malformed usage", events[0])
+	}
+	if _, ok := state.timing["item-1"]; ok {
+		t.Fatal("timing for item-1 still present, want reference cleanup before malformed usage is ignored")
+	}
+}
+
 func TestOpenAIRealtimeSTTInterleavedItemDeltasUseReferenceCurrentText(t *testing.T) {
 	now := time.Unix(100, 0)
 	state := &openAIRealtimeSTTMessageState{
