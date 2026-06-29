@@ -910,6 +910,70 @@ func TestDeepgramTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamEndInputClosesIdleReferenceStream(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		setup func(*testing.T, *deepgramTTSStream, *[]string)
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name: "after flushed segment",
+			setup: func(t *testing.T, stream *deepgramTTSStream, writes *[]string) {
+				t.Helper()
+				if err := stream.PushText("hello"); err != nil {
+					t.Fatalf("PushText() error = %v", err)
+				}
+				if err := stream.Flush(); err != nil {
+					t.Fatalf("Flush() error = %v", err)
+				}
+				if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
+					t.Fatalf("handleTextMessage Flushed error = %v", err)
+				}
+				if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
+					t.Fatalf("Next after setup Flushed = (%+v, %v), want final marker", final, err)
+				}
+				*writes = nil
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var writes []string
+			closeCalls := 0
+			stream := &deepgramTTSStream{
+				audio:   make(chan *tts.SynthesizedAudio, 1),
+				errCh:   make(chan error, 1),
+				flushed: make(chan struct{}, 1),
+				writeText: func(payload string) error {
+					writes = append(writes, payload)
+					return nil
+				},
+				closeConn: func() error {
+					closeCalls++
+					return nil
+				},
+			}
+			if tt.setup != nil {
+				tt.setup(t, stream, &writes)
+			}
+
+			if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+				t.Fatalf("EndSynthesizeStreamInput() error = %v", err)
+			}
+			if len(writes) != 0 {
+				t.Fatalf("writes after idle EndInput = %#v, want none", writes)
+			}
+			if closeCalls != 1 {
+				t.Fatalf("close calls after idle EndInput = %d, want 1", closeCalls)
+			}
+			if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+				t.Fatalf("Next after idle EndInput = (%+v, %v), want EOF", audio, err)
+			}
+		})
+	}
+}
+
 func TestDeepgramTTSStreamIgnoresReferenceEmptyText(t *testing.T) {
 	writes := 0
 	stream := &deepgramTTSStream{

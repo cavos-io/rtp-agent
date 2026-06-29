@@ -364,15 +364,16 @@ type deepgramTTSStream struct {
 	closed     bool
 	inputEnded bool
 
-	sampleRate  int
-	writeJSON   func(any) error
-	writeText   func(string) error
-	closeConn   func() error
-	flushed     chan struct{}
-	pendingText string
-	requestID   string
-	segmentID   string
-	segmentOpen bool
+	sampleRate   int
+	writeJSON    func(any) error
+	writeText    func(string) error
+	closeConn    func() error
+	flushed      chan struct{}
+	pendingText  string
+	requestID    string
+	segmentID    string
+	segmentOpen  bool
+	flushPending bool
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -425,6 +426,9 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		audio := &tts.SynthesizedAudio{IsFinal: true}
 		s.annotateAudio(audio)
 		s.audio <- audio
+		s.mu.Lock()
+		s.flushPending = false
+		s.mu.Unlock()
 		s.segmentID = uuid.NewString()
 		s.signalFlushed()
 		s.closeAfterFinal()
@@ -498,6 +502,7 @@ func (s *deepgramTTSStream) Flush() error {
 		return err
 	}
 	s.segmentOpen = false
+	s.flushPending = true
 	return nil
 }
 
@@ -520,9 +525,17 @@ func (s *deepgramTTSStream) EndInput() error {
 			return err
 		}
 		s.segmentOpen = false
+		s.flushPending = true
 	}
 	s.pendingText = ""
 	s.inputEnded = true
+	if !s.flushPending {
+		s.closed = true
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return s.closeConnection()
+	}
 	return nil
 }
 
