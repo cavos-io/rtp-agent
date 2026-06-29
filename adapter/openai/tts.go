@@ -1040,6 +1040,9 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 	if inputTokens == 0 && outputTokens == 0 {
 		return
 	}
+	if !s.sseSawAudio {
+		return
+	}
 	duration := 0.0
 	if !s.metricsStarted.IsZero() {
 		duration = time.Since(s.metricsStarted).Seconds()

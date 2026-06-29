@@ -1222,6 +1222,42 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEDoneUsageWithoutAudioSuppressesMetrics(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{"req_no_audio_usage"}},
+			Body:       io.NopCloser(strings.NewReader(sse)),
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		if metrics.InputTokens == 7 && metrics.OutputTokens == 11 {
+			metricsCh <- metrics
+		}
+	})
+
+	stream, err := provider.Synthesize(context.Background(), "hello tokens")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if audio, err := stream.Next(); !errors.Is(err, io.EOF) || audio != nil {
+		t.Fatalf("Next = (%#v, %v), want EOF without audio", audio, err)
+	}
+
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("unexpected token usage metrics without audio: %#v", metrics)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestOpenAITTSAudioModelsUseAudioStreamFormat(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
