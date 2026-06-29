@@ -851,7 +851,7 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if !s.isClosed() {
+			if !s.isClosed() && !s.hasInputEnded() {
 				logger.Logger.Errorw("Deepgram WebSocket read error", err)
 				s.sendError(deepgramSTTUnexpectedCloseError(err))
 			}
@@ -1247,6 +1247,12 @@ func (s *deepgramStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *deepgramStream) hasInputEnded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputEnded
 }
 
 func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
