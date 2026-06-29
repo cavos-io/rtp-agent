@@ -223,6 +223,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		flushed:    make(chan struct{}, 1),
 		closeAck:   make(chan struct{}, 1),
 		inputSent:  make(chan struct{}),
+		done:       make(chan struct{}),
 		sampleRate: t.sampleRate,
 		encoding:   t.encoding,
 		timeout:    t.streamResponseTimeout,
@@ -465,6 +466,8 @@ type deepgramTTSStream struct {
 	closeAck      chan struct{}
 	inputSent     chan struct{}
 	inputSentOnce sync.Once
+	done          chan struct{}
+	doneOnce      sync.Once
 	timeout       time.Duration
 	pendingText   string
 	requestID     string
@@ -504,7 +507,10 @@ func (s *deepgramTTSStream) readLoop() {
 				},
 			}
 			s.annotateAudio(audio)
-			s.audio <- audio
+			if !s.sendAudio(audio) {
+				s.markReadDone()
+				return
+			}
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
 				s.markReadDone()
@@ -546,6 +552,28 @@ func (s *deepgramTTSStream) markInputSent() {
 	})
 }
 
+func (s *deepgramTTSStream) closeDone() {
+	if s.done == nil {
+		return
+	}
+	s.doneOnce.Do(func() {
+		close(s.done)
+	})
+}
+
+func (s *deepgramTTSStream) sendAudio(audio *tts.SynthesizedAudio) bool {
+	if s.done == nil {
+		s.audio <- audio
+		return true
+	}
+	select {
+	case s.audio <- audio:
+		return true
+	case <-s.done:
+		return false
+	}
+}
+
 func deepgramTTSUnexpectedCloseError(err error) error {
 	statusCode := -1
 	var closeErr *websocket.CloseError
@@ -564,7 +592,9 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	case "Flushed":
 		audio := &tts.SynthesizedAudio{IsFinal: true}
 		s.annotateAudio(audio)
-		s.audio <- audio
+		if !s.sendAudio(audio) {
+			return nil
+		}
 		s.signalFlushed()
 		s.mu.Lock()
 		s.flushPending = false
@@ -841,6 +871,7 @@ func (s *deepgramTTSStream) Close() error {
 	flushErr := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"})
 	closeErr := s.writeTextData(deepgramTTSCloseMessage, map[string]interface{}{"type": "Close"})
 	s.markInputSent()
+	s.closeDoneIfAudioDeliveryWouldBlockLocked()
 	if flushErr == nil && closeErr == nil && !s.readDone {
 		s.waitForFlushedAckLocked()
 	}
@@ -851,6 +882,16 @@ func (s *deepgramTTSStream) Close() error {
 		return err
 	}
 	return nil
+}
+
+func (s *deepgramTTSStream) closeDoneIfAudioDeliveryWouldBlockLocked() {
+	if s.audio == nil {
+		return
+	}
+	if cap(s.audio) == 0 || len(s.audio) >= cap(s.audio) {
+		s.readDone = true
+		s.closeDone()
+	}
 }
 
 func (s *deepgramTTSStream) drainCloseAckLocked() {

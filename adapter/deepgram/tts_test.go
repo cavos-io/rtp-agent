@@ -1150,6 +1150,68 @@ func TestDeepgramTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamCloseUnblocksBackpressuredAudioSend(t *testing.T) {
+	audioWritten := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSBackpressuredAudioWebsocketServer(serverConn, audioWritten, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	streamIface, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := streamIface.(*deepgramTTSStream)
+	for i := 0; i < cap(stream.audio); i++ {
+		stream.audio <- &tts.SynthesizedAudio{RequestID: "queued"}
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	select {
+	case <-audioWritten:
+	case <-time.After(time.Second):
+		t.Fatal("server did not write provider audio")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close() blocked behind backpressured TTS audio delivery")
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrClosedPipe) && !strings.Contains(err.Error(), "closed pipe") {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
 func TestDeepgramTTSStreamCloseIgnoresReferenceFlushWriteFailure(t *testing.T) {
 	writeErr := errors.New("flush write failed")
 	closed := false
@@ -2211,6 +2273,50 @@ func runDeepgramTTSAudioSegmentWebsocketServer(conn net.Conn, errCh chan<- error
 		return
 	}
 	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
+func runDeepgramTTSBackpressuredAudioWebsocketServer(conn net.Conn, audioWritten chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "Flush" {
+			break
+		}
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{0x01, 0x02}); err != nil {
+		errCh <- err
+		return
+	}
+	close(audioWritten)
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "Close" {
+			break
+		}
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Metadata"}`)); err != nil {
 		errCh <- err
 		return
 	}
