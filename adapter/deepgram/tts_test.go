@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -644,6 +645,48 @@ func TestDeepgramTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 	if body.closeCalls != 1 {
 		t.Fatalf("body close calls = %d, want 1", body.closeCalls)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	body := newDeepgramTTSBlockingReadCloser()
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start body read")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close() blocked behind in-flight body read")
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next remained blocked after Close")
 	}
 }
 
@@ -2240,6 +2283,36 @@ func (r *deepgramTTSCountingReadCloser) Read([]byte) (int, error) {
 
 func (r *deepgramTTSCountingReadCloser) Close() error {
 	r.closeCalls++
+	return nil
+}
+
+type deepgramTTSBlockingReadCloser struct {
+	readStarted chan struct{}
+	closed      chan struct{}
+	closeOnce   sync.Once
+}
+
+func newDeepgramTTSBlockingReadCloser() *deepgramTTSBlockingReadCloser {
+	return &deepgramTTSBlockingReadCloser{
+		readStarted: make(chan struct{}),
+		closed:      make(chan struct{}),
+	}
+}
+
+func (r *deepgramTTSBlockingReadCloser) Read([]byte) (int, error) {
+	select {
+	case <-r.readStarted:
+	default:
+		close(r.readStarted)
+	}
+	<-r.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (r *deepgramTTSBlockingReadCloser) Close() error {
+	r.closeOnce.Do(func() {
+		close(r.closed)
+	})
 	return nil
 }
 
