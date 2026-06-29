@@ -841,6 +841,29 @@ func TestDeepgramSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeReadCancelReturnsContextCanceled(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       deepgramSTTReadCloser{err: context.Canceled},
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Recognize read canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize read canceled error = %T, want raw context cancellation", err)
+	}
+}
+
 func TestDeepgramSTTStreamReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -2538,6 +2561,18 @@ func assertDeepgramPanicsWithMessage(t *testing.T, want string, fn func()) {
 		}
 	}()
 	fn()
+}
+
+type deepgramSTTReadCloser struct {
+	err error
+}
+
+func (r deepgramSTTReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r deepgramSTTReadCloser) Close() error {
+	return nil
 }
 
 type deepgramRoundTripFunc func(*http.Request) (*http.Response, error)

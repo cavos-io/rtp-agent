@@ -420,6 +420,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	var result dgRecognitionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
