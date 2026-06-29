@@ -275,6 +275,9 @@ func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersi
 	if model == "" {
 		model = "gpt-realtime"
 	}
+	if options.baseURL != "" && azureEndpoint != "" {
+		return nil, fmt.Errorf("base_url and azure_endpoint are mutually exclusive")
+	}
 	if azureEndpoint == "" {
 		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
 	}

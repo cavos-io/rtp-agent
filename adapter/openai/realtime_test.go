@@ -599,6 +599,25 @@ func TestNewAzureOpenAIRealtimeUsesConstructorBaseURL(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAIRealtimeRejectsBaseURLAndEndpoint(t *testing.T) {
+	_, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeBaseURL("http://azure-gateway.openai.test/openai"),
+	)
+
+	if err == nil {
+		t.Fatal("NewAzureOpenAIRealtimeModel error = nil, want base URL conflict")
+	}
+	if err.Error() != "base_url and azure_endpoint are mutually exclusive" {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %q, want base URL conflict", err.Error())
+	}
+}
+
 func TestAzureOpenAIRealtimeSessionDialFailureReturnsAPIConnectionError(t *testing.T) {
 	realtimeModel, err := NewAzureOpenAIRealtimeModel(
 		"",
