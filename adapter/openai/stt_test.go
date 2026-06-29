@@ -1144,6 +1144,9 @@ func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("VAD stream was not closed after VAD EndInput error")
 	}
+	if got := vadStream.endInputCalls(); got != 1 {
+		t.Fatalf("VAD EndInput calls = %d, want one failed call before cleanup close", got)
+	}
 }
 
 func TestOpenAIRealtimeSTTVADFlushErrorClosesStreamLikeReference(t *testing.T) {
@@ -4167,6 +4170,7 @@ type fakeOpenAISTTVADStream struct {
 	flushEmitsEndOfSpeech bool
 	frames                []*model.AudioFrame
 	closed                bool
+	endInputCallCount     int
 	endInputOnce          sync.Once
 	closeOnce             sync.Once
 	flushOnce             sync.Once
@@ -4228,12 +4232,21 @@ func (f *fakeOpenAISTTVADStream) Flush() error {
 }
 
 func (f *fakeOpenAISTTVADStream) EndInput() error {
+	f.mu.Lock()
+	f.endInputCallCount++
+	f.mu.Unlock()
 	f.endInputOnce.Do(func() { close(f.endInputCh) })
 	f.closeEvents()
 	if f.endInputErr != nil {
 		return f.endInputErr
 	}
 	return nil
+}
+
+func (f *fakeOpenAISTTVADStream) endInputCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.endInputCallCount
 }
 
 func (f *fakeOpenAISTTVADStream) Close() error {

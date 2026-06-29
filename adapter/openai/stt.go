@@ -756,24 +756,25 @@ func openAITimedStrings(words []struct {
 }
 
 type openAIRealtimeSTTStream struct {
-	conn        *websocket.Conn
-	ctx         context.Context
-	cancel      context.CancelFunc
-	events      chan *stt.SpeechEvent
-	eventStream *openAIRealtimeQueuedStream[*stt.SpeechEvent]
-	errCh       chan error
-	pendingErr  error
-	mu          sync.Mutex
-	closed      bool
-	inputEnded  bool
-	committed   bool
-	hasAudio    bool
-	pushedSR    uint32
-	audio       *audio.AudioByteStream
-	normalizer  openAIRealtimeInputAudioNormalizer
-	state       *openAIRealtimeSTTMessageState
-	owner       *OpenAISTT
-	vadStream   vad.VADStream
+	conn          *websocket.Conn
+	ctx           context.Context
+	cancel        context.CancelFunc
+	events        chan *stt.SpeechEvent
+	eventStream   *openAIRealtimeQueuedStream[*stt.SpeechEvent]
+	errCh         chan error
+	pendingErr    error
+	mu            sync.Mutex
+	closed        bool
+	inputEnded    bool
+	vadInputEnded bool
+	committed     bool
+	hasAudio      bool
+	pushedSR      uint32
+	audio         *audio.AudioByteStream
+	normalizer    openAIRealtimeInputAudioNormalizer
+	state         *openAIRealtimeSTTMessageState
+	owner         *OpenAISTT
+	vadStream     vad.VADStream
 }
 
 func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {
@@ -882,6 +883,7 @@ func (s *openAIRealtimeSTTStream) EndInput() error {
 	s.inputEnded = true
 	var vadErr error
 	if s.vadStream != nil {
+		s.vadInputEnded = true
 		vadErr = s.vadStream.EndInput()
 		if vadErr != nil {
 			s.closeAfterTerminalFailureLocked()
@@ -1025,9 +1027,13 @@ func (s *openAIRealtimeSTTStream) closeVADStreamLocked() {
 		return
 	}
 	vadStream := s.vadStream
+	shouldEndInput := !s.vadInputEnded
+	s.vadInputEnded = true
 	s.vadStream = nil
 	go func() {
-		_ = vadStream.EndInput()
+		if shouldEndInput {
+			_ = vadStream.EndInput()
+		}
 		_ = vadStream.Close()
 	}()
 }
@@ -1320,6 +1326,7 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 			return err
 		}
 		s.vadStream = vadStream
+		s.vadInputEnded = false
 		if vadStream != nil {
 			go s.vadLoopFor(vadStream)
 		}
