@@ -1744,11 +1744,14 @@ func TestDeepgramTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	if !reflect.DeepEqual(writes, wantWrites) {
 		t.Fatalf("writes = %#v, want %#v", writes, wantWrites)
 	}
-	if err := stream.PushText("again"); err == nil || !strings.Contains(err.Error(), "stream input ended") {
-		t.Fatalf("PushText after EndInput error = %v, want stream input ended", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want nil like reference closed input", err)
 	}
-	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
-		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want nil like reference closed input", err)
 	}
 	if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
 		t.Fatalf("handleTextMessage Flushed error = %v", err)
