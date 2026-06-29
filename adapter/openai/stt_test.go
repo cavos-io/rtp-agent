@@ -930,6 +930,48 @@ func TestOpenAISTTReconnectFailureClosesVADStreamLikeReference(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTErrorClosesVADStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+		WithOpenAISTTConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"error",
+				"error":{"message":"bad audio","code":"invalid_audio"}
+			}`)); err != nil {
+				t.Errorf("write provider error: %v", err)
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after provider error")
+	}
+}
+
 func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),

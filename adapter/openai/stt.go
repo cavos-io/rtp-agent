@@ -1138,6 +1138,9 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		if s.owner != nil {
 			s.owner.unregisterRealtimeSTTStream(s)
 		}
+		s.mu.Lock()
+		s.closeVADStreamLocked()
+		s.mu.Unlock()
 		s.closeEventStream()
 	}()
 	connectedAt := time.Now()
