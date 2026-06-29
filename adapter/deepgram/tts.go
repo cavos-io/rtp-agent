@@ -26,6 +26,7 @@ import (
 
 const defaultDeepgramTTSBaseURL = "https://api.deepgram.com/v1/speak"
 const deepgramTTSCloseAckTimeout = time.Second
+const deepgramTTSRequestTimeout = 30 * time.Second
 const deepgramTTSFlushMessage = `{"type": "Flush"}`
 const deepgramTTSCloseMessage = `{"type": "Close"}`
 
@@ -291,6 +292,7 @@ type deepgramTTSChunkedStream struct {
 	sampleRate   int
 	encoding     string
 	requestID    string
+	cancel       context.CancelFunc
 	started      bool
 	pendingFinal bool
 	finalSent    bool
@@ -353,8 +355,11 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 	s.started = true
-	req, err := http.NewRequestWithContext(s.ctx, "POST", s.requestURL, bytes.NewBuffer(s.body))
+	ctx, cancel := context.WithTimeout(s.ctx, deepgramTTSRequestTimeout)
+	s.cancel = cancel
+	req, err := http.NewRequestWithContext(ctx, "POST", s.requestURL, bytes.NewBuffer(s.body))
 	if err != nil {
+		s.cancelRequestLocked()
 		s.finalSent = true
 		return err
 	}
@@ -363,6 +368,7 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		s.cancelRequestLocked()
 		s.finalSent = true
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
@@ -375,11 +381,13 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == 499 {
 			resp.Body.Close()
+			s.cancelRequestLocked()
 			s.finalSent = true
 			return nil
 		}
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		s.cancelRequestLocked()
 		s.finalSent = true
 		return llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
 	}
@@ -397,6 +405,7 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 		s.resp = nil
 		_ = body.Close()
 	}
+	s.cancelRequestLocked()
 	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
 
@@ -404,14 +413,24 @@ func (s *deepgramTTSChunkedStream) Close() error {
 	s.mu.Lock()
 	if s.resp == nil || s.resp.Body == nil {
 		s.finalSent = true
+		s.cancelRequestLocked()
 		s.mu.Unlock()
 		return nil
 	}
 	body := s.resp.Body
 	s.resp = nil
 	s.finalSent = true
+	s.cancelRequestLocked()
 	s.mu.Unlock()
 	return body.Close()
+}
+
+func (s *deepgramTTSChunkedStream) cancelRequestLocked() {
+	if s.cancel == nil {
+		return
+	}
+	s.cancel()
+	s.cancel = nil
 }
 
 type deepgramTTSStream struct {

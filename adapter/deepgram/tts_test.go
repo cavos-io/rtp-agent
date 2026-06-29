@@ -470,6 +470,43 @@ func TestDeepgramTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want Deepgram reference 30s request timeout")
+	}
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want bounded by Deepgram reference 30s timeout", remaining)
+	}
+}
+
 func TestDeepgramTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
