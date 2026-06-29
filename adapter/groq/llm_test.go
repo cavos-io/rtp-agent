@@ -255,6 +255,36 @@ func TestNewGroqLLMDoesNotRetryByDefault(t *testing.T) {
 	}
 }
 
+func TestGroqLLMStartupErrorUnregistersLazyStream(t *testing.T) {
+	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Status:     http.StatusText(http.StatusInternalServerError),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"try again","type":"server_error","code":"server_error"}}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := NewGroqLLM("test-key", "llama-3.3-70b-versatile",
+		WithGroqLLMBaseURL("https://groq.example/openai/v1"),
+		withGroqLLMHTTPClient(client),
+	)
+
+	stream, err := provider.Chat(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	if len(provider.streams) != 1 {
+		t.Fatalf("registered streams = %d, want lazy stream registered", len(provider.streams))
+	}
+	if _, err := stream.Next(); err == nil {
+		t.Fatal("Next error is nil, want provider startup error")
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("registered streams after startup error = %d, want unregistered", len(provider.streams))
+	}
+}
+
 func TestGroqLLMProviderCloseClosesActiveStreams(t *testing.T) {
 	calls := 0
 	client := groqLLMHTTPDoer(func(r *http.Request) (*http.Response, error) {

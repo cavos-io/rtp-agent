@@ -219,6 +219,9 @@ func (s *groqLLMStream) Next() (*llm.ChatChunk, error) {
 	if s.isClosed() && err != nil {
 		return nil, io.EOF
 	}
+	if err != nil {
+		s.unregister()
+	}
 	return chunk, err
 }
 
@@ -239,14 +242,10 @@ func (s *groqLLMStream) Close() error {
 	}
 	if stream != nil {
 		err := stream.Close()
-		if s.provider != nil {
-			s.provider.unregisterStream(s)
-		}
+		s.unregister()
 		return err
 	}
-	if s.provider != nil {
-		s.provider.unregisterStream(s)
-	}
+	s.unregister()
 	return nil
 }
 
@@ -260,9 +259,11 @@ func (s *groqLLMStream) ensureStarted() error {
 		if err != nil {
 			if s.isClosed() {
 				s.startErr = io.EOF
+				s.unregister()
 				return
 			}
 			s.startErr = err
+			s.unregister()
 			return
 		}
 		s.mu.Lock()
@@ -270,6 +271,7 @@ func (s *groqLLMStream) ensureStarted() error {
 			s.mu.Unlock()
 			_ = stream.Close()
 			s.startErr = io.EOF
+			s.unregister()
 			return
 		}
 		s.stream = stream
@@ -282,4 +284,10 @@ func (s *groqLLMStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *groqLLMStream) unregister() {
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 }
