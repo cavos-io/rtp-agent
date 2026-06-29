@@ -2416,6 +2416,52 @@ func TestOpenAIStreamSkipsAzureNullDeltaWithFinishReason(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamSkipsAzureNullDeltaFinishBeforeToolCallComplete(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-null-tool","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-null-tool","choices":[{"index":0,"delta":null,"finish_reason":"tool_calls"}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-null-tool","choices":[{"index":0,"delta":{"content":"after null"}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-null-tool","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	contentChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want content after skipped null delta finish", err)
+	}
+	if contentChunk == nil || contentChunk.Delta == nil || contentChunk.Delta.Content != "after null" {
+		t.Fatalf("first chunk = %#v, want content after skipped null delta finish", contentChunk)
+	}
+	if len(contentChunk.Delta.ToolCalls) != 0 {
+		t.Fatalf("first chunk tool calls = %#v, want pending tool call not completed by null delta", contentChunk.Delta.ToolCalls)
+	}
+
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want tool call after real finish chunk", err)
+	}
+	if toolChunk == nil || toolChunk.Delta == nil || len(toolChunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("second chunk = %#v, want completed tool call after real finish", toolChunk)
+	}
+	if call := toolChunk.Delta.ToolCalls[0]; call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != "{}" {
+		t.Fatalf("tool call = %+v, want accumulated call after real finish", call)
+	}
+}
+
 func TestOpenAIStreamContentDeltaDefaultsAssistantRole(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,

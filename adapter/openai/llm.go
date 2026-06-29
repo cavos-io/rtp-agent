@@ -2488,9 +2488,9 @@ type openAIStreamResponse struct {
 }
 
 type openAIStreamChoice struct {
-	Index        int                     `json:"index"`
-	Delta        openAIStreamChoiceDelta `json:"delta"`
-	FinishReason openai.FinishReason     `json:"finish_reason"`
+	Index        int                      `json:"index"`
+	Delta        *openAIStreamChoiceDelta `json:"delta"`
+	FinishReason openai.FinishReason      `json:"finish_reason"`
 }
 
 type openAIStreamChoiceDelta struct {
@@ -2524,6 +2524,9 @@ func (s *openaiStream) recvOpenAIStreamResponse() (openAIStreamResponse, error) 
 }
 
 func (s *openaiStream) chunkFromOpenAIStreamChoice(id string, choice openAIStreamChoice) *llm.ChatChunk {
+	if choice.Delta == nil {
+		return nil
+	}
 	if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
 		return s.finishOpenAIStreamToolCall(id, choice)
 	}
@@ -2654,6 +2657,9 @@ func isOpenAIStreamToolCallFinish(choice openAIStreamChoice) bool {
 
 func isEmptyOpenAIStreamChoiceDelta(choice openAIStreamChoice) bool {
 	delta := choice.Delta
+	if delta == nil {
+		return true
+	}
 	return delta.Role == "" &&
 		delta.Content == "" &&
 		delta.Refusal == "" &&
