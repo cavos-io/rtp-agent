@@ -190,6 +190,9 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildDeepgramTTSStreamURL(t), header)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError(err.Error())
 		}

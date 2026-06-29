@@ -782,6 +782,40 @@ func TestDeepgramTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := provider.Stream(ctx)
+		errCh <- err
+	}()
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Stream canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Stream canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stream remained blocked after caller cancellation")
+	}
+}
+
 func TestDeepgramTTSUpdateOptionsMatchesReference(t *testing.T) {
 	provider := NewDeepgramTTS("test-key", "")
 
