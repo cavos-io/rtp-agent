@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1488,6 +1489,26 @@ func TestDeepgramSTTv2DropsReferenceMalformedWordConfidence(t *testing.T) {
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
 	}
+}
+
+func TestDeepgramSTTv2DropsReferenceMalformedEndOfTurnEndpoint(t *testing.T) {
+	stream := &deepgramV2Stream{
+		events:   make(chan *stt.SpeechEvent, 4),
+		language: "en",
+		speaking: true,
+	}
+
+	var resp deepgramV2Response
+	if err := json.Unmarshal([]byte(`{"type":"TurnInfo","event":"EndOfTurn","request_id":"req-bad","transcript":"bad","audio_window_start":0.1,"audio_window_end":0.4,"words":[{"word":"bad","start":0.1,"end":0.4}]}`), &resp); err != nil {
+		t.Fatalf("unmarshal TurnInfo: %v", err)
+	}
+	if err := stream.processEvent(resp); err != nil {
+		t.Fatalf("processEvent(EndOfTurn) error = %v", err)
+	}
+	if stream.speaking {
+		t.Fatal("speaking = true, want false after reference EndOfTurn state update")
+	}
+	assertNoDeepgramV2TestEvent(t, stream)
 }
 
 func deepgramV2Turn(event string, requestID string, transcript string, words []deepgramV2Word) deepgramV2Response {

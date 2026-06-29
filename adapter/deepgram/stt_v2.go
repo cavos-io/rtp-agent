@@ -530,6 +530,9 @@ func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
 			return nil
 		}
 		s.speaking = false
+		if deepgramV2MalformedTranscript(resp) {
+			return nil
+		}
 		s.sendTranscriptEvent(stt.SpeechEventFinalTranscript, resp)
 		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	}
@@ -550,6 +553,15 @@ func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, re
 
 func deepgramV2HasTranscript(resp deepgramV2Response) bool {
 	return len(resp.Words) > 0
+}
+
+func deepgramV2MalformedTranscript(resp deepgramV2Response) bool {
+	for _, word := range resp.Words {
+		if word.parsedJSON && !word.confidenceSeen {
+			return true
+		}
+	}
+	return false
 }
 
 func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOffset float64) []stt.SpeechData {
