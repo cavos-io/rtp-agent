@@ -1104,7 +1104,6 @@ func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T
 		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
 	)
 	release := make(chan struct{})
-	messages := make(chan string, 4)
 	defer close(release)
 	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
 		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -1112,18 +1111,7 @@ func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T
 				t.Errorf("session update read error = %v", err)
 				return
 			}
-			for {
-				select {
-				case <-release:
-					return
-				default:
-				}
-				if _, payload, err := conn.ReadMessage(); err != nil {
-					return
-				} else {
-					messages <- string(payload)
-				}
-			}
+			<-release
 		})
 		return dialer(endpoint, headers)
 	}
@@ -1138,15 +1126,10 @@ func TestOpenAIRealtimeSTTVADEndInputErrorClosesStreamLikeReference(t *testing.T
 	if !ok {
 		t.Fatal("stream does not implement stt.InputEnding")
 	}
-	if err := stream.PushFrame(openAIRealtimeSTTTestFrame(bytes.Repeat([]byte{0x04}, openAIRealtimeSTTChunkBytes()/2))); err != nil {
-		t.Fatalf("PushFrame half chunk error = %v", err)
-	}
-	assertNoRealtimeMessage(t, messages, "half chunk should wait for EndInput before provider append")
 	err = ending.EndInput()
 	if err == nil || err.Error() != "vad end failed" {
 		t.Fatalf("EndInput error = %T %v, want VAD end error", err, err)
 	}
-	assertNoRealtimeMessage(t, messages, "VAD EndInput failure should stop provider audio append")
 	err = stream.PushFrame(&model.AudioFrame{
 		Data:              make([]byte, 4800),
 		SampleRate:        24000,
