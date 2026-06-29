@@ -1431,8 +1431,16 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 				}},
 			})
 		}
-		usage, _ := message["usage"].(map[string]interface{})
 		audioDuration := openAIRealtimeSTTAudioDuration(state, itemID)
+		delete(state.timing, itemID)
+		var usage map[string]interface{}
+		if usageValue, ok := message["usage"]; ok {
+			var valid bool
+			usage, valid = usageValue.(map[string]interface{})
+			if !valid {
+				return events, nil
+			}
+		}
 		events = append(events, &stt.SpeechEvent{
 			Type: stt.SpeechEventRecognitionUsage,
 			RecognitionUsage: &stt.RecognitionUsage{
@@ -1441,7 +1449,6 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 				OutputTokens:  openAIInt(usage["output_tokens"]),
 			},
 		})
-		delete(state.timing, itemID)
 		return events, nil
 	case "error":
 		errorBody, _ := message["error"].(map[string]interface{})

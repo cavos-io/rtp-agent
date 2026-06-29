@@ -685,7 +685,9 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			s.sseSawAudio = true
 			return audio, nil
 		case "speech.audio.done":
-			s.recordSSEUsage(event)
+			if err := s.recordSSEUsage(event); err != nil {
+				return nil, s.terminalDecodeError(err)
+			}
 			continue
 		}
 	}
@@ -1025,7 +1027,10 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 			}
 			s.decoder.Push(audioData)
 		case "speech.audio.done":
-			s.recordSSEUsage(event)
+			if err := s.recordSSEUsage(event); err != nil {
+				s.sendDecodeReadError(err)
+				return
+			}
 			continue
 		}
 	}
@@ -1087,15 +1092,23 @@ func (s *openaiTTSChunkedStream) decodeReadError() error {
 	}
 }
 
-func (s *openaiTTSChunkedStream) recordSSEUsage(event map[string]any) {
-	usage, _ := event["usage"].(map[string]any)
+func (s *openaiTTSChunkedStream) recordSSEUsage(event map[string]any) error {
+	usageValue, ok := event["usage"]
+	if !ok {
+		return nil
+	}
+	usage, ok := usageValue.(map[string]any)
+	if !ok {
+		return llm.NewAPIConnectionError("malformed speech.audio.done usage")
+	}
 	inputTokens := openAIInt(usage["input_tokens"])
 	outputTokens := openAIInt(usage["output_tokens"])
 	if inputTokens == 0 && outputTokens == 0 {
-		return
+		return nil
 	}
 	s.sseInputTokens = inputTokens
 	s.sseOutputTokens = outputTokens
+	return nil
 }
 
 func (s *openaiTTSChunkedStream) emitTTSMetrics() {

@@ -24,6 +24,29 @@ func mustNewOpenAILLMWithConfig(t *testing.T, config openaisdk.ClientConfig, mod
 	return provider
 }
 
+func startOpenAIChat(t *testing.T, model *OpenAILLM, ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	t.Helper()
+	stream, err := model.Chat(ctx, chatCtx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	_, err = stream.Next()
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+	return stream, err
+}
+
+func assertOpenAIToolChoiceAutoOmittedWithoutTools(t *testing.T, model *OpenAILLM, requestBody string) {
+	t.Helper()
+	if model.toolChoice != "auto" {
+		t.Fatalf("toolChoice = %#v, want reference default auto", model.toolChoice)
+	}
+	if strings.Contains(requestBody, `"tool_choice"`) {
+		t.Fatalf("request body = %s, want tool_choice omitted when no tools are provided", requestBody)
+	}
+}
+
 type requestTestTool struct{}
 
 func (requestTestTool) ID() string          { return "lookup" }
@@ -262,7 +285,7 @@ func TestNewAzureOpenAILLMRoutesDeploymentAndKeepsModelMetadata(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "gpt-4o" {
 		t.Fatalf("Model = %q, want reference model metadata", model.Model())
@@ -306,7 +329,7 @@ func TestNewAzureOpenAILLMFallsBackToReferenceEnvironment(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != defaultAzureOpenAILLMModel {
 		t.Fatalf("Model = %q, want Azure reference default model", model.Model())
@@ -348,7 +371,7 @@ func TestNewAzureOpenAILLMFallsBackToReferenceOrganizationProjectEnvironment(t *
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if got := capture.header.Get("OpenAI-Organization"); got != "org-123" {
 		t.Fatalf("OpenAI-Organization header = %q, want env organization", got)
@@ -381,7 +404,7 @@ func TestNewAzureOpenAILLMUsesExplicitOrganizationProjectOptions(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if got := capture.header.Get("OpenAI-Organization"); got != "explicit-org" {
 		t.Fatalf("OpenAI-Organization header = %q, want explicit organization", got)
@@ -410,7 +433,7 @@ func TestNewAzureOpenAILLMDoesNotRetryByDefault(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	stream, err := model.Chat(context.Background(), llm.NewChatContext())
+	stream, err := startOpenAIChat(t, model, context.Background(), llm.NewChatContext())
 	if stream != nil {
 		_ = stream.Close()
 	}
@@ -453,7 +476,7 @@ func TestNewAzureOpenAILLMUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if capture.apiKey != "" {
 		t.Fatalf("api-key header = %q, want removed for Entra token auth", capture.apiKey)
@@ -487,7 +510,7 @@ func TestNewAzureOpenAILLMUsesReferenceEntraTokenProvider(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if tokenCalls != 1 {
 		t.Fatalf("token provider calls = %d, want 1", tokenCalls)
@@ -520,7 +543,7 @@ func TestNewAzureOpenAILLMUsesReferenceBaseURLOption(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if got := model.Provider(); got != "gateway.openai.azure.test" {
 		t.Fatalf("Provider() = %q, want base_url host", got)
@@ -550,7 +573,7 @@ func TestNewAzureOpenAILLMUsesReferenceTimeoutOption(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext())
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext())
 
 	if !capture.hasDeadline {
 		t.Fatal("request context has no deadline, want Azure constructor timeout deadline")
@@ -583,7 +606,7 @@ func TestNewAzureOpenAILLMUsesReferenceReasoningObject(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"reasoning":{"effort":"low","summary":"auto"}`) {
 		t.Fatalf("request body = %s, want reference reasoning object", capture.requestBody)
@@ -610,7 +633,7 @@ func TestNewAzureOpenAILLMReasoningObjectOmitsDefaultEffort(t *testing.T) {
 		t.Fatalf("NewAzureOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if strings.Contains(capture.requestBody, `"reasoning_effort"`) {
 		t.Fatalf("request body = %s, want no reasoning_effort when reference reasoning object is configured", capture.requestBody)
@@ -629,7 +652,7 @@ func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewOVHCloudOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "gpt-oss-120b" {
 		t.Fatalf("Model = %q, want gpt-oss-120b", model.Model())
@@ -646,9 +669,7 @@ func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"gpt-oss-120b"`) {
 		t.Fatalf("request body = %s, want default OVHcloud model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewOVHCloudOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -672,7 +693,7 @@ func TestNewDeepSeekOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewDeepSeekOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "deepseek-chat" {
 		t.Fatalf("Model = %q, want deepseek-chat", model.Model())
@@ -689,9 +710,7 @@ func TestNewDeepSeekOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"deepseek-chat"`) {
 		t.Fatalf("request body = %s, want default DeepSeek model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewDeepSeekOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -715,7 +734,7 @@ func TestNewFireworksOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewFireworksOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "accounts/fireworks/models/llama-v3p3-70b-instruct" {
 		t.Fatalf("Model = %q, want Fireworks reference model", model.Model())
@@ -732,9 +751,7 @@ func TestNewFireworksOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"accounts/fireworks/models/llama-v3p3-70b-instruct"`) {
 		t.Fatalf("request body = %s, want default Fireworks model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewFireworksOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -758,7 +775,7 @@ func TestNewPerplexityOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewPerplexityOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "llama-3.1-sonar-small-128k-chat" {
 		t.Fatalf("Model = %q, want Perplexity reference model", model.Model())
@@ -775,9 +792,7 @@ func TestNewPerplexityOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"llama-3.1-sonar-small-128k-chat"`) {
 		t.Fatalf("request body = %s, want default Perplexity model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewPerplexityOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -801,7 +816,7 @@ func TestNewTogetherOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewTogetherOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo" {
 		t.Fatalf("Model = %q, want Together reference model", model.Model())
@@ -818,9 +833,7 @@ func TestNewTogetherOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"`) {
 		t.Fatalf("request body = %s, want default Together model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewTogetherOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -844,7 +857,7 @@ func TestNewTelnyxOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewTelnyxOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "meta-llama/Meta-Llama-3.1-70B-Instruct" {
 		t.Fatalf("Model = %q, want Telnyx reference model", model.Model())
@@ -861,9 +874,7 @@ func TestNewTelnyxOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
 		t.Fatalf("request body = %s, want default Telnyx model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewTelnyxOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -887,7 +898,7 @@ func TestNewNebiusOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewNebiusOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "meta-llama/Meta-Llama-3.1-70B-Instruct" {
 		t.Fatalf("Model = %q, want Nebius reference model", model.Model())
@@ -904,9 +915,7 @@ func TestNewNebiusOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
 		t.Fatalf("request body = %s, want default Nebius model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewNebiusOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -930,7 +939,7 @@ func TestNewLettaOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewLettaOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "agent-123" {
 		t.Fatalf("Model = %q, want Letta agent id", model.Model())
@@ -980,7 +989,7 @@ func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 
 	model := NewOllamaOpenAILLM("", withOpenAILLMHTTPClient(capture))
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "llama3.1" {
 		t.Fatalf("Model = %q, want llama3.1", model.Model())
@@ -997,9 +1006,7 @@ func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"llama3.1"`) {
 		t.Fatalf("request body = %s, want default Ollama model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
@@ -1014,7 +1021,7 @@ func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewCometAPIOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "gpt-5-chat-latest" {
 		t.Fatalf("Model = %q, want gpt-5-chat-latest", model.Model())
@@ -1031,9 +1038,7 @@ func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"gpt-5-chat-latest"`) {
 		t.Fatalf("request body = %s, want default CometAPI model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewCometAPIOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -1057,7 +1062,7 @@ func TestNewOctoAIOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewOctoAIOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "llama-2-13b-chat" {
 		t.Fatalf("Model = %q, want llama-2-13b-chat", model.Model())
@@ -1074,9 +1079,7 @@ func TestNewOctoAIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"llama-2-13b-chat"`) {
 		t.Fatalf("request body = %s, want default OctoAI model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewOctoAIOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -1100,7 +1103,7 @@ func TestNewSambaNovaOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewSambaNovaOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "DeepSeek-R1-0528" {
 		t.Fatalf("Model = %q, want DeepSeek-R1-0528", model.Model())
@@ -1117,9 +1120,7 @@ func TestNewSambaNovaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"DeepSeek-R1-0528"`) {
 		t.Fatalf("request body = %s, want default SambaNova model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewSambaNovaOpenAILLMOmitsStrictToolSchema(t *testing.T) {
@@ -1133,7 +1134,7 @@ func TestNewSambaNovaOpenAILLMOmitsStrictToolSchema(t *testing.T) {
 		t.Fatalf("NewSambaNovaOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(
+	_, _ = startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithTools([]llm.Tool{requestTestTool{}}),
@@ -1172,7 +1173,7 @@ func TestNewCerebrasOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewCerebrasOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "llama-4-scout-17b-16e-instruct" {
 		t.Fatalf("Model = %q, want llama-4-scout-17b-16e-instruct", model.Model())
@@ -1202,7 +1203,7 @@ func TestNewCerebrasOpenAILLMOmitsStrictToolSchema(t *testing.T) {
 		t.Fatalf("NewCerebrasOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(
+	_, _ = startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithTools([]llm.Tool{requestTestTool{}}),
@@ -1241,7 +1242,7 @@ func TestNewXAIOpenAILLMDefaultsMatchReference(t *testing.T) {
 		t.Fatalf("NewXAIOpenAILLM error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if model.Model() != "grok-3-fast" {
 		t.Fatalf("Model = %q, want grok-3-fast", model.Model())
@@ -1258,9 +1259,7 @@ func TestNewXAIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"grok-3-fast"`) {
 		t.Fatalf("request body = %s, want default xAI model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewXAIOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -1286,7 +1285,7 @@ func TestNewOpenAILLMChatUsesConfiguredKeyAndDefaultModel(t *testing.T) {
 		t.Fatalf("newOpenAILLMWithConfigAndModel error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if capture.requestBody == "" || !strings.Contains(capture.requestBody, `"model":"gpt-4.1"`) {
 		t.Fatalf("request body = %s, want default model", capture.requestBody)
@@ -1305,7 +1304,7 @@ func TestOpenAIChatOmitsDefaultParallelToolCalls(t *testing.T) {
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if strings.Contains(capture.requestBody, `"parallel_tool_calls"`) {
 		t.Fatalf("request body = %s, want default parallel_tool_calls omitted", capture.requestBody)
@@ -1321,7 +1320,7 @@ func TestOpenAIChatSerializesExplicitParallelToolCalls(t *testing.T) {
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	_, _ = model.Chat(
+	_, _ = startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithParallelToolCalls(false),
@@ -1346,7 +1345,7 @@ func TestOpenAIChatAppliesProviderParallelToolCalls(t *testing.T) {
 		WithOpenAILLMParallelToolCalls(false),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"parallel_tool_calls":false`) {
 		t.Fatalf("request body = %s, want provider parallel_tool_calls false", capture.requestBody)
@@ -1366,7 +1365,10 @@ func TestOpenAIChatAppliesProviderToolChoice(t *testing.T) {
 		WithOpenAILLMToolChoice("none"),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{requestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	if !strings.Contains(capture.requestBody, `"tool_choice":"none"`) {
 		t.Fatalf("request body = %s, want provider tool_choice none", capture.requestBody)
@@ -1386,7 +1388,7 @@ func TestOpenAIChatAppliesProviderTemperature(t *testing.T) {
 		WithOpenAILLMTemperature(0.3),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"temperature":0.3`) {
 		t.Fatalf("request body = %s, want provider temperature", capture.requestBody)
@@ -1410,7 +1412,7 @@ func TestOpenAIChatProviderTypedOptionsOverrideGenericExtraParams(t *testing.T) 
 		}),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"temperature":0.3`) {
 		t.Fatalf("request body = %s, want typed provider temperature", capture.requestBody)
@@ -1436,7 +1438,7 @@ func TestOpenAIChatAppliesProviderTopP(t *testing.T) {
 		WithOpenAILLMTopP(0.4),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"top_p":0.4`) {
 		t.Fatalf("request body = %s, want provider top_p", capture.requestBody)
@@ -1456,7 +1458,7 @@ func TestOpenAIChatAppliesProviderMaxCompletionTokens(t *testing.T) {
 		WithOpenAILLMMaxCompletionTokens(256),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"max_completion_tokens":256`) {
 		t.Fatalf("request body = %s, want provider max_completion_tokens", capture.requestBody)
@@ -1476,7 +1478,7 @@ func TestOpenAIChatAppliesProviderStore(t *testing.T) {
 		WithOpenAILLMStore(true),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"store":true`) {
 		t.Fatalf("request body = %s, want provider store true", capture.requestBody)
@@ -1496,7 +1498,7 @@ func TestOpenAIChatAppliesProviderServiceTier(t *testing.T) {
 		WithOpenAILLMServiceTier("priority"),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"service_tier":"priority"`) {
 		t.Fatalf("request body = %s, want provider service_tier", capture.requestBody)
@@ -1516,7 +1518,7 @@ func TestOpenAIChatAppliesProviderSafetyIdentifier(t *testing.T) {
 		WithOpenAILLMSafetyIdentifier("hashed-user"),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"safety_identifier":"hashed-user"`) {
 		t.Fatalf("request body = %s, want provider safety_identifier", capture.requestBody)
@@ -1538,7 +1540,7 @@ func TestOpenAIChatAppliesProviderExtraHeaders(t *testing.T) {
 		}),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if got := capture.header.Get("X-Request-Group"); got != "gold" {
 		t.Fatalf("X-Request-Group = %q, want provider extra header", got)
@@ -1560,7 +1562,7 @@ func TestOpenAIChatAppliesProviderExtraQuery(t *testing.T) {
 		}),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	requestURL, err := url.Parse(capture.requestURL)
 	if err != nil {
@@ -1583,7 +1585,7 @@ func TestOpenAIChatAppliesCallExtraHeaders(t *testing.T) {
 		capture,
 	)
 
-	_, _ = model.Chat(
+	_, _ = startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -1611,7 +1613,7 @@ func TestOpenAIChatAppliesCallExtraQuery(t *testing.T) {
 		capture,
 	)
 
-	_, _ = model.Chat(
+	_, _ = startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -1646,7 +1648,7 @@ func TestOpenAIChatProviderExtraHeadersOverrideCallExtraHeaders(t *testing.T) {
 		}),
 	)
 
-	_, _ = model.Chat(
+	_, _ = startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -1681,7 +1683,7 @@ func TestOpenAIChatProviderExtraQueryOverridesCallExtraQuery(t *testing.T) {
 		}),
 	)
 
-	_, _ = model.Chat(
+	_, _ = startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -1720,7 +1722,7 @@ func TestOpenAIChatAppliesProviderExtraBody(t *testing.T) {
 		}),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"prompt_cache_key":"room-123"`) {
 		t.Fatalf("request body = %s, want provider extra body field", capture.requestBody)
@@ -1744,7 +1746,7 @@ func TestOpenAIChatAppliesProviderPromptCacheOptions(t *testing.T) {
 		WithOpenAILLMPromptCacheRetention("24h"),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"prompt_cache_key":"room-123"`) {
 		t.Fatalf("request body = %s, want provider prompt_cache_key", capture.requestBody)
@@ -1767,7 +1769,7 @@ func TestOpenAIChatAppliesProviderUser(t *testing.T) {
 		WithOpenAILLMUser("caller-123"),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"user":"caller-123"`) {
 		t.Fatalf("request body = %s, want provider user", capture.requestBody)
@@ -1787,7 +1789,7 @@ func TestOpenAIChatAppliesProviderMetadata(t *testing.T) {
 		WithOpenAILLMMetadata(map[string]string{"trace": "abc"}),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"metadata":{"trace":"abc"}`) {
 		t.Fatalf("request body = %s, want provider metadata", capture.requestBody)
@@ -1807,7 +1809,7 @@ func TestOpenAIChatAppliesProviderVerbosity(t *testing.T) {
 		WithOpenAILLMVerbosity("low"),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"verbosity":"low"`) {
 		t.Fatalf("request body = %s, want provider verbosity", capture.requestBody)
@@ -1827,7 +1829,7 @@ func TestOpenAIChatAppliesProviderReasoningEffort(t *testing.T) {
 		WithOpenAILLMReasoningEffort("low"),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"reasoning_effort":"low"`) {
 		t.Fatalf("request body = %s, want provider reasoning_effort", capture.requestBody)
@@ -1841,7 +1843,7 @@ func TestOpenAIChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	_, err := model.Chat(
+	_, err := startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: 75 * time.Millisecond}),
@@ -1868,7 +1870,7 @@ func TestOpenAIChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testin
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	_, err := model.Chat(context.Background(), llm.NewChatContext())
+	_, err := startOpenAIChat(t, model, context.Background(), llm.NewChatContext())
 
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
@@ -1981,6 +1983,7 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamParallelToolCalls(t *t
 
 func TestBuildOpenAIChatCompletionRequestAppliesExtraParamToolChoice(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
 		ExtraParams: map[string]any{
 			"tool_choice": "none",
 		},
@@ -1991,8 +1994,22 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamToolChoice(t *testing.
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestOmitsToolChoiceWithoutTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ToolChoice: "required",
+		ExtraParams: map[string]any{
+			"tool_choice": "none",
+		},
+	})
+
+	if req.ToolChoice != nil {
+		t.Fatalf("ToolChoice = %#v, want omitted when no tools are provided", req.ToolChoice)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestToolPolicyOverridesExtraParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		Tools:                []llm.Tool{requestTestTool{}},
 		ParallelToolCalls:    true,
 		ParallelToolCallsSet: true,
 		ToolChoice:           "required",
@@ -2023,7 +2040,7 @@ func TestNewOpenAILLMWithBaseURLAndHTTPClientUsesConfiguredClient(t *testing.T) 
 	}
 	model := NewOpenAILLMWithBaseURLAndHTTPClient("test-key", "gpt-4o", "https://openai.test/v1", capture)
 
-	_, err := model.Chat(
+	_, err := startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -2057,7 +2074,10 @@ func TestNewOpenRouterLLMMatchesReferenceHeadersAndBody(t *testing.T) {
 		t.Fatalf("NewOpenRouterLLMWithHTTPClient error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{requestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	if got := capture.header.Get("HTTP-Referer"); got != "https://app.example" {
 		t.Fatalf("HTTP-Referer = %q, want site URL", got)
@@ -2104,6 +2124,7 @@ func TestNewOpenRouterLLMUsesEnvironmentKeyAndForwardedOptions(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("auto", llm.NewChatContext(), &llm.ChatOptions{
 		ExtraParams: model.extraParams,
 		ToolChoice:  model.toolChoice,
+		Tools:       []llm.Tool{requestTestTool{}},
 	})
 	if req.ToolChoice != "auto" {
 		t.Fatalf("ToolChoice = %#v, want reference auto default", req.ToolChoice)
@@ -2183,7 +2204,7 @@ func TestOpenAIChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	_, err := model.Chat(
+	_, err := startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -2204,13 +2225,67 @@ func TestOpenAIChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatDefersReferenceRequestUntilNext(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusBadRequest, `{"error":{"message":"bad request","type":"invalid_request_error"}}`),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	if capture.calls != 0 {
+		t.Fatalf("HTTP calls after Chat = %d, want 0 until Next", capture.calls)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if capture.calls != 0 {
+		t.Fatalf("HTTP calls after Close before Next = %d, want 0", capture.calls)
+	}
+}
+
+func TestOpenAILLMProviderCloseClosesLazyStreamsBeforeRequest(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK, `data: {"id":"chatcmpl-openai","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}`+"\n\n"+"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	if err := llm.Close(model); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if chunk, err := stream.Next(); chunk != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after provider Close = (%#v, %v), want nil EOF", chunk, err)
+	}
+	if capture.calls != 0 {
+		t.Fatalf("HTTP calls after provider Close before Next = %d, want 0", capture.calls)
+	}
+}
+
 func TestOpenAIChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	capture := &captureDeadlineHTTPClient{err: context.DeadlineExceeded}
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	_, err := model.Chat(
+	_, err := startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -2237,7 +2312,7 @@ func TestOpenAIChatRetriesRetryableSetupAPIError(t *testing.T) {
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	stream, err := model.Chat(
+	stream, err := startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
@@ -2260,7 +2335,7 @@ func TestOpenAIChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	_, err := model.Chat(
+	_, err := startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
@@ -2973,7 +3048,7 @@ func TestOpenAIStreamTreatsClientClosedStatusAsGracefulEOF(t *testing.T) {
 }
 
 func TestOpenAIStreamNextAfterCloseReturnsEOF(t *testing.T) {
-	body := &readErrorAfterClose{}
+	body := newBlockingReadErrorAfterClose()
 	config := openaisdk.DefaultConfig("test-key")
 	config.HTTPClient = &sequenceHTTPClient{responses: []*http.Response{{
 		StatusCode: http.StatusOK,
@@ -2991,23 +3066,46 @@ func TestOpenAIStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+	select {
+	case <-body.reading:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OpenAI stream read")
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
 	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("blocked Next after Close error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked Next did not return after Close")
+	}
 }
 
 func TestOpenAILLMProviderCloseClosesActiveStreams(t *testing.T) {
+	requestStarted := make(chan struct{})
 	body := newBlockingEOFReadCloser(nil)
 	config := openaisdk.DefaultConfig("test-key")
-	config.HTTPClient = &sequenceHTTPClient{responses: []*http.Response{{
-		StatusCode: http.StatusOK,
-		Status:     http.StatusText(http.StatusOK),
-		Body:       body,
-		Header:     make(http.Header),
-	}}}
+	config.HTTPClient = openAITestHTTPDoer(func(req *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     http.StatusText(http.StatusOK),
+			Body:       body,
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
 	stream, err := model.Chat(
@@ -3019,6 +3117,16 @@ func TestOpenAILLMProviderCloseClosesActiveStreams(t *testing.T) {
 		t.Fatalf("Chat() error = %v", err)
 	}
 	defer stream.Close()
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for OpenAI chat request")
+	}
 
 	if err := llm.Close(model); err != nil {
 		t.Fatalf("llm.Close error = %v", err)
@@ -3031,8 +3139,60 @@ func TestOpenAILLMProviderCloseClosesActiveStreams(t *testing.T) {
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after provider Close error = %T %v, want EOF", err, err)
 	}
+	select {
+	case err := <-nextDone:
+		if err != nil && !errors.Is(err, io.EOF) {
+			t.Fatalf("blocked Next after provider Close error = %T %v, want EOF", err, err)
+		}
+	default:
+	}
 	if err := llm.Close(model); err != nil {
 		t.Fatalf("second llm.Close error = %v", err)
+	}
+}
+
+func TestOpenAILLMProviderCloseCancelsPendingChat(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = openAITestHTTPDoer(func(req *http.Request) (*http.Response, error) {
+		close(requestStarted)
+		<-req.Context().Done()
+		close(requestCanceled)
+		return nil, req.Context().Err()
+	})
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := startOpenAIChat(t, model,
+			context.Background(),
+			llm.NewChatContext(),
+			llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+		)
+		done <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for chat request")
+	}
+	if err := llm.Close(model); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("llm.Close did not cancel pending OpenAI chat request")
+	}
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, io.EOF) {
+			t.Fatalf("Chat error after provider Close = %T %v, want nil, io.ErrClosedPipe, or EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Chat did not return after provider Close")
 	}
 }
 
@@ -3045,7 +3205,7 @@ func TestOpenAILLMChatAfterCloseIsRejected(t *testing.T) {
 	config.HTTPClient = capture
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	stream, err := model.Chat(
+	stream, err := startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -3084,7 +3244,7 @@ func TestOpenAILLMRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	}}}
 	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
 
-	stream, err := model.Chat(
+	stream, err := model.chatEager(
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -3417,6 +3577,7 @@ func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaAllOfDefaultN
 
 func TestBuildOpenAIChatCompletionRequestMapsNamedToolChoice(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
 		ToolChoice: map[string]any{
 			"type": "function",
 			"function": map[string]any{
@@ -3532,7 +3693,7 @@ func TestOpenAIChatAppliesExtraParamPromptCacheOptions(t *testing.T) {
 		capture,
 	)
 
-	_, _ = model.Chat(
+	_, _ = startOpenAIChat(t, model,
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
@@ -3588,7 +3749,7 @@ func TestOpenAIChatForwardsReferenceExtraContent(t *testing.T) {
 		Output: "sunny",
 	})
 
-	stream, err := model.Chat(context.Background(), chatCtx, llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	stream, err := startOpenAIChat(t, model, context.Background(), chatCtx, llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)
 	}
