@@ -606,6 +606,7 @@ type deepgramStream struct {
 	errCh          chan error
 	mu             sync.Mutex
 	closed         bool
+	inputEnded     bool
 	speaking       bool
 	reconnectNext  bool
 	requestID      string
@@ -1022,6 +1023,9 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
 			s.closeAfterWriteFailureLocked()
@@ -1048,6 +1052,9 @@ func (s *deepgramStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	flushedFrame := false
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
@@ -1067,6 +1074,41 @@ func (s *deepgramStream) Flush() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	return nil
+}
+
+func (s *deepgramStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	flushedFrame := false
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			flushedFrame = true
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
+	}
+	if flushedFrame {
+		s.flushRecognitionUsageLocked()
+		if err := s.writeTextData(deepgramSTTFinalizeMessage, map[string]string{"type": "Finalize"}); err != nil {
+			s.closeAfterWriteFailureLocked()
+			return err
+		}
+	}
+	if err := s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"}); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	s.inputEnded = true
 	return nil
 }
 

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1481,6 +1482,57 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	}
 	if got := textWrites[0]; got != deepgramSTTFinalizeMessage {
 		t.Fatalf("Finalize payload = %q, want exact reference payload", got)
+	}
+}
+
+func TestDeepgramSTTStreamEndInputFlushesTailAndClosesReferenceInput(t *testing.T) {
+	var binaryWrites [][]byte
+	var textWrites []string
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func(data []byte) error {
+			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
+			return nil
+		},
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if _, ok := any(stream).(stt.InputEnding); !ok {
+		t.Fatalf("stream = %T, want stt.InputEnding", stream)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 2400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1200,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if len(binaryWrites) != 2 {
+		t.Fatalf("binary writes = %d, want full chunk and tail", len(binaryWrites))
+	}
+	if got := len(binaryWrites[0]); got != 1600 {
+		t.Fatalf("first binary write length = %d, want 1600", got)
+	}
+	if got := len(binaryWrites[1]); got != 800 {
+		t.Fatalf("end input binary tail length = %d, want 800", got)
+	}
+	wantText := []string{deepgramSTTFinalizeMessage, deepgramSTTCloseStreamMessage}
+	if !reflect.DeepEqual(textWrites, wantText) {
+		t.Fatalf("text writes = %#v, want %#v", textWrites, wantText)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1}}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
 	}
 }
 
