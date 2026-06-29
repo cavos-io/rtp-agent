@@ -567,32 +567,38 @@ func (s *openaiTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 		go s.feedDecodedAudio()
 	}
 
-	frame, err := s.decoder.Next()
-	if err != nil {
-		if s.closed {
-			return nil, io.EOF
-		}
-		if readErr := s.decodeReadError(); readErr != nil {
-			_ = s.Close()
-			return nil, readErr
-		}
-		if !s.audioSawAudio && openAITTSEmptyDecodeEOF(err) {
-			return nil, s.noAudioError()
-		}
-		if openAITTSDecodeEOF(err) {
-			if s.audioSawAudio && !s.audioFinalSent {
-				s.audioFinalSent = true
-				return s.finalAudio(), nil
+	for {
+		frame, err := s.decoder.Next()
+		if err != nil {
+			if s.closed {
+				return nil, io.EOF
 			}
-			return nil, s.noAudioError()
+			if readErr := s.decodeReadError(); readErr != nil {
+				_ = s.Close()
+				return nil, readErr
+			}
+			if !s.audioSawAudio && openAITTSEmptyDecodeEOF(err) {
+				return nil, s.noAudioError()
+			}
+			if openAITTSDecodeEOF(err) {
+				if s.audioSawAudio && !s.audioFinalSent {
+					s.audioFinalSent = true
+					return s.finalAudio(), nil
+				}
+				return nil, s.noAudioError()
+			}
+			return nil, s.terminalDecodeError(err)
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		frame, err = s.decodedAudioFrame(frame)
+		if err != nil {
+			return nil, s.terminalDecodeError(err)
+		}
+		if frame == nil {
+			continue
+		}
+		s.audioSawAudio = true
+		return s.audioFrame(frame), nil
 	}
-	frame, err = s.decodedAudioFrame(frame)
-	if err != nil {
-		return nil, err
-	}
-	return s.audioFrame(frame), nil
 }
 
 func (s *openaiTTSChunkedStream) feedDecodedAudio() {
@@ -603,7 +609,6 @@ func (s *openaiTTSChunkedStream) feedDecodedAudio() {
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
-			s.audioSawAudio = true
 			s.decoder.Push(chunk)
 		}
 		if err != nil {
@@ -696,32 +701,38 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 		s.decodeErrCh = make(chan error, 1)
 		go s.feedSSEDecodedAudio()
 	}
-	frame, err := s.decoder.Next()
-	if err != nil {
-		if s.closed {
-			return nil, io.EOF
-		}
-		if readErr := s.decodeReadError(); readErr != nil {
-			_ = s.Close()
-			return nil, readErr
-		}
-		if !s.sseSawAudio && openAITTSEmptyDecodeEOF(err) {
-			return nil, s.noAudioError()
-		}
-		if openAITTSDecodeEOF(err) {
-			if s.sseDone && s.sseSawAudio && !s.sseFinalSent {
-				s.sseFinalSent = true
-				return s.finalAudio(), nil
+	for {
+		frame, err := s.decoder.Next()
+		if err != nil {
+			if s.closed {
+				return nil, io.EOF
 			}
-			return nil, s.noAudioError()
+			if readErr := s.decodeReadError(); readErr != nil {
+				_ = s.Close()
+				return nil, readErr
+			}
+			if !s.sseSawAudio && openAITTSEmptyDecodeEOF(err) {
+				return nil, s.noAudioError()
+			}
+			if openAITTSDecodeEOF(err) {
+				if s.sseDone && s.sseSawAudio && !s.sseFinalSent {
+					s.sseFinalSent = true
+					return s.finalAudio(), nil
+				}
+				return nil, s.noAudioError()
+			}
+			return nil, s.terminalDecodeError(err)
 		}
-		return nil, llm.NewAPIConnectionError(err.Error())
+		frame, err = s.decodedAudioFrame(frame)
+		if err != nil {
+			return nil, s.terminalDecodeError(err)
+		}
+		if frame == nil {
+			continue
+		}
+		s.sseSawAudio = true
+		return s.audioFrame(frame), nil
 	}
-	frame, err = s.decodedAudioFrame(frame)
-	if err != nil {
-		return nil, err
-	}
-	return s.audioFrame(frame), nil
 }
 
 func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
@@ -1000,7 +1011,6 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
 				return
 			}
-			s.sseSawAudio = true
 			s.decoder.Push(audioData)
 		case "speech.audio.done":
 			s.emitSSEUsageMetrics(event)
@@ -1032,6 +1042,15 @@ func (s *openaiTTSChunkedStream) terminalReadError(err error) error {
 	mapped := openAITTSReadError(err)
 	_ = s.Close()
 	return mapped
+}
+
+func (s *openaiTTSChunkedStream) terminalDecodeError(err error) error {
+	_ = s.Close()
+	var apiErr *llm.APIError
+	if errors.As(err, &apiErr) {
+		return err
+	}
+	return llm.NewAPIConnectionError(err.Error())
 }
 
 func (s *openaiTTSChunkedStream) sendDecodeReadError(err error) {

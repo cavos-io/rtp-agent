@@ -1843,6 +1843,45 @@ func TestOpenAITTSChunkedStreamReadFailureUnregistersReferenceStream(t *testing.
 	}
 }
 
+func TestOpenAITTSDecodeFailureUnregistersReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: strings.NewReader("not mp3 data")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/mpeg"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatMp3),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want no synthesized audio for malformed compressed data", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after terminal malformed-audio failure", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want malformed-audio stream unregistered", streamCount)
+	}
+}
+
 func TestOpenAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &countingOpenAIReadCloser{}
 	stream := &openaiTTSChunkedStream{resp: body}
@@ -2029,6 +2068,18 @@ type countingFailingReadCloser struct {
 func (r *countingFailingReadCloser) Read([]byte) (int, error) { return 0, r.err }
 
 func (r *countingFailingReadCloser) Close() error {
+	r.closed++
+	return nil
+}
+
+type countingDataReadCloser struct {
+	reader io.Reader
+	closed int
+}
+
+func (r *countingDataReadCloser) Read(p []byte) (int, error) { return r.reader.Read(p) }
+
+func (r *countingDataReadCloser) Close() error {
 	r.closed++
 	return nil
 }
