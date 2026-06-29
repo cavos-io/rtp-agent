@@ -662,6 +662,70 @@ func TestDeepgramSTTv2EndInputFlushesTailAndClosesReferenceInput(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2EndInputFlushesResampledReferenceTail(t *testing.T) {
+	closeSeen := make(chan struct{})
+	audioFrames := make(chan []byte, 2)
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2TurnInfoWebsocketServer(serverConn, closeSeen, audioFrames, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"),
+		WithDeepgramSTTv2SampleRate(16000),
+	)
+	rawStream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := rawStream.(*deepgramV2Stream)
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              deepgramTestInt16PCM(481),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 481,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		t.Fatalf("audio frame before EndInput = %d bytes, want buffered below 50ms chunk", len(got))
+	default:
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		want := deepgramEveryNthInt16PCM(481, 3)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("EndInput audio frame = %#v, want complete resampled tail %#v", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for resampled EndInput tail")
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTv2EndInputTreatsProviderCloseAsExpected(t *testing.T) {
 	closeSeen := make(chan struct{})
 	serverErr := make(chan error, 1)
