@@ -22,6 +22,8 @@ import (
 const defaultDeepgramSTTv2BaseURL = "wss://api.deepgram.com/v2/listen"
 const deepgramSTTv2CloseMessage = `{"type": "CloseStream"}`
 
+var deepgramSTTv2HeartbeatInterval = 30 * time.Second
+
 type DeepgramSTTv2 struct {
 	apiKey     string
 	model      string
@@ -234,6 +236,7 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStre
 		return nil, io.ErrClosedPipe
 	}
 	go stream.readLoop(conn)
+	go stream.heartbeatLoop()
 	return stream, nil
 }
 
@@ -354,6 +357,8 @@ type deepgramV2Stream struct {
 	start          float64
 	offset         float64
 	sampleRate     int
+	rateGuard      stt.SampleRateGuard
+	inputAudio     deepgramSTTInputAudioNormalizer
 	audioBStream   *audio.AudioByteStream
 	streamURL      string
 	reconnectNext  bool
@@ -424,6 +429,32 @@ func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 			return
 		}
 	}
+}
+
+func (s *deepgramV2Stream) heartbeatLoop() {
+	ticker := time.NewTicker(deepgramSTTv2HeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done():
+			return
+		case <-ticker.C:
+			if err := s.sendHeartbeat(); err != nil {
+				s.sendError(err)
+				return
+			}
+		}
+	}
+}
+
+func (s *deepgramV2Stream) sendHeartbeat() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.conn == nil {
+		return nil
+	}
+	return s.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
 }
 
 func (s *deepgramV2Stream) processEvent(resp deepgramV2Response) error {
@@ -526,11 +557,11 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
@@ -539,10 +570,17 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 		}
 		s.reconnectNext = false
 	}
+	if err := s.rateGuard.Check(frame); err != nil {
+		return err
+	}
+	normalizedFrame, err := s.inputAudio.normalize(frame, uint32(s.sampleRate))
+	if err != nil {
+		return err
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = audio.NewAudioByteStream(uint32(s.sampleRate), 1, uint32(s.sampleRate/20))
 	}
-	for _, chunk := range s.audioBStream.Push(frame.Data) {
+	for _, chunk := range s.audioBStream.Push(normalizedFrame.Data) {
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {
 			s.closed = true
 			return err
@@ -554,17 +592,24 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 
 func (s *deepgramV2Stream) updateOptions() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed || s.provider == nil {
+		s.mu.Unlock()
 		return
 	}
 	nextURL := buildDeepgramSTTv2StreamURL(s.provider)
+	reconnectNow := false
 	if nextURL != s.streamURL {
 		s.streamURL = nextURL
 		s.reconnectNext = true
+		reconnectNow = s.conn != nil
 	}
 	s.sampleRate = s.provider.sampleRate
 	s.audioBStream = nil
+	s.mu.Unlock()
+
+	if reconnectNow {
+		go s.reconnectNow()
+	}
 }
 
 func (s *deepgramV2Stream) reconnectLocked() error {
@@ -589,19 +634,54 @@ func (s *deepgramV2Stream) reconnectLocked() error {
 	return nil
 }
 
+func (s *deepgramV2Stream) reconnectNow() {
+	s.mu.Lock()
+	if s.closed || !s.reconnectNext {
+		s.mu.Unlock()
+		return
+	}
+	err := s.reconnectLocked()
+	if err == nil {
+		s.reconnectNext = false
+	} else {
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.conn != nil {
+			_ = s.conn.Close()
+		}
+	}
+	s.mu.Unlock()
+
+	if err != nil {
+		s.sendError(err)
+	}
+}
+
 func (s *deepgramV2Stream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if s.audioBStream == nil {
 		return nil
 	}
 	flushedFrame := false
+	if tail := s.inputAudio.flush(); tail != nil {
+		for _, chunk := range s.audioBStream.Push(tail.Data) {
+			flushedFrame = true
+			if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {
+				s.closed = true
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
+	}
 	for _, chunk := range s.audioBStream.Flush() {
 		flushedFrame = true
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {

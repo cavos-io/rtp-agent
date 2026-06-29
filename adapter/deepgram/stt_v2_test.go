@@ -2,6 +2,7 @@ package deepgram
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -191,6 +192,162 @@ func TestDeepgramSTTv2StreamHandlesReferenceTurnAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2StreamResamplesInputAudioToReferenceRate(t *testing.T) {
+	closeSeen := make(chan struct{})
+	audioFrames := make(chan []byte, 2)
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2TurnInfoWebsocketServer(serverConn, closeSeen, audioFrames, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"),
+		WithDeepgramSTTv2SampleRate(16000),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              deepgramTestInt16PCM(480),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		t.Fatalf("audio frame before Flush = %#v, want resampled frame buffered below stream chunk size", got)
+	default:
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		want := deepgramEveryNthInt16PCM(480, 3)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("flushed audio frame = %#v, want 48k->16k reference resampled PCM", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for resampled audio frame")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2StreamResamplesInputAudioWithReferenceTiming(t *testing.T) {
+	closeSeen := make(chan struct{})
+	audioFrames := make(chan []byte, 2)
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2TurnInfoWebsocketServer(serverConn, closeSeen, audioFrames, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"),
+		WithDeepgramSTTv2SampleRate(16000),
+	)
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	frame := deepgramTestInt16PCM(1)
+	for i := 0; i < 2204; i++ {
+		if err := stream.PushFrame(&model.AudioFrame{
+			Data:              frame,
+			SampleRate:        44100,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}); err != nil {
+			t.Fatalf("PushFrame frame %d error = %v", i, err)
+		}
+	}
+	select {
+	case got := <-audioFrames:
+		t.Fatalf("audio frame before 50ms source duration = %#v, want none", got)
+	default:
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame frame 2205 error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		if len(got) != 1600 {
+			t.Fatalf("audio frame length = %d, want 50ms 16k mono PCM", len(got))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for 50ms resampled audio frame")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2StreamRejectsReferenceSampleRateChange(t *testing.T) {
+	stream := &deepgramV2Stream{sampleRate: 16000}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              deepgramTestInt16PCM(160),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	}); err != nil {
+		t.Fatalf("first PushFrame() error = %v", err)
+	}
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              deepgramTestInt16PCM(160),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 160,
+	})
+	if err == nil || err.Error() != "the sample rate of the input frames must be consistent" {
+		t.Fatalf("second PushFrame() error = %v, want reference sample-rate consistency error", err)
+	}
+}
+
 func TestDeepgramSTTv2StreamUsesReferenceDefaultLanguage(t *testing.T) {
 	closeSeen := make(chan struct{})
 	clientConn, serverConn := net.Pipe()
@@ -370,6 +527,46 @@ func TestDeepgramSTTv2EndInputTreatsProviderCloseAsExpected(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2StreamSendsReferenceHeartbeatPing(t *testing.T) {
+	oldInterval := deepgramSTTv2HeartbeatInterval
+	deepgramSTTv2HeartbeatInterval = 10 * time.Millisecond
+	defer func() {
+		deepgramSTTv2HeartbeatInterval = oldInterval
+	}()
+
+	pingSeen := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2HeartbeatWebsocketServer(serverConn, pingSeen, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-pingSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for STTv2 heartbeat ping")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
 	provider := NewDeepgramSTTv2("test-key",
 		WithDeepgramSTTv2BaseURL("https://deepgram.example/v2/listen"),
@@ -532,6 +729,13 @@ func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	); err != nil {
 		t.Fatalf("UpdateOptions() error = %v", err)
 	}
+
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated STTv2 websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "model", "flux-general-multi")
+	assertDeepgramQuery(t, secondURL.Query(), "sample_rate", "48000")
+	assertDeepgramQuery(t, secondURL.Query(), "eager_eot_threshold", "0.6")
+	assertDeepgramQuery(t, secondURL.Query(), "eot_threshold", "0.8")
+
 	if err := stream.PushFrame(&model.AudioFrame{
 		Data:              make([]byte, 4800),
 		SampleRate:        48000,
@@ -540,12 +744,6 @@ func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PushFrame after update error = %v", err)
 	}
-
-	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated STTv2 websocket request")
-	assertDeepgramQuery(t, secondURL.Query(), "model", "flux-general-multi")
-	assertDeepgramQuery(t, secondURL.Query(), "sample_rate", "48000")
-	assertDeepgramQuery(t, secondURL.Query(), "eager_eot_threshold", "0.6")
-	assertDeepgramQuery(t, secondURL.Query(), "eot_threshold", "0.8")
 	select {
 	case got := <-audioMessages:
 		if len(got) == 0 {
@@ -1017,5 +1215,37 @@ func runDeepgramSTTv2CloseAfterCloseStreamServer(conn net.Conn, closeSeen chan<-
 		}
 		errCh <- nil
 		return
+	}
+}
+
+func runDeepgramSTTv2HeartbeatWebsocketServer(conn net.Conn, pingSeen chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		switch opcode {
+		case websocket.PingMessage:
+			close(pingSeen)
+			errCh <- nil
+			return
+		case websocket.TextMessage:
+			if deepgramTestWebsocketMessageType(payload) == "CloseStream" {
+				continue
+			}
+		}
 	}
 }

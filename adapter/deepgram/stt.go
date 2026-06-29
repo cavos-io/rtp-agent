@@ -60,6 +60,14 @@ type DeepgramKeyword struct {
 
 type DeepgramSTTOption func(*DeepgramSTT)
 
+func WithDeepgramSTTModel(model string) DeepgramSTTOption {
+	return func(s *DeepgramSTT) {
+		if model != "" {
+			s.model = model
+		}
+	}
+}
+
 const deepgramSTTKeepAliveInterval = 5 * time.Second
 const deepgramSTTUsageInterval = 5 * time.Second
 const deepgramSTTKeepAliveMessage = `{"type": "KeepAlive"}`
@@ -623,6 +631,8 @@ type deepgramStream struct {
 	sampleRate   int
 	numChannels  int
 	language     string
+	rateGuard    stt.SampleRateGuard
+	inputAudio   deepgramSTTInputAudioNormalizer
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
 	writeJSON    func(any) error
@@ -1033,10 +1043,17 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		s.reconnectNext = false
 	}
+	if err := s.rateGuard.Check(frame); err != nil {
+		return err
+	}
+	normalizedFrame, err := s.inputAudio.normalize(frame, uint32(s.sampleRate))
+	if err != nil {
+		return err
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = newDeepgramSTTAudioByteStream(s)
 	}
-	for _, chunk := range s.audioBStream.Push(frame.Data) {
+	for _, chunk := range s.audioBStream.Push(normalizedFrame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
@@ -1056,6 +1073,19 @@ func (s *deepgramStream) Flush() error {
 		return fmt.Errorf("stream input ended")
 	}
 	flushedFrame := false
+	if tail := s.inputAudio.flush(); tail != nil {
+		if s.audioBStream == nil {
+			s.audioBStream = newDeepgramSTTAudioByteStream(s)
+		}
+		for _, chunk := range s.audioBStream.Push(tail.Data) {
+			flushedFrame = true
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
+	}
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
 			flushedFrame = true
@@ -1075,6 +1105,108 @@ func (s *deepgramStream) Flush() error {
 		return err
 	}
 	return nil
+}
+
+type deepgramSTTInputAudioNormalizer struct {
+	sampleRate  uint32
+	numChannels uint32
+	targetRate  uint32
+	remainder   uint64
+	lastSample  []byte
+}
+
+func (n *deepgramSTTInputAudioNormalizer) normalize(frame *model.AudioFrame, targetRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || targetRate == 0 || frame.SampleRate == targetRate {
+		n.reset()
+		return frame, nil
+	}
+	if frame.SampleRate == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero sample rate")
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot resample non-16-bit PCM audio")
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(frame.Data)) / frame.NumChannels / 2
+	}
+	expectedBytes := int(samplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if n.sampleRate != frame.SampleRate || n.numChannels != frame.NumChannels || n.targetRate != targetRate {
+		n.sampleRate = frame.SampleRate
+		n.numChannels = frame.NumChannels
+		n.targetRate = targetRate
+		n.remainder = 0
+		n.lastSample = nil
+	}
+	if samplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        targetRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+
+	scaledSamples := uint64(samplesPerChannel)*uint64(targetRate) + n.remainder
+	outSamples := uint32(scaledSamples / uint64(frame.SampleRate))
+	n.remainder = scaledSamples % uint64(frame.SampleRate)
+	out := make([]byte, int(outSamples*frame.NumChannels*2))
+	channelCount := int(frame.NumChannels)
+	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
+		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(targetRate))
+		if srcIdx >= samplesPerChannel {
+			srcIdx = samplesPerChannel - 1
+		}
+		for ch := 0; ch < channelCount; ch++ {
+			inOffset := (int(srcIdx)*channelCount + ch) * 2
+			outOffset := (int(outIdx)*channelCount + ch) * 2
+			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+		}
+	}
+	if n.remainder > 0 {
+		offset := int((samplesPerChannel - 1) * frame.NumChannels * 2)
+		n.lastSample = append(n.lastSample[:0], frame.Data[offset:offset+int(frame.NumChannels*2)]...)
+	} else {
+		n.lastSample = nil
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        targetRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: outSamples,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
+}
+
+func (n *deepgramSTTInputAudioNormalizer) flush() *model.AudioFrame {
+	if n == nil || n.remainder == 0 || len(n.lastSample) == 0 || n.targetRate == 0 || n.numChannels == 0 {
+		return nil
+	}
+	data := append([]byte(nil), n.lastSample...)
+	frame := &model.AudioFrame{
+		Data:              data,
+		SampleRate:        n.targetRate,
+		NumChannels:       n.numChannels,
+		SamplesPerChannel: 1,
+	}
+	n.remainder = 0
+	n.lastSample = nil
+	return frame
+}
+
+func (n *deepgramSTTInputAudioNormalizer) reset() {
+	n.sampleRate = 0
+	n.numChannels = 0
+	n.targetRate = 0
+	n.remainder = 0
+	n.lastSample = nil
 }
 
 func (s *deepgramStream) EndInput() error {
@@ -1147,21 +1279,28 @@ func (s *deepgramStream) Close() error {
 
 func (s *deepgramStream) updateOptions(languageChanged bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed || s.provider == nil {
+		s.mu.Unlock()
 		return
 	}
 	if languageChanged {
 		s.language = s.provider.language
 	}
 	nextURL := buildDeepgramStreamURL(s.provider, s.language)
+	reconnectNow := false
 	if nextURL != s.streamURL {
 		s.streamURL = nextURL
 		s.reconnectNext = true
+		reconnectNow = s.conn != nil
 	}
 	s.sampleRate = s.provider.sampleRate
 	s.numChannels = s.provider.numChannels
 	s.audioBStream = nil
+	s.mu.Unlock()
+
+	if reconnectNow {
+		go s.reconnectNow()
+	}
 }
 
 func (s *deepgramStream) reconnectLocked() error {
@@ -1184,6 +1323,29 @@ func (s *deepgramStream) reconnectLocked() error {
 	_ = oldConn.Close()
 	go s.readLoop(conn)
 	return nil
+}
+
+func (s *deepgramStream) reconnectNow() {
+	s.mu.Lock()
+	if s.closed || !s.reconnectNext {
+		s.mu.Unlock()
+		return
+	}
+	err := s.reconnectLocked()
+	if err == nil {
+		s.reconnectNext = false
+	} else {
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		_ = s.closeConnection()
+	}
+	s.mu.Unlock()
+
+	if err != nil {
+		s.sendError(err)
+	}
 }
 
 func newDeepgramSTTAudioByteStream(s *deepgramStream) *audio.AudioByteStream {

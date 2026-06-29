@@ -260,6 +260,61 @@ func TestDeepgramTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeClientClosedStatusReturnsEOF(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"err_msg":"client closed"}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next = (%#v, %v), want nil, io.EOF for reference client-closed status", audio, err)
+	}
+}
+
+func TestDeepgramTTSSynthesizeClientClosedStatusSkipsBodyRead(t *testing.T) {
+	oldClient := http.DefaultClient
+	body := &deepgramTTSReadTrackingCloser{}
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF for reference client-closed status", err)
+	}
+	if body.reads != 0 {
+		t.Fatalf("body reads = %d, want 0 for client-closed status cleanup", body.reads)
+	}
+	if !body.closed {
+		t.Fatal("body was not closed")
+	}
+}
+
 func TestDeepgramTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -1045,14 +1100,59 @@ func TestDeepgramTTSStreamEmptyFlushIsReferenceNoop(t *testing.T) {
 		t.Fatalf("writes after second empty Flush = %d, want unchanged", writes)
 	}
 
+	writes = 0
+	stream = &deepgramTTSStream{
+		writeJSON: func(any) error {
+			writes++
+			return nil
+		},
+	}
 	if err := stream.PushText("   "); err != nil {
 		t.Fatalf("PushText(whitespace) error = %v", err)
 	}
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush(whitespace) error = %v", err)
 	}
-	if writes != 3 {
+	if writes != 1 {
 		t.Fatalf("writes after whitespace Flush = %d, want one reference Flush", writes)
+	}
+}
+
+func TestDeepgramTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
+	var writes []string
+	stream := &deepgramTTSStream{
+		writeJSON: func(v any) error {
+			msg, ok := v.(map[string]interface{})
+			if !ok {
+				t.Fatalf("writeJSON payload = %#v, want map", v)
+			}
+			msgType, _ := msg["type"].(string)
+			if msgType == "Speak" {
+				text, _ := msg["text"].(string)
+				writes = append(writes, msgType+":"+text)
+				return nil
+			}
+			writes = append(writes, msgType)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v", err)
+	}
+
+	want := []string{"Speak:first ", "Flush"}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes = %#v, want reference first segment only %#v", writes, want)
 	}
 }
 
@@ -1158,6 +1258,42 @@ func TestDeepgramTTSStreamPropagatesReferenceErrorMessage(t *testing.T) {
 	}
 	if body["type"] != "Error" || body["message"] != "bad request" {
 		t.Fatalf("APIError body = %#v, want full provider response", apiErr.Body)
+	}
+}
+
+func TestDeepgramTTSStreamMalformedTextReturnsAPIConnectionError(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSMalformedTextWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
 	}
 }
 
@@ -1317,6 +1453,21 @@ func (r deepgramTTSReadCloser) Close() error {
 	return nil
 }
 
+type deepgramTTSReadTrackingCloser struct {
+	reads  int
+	closed bool
+}
+
+func (r *deepgramTTSReadTrackingCloser) Read([]byte) (int, error) {
+	r.reads++
+	return 0, io.EOF
+}
+
+func (r *deepgramTTSReadTrackingCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
 type deepgramTTSCountingReadCloser struct {
 	closeCalls int
 }
@@ -1431,6 +1582,25 @@ func runDeepgramTTSAudioSegmentWebsocketServer(conn net.Conn, errCh chan<- error
 		return
 	}
 	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
+func runDeepgramTTSMalformedTextWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":`)); err != nil {
 		errCh <- err
 		return
 	}

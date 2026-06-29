@@ -158,6 +158,10 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 499 {
+			resp.Body.Close()
+			return &deepgramTTSChunkedStream{requestID: uuid.NewString()}, nil
+		}
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
@@ -373,6 +377,7 @@ type deepgramTTSStream struct {
 	requestID    string
 	segmentID    string
 	segmentOpen  bool
+	segmentSent  bool
 	flushPending bool
 }
 
@@ -419,7 +424,7 @@ func deepgramTTSUnexpectedCloseError(err error) error {
 func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	var metadata map[string]interface{}
 	if err := json.Unmarshal(message, &metadata); err != nil {
-		return nil
+		return llm.NewAPIConnectionError(err.Error())
 	}
 	switch metadata["type"] {
 	case "Flushed":
@@ -468,7 +473,11 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
+	if !s.segmentOpen && s.segmentSent {
+		return nil
+	}
 	s.segmentOpen = true
+	s.segmentSent = true
 	s.pendingText += text
 	return s.sendCompletedWordsLocked()
 }
