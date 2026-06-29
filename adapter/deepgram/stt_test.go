@@ -1224,6 +1224,59 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveStreamMetadata(t *testing.T) {
+	requests := make(chan *url.URL, 3)
+	audioMessages := make(chan []byte, 1)
+	serverErr := make(chan error, 3)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			go runDeepgramReconnectRecordingWebsocketServer(serverConn, requests, audioMessages, serverErr)
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "nova-2",
+		WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"),
+		WithDeepgramSTTTags([]string{"initial"}),
+	)
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	firstURL := receiveDeepgramTestRequestURL(t, requests, "first websocket request")
+	assertDeepgramQueryValues(t, firstURL.Query(), "tag", []string{"initial"})
+	if got := firstURL.Query().Get("diarize"); got != "" {
+		t.Fatalf("initial diarize query = %q, want absent", got)
+	}
+
+	provider.UpdateOptions(
+		WithDeepgramSTTTags([]string{"updated"}),
+		WithDeepgramSTTDiarization(true),
+	)
+
+	select {
+	case got := <-requests:
+		t.Fatalf("metadata-only update opened websocket %s, want reference active stream unchanged", got.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	provider.UpdateOptions(WithDeepgramSTTModel("nova-3"))
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "model update websocket request")
+	assertDeepgramQueryValues(t, secondURL.Query(), "tag", []string{"initial"})
+	if got := secondURL.Query().Get("diarize"); got != "" {
+		t.Fatalf("updated active stream diarize query = %q, want absent like reference", got)
+	}
+}
+
 func TestDeepgramSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	closed := make(chan struct{})
 	clientConn, serverConn := net.Pipe()

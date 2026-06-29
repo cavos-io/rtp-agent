@@ -316,17 +316,19 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &deepgramStream{
-		provider:    s,
-		conn:        conn,
-		streamURL:   streamURL,
-		events:      make(chan *stt.SpeechEvent, 100),
-		errCh:       make(chan error, 1),
-		ctx:         streamCtx,
-		cancel:      cancel,
-		sampleRate:  s.sampleRate,
-		numChannels: s.numChannels,
-		language:    languageStr,
-		connStart:   time.Now(),
+		provider:          s,
+		conn:              conn,
+		streamURL:         streamURL,
+		events:            make(chan *stt.SpeechEvent, 100),
+		errCh:             make(chan error, 1),
+		ctx:               streamCtx,
+		cancel:            cancel,
+		sampleRate:        s.sampleRate,
+		numChannels:       s.numChannels,
+		language:          languageStr,
+		enableDiarization: s.enableDiarization,
+		tags:              append([]string(nil), s.tags...),
+		connStart:         time.Now(),
 	}
 	if !s.registerStream(stream) {
 		cancel()
@@ -641,15 +643,17 @@ type deepgramStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	sampleRate   int
-	numChannels  int
-	language     string
-	rateGuard    stt.SampleRateGuard
-	inputAudio   deepgramSTTInputAudioNormalizer
-	audioBStream *audio.AudioByteStream
-	writeBinary  func([]byte) error
-	writeJSON    func(any) error
-	writeText    func(string) error
+	sampleRate        int
+	numChannels       int
+	language          string
+	enableDiarization bool
+	tags              []string
+	rateGuard         stt.SampleRateGuard
+	inputAudio        deepgramSTTInputAudioNormalizer
+	audioBStream      *audio.AudioByteStream
+	writeBinary       func([]byte) error
+	writeJSON         func(any) error
+	writeText         func(string) error
 }
 
 type dgWord struct {
@@ -1320,7 +1324,7 @@ func (s *deepgramStream) updateOptions(languageChanged bool) {
 	if languageChanged {
 		s.language = s.provider.language
 	}
-	nextURL := buildDeepgramStreamURL(s.provider, s.language)
+	nextURL := buildDeepgramStreamURL(s.activeConfigLocked(), s.language)
 	reconnectNow := false
 	if nextURL != s.streamURL {
 		s.streamURL = nextURL
@@ -1334,6 +1338,31 @@ func (s *deepgramStream) updateOptions(languageChanged bool) {
 
 	if reconnectNow {
 		go s.reconnectNow()
+	}
+}
+
+func (s *deepgramStream) activeConfigLocked() *DeepgramSTT {
+	return &DeepgramSTT{
+		model:             s.provider.model,
+		language:          s.provider.language,
+		punctuate:         s.provider.punctuate,
+		smartFormat:       s.provider.smartFormat,
+		noDelay:           s.provider.noDelay,
+		endpointingMS:     s.provider.endpointingMS,
+		enableDiarization: s.enableDiarization,
+		fillerWords:       s.provider.fillerWords,
+		sampleRate:        s.provider.sampleRate,
+		numChannels:       s.provider.numChannels,
+		interimResults:    s.provider.interimResults,
+		vadEvents:         s.provider.vadEvents,
+		profanityFilter:   s.provider.profanityFilter,
+		numerals:          s.provider.numerals,
+		mipOptOut:         s.provider.mipOptOut,
+		keywords:          append([]DeepgramKeyword(nil), s.provider.keywords...),
+		keyterms:          append([]string(nil), s.provider.keyterms...),
+		redact:            append([]string(nil), s.provider.redact...),
+		tags:              append([]string(nil), s.tags...),
+		baseURL:           s.provider.baseURL,
 	}
 }
 
