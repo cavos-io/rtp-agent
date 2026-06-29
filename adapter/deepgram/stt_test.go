@@ -802,6 +802,45 @@ func TestDeepgramSTTRecognizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := provider.Recognize(ctx, []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Recognize did not start provider request")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Recognize canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Recognize canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recognize remained blocked after caller cancellation")
+	}
+}
+
 func TestDeepgramSTTStreamReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
