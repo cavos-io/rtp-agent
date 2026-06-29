@@ -874,6 +874,7 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 		"type":     "session.update",
 		"event_id": cavosmath.ShortUUID("instructions_update_"),
 		"session": map[string]any{
+			"type":         "realtime",
 			"instructions": instructions,
 		},
 	}
@@ -1004,6 +1005,8 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		"type":     "session.update",
 		"event_id": cavosmath.ShortUUID("tools_update_"),
 		"session": map[string]any{
+			"type":  "realtime",
+			"model": s.model.model,
 			"tools": formattedTools,
 		},
 	}
@@ -1323,6 +1326,7 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 	}
 	s.mu.Unlock()
 	msg["session"] = changedSession
+	changedSession["type"] = "realtime"
 	if err := s.sendMsg(msg); err != nil {
 		return err
 	}
@@ -2362,6 +2366,8 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 			"type":     "session.update",
 			"event_id": cavosmath.ShortUUID("tools_update_"),
 			"session": map[string]any{
+				"type":  "realtime",
+				"model": s.model.model,
 				"tools": s.model.realtimeTools(tools),
 			},
 		}
