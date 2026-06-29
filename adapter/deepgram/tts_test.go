@@ -1222,6 +1222,28 @@ func TestDeepgramTTSStreamCloseIgnoresStaleReferenceAck(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamWaitsForReferenceInputBeforeRead(t *testing.T) {
+	stream := &deepgramTTSStream{inputSent: make(chan struct{})}
+	waited := make(chan struct{})
+	go func() {
+		stream.waitForInputSent()
+		close(waited)
+	}()
+
+	select {
+	case <-waited:
+		t.Fatal("read gate opened before reference Speak or Flush input")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	stream.markInputSent()
+	select {
+	case <-waited:
+	case <-time.After(time.Second):
+		t.Fatal("read gate did not open after reference input was sent")
+	}
+}
+
 func TestDeepgramTTSStreamSpeakTextKeepsReferenceTrailingSeparator(t *testing.T) {
 	var speakText string
 	stream := &deepgramTTSStream{
@@ -1717,6 +1739,12 @@ func TestDeepgramTTSStreamMalformedTextReturnsAPIConnectionError(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 
 	_, err = stream.Next()
 	if err == nil {
@@ -1766,10 +1794,9 @@ func TestDeepgramTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 
 func TestDeepgramTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	closed := make(chan struct{})
-	closeAfterHandshake := make(chan struct{})
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
-	go runDeepgramClosingWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+	go runDeepgramTTSReadFlushThenCloseServer(serverConn, closed, false, serverErr)
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -1788,7 +1815,12 @@ func TestDeepgramTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
-	close(closeAfterHandshake)
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 
 	select {
 	case <-closed:
@@ -1818,10 +1850,9 @@ func TestDeepgramTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 
 func TestDeepgramTTSStreamNormalCloseBeforeFlushedReturnsAPIStatusError(t *testing.T) {
 	closed := make(chan struct{})
-	closeAfterHandshake := make(chan struct{})
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
-	go runDeepgramNormalCloseWebsocketServer(serverConn, closeAfterHandshake, closed, serverErr)
+	go runDeepgramTTSReadFlushThenCloseServer(serverConn, closed, true, serverErr)
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -1840,7 +1871,12 @@ func TestDeepgramTTSStreamNormalCloseBeforeFlushedReturnsAPIStatusError(t *testi
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
-	close(closeAfterHandshake)
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
 
 	select {
 	case <-closed:
@@ -1932,7 +1968,7 @@ func (r *deepgramTTSFinalReadCloser) Close() error {
 	return nil
 }
 
-func runDeepgramNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {
+func runDeepgramTTSReadFlushThenCloseServer(conn net.Conn, closed chan<- struct{}, normalClose bool, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
@@ -1944,11 +1980,22 @@ func runDeepgramNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake <-
 		errCh <- err
 		return
 	}
-	<-closeAfterHandshake
-	payload := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done")
-	if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, payload); err != nil {
-		errCh <- err
-		return
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "Flush" {
+			break
+		}
+	}
+	if normalClose {
+		payload := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done")
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, payload); err != nil {
+			errCh <- err
+			return
+		}
 	}
 	close(closed)
 	errCh <- nil
@@ -2099,6 +2146,16 @@ func runDeepgramTTSMalformedTextWebsocketServer(conn net.Conn, errCh chan<- erro
 	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
 		errCh <- err
 		return
+	}
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "Flush" {
+			break
+		}
 	}
 	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":`)); err != nil {
 		errCh <- err
