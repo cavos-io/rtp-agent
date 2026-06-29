@@ -2527,19 +2527,19 @@ func (s *openaiStream) chunkFromOpenAIStreamChoice(id string, choice openAIStrea
 	if choice.Delta == nil {
 		return nil
 	}
+	if len(choice.Delta.ToolCalls) > 0 {
+		if chunk := s.processOpenAIStreamToolCalls(id, choice); chunk != nil {
+			return chunk
+		}
+	}
 	if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
 		return s.finishOpenAIStreamToolCall(id, choice)
 	}
 	if isEmptyOpenAIStreamChoiceDelta(choice) {
 		return nil
 	}
-	if len(choice.Delta.ToolCalls) > 0 {
-		if chunk := s.processOpenAIStreamToolCalls(id, choice); chunk != nil {
-			return chunk
-		}
-		if choice.Delta.Content == "" {
-			return nil
-		}
+	if len(choice.Delta.ToolCalls) > 0 && choice.Delta.Content == "" {
+		return nil
 	}
 	content := choice.Delta.Content
 	if content != "" {
