@@ -1662,6 +1662,49 @@ func TestDeepgramSTTStreamEndInputFlushesTailAndClosesReferenceInput(t *testing.
 	}
 }
 
+func TestDeepgramSTTStreamEndInputFlushesResampledReferenceTail(t *testing.T) {
+	var binaryWrites [][]byte
+	var textWrites []string
+	stream := &deepgramStream{
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func(data []byte) error {
+			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
+			return nil
+		},
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              deepgramTestInt16PCM(481),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 481,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	if len(binaryWrites) != 0 {
+		t.Fatalf("binary writes after PushFrame = %d, want buffered below 50ms chunk", len(binaryWrites))
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if len(binaryWrites) != 1 {
+		t.Fatalf("binary writes after EndInput = %d, want one resampled tail chunk", len(binaryWrites))
+	}
+	want := deepgramEveryNthInt16PCM(481, 3)
+	if got := binaryWrites[0]; !bytes.Equal(got, want) {
+		t.Fatalf("EndInput binary data = %#v, want complete resampled tail %#v", got, want)
+	}
+	wantText := []string{deepgramSTTFinalizeMessage, deepgramSTTCloseStreamMessage}
+	if !reflect.DeepEqual(textWrites, wantText) {
+		t.Fatalf("text writes = %#v, want %#v", textWrites, wantText)
+	}
+}
+
 func TestDeepgramSTTStreamEndInputTreatsProviderCloseAsExpected(t *testing.T) {
 	closeSeen := make(chan struct{})
 	serverErr := make(chan error, 1)

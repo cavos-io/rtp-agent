@@ -1236,6 +1236,19 @@ func (s *deepgramStream) EndInput() error {
 		return io.ErrClosedPipe
 	}
 	flushedFrame := false
+	if tail := s.inputAudio.flush(); tail != nil {
+		if s.audioBStream == nil {
+			s.audioBStream = newDeepgramSTTAudioByteStream(s)
+		}
+		for _, chunk := range s.audioBStream.Push(tail.Data) {
+			flushedFrame = true
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
+	}
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
 			flushedFrame = true
