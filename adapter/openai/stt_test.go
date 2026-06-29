@@ -129,6 +129,36 @@ func TestOpenAISpeechEventDefaultsMissingConfidenceToOne(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTRecognizeFallsBackToReferenceRequestLanguage(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			return nil, err
+		}
+		if r.FormValue("language") != "id" {
+			t.Fatalf("language form = %q, want id", r.FormValue("language"))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"halo"}`)),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAISTT(t, "test-key", "",
+		WithOpenAISTTBaseURL("https://openai.test/v1"),
+		withOpenAISTTHTTPClient(client),
+	)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "id")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if got := event.Alternatives[0].Language; got != "id" {
+		t.Fatalf("language = %q, want request language fallback", got)
+	}
+}
+
 func TestOpenAISTTRecognizeUploadsWAVContainer(t *testing.T) {
 	var uploaded []byte
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {

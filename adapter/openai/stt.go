@@ -631,6 +631,9 @@ func (s *OpenAISTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if s.isClosed() {
 		return nil, fmt.Errorf("openai stt is closed: %w", io.ErrClosedPipe)
 	}
+	if resp.Language == "" {
+		resp.Language = openAIAudioRequestLanguage(s, language)
+	}
 
 	return openAISpeechEvent(resp, req.Language), nil
 }
@@ -676,13 +679,7 @@ func openAISTTWAVBytes(frames []*model.AudioFrame) []byte {
 }
 
 func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.AudioRequest {
-	requestLanguage := s.language
-	if language != "" {
-		requestLanguage = language
-	}
-	if requestLanguage != "" {
-		requestLanguage = openAISTTRequestLanguage(requestLanguage)
-	}
+	requestLanguage := openAIAudioRequestLanguage(s, language)
 	req := openai.AudioRequest{
 		Model:    s.model,
 		FilePath: "file.wav", // Static filename required by API when Reader is used.
@@ -695,6 +692,17 @@ func openAIAudioRequest(s *OpenAISTT, reader io.Reader, language string) openai.
 		req.Format = openai.AudioResponseFormatVerboseJSON
 	}
 	return req
+}
+
+func openAIAudioRequestLanguage(s *OpenAISTT, language string) string {
+	requestLanguage := s.language
+	if language != "" {
+		requestLanguage = language
+	}
+	if requestLanguage != "" {
+		requestLanguage = openAISTTRequestLanguage(requestLanguage)
+	}
+	return requestLanguage
 }
 
 func openAISTTRequestLanguage(language string) string {
