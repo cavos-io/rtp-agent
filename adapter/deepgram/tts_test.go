@@ -892,8 +892,12 @@ func TestDeepgramTTSStreamTimesOutSilentProviderAfterInput(t *testing.T) {
 		t.Fatal("Next did not return after response timeout")
 	}
 
+	closeStart := time.Now()
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
+	}
+	if elapsed := time.Since(closeStart); elapsed > 100*time.Millisecond {
+		t.Fatalf("Close after timeout took %s, want no close-ack wait", elapsed)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close error = %v", err)
