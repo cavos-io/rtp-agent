@@ -718,6 +718,7 @@ func (s *deepgramV2Stream) reconnectAfterUnexpectedClose(conn *websocket.Conn) e
 	if s.closed || s.inputEnded || conn != s.conn {
 		return nil
 	}
+	s.advanceTimingForReconnectLocked(time.Now())
 	s.audioBStream = nil
 	if err := s.reconnectLocked(); err != nil {
 		s.closed = true
@@ -731,6 +732,14 @@ func (s *deepgramV2Stream) reconnectAfterUnexpectedClose(conn *websocket.Conn) e
 	}
 	s.reconnectNext = false
 	return nil
+}
+
+func (s *deepgramV2Stream) advanceTimingForReconnectLocked(now time.Time) {
+	nowSeconds := float64(now.UnixNano()) / 1e9
+	if s.start > 0 && nowSeconds > s.start {
+		s.offset += nowSeconds - s.start
+	}
+	s.start = nowSeconds
 }
 
 func (s *deepgramV2Stream) Flush() error {

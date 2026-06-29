@@ -777,6 +777,7 @@ func TestDeepgramSTTv2EndInputTreatsProviderCloseAsExpected(t *testing.T) {
 func TestDeepgramSTTv2ReconnectsAfterUnexpectedProviderClose(t *testing.T) {
 	var dialCount atomic.Int32
 	requests := make(chan struct{}, 2)
+	closeFirst := make(chan struct{})
 	serverErr := make(chan error, 2)
 
 	oldDialer := websocket.DefaultDialer
@@ -786,7 +787,7 @@ func TestDeepgramSTTv2ReconnectsAfterUnexpectedProviderClose(t *testing.T) {
 			attempt := dialCount.Add(1)
 			requests <- struct{}{}
 			if attempt == 1 {
-				go runDeepgramSTTv2UnexpectedCloseWebsocketServer(serverConn, serverErr)
+				go runDeepgramSTTv2UnexpectedCloseWebsocketServer(serverConn, closeFirst, serverErr)
 			} else {
 				go runDeepgramSTTv2DefaultLanguageWebsocketServer(serverConn, make(chan struct{}), serverErr)
 			}
@@ -806,6 +807,10 @@ func TestDeepgramSTTv2ReconnectsAfterUnexpectedProviderClose(t *testing.T) {
 	defer stream.Close()
 
 	<-requests
+	timing := stream.(stt.StreamTiming)
+	timing.SetStartTimeOffset(0.5)
+	timing.SetStartTime(float64(time.Now().Add(-2*time.Second).UnixNano()) / 1e9)
+	close(closeFirst)
 	select {
 	case <-requests:
 	case <-time.After(time.Second):
@@ -825,6 +830,9 @@ func TestDeepgramSTTv2ReconnectsAfterUnexpectedProviderClose(t *testing.T) {
 	}
 	if event == nil || event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
 		t.Fatalf("transcript after reconnect = %+v, want interim hello", event)
+	}
+	if event.Alternatives[0].StartTime < 2.0 || event.Alternatives[0].Words[0].StartTimeOffset < 1.9 {
+		t.Fatalf("transcript timing after reconnect = %+v, want advanced reference start_time_offset", event.Alternatives[0])
 	}
 
 	for i := 0; i < 2; i++ {
@@ -1747,7 +1755,7 @@ func runDeepgramSTTv2DefaultLanguageWebsocketServer(conn net.Conn, closeSeen cha
 	}
 }
 
-func runDeepgramSTTv2UnexpectedCloseWebsocketServer(conn net.Conn, errCh chan<- error) {
+func runDeepgramSTTv2UnexpectedCloseWebsocketServer(conn net.Conn, closeNow <-chan struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
@@ -1759,6 +1767,7 @@ func runDeepgramSTTv2UnexpectedCloseWebsocketServer(conn net.Conn, errCh chan<- 
 		errCh <- err
 		return
 	}
+	<-closeNow
 	closePayload := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "transient")
 	if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, closePayload); err != nil {
 		errCh <- err
