@@ -2390,6 +2390,43 @@ func TestOpenAIStreamTerminalErrorUnregistersReferenceStream(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamEOFUnregistersReferenceStream(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-complete","choices":[{"index":0,"delta":{"role":"assistant","content":"hello"}}]}`+"\n\n"+
+				`data: [DONE]`+"\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want content chunk", err)
+	}
+	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("first chunk = %#v, want hello content", chunk)
+	}
+	if chunk, err = stream.Next(); chunk != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next = (%#v, %v), want EOF", chunk, err)
+	}
+	model.mu.Lock()
+	streamCount := len(model.streams)
+	model.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want completed stream unregistered", streamCount)
+	}
+}
+
 func TestOpenAIStreamSkipsAzureNullDelta(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
