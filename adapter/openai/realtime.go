@@ -1529,13 +1529,13 @@ func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 	audio, _ := session["audio"].(map[string]any)
 	input, _ := audio["input"].(map[string]any)
 	if value, ok := input["turn_detection"]; ok {
-		entries["audio.input.turn_detection"] = value
+		entries["audio.input.turn_detection"] = openAIRealtimeCloneOptionValue(value)
 	}
 	if value, ok := input["transcription"]; ok {
-		entries["audio.input.transcription"] = value
+		entries["audio.input.transcription"] = openAIRealtimeCloneOptionValue(value)
 	}
 	if value, ok := input["noise_reduction"]; ok {
-		entries["audio.input.noise_reduction"] = value
+		entries["audio.input.noise_reduction"] = openAIRealtimeCloneOptionValue(value)
 	}
 	output, _ := audio["output"].(map[string]any)
 	if value, ok := output["voice"]; ok {
@@ -1545,6 +1545,27 @@ func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 		entries["audio.output.speed"] = value
 	}
 	return entries
+}
+
+func openAIRealtimeCloneOptionValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		clone := make(map[string]any, len(typed))
+		for key, entry := range typed {
+			clone[key] = openAIRealtimeCloneOptionValue(entry)
+		}
+		return clone
+	case []any:
+		clone := make([]any, len(typed))
+		for i, entry := range typed {
+			clone[i] = openAIRealtimeCloneOptionValue(entry)
+		}
+		return clone
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return value
+	}
 }
 
 func openAIRealtimeSessionFromOptionEntries(entries map[string]any) map[string]any {
