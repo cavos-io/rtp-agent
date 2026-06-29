@@ -479,33 +479,50 @@ func (s *deepgramV2Stream) processEvent(resp deepgramV2Response) error {
 func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
 	switch resp.Event {
 	case "StartOfTurn":
-		if s.speaking {
-			return nil
+		if !s.speaking {
+			s.speaking = true
+			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		}
-		s.speaking = true
-		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "Update":
 		if !s.speaking {
-			return nil
+			if !s.startSpeakingIfTranscript(resp) {
+				return nil
+			}
 		}
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "EagerEndOfTurn":
 		if !s.speaking {
-			return nil
+			if !s.startSpeakingIfTranscript(resp) {
+				return nil
+			}
 		}
 		s.sendTranscriptEvent(stt.SpeechEventPreflightTranscript, resp)
 	case "TurnResumed":
+		if !s.speaking {
+			s.startSpeakingIfTranscript(resp)
+		}
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "EndOfTurn":
 		if !s.speaking {
-			return nil
+			if !s.startSpeakingIfTranscript(resp) {
+				return nil
+			}
 		}
 		s.speaking = false
 		s.sendTranscriptEvent(stt.SpeechEventFinalTranscript, resp)
 		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	}
 	return nil
+}
+
+func (s *deepgramV2Stream) startSpeakingIfTranscript(resp deepgramV2Response) bool {
+	if !deepgramV2HasTranscript(resp) {
+		return false
+	}
+	s.speaking = true
+	s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
+	return true
 }
 
 func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, resp deepgramV2Response) {
@@ -520,8 +537,12 @@ func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, re
 	})
 }
 
+func deepgramV2HasTranscript(resp deepgramV2Response) bool {
+	return resp.Transcript != "" || len(resp.Words) > 0
+}
+
 func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOffset float64) []stt.SpeechData {
-	if len(resp.Words) == 0 {
+	if !deepgramV2HasTranscript(resp) {
 		return nil
 	}
 	confidence := 0.0
@@ -536,7 +557,9 @@ func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOff
 			StartTimeOffset: startTimeOffset,
 		})
 	}
-	confidence /= float64(len(resp.Words))
+	if len(resp.Words) > 0 {
+		confidence /= float64(len(resp.Words))
+	}
 	if len(resp.Languages) > 0 {
 		language = resp.Languages[0]
 	}

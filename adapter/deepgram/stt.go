@@ -746,12 +746,13 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	var transcriptBuilder string
 	for _, alt := range resp.Channel.Alternatives {
 		transcriptBuilder += alt.Transcript
+		startTime, endTime := deepgramLiveTranscriptTimes(resp, alt.Words)
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
 			Language:   deepgramLiveLanguage(languageStr, alt.Languages),
 			Text:       alt.Transcript,
 			Confidence: alt.Confidence,
-			StartTime:  deepgramFirstWordStart(alt.Words) + startTimeOffset,
-			EndTime:    deepgramFirstWordEnd(alt.Words) + startTimeOffset,
+			StartTime:  startTime + startTimeOffset,
+			EndTime:    endTime + startTimeOffset,
 			SpeakerID:  deepgramLiveSpeakerID(alt.Words, resp.IsFinal),
 			Words:      deepgramTimedStringsOffset(alt.Words, startTimeOffset),
 		})
@@ -762,6 +763,13 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	}
 
 	return event
+}
+
+func deepgramLiveTranscriptTimes(resp dgResponse, words []dgWord) (float64, float64) {
+	if resp.Start != 0 || resp.Duration != 0 {
+		return resp.Start, resp.Start + resp.Duration
+	}
+	return deepgramFirstWordStart(words), deepgramFirstWordEnd(words)
 }
 
 func deepgramLiveLanguage(languageStr string, detected []string) string {
@@ -1418,6 +1426,20 @@ func (s *deepgramStream) hasInputEnded() bool {
 }
 
 func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	default:
+	}
+
 	if s.isClosed() {
 		select {
 		case event, ok := <-s.events:
@@ -1436,6 +1458,13 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 
 	select {
 	case <-s.ctx.Done():
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
 		return nil, io.EOF
 	case err := <-s.errCh:
 		select {

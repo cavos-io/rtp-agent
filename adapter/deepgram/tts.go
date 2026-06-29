@@ -60,11 +60,24 @@ func WithDeepgramTTSMipOptOut(mipOptOut bool) DeepgramTTSOption {
 func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) DeepgramTTSOption {
 	return func(t *DeepgramTTS) {
 		if encoding != "" {
-			t.encoding = encoding
+			t.encoding = deepgramTTSNormalizeEncoding(encoding)
 		}
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
+	}
+}
+
+func deepgramTTSNormalizeEncoding(encoding string) string {
+	switch strings.ToLower(encoding) {
+	case "pcm_s16le", "linear_pcm", "pcm_linear":
+		return "linear16"
+	case "pcm_mulaw":
+		return "mulaw"
+	case "pcm_alaw":
+		return "alaw"
+	default:
+		return encoding
 	}
 }
 
@@ -140,36 +153,13 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 		return nil, err
 	}
 	u, jsonBody := buildDeepgramTTSSynthesizeRequest(t, text)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Token "+t.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == 499 {
-			resp.Body.Close()
-			return &deepgramTTSChunkedStream{requestID: uuid.NewString()}, nil
-		}
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &deepgramTTSChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		requestURL: u,
+		body:       jsonBody,
+		apiKey:     t.apiKey,
 		sampleRate: t.sampleRate,
+		encoding:   t.encoding,
 		requestID:  uuid.NewString(),
 	}, nil
 }
@@ -217,6 +207,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		errCh:      make(chan error, 1),
 		flushed:    make(chan struct{}, 1),
 		sampleRate: t.sampleRate,
+		encoding:   t.encoding,
 		requestID:  uuid.NewString(),
 		segmentID:  uuid.NewString(),
 	}
@@ -287,9 +278,15 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 }
 
 type deepgramTTSChunkedStream struct {
+	ctx          context.Context
+	requestURL   string
+	body         []byte
+	apiKey       string
 	resp         *http.Response
 	sampleRate   int
+	encoding     string
 	requestID    string
+	started      bool
 	pendingFinal bool
 	finalSent    bool
 	mu           sync.Mutex
@@ -298,6 +295,18 @@ type deepgramTTSChunkedStream struct {
 func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.resp == nil || s.resp.Body == nil || s.finalSent {
+		if !s.started && !s.finalSent {
+			if err := s.startRequestLocked(); err != nil {
+				return nil, err
+			}
+			if s.resp == nil || s.resp.Body == nil || s.finalSent {
+				return nil, io.EOF
+			}
+		} else {
+			return nil, io.EOF
+		}
+	}
 	if s.resp == nil || s.resp.Body == nil || s.finalSent {
 		return nil, io.EOF
 	}
@@ -322,15 +331,52 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 
+	frameData := deepgramTTSTelephonyToPCM(s.encoding, buf[:n])
 	return &tts.SynthesizedAudio{
 		RequestID: s.requestID,
 		Frame: &model.AudioFrame{
-			Data:              buf[:n],
+			Data:              frameData,
 			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
+			SamplesPerChannel: uint32(len(frameData) / 2),
 		},
 	}, nil
+}
+
+func (s *deepgramTTSChunkedStream) startRequestLocked() error {
+	s.started = true
+	req, err := http.NewRequestWithContext(s.ctx, "POST", s.requestURL, bytes.NewBuffer(s.body))
+	if err != nil {
+		s.finalSent = true
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Token "+s.apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.finalSent = true
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 499 {
+			resp.Body.Close()
+			s.finalSent = true
+			return nil
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		s.finalSent = true
+		return llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
 }
 
 func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
@@ -349,6 +395,7 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 func (s *deepgramTTSChunkedStream) Close() error {
 	s.mu.Lock()
 	if s.resp == nil || s.resp.Body == nil {
+		s.finalSent = true
 		s.mu.Unlock()
 		return nil
 	}
@@ -360,15 +407,17 @@ func (s *deepgramTTSChunkedStream) Close() error {
 }
 
 type deepgramTTSStream struct {
-	provider   *DeepgramTTS
-	conn       *websocket.Conn
-	audio      chan *tts.SynthesizedAudio
-	errCh      chan error
-	mu         sync.Mutex
-	closed     bool
-	inputEnded bool
+	provider    *DeepgramTTS
+	conn        *websocket.Conn
+	audio       chan *tts.SynthesizedAudio
+	errCh       chan error
+	mu          sync.Mutex
+	closed      bool
+	inputEnded  bool
+	drainClosed bool
 
 	sampleRate   int
+	encoding     string
 	writeJSON    func(any) error
 	writeText    func(string) error
 	closeConn    func() error
@@ -393,12 +442,13 @@ func (s *deepgramTTSStream) readLoop() {
 		}
 
 		if msgType == websocket.BinaryMessage {
+			frameData := deepgramTTSTelephonyToPCM(s.encoding, message)
 			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
-					Data:              message,
+					Data:              frameData,
 					SampleRate:        uint32(s.sampleRate),
 					NumChannels:       1,
-					SamplesPerChannel: uint32(len(message) / 2),
+					SamplesPerChannel: uint32(len(frameData) / 2),
 				},
 			}
 			s.annotateAudio(audio)
@@ -441,6 +491,58 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
+}
+
+func deepgramTTSTelephonyToPCM(encoding string, data []byte) []byte {
+	switch strings.ToLower(encoding) {
+	case "mulaw", "mu-law", "ulaw", "u-law", "pcm_mulaw":
+		return deepgramTTSDecodeMuLaw(data)
+	case "alaw", "a-law", "pcm_alaw":
+		return deepgramTTSDecodeALaw(data)
+	default:
+		return bytes.Clone(data)
+	}
+}
+
+func deepgramTTSDecodeMuLaw(data []byte) []byte {
+	pcm := make([]byte, len(data)*2)
+	for i, encoded := range data {
+		u := ^encoded
+		sign := 1
+		if u&0x80 != 0 {
+			sign = -1
+		}
+		exponent := int((u >> 4) & 0x07)
+		mantissa := int(u & 0x0f)
+		sample := ((mantissa << 3) + 0x84) << exponent
+		value := int16(sign * (sample - 0x84))
+		pcm[i*2] = byte(value)
+		pcm[i*2+1] = byte(value >> 8)
+	}
+	return pcm
+}
+
+func deepgramTTSDecodeALaw(data []byte) []byte {
+	pcm := make([]byte, len(data)*2)
+	for i, encoded := range data {
+		a := encoded ^ 0x55
+		sign := -1
+		if a&0x80 != 0 {
+			sign = 1
+		}
+		exponent := int((a >> 4) & 0x07)
+		mantissa := int(a & 0x0f)
+		sample := 0
+		if exponent == 0 {
+			sample = (mantissa << 4) + 8
+		} else {
+			sample = ((mantissa << 4) + 0x108) << (exponent - 1)
+		}
+		value := int16(sign * sample)
+		pcm[i*2] = byte(value)
+		pcm[i*2+1] = byte(value >> 8)
+	}
+	return pcm
 }
 
 func (s *deepgramTTSStream) annotateAudio(audio *tts.SynthesizedAudio) {
@@ -708,6 +810,7 @@ func (s *deepgramTTSStream) closeAfterFinal() {
 		return
 	}
 	s.closed = true
+	s.drainClosed = true
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
@@ -715,13 +818,34 @@ func (s *deepgramTTSStream) closeAfterFinal() {
 }
 
 func (s *deepgramTTSStream) isClosed() bool {
+	closed, _ := s.closedState()
+	return closed
+}
+
+func (s *deepgramTTSStream) closedState() (bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.closed
+	return s.closed, s.drainClosed
 }
 
 func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.isClosed() {
+	if closed, drainClosed := s.closedState(); closed {
+		if drainClosed {
+			select {
+			case audio, ok := <-s.audio:
+				if ok {
+					return audio, nil
+				}
+				select {
+				case err := <-s.errCh:
+					return nil, err
+				default:
+					return nil, io.EOF
+				}
+			default:
+				return nil, io.EOF
+			}
+		}
 		for {
 			select {
 			case audio, ok := <-s.audio:

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -64,8 +65,8 @@ func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	if alt.Text != "hello world" {
 		t.Fatalf("text = %q, want hello world", alt.Text)
 	}
-	if alt.StartTime != 1.5 || alt.EndTime != 1.8 {
-		t.Fatalf("time range = %v-%v, want first word range 1.5-1.8", alt.StartTime, alt.EndTime)
+	if alt.StartTime != 1.5 || alt.EndTime != 2.4 {
+		t.Fatalf("time range = %v-%v, want reference result range 1.5-2.4", alt.StartTime, alt.EndTime)
 	}
 	if alt.SpeakerID != "S2" {
 		t.Fatalf("speaker id = %q, want S2", alt.SpeakerID)
@@ -78,6 +79,29 @@ func TestDeepgramSpeechEventPreservesAlternativeWords(t *testing.T) {
 	}
 	if got := alt.Words[1]; got.Text != "world" || got.StartTime != 1.9 || got.EndTime != 2.4 || got.Confidence != 0.97 || got.SpeakerID != "" {
 		t.Fatalf("second word = %+v, want world timing without word speaker ID", got)
+	}
+}
+
+func TestDeepgramSpeechEventUsesReferenceResultTimingWithoutWords(t *testing.T) {
+	resp := dgResponse{
+		Type:     "Results",
+		IsFinal:  true,
+		Start:    3.2,
+		Duration: 1.1,
+	}
+	resp.Metadata.RequestID = "request-timing"
+	resp.Channel.Alternatives = []dgAlternative{{Transcript: "hello timing", Confidence: 0.7}}
+
+	event := deepgramSpeechEventForLanguageOffset(resp, "en-US", 0.5)
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one alternative", event)
+	}
+	alt := event.Alternatives[0]
+	if math.Abs(alt.StartTime-3.7) > 1e-9 || math.Abs(alt.EndTime-4.8) > 1e-9 {
+		t.Fatalf("time range = %v-%v, want reference result range with offset 3.7-4.8", alt.StartTime, alt.EndTime)
+	}
+	if len(alt.Words) != 0 {
+		t.Fatalf("words = %+v, want none", alt.Words)
 	}
 }
 
@@ -1961,6 +1985,33 @@ func TestDeepgramSTTStreamNextAfterCloseDrainsQueuedEvent(t *testing.T) {
 		got, err := stream.Next()
 		if err != nil {
 			t.Fatalf("iteration %d: Next() error = %v, want queued event", i, err)
+		}
+		if got != want {
+			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
+		}
+	}
+}
+
+func TestDeepgramSTTNextDrainsQueuedEventBeforeCanceledContext(t *testing.T) {
+	want := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{{
+			Text: "queued final",
+		}},
+	}
+
+	for i := 0; i < 256; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		stream := &deepgramStream{
+			ctx:    ctx,
+			events: make(chan *stt.SpeechEvent, 1),
+		}
+		stream.events <- want
+
+		got, err := stream.Next()
+		if err != nil {
+			t.Fatalf("iteration %d: Next() error = %v, want queued event before canceled context", i, err)
 		}
 		if got != want {
 			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
