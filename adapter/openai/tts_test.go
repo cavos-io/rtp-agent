@@ -1734,6 +1734,46 @@ func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterDone(t *testing.T) {
 	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
 }
 
+func TestOpenAITTSSSEMP3DrainsAndFinalizesAfterCleanEOF(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(mp3Data) + `"}` + "\n\n"
+	stream := &openaiTTSChunkedStream{
+		resp:           io.NopCloser(strings.NewReader(sse)),
+		responseFormat: goopenai.SpeechResponseFormatMp3,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+	defer stream.Close()
+
+	frames := 0
+	for i := 0; i < 5000; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned %v before clean-EOF final marker after %d frames", err, frames)
+		}
+		if audio == nil {
+			t.Fatalf("Next returned nil audio after %d frames", frames)
+		}
+		if audio.IsFinal {
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded MP3 frames")
+			}
+			_, err = stream.Next()
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("Next after final = %v, want io.EOF", err)
+			}
+			return
+		}
+		if audio.Frame == nil || len(audio.Frame.Data) == 0 {
+			t.Fatalf("audio = %#v, want decoded MP3 frame or final marker", audio)
+		}
+		frames++
+	}
+	t.Fatalf("read %d decoded MP3 frames without clean-EOF final marker", frames)
+}
+
 func TestOpenAITTSRawAudioStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &openaiTTSChunkedStream{
 		resp:           &eofWithDataReader{data: []byte{1, 2, 3, 4}},
