@@ -351,6 +351,7 @@ type deepgramV2Stream struct {
 	errCh          chan error
 	mu             sync.Mutex
 	closed         bool
+	inputEnded     bool
 	speaking       bool
 	requestID      string
 	language       string
@@ -532,6 +533,9 @@ func (s *deepgramV2Stream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
 			s.closed = true
@@ -595,6 +599,9 @@ func (s *deepgramV2Stream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.audioBStream == nil {
 		return nil
 	}
@@ -610,6 +617,33 @@ func (s *deepgramV2Stream) Flush() error {
 	if flushedFrame {
 		s.flushRecognitionUsageLocked()
 	}
+	return nil
+}
+
+func (s *deepgramV2Stream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk.Data); err != nil {
+				s.closed = true
+				return err
+			}
+			s.sendRecognitionUsage(chunk)
+		}
+		s.flushRecognitionUsageLocked()
+	}
+	if err := s.conn.WriteMessage(websocket.TextMessage, []byte(deepgramSTTv2CloseMessage)); err != nil {
+		s.closed = true
+		return err
+	}
+	s.inputEnded = true
 	return nil
 }
 

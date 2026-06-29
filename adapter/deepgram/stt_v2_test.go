@@ -191,6 +191,81 @@ func TestDeepgramSTTv2StreamHandlesReferenceTurnAndClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2EndInputFlushesTailAndClosesReferenceInput(t *testing.T) {
+	closeSeen := make(chan struct{})
+	audioFrames := make(chan []byte, 2)
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTv2TurnInfoWebsocketServer(serverConn, closeSeen, audioFrames, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"),
+		WithDeepgramSTTv2SampleRate(16000),
+	)
+	rawStream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	stream := rawStream.(*deepgramV2Stream)
+	defer stream.Close()
+
+	if _, ok := rawStream.(stt.InputEnding); !ok {
+		t.Fatalf("stream = %T, want stt.InputEnding", rawStream)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 2400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1200,
+	}); err != nil {
+		t.Fatalf("PushFrame() error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		if len(got) != 1600 {
+			t.Fatalf("first audio frame length = %d, want 1600", len(got))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first audio frame")
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	select {
+	case got := <-audioFrames:
+		if len(got) != 800 {
+			t.Fatalf("end input audio frame length = %d, want 800", len(got))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for end input audio tail")
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1}}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
 	provider := NewDeepgramSTTv2("test-key",
 		WithDeepgramSTTv2BaseURL("https://deepgram.example/v2/listen"),
