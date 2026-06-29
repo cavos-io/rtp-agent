@@ -762,6 +762,7 @@ type openAIRealtimeSTTStream struct {
 	events      chan *stt.SpeechEvent
 	eventStream *openAIRealtimeQueuedStream[*stt.SpeechEvent]
 	errCh       chan error
+	pendingErr  error
 	mu          sync.Mutex
 	closed      bool
 	inputEnded  bool
@@ -1050,15 +1051,42 @@ func (s *openAIRealtimeSTTStream) closeEventStream() {
 	}
 }
 
+func (s *openAIRealtimeSTTStream) nextQueuedEvent() (*stt.SpeechEvent, bool) {
+	if s == nil || s.events == nil {
+		return nil, false
+	}
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, true
+		}
+		return nil, false
+	default:
+	}
+	if s.eventStream != nil && s.eventStream.pending() > 0 {
+		event, ok := <-s.events
+		return event, ok
+	}
+	return nil, false
+}
+
 func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
+	if s.pendingErr != nil {
+		if event, ok := s.nextQueuedEvent(); ok {
+			return event, nil
+		}
+		err := s.pendingErr
+		s.pendingErr = nil
+		return nil, err
+	}
+	if event, ok := s.nextQueuedEvent(); ok {
+		return event, nil
+	}
 	select {
 	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+		if event, ok := s.nextQueuedEvent(); ok {
+			s.pendingErr = err
+			return event, nil
 		}
 		return nil, err
 	default:
@@ -1089,12 +1117,9 @@ func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+		if event, ok := s.nextQueuedEvent(); ok {
+			s.pendingErr = err
+			return event, nil
 		}
 		return nil, err
 	case <-s.ctx.Done():
@@ -1113,6 +1138,9 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 		if s.owner != nil {
 			s.owner.unregisterRealtimeSTTStream(s)
 		}
+		s.mu.Lock()
+		s.closeVADStreamLocked()
+		s.mu.Unlock()
 		s.closeEventStream()
 	}()
 	connectedAt := time.Now()
@@ -1245,15 +1273,18 @@ func (s *openAIRealtimeSTTStream) reconnectAfterUnexpectedClose() error {
 	_ = s.conn.Close()
 	conn, _, err := s.owner.dialRealtimeSTTWebsocket(s.ctx)
 	if err != nil {
+		s.closeVADStreamLocked()
 		return mapOpenAIError(err)
 	}
 	sessionUpdate, err := buildOpenAIRealtimeSTTSessionUpdate(s.owner)
 	if err != nil {
 		_ = conn.Close()
+		s.closeVADStreamLocked()
 		return err
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, sessionUpdate); err != nil {
 		_ = conn.Close()
+		s.closeVADStreamLocked()
 		return mapOpenAIError(err)
 	}
 	s.conn = conn

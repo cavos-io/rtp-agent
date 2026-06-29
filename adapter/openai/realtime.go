@@ -401,6 +401,7 @@ type realtimeSession struct {
 	pendingCreateAcks     map[string]chan struct{}
 	pendingDeleteAcks     map[string]chan struct{}
 	instructions          string
+	instructionsSet       bool
 	tools                 []llm.Tool
 	audioBStream          *audio.AudioByteStream
 	audioNormalizer       openAIRealtimeInputAudioNormalizer
@@ -502,6 +503,15 @@ func (s *openAIRealtimeQueuedStream[T]) Send(value T) bool {
 	s.queue = append(s.queue, value)
 	s.notifyLocked()
 	return true
+}
+
+func (s *openAIRealtimeQueuedStream[T]) pending() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.queue)
 }
 
 func (s *openAIRealtimeQueuedStream[T]) Close() {
@@ -873,6 +883,7 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 		"type":     "session.update",
 		"event_id": cavosmath.ShortUUID("instructions_update_"),
 		"session": map[string]any{
+			"type":         "realtime",
 			"instructions": instructions,
 		},
 	}
@@ -881,6 +892,7 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 	}
 	s.mu.Lock()
 	s.instructions = instructions
+	s.instructionsSet = true
 	s.mu.Unlock()
 	return nil
 }
@@ -1002,6 +1014,8 @@ func (s *realtimeSession) UpdateTools(tools []llm.Tool) error {
 		"type":     "session.update",
 		"event_id": cavosmath.ShortUUID("tools_update_"),
 		"session": map[string]any{
+			"type":  "realtime",
+			"model": s.model.model,
 			"tools": formattedTools,
 		},
 	}
@@ -1321,6 +1335,7 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 	}
 	s.mu.Unlock()
 	msg["session"] = changedSession
+	changedSession["type"] = "realtime"
 	if err := s.sendMsg(msg); err != nil {
 		return err
 	}
@@ -2325,6 +2340,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	s.mu.Lock()
 	oldConn := s.conn
 	instructions := s.instructions
+	instructionsSet := s.instructionsSet
 	tools := append([]llm.Tool(nil), s.tools...)
 	optionsState := make(map[string]any, len(s.optionsState))
 	for key, value := range s.optionsState {
@@ -2343,7 +2359,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 			openAIRealtimeRemoveInputNoiseReduction(initialSession)
 		}
 	}
-	if instructions != "" {
+	if instructionsSet {
 		initialSession["instructions"] = instructions
 	}
 	msg := openAIRealtimeInitialSessionUpdateMessage(initialSession)
@@ -2359,6 +2375,8 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 			"type":     "session.update",
 			"event_id": cavosmath.ShortUUID("tools_update_"),
 			"session": map[string]any{
+				"type":  "realtime",
+				"model": s.model.model,
 				"tools": s.model.realtimeTools(tools),
 			},
 		}

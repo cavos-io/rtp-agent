@@ -1660,6 +1660,48 @@ func TestOpenAITTSRawAudioStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSFinalMarkerClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: bytes.NewReader([]byte{1, 2, 3, 4})}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil || audio == nil || audio.IsFinal {
+		t.Fatalf("first Next = (%#v, %v), want provider audio", audio, err)
+	}
+	final, err := stream.Next()
+	if err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("second Next = (%#v, %v), want final marker", final, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after final marker", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want completed stream unregistered", streamCount)
+	}
+	if audio, err = stream.Next(); !errors.Is(err, io.EOF) || audio != nil {
+		t.Fatalf("Next after final = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestOpenAITTSRawAudioStreamReturnsEOFWhenEmpty(t *testing.T) {
 	stream := &openaiTTSChunkedStream{
 		resp:           io.NopCloser(strings.NewReader("")),
@@ -1670,6 +1712,45 @@ func TestOpenAITTSRawAudioStreamReturnsEOFWhenEmpty(t *testing.T) {
 	audio, err := stream.Next()
 	if !errors.Is(err, io.EOF) || audio != nil {
 		t.Fatalf("Next = (%#v, %v), want EOF without boundary-only final marker", audio, err)
+	}
+}
+
+func TestOpenAITTSNoAudioErrorUnregistersReferenceStream(t *testing.T) {
+	body := &countingOpenAIReadCloser{}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want nil for silent provider response", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after terminal no-audio error", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want no-audio stream unregistered", streamCount)
 	}
 }
 
@@ -1752,6 +1833,172 @@ func TestOpenAITTSChunkedStreamReturnsAPIConnectionErrorOnReadFailure(t *testing
 	}
 	if connectionErr.Message != "socket closed" {
 		t.Fatalf("APIConnectionError message = %q, want socket closed", connectionErr.Message)
+	}
+}
+
+func TestOpenAITTSChunkedStreamReturnsAPITimeoutErrorOnReadTimeout(t *testing.T) {
+	stream := &openaiTTSChunkedStream{resp: failingReadCloser{err: context.DeadlineExceeded}}
+
+	_, err := stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("APITimeoutError message = %q, want default timeout message", timeoutErr.Message)
+	}
+}
+
+func TestOpenAITTSChunkedStreamReadFailureUnregistersReferenceStream(t *testing.T) {
+	body := &countingFailingReadCloser{err: errors.New("socket closed")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after terminal read failure", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want failed stream unregistered", streamCount)
+	}
+}
+
+func TestOpenAITTSDecodeFailureUnregistersReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: strings.NewReader("not mp3 data")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/mpeg"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatMp3),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want no synthesized audio for malformed compressed data", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after terminal malformed-audio failure", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want malformed-audio stream unregistered", streamCount)
+	}
+}
+
+func TestOpenAITTSSSEInvalidBase64ClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: strings.NewReader(`data: {"type":"speech.audio.delta","delta":"%%%%"}` + "\n\n")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want no synthesized audio for malformed SSE audio", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after malformed SSE audio", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want malformed SSE stream unregistered", streamCount)
+	}
+}
+
+func TestOpenAITTSMalformedWAVClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: bytes.NewReader(openAITTSTestInvalidWAV())}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatWav),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want no synthesized audio for malformed WAV", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after malformed WAV", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want malformed WAV stream unregistered", streamCount)
 	}
 }
 
@@ -1932,6 +2179,30 @@ type failingReadCloser struct {
 func (r failingReadCloser) Read([]byte) (int, error) { return 0, r.err }
 
 func (r failingReadCloser) Close() error { return nil }
+
+type countingFailingReadCloser struct {
+	err    error
+	closed int
+}
+
+func (r *countingFailingReadCloser) Read([]byte) (int, error) { return 0, r.err }
+
+func (r *countingFailingReadCloser) Close() error {
+	r.closed++
+	return nil
+}
+
+type countingDataReadCloser struct {
+	reader io.Reader
+	closed int
+}
+
+func (r *countingDataReadCloser) Read(p []byte) (int, error) { return r.reader.Read(p) }
+
+func (r *countingDataReadCloser) Close() error {
+	r.closed++
+	return nil
+}
 
 type closeErrorReadCloser struct {
 	err error
@@ -2126,6 +2397,22 @@ func openAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
 	wav.WriteString("data")
 	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
 	wav.Write(pcm)
+	return wav.Bytes()
+}
+
+func openAITTSTestInvalidWAV() []byte {
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(3))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(24000))
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(96000))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(4))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(32))
 	return wav.Bytes()
 }
 

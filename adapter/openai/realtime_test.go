@@ -1327,6 +1327,7 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	instructionsUpdate := <-messages
 	assertRealtimeMessage(t, instructionsUpdate, "session.update", "answer briefly")
 	assertRealtimeMessageEventID(t, instructionsUpdate, "instructions_update_")
+	assertRealtimeSessionType(t, instructionsUpdate)
 
 	if err := session.UpdateTools([]llm.Tool{requestTestTool{}}); err != nil {
 		t.Fatalf("UpdateTools error = %v", err)
@@ -1334,6 +1335,7 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	toolsUpdate := <-messages
 	assertRealtimeMessage(t, toolsUpdate, "session.update", "lookup")
 	assertRealtimeMessageEventID(t, toolsUpdate, "tools_update_")
+	assertRealtimeSessionType(t, toolsUpdate)
 
 	chatCtx := llm.NewChatContext()
 	chatCtx.Items = []llm.ChatItem{
@@ -1355,7 +1357,9 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "alloy"}); err != nil {
 		t.Fatalf("UpdateOptions voice error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "session.update", "alloy")
+	optionsUpdate := <-messages
+	assertRealtimeMessage(t, optionsUpdate, "session.update", "alloy")
+	assertRealtimeSessionType(t, optionsUpdate)
 	if err := session.UpdateOptions(llm.RealtimeSessionOptions{ToolChoice: "auto"}); err != nil {
 		t.Fatalf("UpdateOptions unchanged tool choice error = %v", err)
 	}
@@ -2283,6 +2287,21 @@ func assertRealtimeMessage(t *testing.T, raw string, wantType string, wantContai
 	}
 	if wantContains != "" && !strings.Contains(raw, wantContains) {
 		t.Fatalf("message %s does not contain %q", raw, wantContains)
+	}
+}
+
+func assertRealtimeSessionType(t *testing.T, raw string) {
+	t.Helper()
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(raw), &msg); err != nil {
+		t.Fatalf("message %q is not JSON: %v", raw, err)
+	}
+	session, ok := msg["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("message %q session = %#v, want object", raw, msg["session"])
+	}
+	if session["type"] != "realtime" {
+		t.Fatalf("session type = %#v, want realtime; raw=%s", session["type"], raw)
 	}
 }
 
@@ -4276,6 +4295,64 @@ func TestRealtimeSessionReconnectReplaysUpdatedOptions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("session did not replay updated options after reconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+}
+
+func TestRealtimeSessionReconnectReplaysEmptyInstructions(t *testing.T) {
+	var dialCount atomic.Int32
+	instructionsReplayed := make(chan map[string]any, 1)
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		_, initialPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read instructions update error = %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		var initialUpdate map[string]any
+		if err := json.Unmarshal(initialPayload, &initialUpdate); err != nil {
+			t.Errorf("Decode replayed initial session update error = %v", err)
+			return
+		}
+		instructionsReplayed <- initialUpdate
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateInstructions(""); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+
+	select {
+	case update := <-instructionsReplayed:
+		sessionPayload := update["session"].(map[string]any)
+		instructions, ok := sessionPayload["instructions"]
+		if !ok || instructions != "" {
+			t.Fatalf("replayed instructions = %#v (present=%v), want explicit empty string", instructions, ok)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session did not replay empty instructions after reconnect")
 	}
 	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 	if reconnected.Reconnect == nil {

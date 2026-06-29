@@ -886,6 +886,92 @@ func TestOpenAISTTStreamReturnsAPIConnectionErrorWhenReconnectFails(t *testing.T
 	}
 }
 
+func TestOpenAISTTReconnectFailureClosesVADStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+	)
+	var dialCount atomic.Int32
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		if dialCount.Add(1) > 1 {
+			return nil, nil, errors.New("redial refused")
+		}
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			_ = conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "provider failed"),
+				time.Now().Add(time.Second),
+			)
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after reconnect failure")
+	}
+}
+
+func TestOpenAIRealtimeSTTErrorClosesVADStreamLikeReference(t *testing.T) {
+	vadStream := newFakeOpenAISTTVADStream()
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+		WithOpenAISTTVAD(&fakeOpenAISTTVAD{stream: vadStream}),
+		WithOpenAISTTConnectOptions(llm.APIConnectOptions{MaxRetry: 0, Timeout: time.Second}),
+	)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+				"type":"error",
+				"error":{"message":"bad audio","code":"invalid_audio"}
+			}`)); err != nil {
+				t.Errorf("write provider error: %v", err)
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	select {
+	case <-vadStream.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("VAD stream was not closed after provider error")
+	}
+}
+
 func TestOpenAISTTStreamReconnectsAfterUnexpectedClose(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -2472,7 +2558,6 @@ func TestOpenAIRealtimeSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testin
 		stream.errCh <- errors.New("stream failed")
 
 		event, err := stream.Next()
-		cancel()
 		if err != nil {
 			t.Fatalf("Next error = %v, want queued transcript before stream error", err)
 		}
@@ -2482,6 +2567,63 @@ func TestOpenAIRealtimeSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testin
 		if got := event.Alternatives[0].Text; got != "final words" {
 			t.Fatalf("transcript = %q, want final words", got)
 		}
+		_, err = stream.Next()
+		if err == nil || err.Error() != "stream failed" {
+			t.Fatalf("second Next error = %v, want queued stream error after transcript", err)
+		}
+		cancel()
+	}
+}
+
+func TestOpenAIRealtimeSTTNextDrainsQueuedStreamBeforeError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eventStream := newOpenAIRealtimeQueuedStream[*stt.SpeechEvent]()
+	defer eventStream.Close()
+	stream := &openAIRealtimeSTTStream{
+		ctx:         ctx,
+		cancel:      cancel,
+		events:      eventStream.rawChan(),
+		eventStream: eventStream,
+		errCh:       make(chan error, 1),
+	}
+	eventStream.Send(&stt.SpeechEvent{
+		Type:      stt.SpeechEventFinalTranscript,
+		RequestID: "item-final",
+		Alternatives: []stt.SpeechData{{
+			Text:     "final words",
+			Language: "en",
+		}},
+	})
+	eventStream.Send(&stt.SpeechEvent{
+		Type: stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: 1.25,
+			InputTokens:   3,
+			OutputTokens:  5,
+		},
+	})
+	stream.errCh <- errors.New("stream failed")
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want queued final transcript", err)
+	}
+	if first.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("first event = %#v, want final transcript", first)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want queued usage before stream error", err)
+	}
+	if second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("second event = %#v, want recognition usage", second)
+	}
+
+	_, err = stream.Next()
+	if err == nil || err.Error() != "stream failed" {
+		t.Fatalf("third Next error = %v, want queued stream error after events", err)
 	}
 }
 
