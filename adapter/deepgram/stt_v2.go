@@ -678,23 +678,42 @@ func (s *deepgramV2Stream) flushRecognitionUsageLocked() {
 }
 
 func (s *deepgramV2Stream) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
 	s.closed = true
-	_ = s.conn.WriteMessage(websocket.TextMessage, []byte(deepgramSTTv2CloseMessage))
-	if s.cancel != nil {
-		s.cancel()
+	if s.conn != nil {
+		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(deepgramSTTv2CloseMessage))
 	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
+	}
+	if s.conn == nil {
+		return nil
 	}
 	return s.conn.Close()
 }
 
 func (s *deepgramV2Stream) Next() (*stt.SpeechEvent, error) {
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	default:
+	}
+
 	if s.isClosed() {
 		select {
 		case event, ok := <-s.events:

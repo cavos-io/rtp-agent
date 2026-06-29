@@ -724,6 +724,112 @@ func TestDeepgramSTTv2SendEventWaitsForConsumer(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2CloseUnblocksBackpressuredEventSend(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &deepgramV2Stream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+
+	sendStarted := make(chan struct{})
+	sendDone := make(chan struct{})
+	go func() {
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		close(sendStarted)
+		stream.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventFinalTranscript})
+		close(sendDone)
+	}()
+
+	select {
+	case <-sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for blocked event send")
+	}
+	select {
+	case <-sendDone:
+		t.Fatal("sendEvent returned before Close canceled stream context")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not unblock backpressured event send")
+	}
+	select {
+	case <-sendDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocked sendEvent did not exit after Close")
+	}
+}
+
+func TestDeepgramSTTv2UsageFlushDoesNotBlockConsumer(t *testing.T) {
+	stream := &deepgramV2Stream{
+		ctx:        context.Background(),
+		events:     make(chan *stt.SpeechEvent, 1),
+		errCh:      make(chan error, 1),
+		requestID:  "req-usage",
+		usageTotal: 0.25,
+	}
+	first := &stt.SpeechEvent{Type: stt.SpeechEventInterimTranscript}
+	stream.events <- first
+
+	flushDone := make(chan struct{})
+	go func() {
+		stream.mu.Lock()
+		defer stream.mu.Unlock()
+		stream.flushRecognitionUsageLocked()
+		close(flushDone)
+	}()
+
+	nextDone := make(chan *stt.SpeechEvent, 1)
+	nextErr := make(chan error, 1)
+	go func() {
+		event, err := stream.Next()
+		nextDone <- event
+		nextErr <- err
+	}()
+
+	select {
+	case event := <-nextDone:
+		if err := <-nextErr; err != nil {
+			t.Fatalf("Next() error = %v, want queued event", err)
+		}
+		if event != first {
+			t.Fatalf("Next() event = %+v, want first queued event %+v", event, first)
+		}
+	case <-time.After(200 * time.Millisecond):
+		<-stream.events
+		<-flushDone
+		t.Fatal("Next() blocked behind usage flush stream lock")
+	}
+
+	select {
+	case <-flushDone:
+	case <-time.After(time.Second):
+		t.Fatal("usage flush did not finish after consumer drained queue")
+	}
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() usage error = %v", err)
+	}
+	if usage.Type != stt.SpeechEventRecognitionUsage || usage.RequestID != "req-usage" {
+		t.Fatalf("usage event = %+v, want recognition_usage for req-usage", usage)
+	}
+}
+
 func TestDeepgramSTTv2ErrorMessageReturnsAPIStatusError(t *testing.T) {
 	stream := &deepgramV2Stream{}
 
