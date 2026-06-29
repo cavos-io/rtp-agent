@@ -3542,6 +3542,9 @@ func TestOpenAIRealtimeSTTCompletedWithoutItemIDClearsCurrentPartial(t *testing.
 	if len(events) != 1 || events[0].Type != stt.SpeechEventInterimTranscript {
 		t.Fatalf("events = %+v, want fresh interim transcript", events)
 	}
+	if events[0].RequestID != "item-1" {
+		t.Fatalf("RequestID = %q, want previous item_id retained after id-less completion", events[0].RequestID)
+	}
 	if events[0].Alternatives[0].Text != "new" {
 		t.Fatalf("interim text = %q, want fresh transcript after completed reset", events[0].Alternatives[0].Text)
 	}
