@@ -980,6 +980,32 @@ func TestDeepgramSTTRecognizeMalformedEnvelopeReturnsAPIConnectionError(t *testi
 	}
 }
 
+func TestDeepgramSTTRecognizePreservesEmptyReferenceAlternatives(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"req-empty-alts"},"results":{"channels":[{"alternatives":[]}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v", err)
+	}
+	if event == nil || event.RequestID != "req-empty-alts" || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event = %+v, want final transcript with request id", event)
+	}
+	if len(event.Alternatives) != 0 {
+		t.Fatalf("alternatives = %d, want 0", len(event.Alternatives))
+	}
+}
+
 func TestDeepgramSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	oldClient := http.DefaultClient
 	requests := make(chan *http.Request, 1)

@@ -893,9 +893,8 @@ func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) erro
 
 func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languageStr string) *stt.SpeechEvent {
 	event := &stt.SpeechEvent{
-		Type:         stt.SpeechEventFinalTranscript,
-		RequestID:    resp.Metadata.RequestID,
-		Alternatives: []stt.SpeechData{{Language: languageStr}},
+		Type:      stt.SpeechEventFinalTranscript,
+		RequestID: resp.Metadata.RequestID,
 	}
 
 	if len(resp.Results.Channels) == 0 || len(resp.Results.Channels[0].Alternatives) == 0 {
@@ -903,7 +902,6 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 	}
 
 	channel := resp.Results.Channels[0]
-	event.Alternatives = event.Alternatives[:0]
 	for _, alt := range channel.Alternatives {
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
 			Language:   deepgramRecognizeLanguage(languageStr, channel.DetectedLanguage),
