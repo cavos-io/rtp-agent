@@ -2211,6 +2211,33 @@ func TestOpenAITTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSDecodedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	body := newBlockingEOFReadCloser(nil)
+	stream := &openaiTTSChunkedStream{
+		resp:           body,
+		responseFormat: goopenai.SpeechResponseFormatMp3,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after decoded Close during read error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for decoded Next to unblock after Close")
+	}
+}
+
 func TestOpenAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	body := newBlockingReadErrorAfterClose()
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
