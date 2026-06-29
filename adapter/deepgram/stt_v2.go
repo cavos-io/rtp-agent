@@ -442,7 +442,11 @@ func (s *deepgramV2Stream) readLoop(conn *websocket.Conn) {
 		msgType, message, err := conn.ReadMessage()
 		if err != nil {
 			if s.isCurrentConn(conn) && !s.isClosed() && !s.hasInputEnded() {
-				s.sendError(deepgramSTTUnexpectedCloseError(err))
+				if reconnectErr := s.reconnectAfterUnexpectedClose(conn); reconnectErr == nil {
+					return
+				} else {
+					s.sendError(reconnectErr)
+				}
 			}
 			return
 		}
@@ -530,6 +534,9 @@ func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
 			return nil
 		}
 		s.speaking = false
+		if deepgramV2MalformedTranscript(resp) {
+			return nil
+		}
 		s.sendTranscriptEvent(stt.SpeechEventFinalTranscript, resp)
 		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech})
 	}
@@ -550,6 +557,15 @@ func (s *deepgramV2Stream) sendTranscriptEvent(eventType stt.SpeechEventType, re
 
 func deepgramV2HasTranscript(resp deepgramV2Response) bool {
 	return len(resp.Words) > 0
+}
+
+func deepgramV2MalformedTranscript(resp deepgramV2Response) bool {
+	for _, word := range resp.Words {
+		if word.parsedJSON && !word.confidenceSeen {
+			return true
+		}
+	}
+	return false
 }
 
 func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOffset float64) []stt.SpeechData {
@@ -694,6 +710,36 @@ func (s *deepgramV2Stream) reconnectNow() {
 	if err != nil {
 		s.sendError(err)
 	}
+}
+
+func (s *deepgramV2Stream) reconnectAfterUnexpectedClose(conn *websocket.Conn) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputEnded || conn != s.conn {
+		return nil
+	}
+	s.advanceTimingForReconnectLocked(time.Now())
+	s.audioBStream = nil
+	if err := s.reconnectLocked(); err != nil {
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.conn != nil {
+			_ = s.conn.Close()
+		}
+		return err
+	}
+	s.reconnectNext = false
+	return nil
+}
+
+func (s *deepgramV2Stream) advanceTimingForReconnectLocked(now time.Time) {
+	nowSeconds := float64(now.UnixNano()) / 1e9
+	if s.start > 0 && nowSeconds > s.start {
+		s.offset += nowSeconds - s.start
+	}
+	s.start = nowSeconds
 }
 
 func (s *deepgramV2Stream) Flush() error {

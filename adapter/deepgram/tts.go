@@ -290,32 +290,53 @@ type deepgramTTSChunkedStream struct {
 	pendingFinal bool
 	finalSent    bool
 	mu           sync.Mutex
+	readMu       sync.Mutex
 }
 
 func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.resp == nil || s.resp.Body == nil || s.finalSent {
 		if !s.started && !s.finalSent {
 			if err := s.startRequestLocked(); err != nil {
+				s.mu.Unlock()
 				return nil, err
 			}
 			if s.resp == nil || s.resp.Body == nil || s.finalSent {
+				s.mu.Unlock()
 				return nil, io.EOF
 			}
 		} else {
+			s.mu.Unlock()
 			return nil, io.EOF
 		}
 	}
 	if s.resp == nil || s.resp.Body == nil || s.finalSent {
+		s.mu.Unlock()
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
 		s.pendingFinal = false
-		return s.emitFinal()
+		audio, err := s.emitFinal()
+		s.mu.Unlock()
+		return audio, err
 	}
+	body := s.resp.Body
+	encoding := s.encoding
+	sampleRate := s.sampleRate
+	requestID := s.requestID
+	s.mu.Unlock()
+
 	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
+	n, err := body.Read(buf)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.finalSent {
+		return nil, io.EOF
+	}
 	if n > 0 && err == io.EOF {
 		s.pendingFinal = true
 	}
@@ -334,12 +355,12 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 
-	frameData := deepgramTTSTelephonyToPCM(s.encoding, buf[:n])
+	frameData := deepgramTTSTelephonyToPCM(encoding, buf[:n])
 	return &tts.SynthesizedAudio{
-		RequestID: s.requestID,
+		RequestID: requestID,
 		Frame: &model.AudioFrame{
 			Data:              frameData,
-			SampleRate:        uint32(s.sampleRate),
+			SampleRate:        uint32(sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(len(frameData) / 2),
 		},
@@ -359,7 +380,16 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Token "+s.apiKey)
 
+	s.mu.Unlock()
 	resp, err := http.DefaultClient.Do(req)
+	s.mu.Lock()
+	if s.finalSent {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		s.cancelRequestLocked()
+		return io.EOF
+	}
 	if err != nil {
 		s.cancelRequestLocked()
 		s.finalSent = true
