@@ -424,6 +424,24 @@ func TestDeepgramSTTKeepAliveIntervalMatchesReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTControlMessagesMatchReferenceJSONDumps(t *testing.T) {
+	want := map[string]string{
+		"keepalive":    `{"type": "KeepAlive"}`,
+		"finalize":     `{"type": "Finalize"}`,
+		"close_stream": `{"type": "CloseStream"}`,
+	}
+	got := map[string]string{
+		"keepalive":    deepgramSTTKeepAliveMessage,
+		"finalize":     deepgramSTTFinalizeMessage,
+		"close_stream": deepgramSTTCloseStreamMessage,
+	}
+	for name, wantPayload := range want {
+		if got[name] != wantPayload {
+			t.Fatalf("%s control message = %q, want Python json.dumps payload %q", name, got[name], wantPayload)
+		}
+	}
+}
+
 func TestDeepgramSTTStreamSendsReferenceImmediateKeepAlive(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -1461,7 +1479,7 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	if len(textWrites) != 1 {
 		t.Fatalf("text writes after Flush = %d, want Finalize", len(textWrites))
 	}
-	if got := textWrites[0]; got != `{"type":"Finalize"}` {
+	if got := textWrites[0]; got != deepgramSTTFinalizeMessage {
 		t.Fatalf("Finalize payload = %q, want exact reference payload", got)
 	}
 }
@@ -1642,7 +1660,7 @@ func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
 		cancel: cancel,
 		events: make(chan *stt.SpeechEvent, 1),
 		writeText: func(payload string) error {
-			if payload == `{"type":"CloseStream"}` {
+			if payload == deepgramSTTCloseStreamMessage {
 				close(closeSent)
 			}
 			return nil
@@ -1702,7 +1720,7 @@ func TestDeepgramSTTStreamCloseSendsReferenceCloseStreamText(t *testing.T) {
 	if len(textWrites) != 1 {
 		t.Fatalf("text writes after Close = %d, want CloseStream", len(textWrites))
 	}
-	if got := textWrites[0]; got != `{"type":"CloseStream"}` {
+	if got := textWrites[0]; got != deepgramSTTCloseStreamMessage {
 		t.Fatalf("CloseStream payload = %q, want exact reference payload", got)
 	}
 }
@@ -1858,7 +1876,7 @@ func runDeepgramImmediateKeepAliveWebsocketServer(conn net.Conn, errCh chan<- er
 		errCh <- err
 		return
 	}
-	if opcode != websocket.TextMessage || string(payload) != `{"type":"KeepAlive"}` {
+	if opcode != websocket.TextMessage || string(payload) != deepgramSTTKeepAliveMessage {
 		errCh <- fmt.Errorf("first websocket frame = opcode %d payload %q, want immediate KeepAlive", opcode, payload)
 		return
 	}
@@ -1876,7 +1894,7 @@ func readDeepgramSTTInitialKeepAlive(conn net.Conn, reader *bufio.Reader) error 
 	if err != nil {
 		return err
 	}
-	if opcode != websocket.TextMessage || string(payload) != `{"type":"KeepAlive"}` {
+	if opcode != websocket.TextMessage || string(payload) != deepgramSTTKeepAliveMessage {
 		return fmt.Errorf("first websocket frame = opcode %d payload %q, want immediate KeepAlive", opcode, payload)
 	}
 	return nil

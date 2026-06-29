@@ -62,6 +62,9 @@ type DeepgramSTTOption func(*DeepgramSTT)
 
 const deepgramSTTKeepAliveInterval = 5 * time.Second
 const deepgramSTTUsageInterval = 5 * time.Second
+const deepgramSTTKeepAliveMessage = `{"type": "KeepAlive"}`
+const deepgramSTTFinalizeMessage = `{"type": "Finalize"}`
+const deepgramSTTCloseStreamMessage = `{"type": "CloseStream"}`
 
 func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
@@ -914,7 +917,7 @@ func (s *deepgramStream) sendKeepAlive() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.closed {
-		_ = s.writeTextData(`{"type":"KeepAlive"}`, map[string]string{"type": "KeepAlive"})
+		_ = s.writeTextData(deepgramSTTKeepAliveMessage, map[string]string{"type": "KeepAlive"})
 	}
 }
 
@@ -1060,7 +1063,7 @@ func (s *deepgramStream) Flush() error {
 		return nil
 	}
 	s.flushRecognitionUsageLocked()
-	if err := s.writeTextData(`{"type":"Finalize"}`, map[string]string{"type": "Finalize"}); err != nil {
+	if err := s.writeTextData(deepgramSTTFinalizeMessage, map[string]string{"type": "Finalize"}); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -1087,7 +1090,7 @@ func (s *deepgramStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	_ = s.writeTextData(`{"type":"CloseStream"}`, map[string]string{"type": "CloseStream"})
+	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
 	s.sendConnectionUsageRemainderLocked()
