@@ -36,6 +36,7 @@ type OpenAITTS struct {
 	model          openai.SpeechModel
 	voice          openai.SpeechVoice
 	baseURL        string
+	baseURLSet     bool
 	speed          float64
 	instructions   string
 	responseFormat openai.SpeechResponseFormat
@@ -93,6 +94,7 @@ func WithOpenAITTSBaseURL(baseURL string) OpenAITTSOption {
 	return func(t *OpenAITTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
+			t.baseURLSet = true
 		}
 	}
 }
@@ -169,6 +171,9 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	}
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
+	}
+	if provider.baseURLSet {
+		config.BaseURL = provider.baseURL
 	}
 	config.HTTPClient = &openAITTSStreamFormatHTTPClient{base: config.HTTPClient, provider: provider}
 	if apiKey == "" && azureADToken != "" {
