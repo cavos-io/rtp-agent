@@ -61,6 +61,7 @@ type DeepgramKeyword struct {
 type DeepgramSTTOption func(*DeepgramSTT)
 
 const deepgramSTTKeepAliveInterval = 5 * time.Second
+const deepgramSTTUsageInterval = 5 * time.Second
 
 func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
@@ -595,20 +596,22 @@ func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {
 }
 
 type deepgramStream struct {
-	provider      *DeepgramSTT
-	conn          *websocket.Conn
-	streamURL     string
-	events        chan *stt.SpeechEvent
-	errCh         chan error
-	mu            sync.Mutex
-	closed        bool
-	speaking      bool
-	reconnectNext bool
-	requestID     string
-	start         float64
-	offset        float64
-	connStart     time.Time
-	reportedAudio float64
+	provider       *DeepgramSTT
+	conn           *websocket.Conn
+	streamURL      string
+	events         chan *stt.SpeechEvent
+	errCh          chan error
+	mu             sync.Mutex
+	closed         bool
+	speaking       bool
+	reconnectNext  bool
+	requestID      string
+	start          float64
+	offset         float64
+	connStart      time.Time
+	reportedAudio  float64
+	usageTotal     float64
+	usageLastFlush time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -915,14 +918,21 @@ func (s *deepgramStream) sendRecognitionUsage(frame *model.AudioFrame) {
 	if duration <= 0 {
 		return
 	}
-	s.reportedAudio += duration
-	s.sendRecognitionUsageDuration(duration)
+	s.usageTotal += duration
+	if s.usageLastFlush.IsZero() {
+		s.usageLastFlush = time.Now()
+		return
+	}
+	if time.Since(s.usageLastFlush) >= deepgramSTTUsageInterval {
+		s.flushRecognitionUsageLocked()
+	}
 }
 
 func (s *deepgramStream) sendRecognitionUsageDuration(duration float64) {
 	if s.ctx == nil || s.events == nil || duration <= 0 {
 		return
 	}
+	s.reportedAudio += duration
 	s.sendEvent(&stt.SpeechEvent{
 		Type:      stt.SpeechEventRecognitionUsage,
 		RequestID: s.requestID,
@@ -930,6 +940,16 @@ func (s *deepgramStream) sendRecognitionUsageDuration(duration float64) {
 			AudioDuration: duration,
 		},
 	})
+}
+
+func (s *deepgramStream) flushRecognitionUsageLocked() {
+	if s.usageTotal <= 0 {
+		return
+	}
+	duration := s.usageTotal
+	s.usageTotal = 0
+	s.usageLastFlush = time.Now()
+	s.sendRecognitionUsageDuration(duration)
 }
 
 func (s *deepgramStream) sendError(err error) {
@@ -1019,6 +1039,7 @@ func (s *deepgramStream) Flush() error {
 			s.sendRecognitionUsage(chunk)
 		}
 	}
+	s.flushRecognitionUsageLocked()
 	if err := s.writeJSONData(map[string]string{"type": "Finalize"}); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
@@ -1030,6 +1051,7 @@ func (s *deepgramStream) sendConnectionUsageRemainderLocked() {
 	if s.connStart.IsZero() {
 		return
 	}
+	s.flushRecognitionUsageLocked()
 	remainder := time.Since(s.connStart).Seconds() - s.reportedAudio
 	s.connStart = time.Time{}
 	s.reportedAudio = 0

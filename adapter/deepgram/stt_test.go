@@ -1190,6 +1190,7 @@ func TestDeepgramSTTRecognitionUsageCarriesReferenceRequestID(t *testing.T) {
 		NumChannels:       1,
 		SamplesPerChannel: 800,
 	})
+	rawStream.flushRecognitionUsageLocked()
 	rawStream.mu.Unlock()
 
 	usage := nextDeepgramTestSpeechEvent(t, stream)
@@ -1466,12 +1467,12 @@ func TestDeepgramSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
-	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.05)
+	assertNoDeepgramRecognitionUsageEvent(t, stream.events)
 
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
-	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.0125)
+	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.0625)
 }
 
 func TestDeepgramSTTStreamCloseEmitsReferenceRecognitionUsageRemainder(t *testing.T) {
@@ -1930,6 +1931,15 @@ func assertDeepgramRecognitionUsageEvent(t *testing.T, events <-chan *stt.Speech
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for recognition usage event")
+	}
+}
+
+func assertNoDeepgramRecognitionUsageEvent(t *testing.T, events <-chan *stt.SpeechEvent) {
+	t.Helper()
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected event before reference usage flush: %+v", event)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 
