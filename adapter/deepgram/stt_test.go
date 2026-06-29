@@ -1633,8 +1633,8 @@ func TestDeepgramSTTProviderCloseClosesActiveStreams(t *testing.T) {
 		SampleRate:        16000,
 		NumChannels:       1,
 		SamplesPerChannel: 160,
-	}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after provider Close = %v, want io.ErrClosedPipe", err)
+	}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after provider Close = %v, want stream input ended", err)
 	}
 
 	select {
@@ -2884,6 +2884,27 @@ func TestDeepgramSTTCloseUnblocksBackpressuredUsageRemainder(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Close() blocked while emitting usage remainder to a full event queue")
+	}
+}
+
+func TestDeepgramSTTStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
+	stream := &deepgramStream{
+		writeText: func(string) error {
+			return nil
+		},
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after Close error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after Close error = %v, want stream input ended", err)
+	}
+	if err := stream.EndInput(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("EndInput after Close error = %v, want stream input ended", err)
 	}
 }
 

@@ -1317,11 +1317,11 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if s.reconnectNext {
 		if err := s.reconnectLocked(); err != nil {
@@ -1353,11 +1353,11 @@ func (s *deepgramStream) PushFrame(frame *model.AudioFrame) error {
 func (s *deepgramStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	flushedFrame := false
 	if tail := s.inputAudio.flush(); tail != nil {
@@ -1584,6 +1584,7 @@ func (s *deepgramStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.inputEnded = true
 	s.closeDraining = true
 	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
 	s.mu.Unlock()
