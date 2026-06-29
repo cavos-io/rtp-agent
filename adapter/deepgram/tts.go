@@ -360,13 +360,14 @@ func (s *deepgramTTSChunkedStream) Close() error {
 }
 
 type deepgramTTSStream struct {
-	provider   *DeepgramTTS
-	conn       *websocket.Conn
-	audio      chan *tts.SynthesizedAudio
-	errCh      chan error
-	mu         sync.Mutex
-	closed     bool
-	inputEnded bool
+	provider    *DeepgramTTS
+	conn        *websocket.Conn
+	audio       chan *tts.SynthesizedAudio
+	errCh       chan error
+	mu          sync.Mutex
+	closed      bool
+	inputEnded  bool
+	drainClosed bool
 
 	sampleRate   int
 	writeJSON    func(any) error
@@ -705,9 +706,11 @@ func (s *deepgramTTSStream) closeAfterFinal() {
 		return
 	}
 	if s.closed {
+		s.drainClosed = true
 		return
 	}
 	s.closed = true
+	s.drainClosed = true
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
@@ -715,13 +718,34 @@ func (s *deepgramTTSStream) closeAfterFinal() {
 }
 
 func (s *deepgramTTSStream) isClosed() bool {
+	closed, _ := s.closedState()
+	return closed
+}
+
+func (s *deepgramTTSStream) closedState() (bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.closed
+	return s.closed, s.drainClosed
 }
 
 func (s *deepgramTTSStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.isClosed() {
+	if closed, drainClosed := s.closedState(); closed {
+		if drainClosed {
+			select {
+			case audio, ok := <-s.audio:
+				if ok {
+					return audio, nil
+				}
+				select {
+				case err := <-s.errCh:
+					return nil, err
+				default:
+					return nil, io.EOF
+				}
+			default:
+				return nil, io.EOF
+			}
+		}
 		for {
 			select {
 			case audio, ok := <-s.audio:
