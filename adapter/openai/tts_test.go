@@ -575,6 +575,73 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSynthesizeSnapshotsReferenceOptions(t *testing.T) {
+	requestBody := make(chan string, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		requestBody <- string(body)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSSpeed(1.25),
+		WithOpenAITTSInstructions("speak warmly"),
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions(
+		WithOpenAITTSModel(goopenai.TTSModel1HD),
+		WithOpenAITTSVoice(goopenai.VoiceNova),
+		WithOpenAITTSSpeed(0.5),
+		WithOpenAITTSInstructions("speak slowly"),
+	)
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	var body string
+	select {
+	case body = <-requestBody:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for speech request")
+	}
+	for _, want := range []string{
+		`"model":"tts-1"`,
+		`"voice":"ash"`,
+		`"speed":1.25`,
+		`"instructions":"speak warmly"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("request body = %s, want snapshot field %s", body, want)
+		}
+	}
+	for _, stale := range []string{
+		`"model":"tts-1-hd"`,
+		`"voice":"nova"`,
+		`"speed":0.5`,
+		`"instructions":"speak slowly"`,
+	} {
+		if strings.Contains(body, stale) {
+			t.Fatalf("request body = %s, contains post-synthesize option %s", body, stale)
+		}
+	}
+}
+
 func TestOpenAITTSSynthesizeUsesUnknownRequestIDFallback(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
