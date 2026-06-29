@@ -380,7 +380,16 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Token "+s.apiKey)
 
+	s.mu.Unlock()
 	resp, err := http.DefaultClient.Do(req)
+	s.mu.Lock()
+	if s.finalSent {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		s.cancelRequestLocked()
+		return io.EOF
+	}
 	if err != nil {
 		s.cancelRequestLocked()
 		s.finalSent = true

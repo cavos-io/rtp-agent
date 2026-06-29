@@ -690,6 +690,56 @@ func TestDeepgramTTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSChunkedStreamCloseCancelsInFlightRequest(t *testing.T) {
+	entered := make(chan struct{})
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		close(entered)
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start Deepgram TTS request")
+	}
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close() blocked behind in-flight request")
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next did not return after Close canceled in-flight request")
+	}
+}
+
 func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	stream := &deepgramTTSChunkedStream{
 		resp:       &http.Response{Body: &deepgramTTSFinalReadCloser{data: []byte{0x01, 0x02, 0x03, 0x04}}},
