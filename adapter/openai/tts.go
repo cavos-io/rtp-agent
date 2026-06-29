@@ -736,6 +736,7 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 }
 
 func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
+	defer func() { _ = s.Close() }()
 	return &tts.SynthesizedAudio{IsFinal: true, RequestID: s.requestID}
 }
 

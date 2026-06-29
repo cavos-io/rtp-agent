@@ -1660,6 +1660,48 @@ func TestOpenAITTSRawAudioStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSFinalMarkerClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: bytes.NewReader([]byte{1, 2, 3, 4})}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil || audio == nil || audio.IsFinal {
+		t.Fatalf("first Next = (%#v, %v), want provider audio", audio, err)
+	}
+	final, err := stream.Next()
+	if err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("second Next = (%#v, %v), want final marker", final, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after final marker", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want completed stream unregistered", streamCount)
+	}
+	if audio, err = stream.Next(); !errors.Is(err, io.EOF) || audio != nil {
+		t.Fatalf("Next after final = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestOpenAITTSRawAudioStreamReturnsEOFWhenEmpty(t *testing.T) {
 	stream := &openaiTTSChunkedStream{
 		resp:           io.NopCloser(strings.NewReader("")),
