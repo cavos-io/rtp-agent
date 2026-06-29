@@ -2356,6 +2356,40 @@ func TestOpenAIStreamErrorAfterChunkIsNonRetryable(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamTerminalErrorUnregistersReferenceStream(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"error":{"message":"stream failed","type":"server_error","code":"server_error"}}`+"\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	model.mu.Lock()
+	streamCount := len(model.streams)
+	model.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want terminal-error stream unregistered", streamCount)
+	}
+	if chunk, err := stream.Next(); chunk != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after terminal error = (%#v, %v), want EOF", chunk, err)
+	}
+}
+
 func TestOpenAIStreamSkipsAzureNullDelta(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
