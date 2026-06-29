@@ -430,9 +430,9 @@ type openaiTTSChunkedStream struct {
 	metricsStarted  time.Time
 	metricsFirst    time.Time
 	metricsAudio    float64
+	metricsEmitted  bool
 	sseInputTokens  int
 	sseOutputTokens int
-	sseUsagePending bool
 }
 
 func (s *openaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -741,7 +741,7 @@ func (s *openaiTTSChunkedStream) nextSSEDecodedAudio() (*tts.SynthesizedAudio, e
 }
 
 func (s *openaiTTSChunkedStream) finalAudio() *tts.SynthesizedAudio {
-	s.emitPendingSSEUsageMetrics()
+	s.emitTTSMetrics()
 	defer func() { _ = s.Close() }()
 	return &tts.SynthesizedAudio{IsFinal: true, RequestID: s.requestID}
 }
@@ -1091,14 +1091,13 @@ func (s *openaiTTSChunkedStream) recordSSEUsage(event map[string]any) {
 	}
 	s.sseInputTokens = inputTokens
 	s.sseOutputTokens = outputTokens
-	s.sseUsagePending = true
 }
 
-func (s *openaiTTSChunkedStream) emitPendingSSEUsageMetrics() {
-	if s.provider == nil || !s.sseUsagePending {
+func (s *openaiTTSChunkedStream) emitTTSMetrics() {
+	if s.provider == nil || s.metricsEmitted {
 		return
 	}
-	s.sseUsagePending = false
+	s.metricsEmitted = true
 	duration := 0.0
 	if !s.metricsStarted.IsZero() {
 		duration = time.Since(s.metricsStarted).Seconds()

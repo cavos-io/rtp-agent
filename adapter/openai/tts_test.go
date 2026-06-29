@@ -1173,6 +1173,63 @@ func TestOpenAITTSSSEStreamHandlesLargeAudioDelta(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSRawAudioEmitsReferenceMetrics(t *testing.T) {
+	const requestID = "req_raw_metrics"
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/octet-stream"}, "X-Request-Id": []string{requestID}},
+			Body:       io.NopCloser(bytes.NewReader(bytes.Repeat([]byte{1, 2}, 1200))),
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	metricsCh := make(chan *telemetry.TTSMetrics, 1)
+	provider.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		metricsCh <- metrics
+	})
+
+	stream, err := provider.Synthesize(context.Background(), "raw metrics")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("audio Next error = %v", err)
+	}
+	if audio == nil || audio.IsFinal || audio.RequestID != requestID {
+		t.Fatalf("audio = %#v, want raw PCM frame with request id", audio)
+	}
+	select {
+	case metrics := <-metricsCh:
+		t.Fatalf("metrics emitted before final marker: %#v", metrics)
+	default:
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != requestID {
+		t.Fatalf("final = %#v, want final marker with request id", final)
+	}
+	select {
+	case metrics := <-metricsCh:
+		if metrics.RequestID != requestID || metrics.InputTokens != 0 || metrics.OutputTokens != 0 {
+			t.Fatalf("metrics = %#v, want request id and zero token usage", metrics)
+		}
+		if metrics.AudioDuration <= 0 || metrics.TTFB < 0 {
+			t.Fatalf("metrics audio/ttfb = %f/%f, want synthesized audio timing", metrics.AudioDuration, metrics.TTFB)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for raw audio reference metrics")
+	}
+}
+
 func TestOpenAITTSSSEPCMEmitsFinalMarkerAfterDone(t *testing.T) {
 	wantAudio := []byte{0x01, 0x00, 0x02, 0x00}
 	sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
