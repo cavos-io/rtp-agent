@@ -826,11 +826,20 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 	defer func() {
 		s.mu.Lock()
 		stale := conn != s.conn
+		if !stale && !s.closed {
+			s.closed = true
+			if s.cancel != nil {
+				s.cancel()
+			}
+			if s.provider != nil {
+				s.provider.unregisterStream(s)
+			}
+			_ = s.closeConnection()
+		}
 		s.mu.Unlock()
 		if stale {
 			return
 		}
-		_ = s.Close()
 		close(s.events)
 	}()
 
@@ -888,18 +897,23 @@ func deepgramSTTUnexpectedCloseError(err error) error {
 func (s *deepgramStream) keepAliveLoop() {
 	ticker := time.NewTicker(deepgramSTTKeepAliveInterval)
 	defer ticker.Stop()
+	s.sendKeepAlive()
 
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			s.mu.Lock()
-			if !s.closed {
-				_ = s.conn.WriteJSON(map[string]string{"type": "KeepAlive"})
-			}
-			s.mu.Unlock()
+			s.sendKeepAlive()
 		}
+	}
+}
+
+func (s *deepgramStream) sendKeepAlive() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`))
 	}
 }
 
@@ -1181,6 +1195,11 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 			if ok {
 				return event, nil
 			}
+		default:
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
 		default:
 		}
 		return nil, io.EOF

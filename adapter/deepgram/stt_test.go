@@ -424,6 +424,34 @@ func TestDeepgramSTTKeepAliveIntervalMatchesReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamSendsReferenceImmediateKeepAlive(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramImmediateKeepAliveWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
 	t.Setenv("DEEPGRAM_API_KEY", "env-key")
 
@@ -1707,6 +1735,10 @@ func runDeepgramSTTNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake
 		errCh <- err
 		return
 	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
+		errCh <- err
+		return
+	}
 	<-closeAfterHandshake
 	if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "normal provider close")); err != nil {
 		errCh <- err
@@ -1728,13 +1760,68 @@ func runDeepgramHoldOpenWebsocketServer(conn net.Conn, closed chan<- struct{}, e
 		errCh <- err
 		return
 	}
-	_, _, err = readDeepgramSTTTestClientWebsocketFrame(reader)
-	if err != nil && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "closed pipe") {
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed pipe") {
+				close(closed)
+				errCh <- nil
+				return
+			}
+			errCh <- err
+			return
+		}
+		if opcode == websocket.CloseMessage || (opcode == websocket.TextMessage && strings.Contains(string(payload), "CloseStream")) {
+			close(closed)
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func runDeepgramImmediateKeepAliveWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
 		errCh <- err
 		return
 	}
-	close(closed)
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage || string(payload) != `{"type":"KeepAlive"}` {
+		errCh <- fmt.Errorf("first websocket frame = opcode %d payload %q, want immediate KeepAlive", opcode, payload)
+		return
+	}
 	errCh <- nil
+}
+
+func readDeepgramSTTInitialKeepAlive(conn net.Conn, reader *bufio.Reader) error {
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		return err
+	}
+	opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+	if deadlineErr := conn.SetReadDeadline(time.Time{}); deadlineErr != nil && err == nil {
+		err = deadlineErr
+	}
+	if err != nil {
+		return err
+	}
+	if opcode != websocket.TextMessage || string(payload) != `{"type":"KeepAlive"}` {
+		return fmt.Errorf("first websocket frame = opcode %d payload %q, want immediate KeepAlive", opcode, payload)
+	}
+	return nil
 }
 
 func deepgramTestAcceptKey(key string) string {
@@ -1751,6 +1838,10 @@ func runDeepgramSpeechStateWebsocketServer(conn net.Conn, closeServer <-chan str
 		return
 	}
 	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
 		errCh <- err
 		return
 	}
@@ -1780,6 +1871,10 @@ func runDeepgramTimingOffsetWebsocketServer(conn net.Conn, closeServer <-chan st
 		return
 	}
 	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
 		errCh <- err
 		return
 	}
