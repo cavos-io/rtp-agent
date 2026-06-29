@@ -894,6 +894,28 @@ func TestDeepgramSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeAcceptsReferenceSuccessStatusClass(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusPartialContent,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"req-partial"},"results":{"channels":[{"alternatives":[{"transcript":"partial ok","confidence":0.9,"words":[]}]}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize() error = %v, want successful 2xx response", err)
+	}
+	if event == nil || event.RequestID != "req-partial" || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "partial ok" {
+		t.Fatalf("Recognize() event = %+v, want partial-ok transcript", event)
+	}
+}
+
 func TestDeepgramSTTRecognizeReturnsAPITimeoutError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {

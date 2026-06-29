@@ -470,7 +470,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, llm.NewAPIStatusError("Deepgram STT request failed", resp.StatusCode, "", string(respBody))
 	}
