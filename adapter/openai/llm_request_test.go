@@ -24,6 +24,16 @@ func mustNewOpenAILLMWithConfig(t *testing.T, config openaisdk.ClientConfig, mod
 	return provider
 }
 
+func assertOpenAIToolChoiceAutoOmittedWithoutTools(t *testing.T, model *OpenAILLM, requestBody string) {
+	t.Helper()
+	if model.toolChoice != "auto" {
+		t.Fatalf("toolChoice = %#v, want reference default auto", model.toolChoice)
+	}
+	if strings.Contains(requestBody, `"tool_choice"`) {
+		t.Fatalf("request body = %s, want tool_choice omitted when no tools are provided", requestBody)
+	}
+}
+
 type requestTestTool struct{}
 
 func (requestTestTool) ID() string          { return "lookup" }
@@ -646,9 +656,7 @@ func TestNewOVHCloudOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"gpt-oss-120b"`) {
 		t.Fatalf("request body = %s, want default OVHcloud model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewOVHCloudOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -689,9 +697,7 @@ func TestNewDeepSeekOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"deepseek-chat"`) {
 		t.Fatalf("request body = %s, want default DeepSeek model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewDeepSeekOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -732,9 +738,7 @@ func TestNewFireworksOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"accounts/fireworks/models/llama-v3p3-70b-instruct"`) {
 		t.Fatalf("request body = %s, want default Fireworks model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewFireworksOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -775,9 +779,7 @@ func TestNewPerplexityOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"llama-3.1-sonar-small-128k-chat"`) {
 		t.Fatalf("request body = %s, want default Perplexity model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewPerplexityOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -818,9 +820,7 @@ func TestNewTogetherOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo"`) {
 		t.Fatalf("request body = %s, want default Together model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewTogetherOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -861,9 +861,7 @@ func TestNewTelnyxOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
 		t.Fatalf("request body = %s, want default Telnyx model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewTelnyxOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -904,9 +902,7 @@ func TestNewNebiusOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"meta-llama/Meta-Llama-3.1-70B-Instruct"`) {
 		t.Fatalf("request body = %s, want default Nebius model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewNebiusOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -997,9 +993,7 @@ func TestNewOllamaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"llama3.1"`) {
 		t.Fatalf("request body = %s, want default Ollama model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
@@ -1031,9 +1025,7 @@ func TestNewCometAPIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"gpt-5-chat-latest"`) {
 		t.Fatalf("request body = %s, want default CometAPI model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewCometAPIOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -1074,9 +1066,7 @@ func TestNewOctoAIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"llama-2-13b-chat"`) {
 		t.Fatalf("request body = %s, want default OctoAI model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewOctoAIOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -1117,9 +1107,7 @@ func TestNewSambaNovaOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"DeepSeek-R1-0528"`) {
 		t.Fatalf("request body = %s, want default SambaNova model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewSambaNovaOpenAILLMOmitsStrictToolSchema(t *testing.T) {
@@ -1258,9 +1246,7 @@ func TestNewXAIOpenAILLMDefaultsMatchReference(t *testing.T) {
 	if !strings.Contains(capture.requestBody, `"model":"grok-3-fast"`) {
 		t.Fatalf("request body = %s, want default xAI model", capture.requestBody)
 	}
-	if !strings.Contains(capture.requestBody, `"tool_choice":"auto"`) {
-		t.Fatalf("request body = %s, want reference default tool_choice auto", capture.requestBody)
-	}
+	assertOpenAIToolChoiceAutoOmittedWithoutTools(t, model, capture.requestBody)
 }
 
 func TestNewXAIOpenAILLMRequiresAPIKey(t *testing.T) {
@@ -1366,7 +1352,10 @@ func TestOpenAIChatAppliesProviderToolChoice(t *testing.T) {
 		WithOpenAILLMToolChoice("none"),
 	)
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{requestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	if !strings.Contains(capture.requestBody, `"tool_choice":"none"`) {
 		t.Fatalf("request body = %s, want provider tool_choice none", capture.requestBody)
@@ -1981,6 +1970,7 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamParallelToolCalls(t *t
 
 func TestBuildOpenAIChatCompletionRequestAppliesExtraParamToolChoice(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
 		ExtraParams: map[string]any{
 			"tool_choice": "none",
 		},
@@ -1991,8 +1981,22 @@ func TestBuildOpenAIChatCompletionRequestAppliesExtraParamToolChoice(t *testing.
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestOmitsToolChoiceWithoutTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		ToolChoice: "required",
+		ExtraParams: map[string]any{
+			"tool_choice": "none",
+		},
+	})
+
+	if req.ToolChoice != nil {
+		t.Fatalf("ToolChoice = %#v, want omitted when no tools are provided", req.ToolChoice)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestToolPolicyOverridesExtraParams(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		Tools:                []llm.Tool{requestTestTool{}},
 		ParallelToolCalls:    true,
 		ParallelToolCallsSet: true,
 		ToolChoice:           "required",
@@ -2057,7 +2061,10 @@ func TestNewOpenRouterLLMMatchesReferenceHeadersAndBody(t *testing.T) {
 		t.Fatalf("NewOpenRouterLLMWithHTTPClient error = %v", err)
 	}
 
-	_, _ = model.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	_, _ = model.Chat(context.Background(), llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{requestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	if got := capture.header.Get("HTTP-Referer"); got != "https://app.example" {
 		t.Fatalf("HTTP-Referer = %q, want site URL", got)
@@ -2104,6 +2111,7 @@ func TestNewOpenRouterLLMUsesEnvironmentKeyAndForwardedOptions(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("auto", llm.NewChatContext(), &llm.ChatOptions{
 		ExtraParams: model.extraParams,
 		ToolChoice:  model.toolChoice,
+		Tools:       []llm.Tool{requestTestTool{}},
 	})
 	if req.ToolChoice != "auto" {
 		t.Fatalf("ToolChoice = %#v, want reference auto default", req.ToolChoice)
@@ -3462,6 +3470,7 @@ func TestBuildOpenAIChatCompletionRequestNormalizesStrictToolSchemaAllOfDefaultN
 
 func TestBuildOpenAIChatCompletionRequestMapsNamedToolChoice(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-4o", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
 		ToolChoice: map[string]any{
 			"type": "function",
 			"function": map[string]any{

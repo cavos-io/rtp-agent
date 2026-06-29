@@ -1754,7 +1754,7 @@ func buildOpenAIChatCompletionRequestWithReasoningDefaultAndToolSchema(model str
 	if options.ParallelToolCallsSet {
 		req.ParallelToolCalls = &options.ParallelToolCalls
 	}
-	if options.ToolChoice != nil {
+	if len(options.Tools) > 0 && options.ToolChoice != nil {
 		if toolChoice := buildOpenAIToolChoice(options.ToolChoice); toolChoice != nil {
 			req.ToolChoice = toolChoice
 		}
@@ -1965,12 +1965,20 @@ func dropUnsupportedOpenAIParams(model string, params map[string]any, hasTools b
 		modelName = modelName[slash+1:]
 	}
 	unsupported := unsupportedOpenAIParamsForModel(modelName)
-	if len(unsupported) == 0 && !(hasTools && openAIReasoningEffortToolIncompatible(modelName)) {
+	if len(unsupported) == 0 && hasTools && !openAIReasoningEffortToolIncompatible(modelName) {
 		return params
+	}
+	if len(unsupported) == 0 && !hasTools {
+		if _, ok := params["tool_choice"]; !ok {
+			return params
+		}
 	}
 	filtered := make(map[string]any, len(params))
 	for key, value := range params {
 		if _, drop := unsupported[key]; drop {
+			continue
+		}
+		if key == "tool_choice" && !hasTools {
 			continue
 		}
 		if key == "reasoning_effort" && hasTools && openAIReasoningEffortToolIncompatible(modelName) {
