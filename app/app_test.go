@@ -8773,13 +8773,19 @@ func TestDeepgramSTTFallbackSelectsReferenceV2Options(t *testing.T) {
 	sampleRate := 48000
 	mipOptOut := true
 	provider, err := fallbackSTTFromProvider(AppConfig{
-		STTVersion:        "v2",
-		STTBaseURL:        "ws" + strings.TrimPrefix(server.URL, "http") + "/v2/listen",
-		STTModel:          "flux-general-multi",
-		STTSampleRate:     &sampleRate,
-		STTMIPOptOut:      &mipOptOut,
-		STTKeytermsPrompt: []string{"LiveKit", "rtp-agent"},
-		STTTags:           []string{"agent", "fallback"},
+		STTVersion:         "v2",
+		STTBaseURL:         "ws" + strings.TrimPrefix(server.URL, "http") + "/v2/listen",
+		STTModel:           "flux-general-multi",
+		STTSampleRate:      &sampleRate,
+		STTMIPOptOut:       &mipOptOut,
+		STTKeytermsPrompt:  []string{"LiveKit", "rtp-agent"},
+		STTLanguageOptions: "en,es",
+		STTModelOptions: map[string]any{
+			"eager_eot_threshold": "0.6",
+			"eot_threshold":       "0.8",
+			"eot_timeout_ms":      "1500",
+		},
+		STTTags: []string{"agent", "fallback"},
 	}, providerDeepgram)
 	if err != nil {
 		t.Fatalf("fallbackSTTFromProvider() error = %v", err)
@@ -8807,10 +8813,13 @@ func TestDeepgramSTTFallbackSelectsReferenceV2Options(t *testing.T) {
 			t.Fatalf("Authorization = %q, want %q", got, want)
 		}
 		expectedQuery := map[string]string{
-			"model":       "flux-general-multi",
-			"encoding":    "linear16",
-			"sample_rate": "48000",
-			"mip_opt_out": "true",
+			"model":               "flux-general-multi",
+			"encoding":            "linear16",
+			"sample_rate":         "48000",
+			"mip_opt_out":         "true",
+			"eager_eot_threshold": "0.6",
+			"eot_threshold":       "0.8",
+			"eot_timeout_ms":      "1500",
 		}
 		for key, want := range expectedQuery {
 			if got := firstQueryValue(record.query, key); got != want {
@@ -8822,6 +8831,9 @@ func TestDeepgramSTTFallbackSelectsReferenceV2Options(t *testing.T) {
 		}
 		if got, want := record.query["tag"], []string{"agent", "fallback"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("tag = %#v, want %#v", got, want)
+		}
+		if got, want := record.query["language_hint"], []string{"en", "es"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("language_hint = %#v, want %#v", got, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Deepgram STTv2 websocket request")
