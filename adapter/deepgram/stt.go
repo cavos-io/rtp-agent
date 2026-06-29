@@ -1147,21 +1147,28 @@ func (s *deepgramStream) Close() error {
 
 func (s *deepgramStream) updateOptions(languageChanged bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed || s.provider == nil {
+		s.mu.Unlock()
 		return
 	}
 	if languageChanged {
 		s.language = s.provider.language
 	}
 	nextURL := buildDeepgramStreamURL(s.provider, s.language)
+	reconnectNow := false
 	if nextURL != s.streamURL {
 		s.streamURL = nextURL
 		s.reconnectNext = true
+		reconnectNow = s.conn != nil
 	}
 	s.sampleRate = s.provider.sampleRate
 	s.numChannels = s.provider.numChannels
 	s.audioBStream = nil
+	s.mu.Unlock()
+
+	if reconnectNow {
+		go s.reconnectNow()
+	}
 }
 
 func (s *deepgramStream) reconnectLocked() error {
@@ -1184,6 +1191,29 @@ func (s *deepgramStream) reconnectLocked() error {
 	_ = oldConn.Close()
 	go s.readLoop(conn)
 	return nil
+}
+
+func (s *deepgramStream) reconnectNow() {
+	s.mu.Lock()
+	if s.closed || !s.reconnectNext {
+		s.mu.Unlock()
+		return
+	}
+	err := s.reconnectLocked()
+	if err == nil {
+		s.reconnectNext = false
+	} else {
+		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
+		_ = s.closeConnection()
+	}
+	s.mu.Unlock()
+
+	if err != nil {
+		s.sendError(err)
+	}
 }
 
 func newDeepgramSTTAudioByteStream(s *deepgramStream) *audio.AudioByteStream {

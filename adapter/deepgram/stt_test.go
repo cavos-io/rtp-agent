@@ -1033,6 +1033,12 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 		WithDeepgramSTTInterimResults(false),
 		WithDeepgramSTTEndpointing(0),
 	)
+
+	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated websocket request")
+	assertDeepgramQuery(t, secondURL.Query(), "language", "id")
+	assertDeepgramQuery(t, secondURL.Query(), "interim_results", "false")
+	assertDeepgramQuery(t, secondURL.Query(), "endpointing", "false")
+
 	if err := stream.PushFrame(&model.AudioFrame{
 		Data:              make([]byte, 1600),
 		SampleRate:        16000,
@@ -1041,11 +1047,6 @@ func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PushFrame after update error = %v", err)
 	}
-
-	secondURL := receiveDeepgramTestRequestURL(t, requests, "updated websocket request")
-	assertDeepgramQuery(t, secondURL.Query(), "language", "id")
-	assertDeepgramQuery(t, secondURL.Query(), "interim_results", "false")
-	assertDeepgramQuery(t, secondURL.Query(), "endpointing", "false")
 	select {
 	case <-audioMessages:
 	case <-time.After(time.Second):
