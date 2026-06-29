@@ -3398,7 +3398,7 @@ func TestOpenAIRealtimeSTTCompletedEmptyTranscriptEmitsUsageOnly(t *testing.T) {
 	}
 }
 
-func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
+func TestOpenAIRealtimeSTTInterleavedItemDeltasUseReferenceCurrentText(t *testing.T) {
 	now := time.Unix(100, 0)
 	state := &openAIRealtimeSTTMessageState{
 		language: "en",
@@ -3415,18 +3415,19 @@ func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
 		t.Fatalf("item-1 delta: %v", err)
 	}
 	if len(events) != 1 || events[0].RequestID != "item-1" || events[0].Alternatives[0].Text != "hello" {
-		t.Fatalf("item-1 events = %+v, want isolated hello interim", events)
+		t.Fatalf("item-1 events = %+v, want hello interim", events)
 	}
 
 	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-2","audio_start_ms":200}`), state); err != nil {
 		t.Fatalf("item-2 speech started: %v", err)
 	}
+	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-2","delta":"wo"}`), state)
 	if err != nil {
 		t.Fatalf("item-2 first delta: %v", err)
 	}
-	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "wo" {
-		t.Fatalf("item-2 first events = %+v, want fresh item transcript", events)
+	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "hellowo" {
+		t.Fatalf("item-2 first events = %+v, want reference current_text accumulation", events)
 	}
 
 	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
@@ -3434,8 +3435,8 @@ func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("item-1 second delta: %v", err)
 	}
-	if len(events) != 1 || events[0].RequestID != "item-1" || events[0].Alternatives[0].Text != "hello!" {
-		t.Fatalf("item-1 second events = %+v, want item-1 accumulated transcript only", events)
+	if len(events) != 1 || events[0].RequestID != "item-1" || events[0].Alternatives[0].Text != "hellowo!" {
+		t.Fatalf("item-1 second events = %+v, want shared current_text transcript", events)
 	}
 
 	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
@@ -3443,8 +3444,8 @@ func TestOpenAIRealtimeSTTInterleavedItemDeltasStayIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("item-2 second delta: %v", err)
 	}
-	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "world" {
-		t.Fatalf("item-2 second events = %+v, want item-2 accumulated transcript only", events)
+	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "hellowo!rld" {
+		t.Fatalf("item-2 second events = %+v, want shared current_text transcript", events)
 	}
 }
 
@@ -3476,6 +3477,9 @@ func TestOpenAIRealtimeSTTSpeechStartedClearsStaleCurrentItemID(t *testing.T) {
 	}
 	if events[0].RequestID != "" {
 		t.Fatalf("RequestID = %q, want empty after empty-id speech_started clears stale item", events[0].RequestID)
+	}
+	if events[0].Alternatives[0].Text != "oldnew" {
+		t.Fatalf("interim text = %q, want reference current_text to persist until completed", events[0].Alternatives[0].Text)
 	}
 }
 
