@@ -1921,6 +1921,45 @@ func TestOpenAITTSSSEInvalidBase64ClosesReferenceStream(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSMalformedWAVClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: bytes.NewReader(openAITTSTestInvalidWAV())}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatWav),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want no synthesized audio for malformed WAV", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after malformed WAV", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want malformed WAV stream unregistered", streamCount)
+	}
+}
+
 func TestOpenAITTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &countingOpenAIReadCloser{}
 	stream := &openaiTTSChunkedStream{resp: body}
@@ -2316,6 +2355,22 @@ func openAITTSTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
 	wav.WriteString("data")
 	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
 	wav.Write(pcm)
+	return wav.Bytes()
+}
+
+func openAITTSTestInvalidWAV() []byte {
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(3))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(24000))
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(96000))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(4))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(32))
 	return wav.Bytes()
 }
 

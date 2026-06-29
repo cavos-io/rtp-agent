@@ -513,7 +513,7 @@ func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
 		if n > 0 {
 			audio, frameErr := s.audioFrameFromPCMChunk(buf[:n])
 			if frameErr != nil {
-				return nil, frameErr
+				return nil, s.terminalDecodeError(frameErr)
 			}
 			if audio != nil {
 				s.audioSawAudio = true
