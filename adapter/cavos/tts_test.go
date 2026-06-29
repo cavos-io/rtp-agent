@@ -253,6 +253,45 @@ func TestCavosTTSChunkedStreamPreserves16BitAlignmentAcrossOddReads(t *testing.T
 	}
 }
 
+type cavosTTSDataThenErrorBody struct {
+	data []byte
+	err  error
+	read bool
+}
+
+func (b *cavosTTSDataThenErrorBody) Read(p []byte) (int, error) {
+	if b.read {
+		return 0, b.err
+	}
+	b.read = true
+	return copy(p, b.data), b.err
+}
+
+func (b *cavosTTSDataThenErrorBody) Close() error { return nil }
+
+func TestCavosTTSChunkedStreamEmitsBufferedAudioBeforeReadError(t *testing.T) {
+	boom := errors.New("connection reset")
+	stream := &ttsStream{
+		resp:       &cavosTTSDataThenErrorBody{data: []byte{0x01, 0x00, 0x02, 0x00}, err: boom},
+		sampleRate: 44100,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want buffered audio before read error", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first Next = %+v, want audio frame", audio)
+	}
+	if got := audio.Frame.Data; string(got) != "\x01\x00\x02\x00" {
+		t.Fatalf("audio data = %v, want bytes read before the error", got)
+	}
+
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, boom) {
+		t.Fatalf("second Next = (%+v, %v), want surfaced read error", audio, err)
+	}
+}
+
 func assertPayloadString(t *testing.T, payload map[string]any, key, want string) {
 	t.Helper()
 	if got, _ := payload[key].(string); got != want {

@@ -166,43 +166,36 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type ttsStream struct {
-	resp         io.ReadCloser
-	sampleRate   int
-	leftover     []byte
-	pendingFinal bool
-	finalSent    bool
-	closed       bool
+	resp       io.ReadCloser
+	sampleRate int
+	leftover   []byte
+	readErr    error
+	finalSent  bool
+	closed     bool
 }
 
 func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.finalSent || s.closed {
 		return nil, io.EOF
 	}
-	if s.pendingFinal {
-		s.pendingFinal = false
-		s.finalSent = true
-		return &tts.SynthesizedAudio{IsFinal: true}, nil
-	}
 	buf := make([]byte, 4096)
 	for {
+		if frame := s.takeAlignedFrame(); frame != nil {
+			return frame, nil
+		}
+		if s.readErr != nil {
+			s.finalSent = true
+			if s.readErr == io.EOF {
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
+			return nil, s.readErr
+		}
 		n, err := s.resp.Read(buf)
 		if n > 0 {
 			s.leftover = append(s.leftover, buf[:n]...)
 		}
 		if err != nil {
-			if err == io.EOF {
-				if frame := s.takeAlignedFrame(); frame != nil {
-					s.pendingFinal = true
-					return frame, nil
-				}
-				s.leftover = nil
-				s.finalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
-			}
-			return nil, err
-		}
-		if frame := s.takeAlignedFrame(); frame != nil {
-			return frame, nil
+			s.readErr = err
 		}
 	}
 }
