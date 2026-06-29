@@ -552,6 +552,72 @@ func TestNewAzureOpenAIRealtimeRoutesDeploymentAndUsesAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAIRealtimeUsesConstructorBaseURL(t *testing.T) {
+	connected := make(chan *http.Request, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		connected <- r
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeBaseURL("http://azure-gateway.openai.test/openai"),
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := <-connected
+	if req.Host != "azure-gateway.openai.test" || req.URL.Path != "/openai/realtime" {
+		t.Fatalf("url = %s, want constructor Azure base URL route", req.URL.String())
+	}
+	if req.URL.Query().Get("api-version") != "2024-10-01-preview" {
+		t.Fatalf("api-version query = %q, want 2024-10-01-preview", req.URL.Query().Get("api-version"))
+	}
+	if req.URL.Query().Get("deployment") != "voice-deployment" {
+		t.Fatalf("deployment query = %q, want voice-deployment", req.URL.Query().Get("deployment"))
+	}
+	if req.Header.Get("api-key") != "azure-key" {
+		t.Fatalf("api-key header = %q, want Azure API key", req.Header.Get("api-key"))
+	}
+}
+
+func TestNewAzureOpenAIRealtimeRejectsBaseURLAndEndpoint(t *testing.T) {
+	_, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"azure-key",
+		"",
+		WithOpenAIRealtimeBaseURL("http://azure-gateway.openai.test/openai"),
+	)
+
+	if err == nil {
+		t.Fatal("NewAzureOpenAIRealtimeModel error = nil, want base URL conflict")
+	}
+	if err.Error() != "base_url and azure_endpoint are mutually exclusive" {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %q, want base URL conflict", err.Error())
+	}
+}
+
 func TestAzureOpenAIRealtimeSessionDialFailureReturnsAPIConnectionError(t *testing.T) {
 	realtimeModel, err := NewAzureOpenAIRealtimeModel(
 		"",
@@ -1158,6 +1224,172 @@ func TestRealtimeModelConstructorTurnDetectionAppliesToInitialSession(t *testing
 		turnDetection["silence_duration_ms"] != float64(450) ||
 		turnDetection["create_response"] != false {
 		t.Fatalf("turn_detection = %#v, want configured server_vad", turnDetection)
+	}
+}
+
+func TestRealtimeUpdateOptionsSnapshotsMutableTurnDetection(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeWebsocketDialer(dialer))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	assertRealtimeMessage(t, <-messages, "session.update", "")
+
+	turnDetection := map[string]any{
+		"type":      "server_vad",
+		"threshold": 0.45,
+	}
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{TurnDetection: turnDetection, TurnDetectionSet: true}); err != nil {
+		t.Fatalf("UpdateOptions first turn detection error = %v", err)
+	}
+	first := <-messages
+	assertRealtimeMessage(t, first, "session.update", "server_vad")
+
+	turnDetection["threshold"] = 0.7
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{TurnDetection: turnDetection, TurnDetectionSet: true}); err != nil {
+		t.Fatalf("UpdateOptions mutated turn detection error = %v", err)
+	}
+	var second string
+	select {
+	case second = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for session.update after mutating reused turn_detection map")
+	}
+	assertRealtimeMessage(t, second, "session.update", "server_vad")
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(second), &payload); err != nil {
+		t.Fatalf("decode mutated update: %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	got := input["turn_detection"].(map[string]any)
+	if got["threshold"] != 0.7 {
+		t.Fatalf("turn_detection threshold = %#v, want mutated update 0.7", got["threshold"])
+	}
+}
+
+func TestRealtimeUpdateOptionsSnapshotsMutableReasoning(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime-2", WithOpenAIRealtimeWebsocketDialer(dialer))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	assertRealtimeMessage(t, <-messages, "session.update", "")
+
+	reasoning := map[string]any{"effort": "low"}
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Reasoning: reasoning}); err != nil {
+		t.Fatalf("UpdateOptions first reasoning error = %v", err)
+	}
+	first := <-messages
+	assertRealtimeMessage(t, first, "session.update", "")
+
+	reasoning["effort"] = "high"
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Reasoning: reasoning}); err != nil {
+		t.Fatalf("UpdateOptions mutated reasoning error = %v", err)
+	}
+	var second string
+	select {
+	case second = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for session.update after mutating reused reasoning map")
+	}
+	assertRealtimeMessage(t, second, "session.update", "")
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(second), &payload); err != nil {
+		t.Fatalf("decode mutated update: %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	got := sessionPayload["reasoning"].(map[string]any)
+	if got["effort"] != "high" {
+		t.Fatalf("reasoning effort = %#v, want mutated update high", got["effort"])
+	}
+}
+
+func TestRealtimeUpdateOptionsSnapshotsTypedMutableInputAudioTranscription(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeWebsocketDialer(dialer))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	assertRealtimeMessage(t, <-messages, "session.update", "")
+
+	transcription := map[string]string{"model": "gpt-4o-mini-transcribe"}
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		InputAudioTranscription:    transcription,
+		InputAudioTranscriptionSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions first input transcription error = %v", err)
+	}
+	first := <-messages
+	assertRealtimeMessage(t, first, "session.update", "")
+
+	transcription["model"] = "gpt-4o-transcribe"
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		InputAudioTranscription:    transcription,
+		InputAudioTranscriptionSet: true,
+	}); err != nil {
+		t.Fatalf("UpdateOptions mutated input transcription error = %v", err)
+	}
+	var second string
+	select {
+	case second = <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for session.update after mutating reused input_audio_transcription map")
+	}
+	assertRealtimeMessage(t, second, "session.update", "")
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(second), &payload); err != nil {
+		t.Fatalf("decode mutated update: %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	got := input["transcription"].(map[string]any)
+	if got["model"] != "gpt-4o-transcribe" {
+		t.Fatalf("transcription model = %#v, want mutated update gpt-4o-transcribe", got["model"])
 	}
 }
 

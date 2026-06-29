@@ -216,6 +216,18 @@ func WithOpenAIRealtimeSessionCloseMetricsHook(hook OpenAIRealtimeSessionCloseMe
 }
 
 func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *RealtimeModel {
+	return newRealtimeModel(apiKey, model, openAIRealtimeApplyModelOptions(opts...))
+}
+
+func openAIRealtimeApplyModelOptions(opts ...OpenAIRealtimeOption) openAIRealtimeModelOptions {
+	options := openAIRealtimeModelOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	return options
+}
+
+func newRealtimeModel(apiKey, model string, options openAIRealtimeModelOptions) *RealtimeModel {
 	if model == "" {
 		model = "gpt-realtime"
 	}
@@ -225,10 +237,6 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 	baseURL := os.Getenv("OPENAI_BASE_URL")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
-	}
-	options := openAIRealtimeModelOptions{}
-	for _, opt := range opts {
-		opt(&options)
 	}
 	if options.baseURL != "" {
 		baseURL = options.baseURL
@@ -263,8 +271,12 @@ func NewRealtimeModel(apiKey, model string, opts ...OpenAIRealtimeOption) *Realt
 }
 
 func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAIRealtimeOption) (*RealtimeModel, error) {
+	options := openAIRealtimeApplyModelOptions(opts...)
 	if model == "" {
 		model = "gpt-realtime"
+	}
+	if options.baseURL != "" && azureEndpoint != "" {
+		return nil, fmt.Errorf("base_url and azure_endpoint are mutually exclusive")
 	}
 	if azureEndpoint == "" {
 		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
@@ -278,7 +290,7 @@ func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersi
 	if azureADToken == "" {
 		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
 	}
-	if azureEndpoint == "" {
+	if azureEndpoint == "" && options.baseURL == "" {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI realtime", azureOpenAIEndpointEnv)
 	}
 	if apiKey == "" && azureADToken == "" {
@@ -287,9 +299,13 @@ func NewAzureOpenAIRealtimeModel(model, azureEndpoint, azureDeployment, apiVersi
 	if azureDeployment == "" {
 		azureDeployment = model
 	}
-	provider := NewRealtimeModel(apiKey, model, opts...)
+	provider := newRealtimeModel(apiKey, model, options)
 	provider.apiKey = apiKey
-	provider.baseURL = openAIRealtimeAzureBaseURL(azureEndpoint)
+	if options.baseURL != "" {
+		provider.baseURL = openAIRealtimeWebsocketBaseURL(options.baseURL)
+	} else {
+		provider.baseURL = openAIRealtimeAzureBaseURL(azureEndpoint)
+	}
 	provider.azureADToken = azureADToken
 	provider.azureDeployment = azureDeployment
 	provider.apiVersion = apiVersion
@@ -735,6 +751,20 @@ func openAIRealtimeBaseURL(rawURL string) string {
 
 func openAIRealtimeAzureBaseURL(rawURL string) string {
 	u, err := url.Parse(strings.TrimRight(rawURL, "/") + "/openai")
+	if err != nil {
+		return rawURL
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	return u.String()
+}
+
+func openAIRealtimeWebsocketBaseURL(rawURL string) string {
+	u, err := url.Parse(strings.TrimRight(rawURL, "/"))
 	if err != nil {
 		return rawURL
 	}
@@ -1518,24 +1548,24 @@ func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 		entries["max_output_tokens"] = value
 	}
 	if value, ok := session["truncation"]; ok {
-		entries["truncation"] = value
+		entries["truncation"] = openAIRealtimeCloneOptionValue(value)
 	}
 	if value, ok := session["tracing"]; ok {
-		entries["tracing"] = value
+		entries["tracing"] = openAIRealtimeCloneOptionValue(value)
 	}
 	if value, ok := session["reasoning"]; ok {
-		entries["reasoning"] = value
+		entries["reasoning"] = openAIRealtimeCloneOptionValue(value)
 	}
 	audio, _ := session["audio"].(map[string]any)
 	input, _ := audio["input"].(map[string]any)
 	if value, ok := input["turn_detection"]; ok {
-		entries["audio.input.turn_detection"] = value
+		entries["audio.input.turn_detection"] = openAIRealtimeCloneOptionValue(value)
 	}
 	if value, ok := input["transcription"]; ok {
-		entries["audio.input.transcription"] = value
+		entries["audio.input.transcription"] = openAIRealtimeCloneOptionValue(value)
 	}
 	if value, ok := input["noise_reduction"]; ok {
-		entries["audio.input.noise_reduction"] = value
+		entries["audio.input.noise_reduction"] = openAIRealtimeCloneOptionValue(value)
 	}
 	output, _ := audio["output"].(map[string]any)
 	if value, ok := output["voice"]; ok {
@@ -1545,6 +1575,84 @@ func openAIRealtimeOptionEntries(session map[string]any) map[string]any {
 		entries["audio.output.speed"] = value
 	}
 	return entries
+}
+
+func openAIRealtimeCloneOptionValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	clone, ok := openAIRealtimeCloneReflectValue(reflect.ValueOf(value))
+	if !ok {
+		return value
+	}
+	return clone.Interface()
+}
+
+func openAIRealtimeCloneReflectValue(value reflect.Value) (reflect.Value, bool) {
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return value, true
+		}
+		clone, ok := openAIRealtimeCloneReflectValue(value.Elem())
+		if !ok {
+			return value, false
+		}
+		if clone.Type().AssignableTo(value.Type()) {
+			return clone, true
+		}
+		if clone.Type().ConvertibleTo(value.Type()) {
+			return clone.Convert(value.Type()), true
+		}
+		return value, false
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type()), true
+		}
+		clone := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			entry := iter.Value()
+			clonedEntry, ok := openAIRealtimeCloneReflectValue(entry)
+			if !ok {
+				clonedEntry = entry
+			}
+			if clonedEntry.Type().AssignableTo(value.Type().Elem()) {
+				clone.SetMapIndex(iter.Key(), clonedEntry)
+				continue
+			}
+			if clonedEntry.Type().ConvertibleTo(value.Type().Elem()) {
+				clone.SetMapIndex(iter.Key(), clonedEntry.Convert(value.Type().Elem()))
+				continue
+			}
+			clone.SetMapIndex(iter.Key(), entry)
+		}
+		return clone, true
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type()), true
+		}
+		clone := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			entry := value.Index(i)
+			clonedEntry, ok := openAIRealtimeCloneReflectValue(entry)
+			if !ok {
+				clonedEntry = entry
+			}
+			if clonedEntry.Type().AssignableTo(value.Type().Elem()) {
+				clone.Index(i).Set(clonedEntry)
+				continue
+			}
+			if clonedEntry.Type().ConvertibleTo(value.Type().Elem()) {
+				clone.Index(i).Set(clonedEntry.Convert(value.Type().Elem()))
+				continue
+			}
+			clone.Index(i).Set(entry)
+		}
+		return clone, true
+	default:
+		return value, false
+	}
 }
 
 func openAIRealtimeSessionFromOptionEntries(entries map[string]any) map[string]any {

@@ -36,6 +36,7 @@ type OpenAITTS struct {
 	model          openai.SpeechModel
 	voice          openai.SpeechVoice
 	baseURL        string
+	baseURLSet     bool
 	speed          float64
 	instructions   string
 	responseFormat openai.SpeechResponseFormat
@@ -93,6 +94,7 @@ func WithOpenAITTSBaseURL(baseURL string) OpenAITTSOption {
 	return func(t *OpenAITTS) {
 		if baseURL != "" {
 			t.baseURL = strings.TrimRight(baseURL, "/")
+			t.baseURLSet = true
 		}
 	}
 }
@@ -122,6 +124,10 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	if voice == "" {
 		voice = openai.VoiceAsh
 	}
+	preflight := &OpenAITTS{}
+	for _, opt := range opts {
+		opt(preflight)
+	}
 	if azureEndpoint == "" {
 		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
 	}
@@ -134,7 +140,7 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	if azureADToken == "" {
 		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
 	}
-	if azureEndpoint == "" {
+	if azureEndpoint == "" && !preflight.baseURLSet {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI TTS", azureOpenAIEndpointEnv)
 	}
 	if apiKey == "" && azureADToken == "" {
@@ -169,6 +175,9 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	}
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
+	}
+	if provider.baseURLSet {
+		config.BaseURL = provider.baseURL
 	}
 	config.HTTPClient = &openAITTSStreamFormatHTTPClient{base: config.HTTPClient, provider: provider}
 	if apiKey == "" && azureADToken != "" {

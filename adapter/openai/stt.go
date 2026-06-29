@@ -46,7 +46,10 @@ type OpenAISTT struct {
 	client           *openai.Client
 	httpClient       openai.HTTPDoer
 	apiKey           string
+	azureADToken     string
 	baseURL          string
+	baseURLSet       bool
+	realtimeBaseURL  string
 	model            string
 	language         string
 	languageSet      bool
@@ -149,6 +152,7 @@ func WithOpenAISTTBaseURL(baseURL string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		if baseURL != "" {
 			s.baseURL = strings.TrimRight(baseURL, "/")
+			s.baseURLSet = true
 		}
 	}
 }
@@ -204,6 +208,10 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if model == "" {
 		model = "gpt-4o-mini-transcribe"
 	}
+	preflight := &OpenAISTT{}
+	for _, opt := range opts {
+		opt(preflight)
+	}
 	if azureEndpoint == "" {
 		azureEndpoint = os.Getenv(azureOpenAIEndpointEnv)
 	}
@@ -216,7 +224,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if azureADToken == "" {
 		azureADToken = os.Getenv(azureOpenAIADTokenEnv)
 	}
-	if azureEndpoint == "" {
+	if azureEndpoint == "" && !preflight.baseURLSet {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI STT", azureOpenAIEndpointEnv)
 	}
 	if apiKey == "" && azureADToken == "" {
@@ -225,18 +233,24 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if azureDeployment == "" {
 		azureDeployment = model
 	}
+	realtimeBaseURL := openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment)
 
 	provider := &OpenAISTT{
-		apiKey:        apiKey,
-		baseURL:       openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment),
-		model:         model,
-		language:      "en",
-		connect:       llm.DefaultAPIConnectOptions(),
-		maxSession:    10 * time.Minute,
-		dialWebsocket: defaultOpenAIRealtimeSTTWebsocketDialer,
+		apiKey:          apiKey,
+		azureADToken:    azureADToken,
+		baseURL:         realtimeBaseURL,
+		realtimeBaseURL: realtimeBaseURL,
+		model:           model,
+		language:        "en",
+		connect:         llm.DefaultAPIConnectOptions(),
+		maxSession:      10 * time.Minute,
+		dialWebsocket:   defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
+	}
+	if provider.baseURLSet {
+		provider.realtimeBaseURL = openAISTTAzureRealtimeBaseURL(provider.baseURL, azureDeployment)
 	}
 	provider.applyDetectLanguage()
 	if provider.useRealtime && openAIRealtimeIsWhisperModel(provider.model) && !provider.vadSet {
@@ -252,6 +266,9 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	}
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
+	}
+	if provider.baseURLSet {
+		config.BaseURL = provider.baseURL
 	}
 	if apiKey == "" && azureADToken != "" {
 		config.HTTPClient = &azureADTokenHTTPClient{
@@ -523,6 +540,9 @@ func (s *OpenAISTT) dialRealtimeSTTWebsocketAttempt(ctx context.Context) (*webso
 
 func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {
 	baseURL := strings.TrimRight(s.baseURL, "/")
+	if s.realtimeBaseURL != "" {
+		baseURL = strings.TrimRight(s.realtimeBaseURL, "/")
+	}
 	if strings.HasPrefix(baseURL, "http://") || strings.HasPrefix(baseURL, "https://") {
 		baseURL = strings.Replace(baseURL, "http", "ws", 1)
 	}
@@ -539,7 +559,11 @@ func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {
 func buildOpenAIRealtimeSTTHeaders(s *OpenAISTT) http.Header {
 	headers := make(http.Header)
 	headers.Set("User-Agent", "LiveKit Agents")
-	headers.Set("Authorization", "Bearer "+s.apiKey)
+	authToken := s.apiKey
+	if authToken == "" {
+		authToken = s.azureADToken
+	}
+	headers.Set("Authorization", "Bearer "+authToken)
 	return headers
 }
 

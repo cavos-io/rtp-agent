@@ -192,6 +192,96 @@ func TestNewAzureOpenAITTSFallsBackToReferenceEnvironment(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAITTSUsesReferenceBaseURLOption(t *testing.T) {
+	var requestURL string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requestURL = r.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com",
+		"tts-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+		WithOpenAITTSBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if got := provider.Provider(); got != "gateway.openai.azure.test" {
+		t.Fatalf("Provider() = %q, want base_url host", got)
+	}
+	if !strings.HasPrefix(requestURL, "https://gateway.openai.azure.test/custom/openai/deployments/tts-deployment/audio/speech") {
+		t.Fatalf("request URL = %s, want reference base_url route", requestURL)
+	}
+}
+
+func TestNewAzureOpenAITTSUsesReferenceBaseURLWithoutEndpoint(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
+	var requestURL string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requestURL = r.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"",
+		"tts-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+		WithOpenAITTSBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if !strings.HasPrefix(requestURL, "https://gateway.openai.azure.test/custom/openai/deployments/tts-deployment/audio/speech") {
+		t.Fatalf("request URL = %s, want reference base_url route", requestURL)
+	}
+}
+
 func TestNewAzureOpenAITTSRequiresEndpoint(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
 	t.Setenv("AZURE_OPENAI_API_KEY", "key")

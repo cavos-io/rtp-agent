@@ -413,6 +413,82 @@ func TestNewAzureOpenAISTTFallsBackToReferenceEnvironment(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAISTTUsesReferenceBaseURLOption(t *testing.T) {
+	var requestURL string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requestURL = r.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAISTTHTTPClient(client),
+		WithOpenAISTTBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if got := provider.Provider(); got != "gateway.openai.azure.test" {
+		t.Fatalf("Provider() = %q, want base_url host", got)
+	}
+	if !strings.HasPrefix(requestURL, "https://gateway.openai.azure.test/custom/openai/deployments/stt-deployment/audio/transcriptions") {
+		t.Fatalf("request URL = %s, want reference base_url route", requestURL)
+	}
+}
+
+func TestNewAzureOpenAISTTUsesReferenceBaseURLWithoutEndpoint(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
+	var requestURL string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		requestURL = r.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAISTTHTTPClient(client),
+		WithOpenAISTTBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if !strings.HasPrefix(requestURL, "https://gateway.openai.azure.test/custom/openai/deployments/stt-deployment/audio/transcriptions") {
+		t.Fatalf("request URL = %s, want reference base_url route", requestURL)
+	}
+}
+
 func TestNewAzureOpenAISTTRequiresEndpoint(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
 	t.Setenv("AZURE_OPENAI_API_KEY", "key")
@@ -488,6 +564,50 @@ func TestAzureOpenAIRealtimeSTTWebsocketRequestMatchesReference(t *testing.T) {
 	headers := buildOpenAIRealtimeSTTHeaders(provider)
 	if headers.Get("Authorization") != "Bearer azure-key" {
 		t.Fatalf("authorization = %q, want reference bearer token", headers.Get("Authorization"))
+	}
+}
+
+func TestAzureOpenAIRealtimeSTTWebsocketUsesEntraToken(t *testing.T) {
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com/",
+		"stt-deployment",
+		"2024-06-01",
+		"",
+		"entra-token",
+		WithOpenAISTTRealtime(true),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	headers := buildOpenAIRealtimeSTTHeaders(provider)
+	if headers.Get("Authorization") != "Bearer entra-token" {
+		t.Fatalf("authorization = %q, want Entra bearer token", headers.Get("Authorization"))
+	}
+}
+
+func TestAzureOpenAIRealtimeSTTWebsocketUsesReferenceBaseURL(t *testing.T) {
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("https://gateway.openai.azure.test/custom"),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	wsURL := buildOpenAIRealtimeSTTWebsocketURL(provider)
+	if wsURL.Scheme != "wss" || wsURL.Host != "gateway.openai.azure.test" || wsURL.Path != "/custom/openai/deployments/stt-deployment/realtime" {
+		t.Fatalf("websocket URL = %q, want reference Azure base_url deployment realtime endpoint", wsURL.String())
+	}
+	if wsURL.Query().Get("intent") != "transcription" {
+		t.Fatalf("intent query = %q, want transcription", wsURL.Query().Get("intent"))
 	}
 }
 
