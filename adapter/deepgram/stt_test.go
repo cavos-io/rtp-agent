@@ -256,6 +256,17 @@ func TestDeepgramSpeechEventUsesReferenceDetectedLanguageForMulti(t *testing.T) 
 	}
 }
 
+func TestDeepgramSpeechEventDropsReferenceEmptyDetectedLanguagesForMulti(t *testing.T) {
+	var resp dgResponse
+	if err := json.Unmarshal([]byte(`{"type":"Results","is_final":true,"metadata":{"request_id":"req-lang-empty"},"channel":{"alternatives":[{"transcript":"hola","confidence":0.9,"languages":[],"words":[{"word":"hola","start":0.1,"end":0.4}]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if event := deepgramSpeechEventForLanguage(resp, "multi"); event != nil {
+		t.Fatalf("event = %+v, want nil when reference multi-language parser sees empty languages list", event)
+	}
+}
+
 func TestDeepgramSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)

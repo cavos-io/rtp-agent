@@ -826,6 +826,9 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 
 	var transcriptBuilder string
 	for _, alt := range resp.Channel.Alternatives {
+		if deepgramLiveMissingDetectedLanguage(languageStr, alt.Languages) {
+			return nil
+		}
 		transcriptBuilder += alt.Transcript
 		startTime, endTime := deepgramLiveTranscriptTimes(resp, alt.Words)
 		event.Alternatives = append(event.Alternatives, stt.SpeechData{
@@ -844,6 +847,10 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 	}
 
 	return event
+}
+
+func deepgramLiveMissingDetectedLanguage(languageStr string, detected []string) bool {
+	return languageStr == "multi" && detected != nil && len(detected) == 0
 }
 
 func deepgramLiveTranscriptTimes(resp dgResponse, words []dgWord) (float64, float64) {
