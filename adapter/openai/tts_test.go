@@ -714,6 +714,45 @@ func TestOpenAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		if !ok {
+			t.Fatal("request context has no deadline, want reference total timeout")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 29*time.Second || remaining > 30*time.Second {
+			t.Fatalf("request timeout remaining = %v, want about 30s", remaining)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{1, 2, 3, 4})),
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModel1, goopenai.VoiceAsh,
+		WithOpenAITTSBaseURL("https://openai.test/v1"),
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || len(audio.Frame.Data) == 0 {
+		t.Fatalf("audio = %#v, want synthesized audio after timed request", audio)
+	}
+}
+
 func TestOpenAITTSChunkedStreamCloseCancelsReferenceRequestStartup(t *testing.T) {
 	requestStarted := make(chan struct{})
 	requestCanceled := make(chan struct{})

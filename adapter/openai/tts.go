@@ -50,6 +50,7 @@ const (
 	openAITTSStreamFormatAudio = "audio"
 	openAITTSStreamFormatSSE   = "sse"
 	openAITTSMaxSSELineBytes   = 16 * 1024 * 1024
+	openAITTSRequestTimeout    = 30 * time.Second
 )
 
 type OpenAITTSOption func(*OpenAITTS)
@@ -400,6 +401,7 @@ func (t *OpenAITTS) isClosed() bool {
 type openaiTTSChunkedStream struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
+	requestCancel   context.CancelFunc
 	request         openai.CreateSpeechRequest
 	resp            io.ReadCloser
 	responseFormat  openai.SpeechResponseFormat
@@ -461,7 +463,9 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 			s.startErr = fmt.Errorf("openai tts is closed: %w", io.ErrClosedPipe)
 			return
 		}
-		resp, err := s.provider.client.CreateSpeech(s.ctx, s.request)
+		requestCtx, requestCancel := context.WithTimeout(s.ctx, openAITTSRequestTimeout)
+		s.requestCancel = requestCancel
+		resp, err := s.provider.client.CreateSpeech(requestCtx, s.request)
 		if err != nil {
 			if s.closed {
 				s.startErr = io.EOF
@@ -1138,6 +1142,9 @@ func (s *openaiTTSChunkedStream) Close() error {
 	s.closed = true
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if s.requestCancel != nil {
+		s.requestCancel()
 	}
 	if s.decoder != nil {
 		_ = s.decoder.Close()
