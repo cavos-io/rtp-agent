@@ -1303,6 +1303,42 @@ func TestDeepgramTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeReturnsPartialAudioBeforeReadError(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Body: &deepgramTTSErrorAfterDataReadCloser{
+				data: []byte{0x01, 0x00, 0x02, 0x00},
+				err:  io.ErrUnexpectedEOF,
+			},
+		},
+		sampleRate: 24000,
+		encoding:   "linear16",
+		requestID:  "req-audio",
+		started:    true,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v, want partial audio before read error", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first Next() audio = %#v, want partial audio frame", audio)
+	}
+	if got, want := audio.Frame.Data, []byte{0x01, 0x00, 0x02, 0x00}; !bytes.Equal(got, want) {
+		t.Fatalf("audio data = %v, want %v", got, want)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("second Next() error = nil, want read error")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next() error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestDeepgramTTSStreamCloseUnblocksBackpressuredAudioSend(t *testing.T) {
 	audioWritten := make(chan struct{})
 	clientConn, serverConn := net.Pipe()
@@ -2305,6 +2341,24 @@ func (r deepgramTTSReadCloser) Read([]byte) (int, error) {
 }
 
 func (r deepgramTTSReadCloser) Close() error {
+	return nil
+}
+
+type deepgramTTSErrorAfterDataReadCloser struct {
+	data []byte
+	err  error
+	read bool
+}
+
+func (r *deepgramTTSErrorAfterDataReadCloser) Read(p []byte) (int, error) {
+	if r.read {
+		return 0, io.EOF
+	}
+	r.read = true
+	return copy(p, r.data), r.err
+}
+
+func (r *deepgramTTSErrorAfterDataReadCloser) Close() error {
 	return nil
 }
 
