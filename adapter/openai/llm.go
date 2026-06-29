@@ -94,6 +94,7 @@ type OpenAILLM struct {
 	mu                   sync.Mutex
 	closed               bool
 	streams              map[*openaiStream]struct{}
+	lazyStreams          map[*openaiLazyStream]struct{}
 	nextRequestID        uint64
 	requestCancels       map[uint64]context.CancelFunc
 }
@@ -1016,6 +1017,11 @@ func (l *OpenAILLM) Close() error {
 		streams = append(streams, stream)
 	}
 	l.streams = make(map[*openaiStream]struct{})
+	lazyStreams := make([]*openaiLazyStream, 0, len(l.lazyStreams))
+	for stream := range l.lazyStreams {
+		lazyStreams = append(lazyStreams, stream)
+	}
+	l.lazyStreams = make(map[*openaiLazyStream]struct{})
 	requestCancels := make([]context.CancelFunc, 0, len(l.requestCancels))
 	for _, cancel := range l.requestCancels {
 		requestCancels = append(requestCancels, cancel)
@@ -1025,6 +1031,9 @@ func (l *OpenAILLM) Close() error {
 
 	for _, cancel := range requestCancels {
 		cancel()
+	}
+	for _, stream := range lazyStreams {
+		_ = stream.Close()
 	}
 	var closeErr error
 	for _, stream := range streams {
@@ -1046,6 +1055,21 @@ func (l *OpenAILLM) registerStream(stream *openaiStream) bool {
 		l.streams = make(map[*openaiStream]struct{})
 	}
 	l.streams[stream] = struct{}{}
+	l.mu.Unlock()
+	return true
+}
+
+func (l *OpenAILLM) registerLazyStream(stream *openaiLazyStream) bool {
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
+	if l.lazyStreams == nil {
+		l.lazyStreams = make(map[*openaiLazyStream]struct{})
+	}
+	l.lazyStreams[stream] = struct{}{}
 	l.mu.Unlock()
 	return true
 }
@@ -1077,7 +1101,32 @@ func (l *OpenAILLM) unregisterStream(stream *openaiStream) {
 	delete(l.streams, stream)
 }
 
+func (l *OpenAILLM) unregisterLazyStream(stream *openaiLazyStream) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.lazyStreams, stream)
+}
+
 func (l *OpenAILLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
+	if l.isClosed() {
+		return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+	}
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &openaiLazyStream{
+		ctx:      streamCtx,
+		cancel:   cancel,
+		provider: l,
+		chatCtx:  chatCtx,
+		opts:     append([]llm.ChatOption(nil), opts...),
+	}
+	if !l.registerLazyStream(stream) {
+		_ = stream.Close()
+		return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
+	}
+	return stream, nil
+}
+
+func (l *OpenAILLM) chatEager(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.isClosed() {
 		return nil, fmt.Errorf("openai llm is closed: %w", io.ErrClosedPipe)
 	}
@@ -1188,6 +1237,108 @@ func (openAIEOFStream) Next() (*llm.ChatChunk, error) {
 
 func (openAIEOFStream) Close() error {
 	return nil
+}
+
+type openaiLazyStream struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	provider *OpenAILLM
+	chatCtx  *llm.ChatContext
+	opts     []llm.ChatOption
+
+	startOnce sync.Once
+	startErr  error
+	stream    llm.LLMStream
+	mu        sync.Mutex
+	closed    bool
+}
+
+func (s *openaiLazyStream) Next() (*llm.ChatChunk, error) {
+	if s.isClosed() {
+		return nil, io.EOF
+	}
+	if err := s.ensureStarted(); err != nil {
+		return nil, err
+	}
+	if s.stream == nil {
+		return nil, io.EOF
+	}
+	chunk, err := s.stream.Next()
+	if s.isClosed() && err != nil {
+		return nil, io.EOF
+	}
+	if err != nil {
+		_ = s.Close()
+	}
+	return chunk, err
+}
+
+func (s *openaiLazyStream) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	cancel := s.cancel
+	s.cancel = nil
+	stream := s.stream
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if stream != nil {
+		err := stream.Close()
+		s.unregister()
+		return err
+	}
+	s.unregister()
+	return nil
+}
+
+func (s *openaiLazyStream) ensureStarted() error {
+	s.startOnce.Do(func() {
+		if s.isClosed() {
+			s.startErr = io.EOF
+			return
+		}
+		stream, err := s.provider.chatEager(s.ctx, s.chatCtx, s.opts...)
+		if err != nil {
+			if s.isClosed() {
+				s.startErr = io.EOF
+				s.unregister()
+				return
+			}
+			s.startErr = err
+			s.unregister()
+			return
+		}
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			_ = stream.Close()
+			s.startErr = io.EOF
+			s.unregister()
+			return
+		}
+		s.stream = stream
+		s.mu.Unlock()
+		s.unregister()
+	})
+	return s.startErr
+}
+
+func (s *openaiLazyStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *openaiLazyStream) unregister() {
+	if s.provider != nil {
+		s.provider.unregisterLazyStream(s)
+	}
 }
 
 func (l *OpenAILLM) effectiveConnectOptions(options *llm.ChatOptions) (llm.APIConnectOptions, error) {
