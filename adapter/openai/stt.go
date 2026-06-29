@@ -1051,28 +1051,42 @@ func (s *openAIRealtimeSTTStream) closeEventStream() {
 	}
 }
 
+func (s *openAIRealtimeSTTStream) nextQueuedEvent() (*stt.SpeechEvent, bool) {
+	if s == nil || s.events == nil {
+		return nil, false
+	}
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, true
+		}
+		return nil, false
+	default:
+	}
+	if s.eventStream != nil && s.eventStream.pending() > 0 {
+		event, ok := <-s.events
+		return event, ok
+	}
+	return nil, false
+}
+
 func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.pendingErr != nil {
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+		if event, ok := s.nextQueuedEvent(); ok {
+			return event, nil
 		}
 		err := s.pendingErr
 		s.pendingErr = nil
 		return nil, err
 	}
+	if event, ok := s.nextQueuedEvent(); ok {
+		return event, nil
+	}
 	select {
 	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				s.pendingErr = err
-				return event, nil
-			}
-		default:
+		if event, ok := s.nextQueuedEvent(); ok {
+			s.pendingErr = err
+			return event, nil
 		}
 		return nil, err
 	default:
@@ -1103,13 +1117,9 @@ func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				s.pendingErr = err
-				return event, nil
-			}
-		default:
+		if event, ok := s.nextQueuedEvent(); ok {
+			s.pendingErr = err
+			return event, nil
 		}
 		return nil, err
 	case <-s.ctx.Done():

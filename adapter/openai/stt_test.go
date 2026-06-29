@@ -2489,6 +2489,58 @@ func TestOpenAIRealtimeSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testin
 	}
 }
 
+func TestOpenAIRealtimeSTTNextDrainsQueuedStreamBeforeError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	eventStream := newOpenAIRealtimeQueuedStream[*stt.SpeechEvent]()
+	defer eventStream.Close()
+	stream := &openAIRealtimeSTTStream{
+		ctx:         ctx,
+		cancel:      cancel,
+		events:      eventStream.rawChan(),
+		eventStream: eventStream,
+		errCh:       make(chan error, 1),
+	}
+	eventStream.Send(&stt.SpeechEvent{
+		Type:      stt.SpeechEventFinalTranscript,
+		RequestID: "item-final",
+		Alternatives: []stt.SpeechData{{
+			Text:     "final words",
+			Language: "en",
+		}},
+	})
+	eventStream.Send(&stt.SpeechEvent{
+		Type: stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{
+			AudioDuration: 1.25,
+			InputTokens:   3,
+			OutputTokens:  5,
+		},
+	})
+	stream.errCh <- errors.New("stream failed")
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want queued final transcript", err)
+	}
+	if first.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("first event = %#v, want final transcript", first)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want queued usage before stream error", err)
+	}
+	if second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("second event = %#v, want recognition usage", second)
+	}
+
+	_, err = stream.Next()
+	if err == nil || err.Error() != "stream failed" {
+		t.Fatalf("third Next error = %v, want queued stream error after events", err)
+	}
+}
+
 func TestOpenAIRealtimeSTTPendingNextReturnsEOFAfterClose(t *testing.T) {
 	ctx := newOpenAIControlledCancelContext()
 	stream := &openAIRealtimeSTTStream{

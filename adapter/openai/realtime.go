@@ -505,6 +505,15 @@ func (s *openAIRealtimeQueuedStream[T]) Send(value T) bool {
 	return true
 }
 
+func (s *openAIRealtimeQueuedStream[T]) pending() int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.queue)
+}
+
 func (s *openAIRealtimeQueuedStream[T]) Close() {
 	if s == nil {
 		return
