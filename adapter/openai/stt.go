@@ -762,6 +762,7 @@ type openAIRealtimeSTTStream struct {
 	events      chan *stt.SpeechEvent
 	eventStream *openAIRealtimeQueuedStream[*stt.SpeechEvent]
 	errCh       chan error
+	pendingErr  error
 	mu          sync.Mutex
 	closed      bool
 	inputEnded  bool
@@ -1051,11 +1052,24 @@ func (s *openAIRealtimeSTTStream) closeEventStream() {
 }
 
 func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
+	if s.pendingErr != nil {
+		select {
+		case event, ok := <-s.events:
+			if ok {
+				return event, nil
+			}
+		default:
+		}
+		err := s.pendingErr
+		s.pendingErr = nil
+		return nil, err
+	}
 	select {
 	case err := <-s.errCh:
 		select {
 		case event, ok := <-s.events:
 			if ok {
+				s.pendingErr = err
 				return event, nil
 			}
 		default:
@@ -1092,6 +1106,7 @@ func (s *openAIRealtimeSTTStream) Next() (*stt.SpeechEvent, error) {
 		select {
 		case event, ok := <-s.events:
 			if ok {
+				s.pendingErr = err
 				return event, nil
 			}
 		default:

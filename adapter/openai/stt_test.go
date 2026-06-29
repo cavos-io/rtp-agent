@@ -2472,7 +2472,6 @@ func TestOpenAIRealtimeSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testin
 		stream.errCh <- errors.New("stream failed")
 
 		event, err := stream.Next()
-		cancel()
 		if err != nil {
 			t.Fatalf("Next error = %v, want queued transcript before stream error", err)
 		}
@@ -2482,6 +2481,11 @@ func TestOpenAIRealtimeSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testin
 		if got := event.Alternatives[0].Text; got != "final words" {
 			t.Fatalf("transcript = %q, want final words", got)
 		}
+		_, err = stream.Next()
+		if err == nil || err.Error() != "stream failed" {
+			t.Fatalf("second Next error = %v, want queued stream error after transcript", err)
+		}
+		cancel()
 	}
 }
 
