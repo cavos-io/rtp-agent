@@ -4283,6 +4283,64 @@ func TestRealtimeSessionReconnectReplaysUpdatedOptions(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionReconnectReplaysEmptyInstructions(t *testing.T) {
+	var dialCount atomic.Int32
+	instructionsReplayed := make(chan map[string]any, 1)
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		_, initialPayload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("Read instructions update error = %v", err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		var initialUpdate map[string]any
+		if err := json.Unmarshal(initialPayload, &initialUpdate); err != nil {
+			t.Errorf("Decode replayed initial session update error = %v", err)
+			return
+		}
+		instructionsReplayed <- initialUpdate
+		<-releaseSecond
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateInstructions(""); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+
+	select {
+	case update := <-instructionsReplayed:
+		sessionPayload := update["session"].(map[string]any)
+		instructions, ok := sessionPayload["instructions"]
+		if !ok || instructions != "" {
+			t.Fatalf("replayed instructions = %#v (present=%v), want explicit empty string", instructions, ok)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("session did not replay empty instructions after reconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+}
+
 func TestRealtimeSessionReconnectReplaysChatContext(t *testing.T) {
 	var dialCount atomic.Int32
 	chatReplayed := make(chan map[string]any, 1)

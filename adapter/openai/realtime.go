@@ -401,6 +401,7 @@ type realtimeSession struct {
 	pendingCreateAcks     map[string]chan struct{}
 	pendingDeleteAcks     map[string]chan struct{}
 	instructions          string
+	instructionsSet       bool
 	tools                 []llm.Tool
 	audioBStream          *audio.AudioByteStream
 	audioNormalizer       openAIRealtimeInputAudioNormalizer
@@ -881,6 +882,7 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 	}
 	s.mu.Lock()
 	s.instructions = instructions
+	s.instructionsSet = true
 	s.mu.Unlock()
 	return nil
 }
@@ -2325,6 +2327,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	s.mu.Lock()
 	oldConn := s.conn
 	instructions := s.instructions
+	instructionsSet := s.instructionsSet
 	tools := append([]llm.Tool(nil), s.tools...)
 	optionsState := make(map[string]any, len(s.optionsState))
 	for key, value := range s.optionsState {
@@ -2343,7 +2346,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 			openAIRealtimeRemoveInputNoiseReduction(initialSession)
 		}
 	}
-	if instructions != "" {
+	if instructionsSet {
 		initialSession["instructions"] = instructions
 	}
 	msg := openAIRealtimeInitialSessionUpdateMessage(initialSession)
