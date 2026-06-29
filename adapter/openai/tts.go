@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
@@ -1057,7 +1058,7 @@ func (s *openaiTTSChunkedStream) emitSSEUsageMetrics(event map[string]any) {
 		RequestID:       s.requestID,
 		TTFB:            ttfb,
 		Duration:        duration,
-		CharactersCount: len(s.inputText),
+		CharactersCount: utf8.RuneCountInString(s.inputText),
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		AudioDuration:   s.metricsAudio,

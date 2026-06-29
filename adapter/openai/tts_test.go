@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -1190,7 +1191,8 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 		}
 	})
 
-	stream, err := provider.Synthesize(context.Background(), "hello tokens")
+	inputText := "hé tokens"
+	stream, err := provider.Synthesize(context.Background(), inputText)
 	if err != nil {
 		t.Fatalf("Synthesize error = %v", err)
 	}
@@ -1212,8 +1214,8 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 
 	select {
 	case metrics := <-metricsCh:
-		if metrics.CharactersCount != len("hello tokens") {
-			t.Fatalf("CharactersCount = %d, want input text length", metrics.CharactersCount)
+		if metrics.CharactersCount != utf8.RuneCountInString(inputText) {
+			t.Fatalf("CharactersCount = %d, want reference character count", metrics.CharactersCount)
 		}
 		if metrics.AudioDuration <= 0 {
 			t.Fatalf("AudioDuration = %f, want synthesized audio duration", metrics.AudioDuration)
