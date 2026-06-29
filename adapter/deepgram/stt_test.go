@@ -2224,6 +2224,67 @@ func TestDeepgramSTTStreamReconnectsAfterUnexpectedNormalClose(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamReconnectSendsImmediateKeepAlive(t *testing.T) {
+	requests := make(chan struct{}, 2)
+	closeAfterHandshake := make(chan struct{})
+	keepAliveSeen := make(chan struct{})
+	closeSeen := make(chan struct{})
+	serverErr := make(chan error, 2)
+	attempt := 0
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			attempt++
+			requests <- struct{}{}
+			if attempt == 1 {
+				go runDeepgramClosingWebsocketServer(serverConn, closeAfterHandshake, make(chan struct{}), serverErr)
+			} else {
+				go runDeepgramSTTReconnectKeepAliveWebsocketServer(serverConn, keepAliveSeen, closeSeen, serverErr)
+			}
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	<-requests
+	close(closeAfterHandshake)
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Deepgram STT stream did not reconnect after unexpected provider close")
+	}
+	select {
+	case <-keepAliveSeen:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Deepgram STT reconnect did not send immediate KeepAlive")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream on keepalive reconnect")
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-serverErr; err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	}
+}
+
 func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	var binaryWrites [][]byte
 	var textWrites []string
@@ -3078,6 +3139,42 @@ func runDeepgramSTTReconnectTranscriptWebsocketServer(conn net.Conn, closeSeen c
 			return
 		}
 	}
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && string(payload) == deepgramSTTCloseStreamMessage {
+			close(closeSeen)
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func runDeepgramSTTReconnectKeepAliveWebsocketServer(conn net.Conn, keepAliveSeen, closeSeen chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage || string(payload) != deepgramSTTKeepAliveMessage {
+		errCh <- fmt.Errorf("first reconnect frame = opcode %d payload %q, want KeepAlive", opcode, payload)
+		return
+	}
+	close(keepAliveSeen)
 	for {
 		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
 		if err != nil {

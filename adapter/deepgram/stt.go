@@ -1210,8 +1210,12 @@ func (s *deepgramStream) sendKeepAlive() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.closed {
-		_ = s.writeTextData(deepgramSTTKeepAliveMessage, map[string]string{"type": "KeepAlive"})
+		s.sendKeepAliveLocked()
 	}
+}
+
+func (s *deepgramStream) sendKeepAliveLocked() {
+	_ = s.writeTextData(deepgramSTTKeepAliveMessage, map[string]string{"type": "KeepAlive"})
 }
 
 func (s *deepgramStream) sendEvent(ev *stt.SpeechEvent) {
@@ -1668,6 +1672,7 @@ func (s *deepgramStream) reconnectLocked() error {
 	s.connStart = time.Now()
 	_ = oldConn.Close()
 	go s.readLoop(conn)
+	s.sendKeepAliveLocked()
 	return nil
 }
 
