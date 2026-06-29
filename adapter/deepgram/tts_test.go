@@ -491,6 +491,50 @@ func TestDeepgramTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	oldClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("https://deepgram.example/v1/speak"))
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connectionErr *llm.APIConnectionError
+		if errors.As(err, &connectionErr) {
+			t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next remained blocked after caller cancellation")
+	}
+}
+
 func TestDeepgramTTSChunkedStreamReturnsAPITimeoutErrorOnReadFailure(t *testing.T) {
 	stream := &deepgramTTSChunkedStream{
 		resp:       &http.Response{Body: deepgramTTSReadCloser{err: context.DeadlineExceeded}},
