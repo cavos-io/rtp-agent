@@ -479,11 +479,10 @@ func (s *deepgramV2Stream) processEvent(resp deepgramV2Response) error {
 func (s *deepgramV2Stream) processTurnInfo(resp deepgramV2Response) error {
 	switch resp.Event {
 	case "StartOfTurn":
-		if s.speaking {
-			return nil
+		if !s.speaking {
+			s.speaking = true
+			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		}
-		s.speaking = true
-		s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 		s.sendTranscriptEvent(stt.SpeechEventInterimTranscript, resp)
 	case "Update":
 		if !s.speaking {
