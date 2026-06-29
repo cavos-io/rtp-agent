@@ -168,6 +168,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 type ttsStream struct {
 	resp         io.ReadCloser
 	sampleRate   int
+	leftover     []byte
 	pendingFinal bool
 	finalSent    bool
 	closed       bool
@@ -183,25 +184,45 @@ func (s *ttsStream) Next() (*tts.SynthesizedAudio, error) {
 		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
 	buf := make([]byte, 4096)
-	n, err := s.resp.Read(buf)
-	if n > 0 && err == io.EOF {
-		s.pendingFinal = true
-	}
-	if err != nil && n == 0 {
-		if err == io.EOF {
-			s.finalSent = true
-			return &tts.SynthesizedAudio{IsFinal: true}, nil
+	for {
+		n, err := s.resp.Read(buf)
+		if n > 0 {
+			s.leftover = append(s.leftover, buf[:n]...)
 		}
-		return nil, err
+		if err != nil {
+			if err == io.EOF {
+				if frame := s.takeAlignedFrame(); frame != nil {
+					s.pendingFinal = true
+					return frame, nil
+				}
+				s.leftover = nil
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
+			return nil, err
+		}
+		if frame := s.takeAlignedFrame(); frame != nil {
+			return frame, nil
+		}
 	}
+}
+
+func (s *ttsStream) takeAlignedFrame() *tts.SynthesizedAudio {
+	aligned := len(s.leftover) - len(s.leftover)%2
+	if aligned == 0 {
+		return nil
+	}
+	data := make([]byte, aligned)
+	copy(data, s.leftover[:aligned])
+	s.leftover = append([]byte(nil), s.leftover[aligned:]...)
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
-			Data:              buf[:n],
+			Data:              data,
 			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
+			SamplesPerChannel: uint32(aligned / 2),
 		},
-	}, nil
+	}
 }
 
 func (s *ttsStream) Close() error {
