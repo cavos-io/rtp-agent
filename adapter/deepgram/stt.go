@@ -768,8 +768,27 @@ func (a *dgAlternative) UnmarshalJSON(data []byte) error {
 }
 
 type dgRecognitionChannel struct {
-	Alternatives     []dgAlternative `json:"alternatives"`
-	DetectedLanguage string          `json:"detected_language"`
+	Alternatives     []dgAlternative
+	DetectedLanguage string
+	alternativesSeen bool
+}
+
+func (c *dgRecognitionChannel) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Alternatives     []dgAlternative `json:"alternatives"`
+		DetectedLanguage string          `json:"detected_language"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	c.Alternatives = raw.Alternatives
+	c.DetectedLanguage = raw.DetectedLanguage
+	_, c.alternativesSeen = fields["alternatives"]
+	return nil
 }
 
 type dgRecognitionResponse struct {
@@ -882,6 +901,9 @@ func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) erro
 		return fmt.Errorf("malformed deepgram recognition response")
 	}
 	for _, channel := range resp.Results.Channels {
+		if !channel.alternativesSeen {
+			return fmt.Errorf("malformed deepgram recognition channel")
+		}
 		for _, alt := range channel.Alternatives {
 			if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen) {
 				return fmt.Errorf("malformed deepgram recognition alternative")
