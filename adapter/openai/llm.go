@@ -2431,6 +2431,7 @@ type openaiStream struct {
 	toolCallType    string
 	toolCallName    string
 	toolCallRawArgs string
+	toolCallExtra   map[string]any
 	thinking        bool
 	emitted         bool
 }
@@ -2444,7 +2445,7 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 		return chunk, nil
 	}
 	for {
-		resp, err := s.stream.Recv()
+		resp, err := s.recvOpenAIStreamResponse()
 		if err != nil {
 			if s.isClosed() {
 				return nil, io.EOF
@@ -2480,7 +2481,49 @@ func (s *openaiStream) Next() (*llm.ChatChunk, error) {
 	}
 }
 
-func (s *openaiStream) chunkFromOpenAIStreamChoice(id string, choice openai.ChatCompletionStreamChoice) *llm.ChatChunk {
+type openAIStreamResponse struct {
+	ID      string               `json:"id"`
+	Choices []openAIStreamChoice `json:"choices"`
+	Usage   *openai.Usage        `json:"usage,omitempty"`
+}
+
+type openAIStreamChoice struct {
+	Index        int                     `json:"index"`
+	Delta        openAIStreamChoiceDelta `json:"delta"`
+	FinishReason openai.FinishReason     `json:"finish_reason"`
+}
+
+type openAIStreamChoiceDelta struct {
+	Content          string                 `json:"content,omitempty"`
+	Role             string                 `json:"role,omitempty"`
+	FunctionCall     *openai.FunctionCall   `json:"function_call,omitempty"`
+	ToolCalls        []openAIStreamToolCall `json:"tool_calls,omitempty"`
+	Refusal          string                 `json:"refusal,omitempty"`
+	ReasoningContent string                 `json:"reasoning_content,omitempty"`
+	ExtraContent     map[string]any         `json:"extra_content,omitempty"`
+}
+
+type openAIStreamToolCall struct {
+	Index        *int                `json:"index,omitempty"`
+	ID           string              `json:"id,omitempty"`
+	Type         openai.ToolType     `json:"type"`
+	Function     openai.FunctionCall `json:"function"`
+	ExtraContent map[string]any      `json:"extra_content,omitempty"`
+}
+
+func (s *openaiStream) recvOpenAIStreamResponse() (openAIStreamResponse, error) {
+	raw, err := s.stream.RecvRaw()
+	if err != nil {
+		return openAIStreamResponse{}, err
+	}
+	var resp openAIStreamResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return openAIStreamResponse{}, err
+	}
+	return resp, nil
+}
+
+func (s *openaiStream) chunkFromOpenAIStreamChoice(id string, choice openAIStreamChoice) *llm.ChatChunk {
 	if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
 		return s.finishOpenAIStreamToolCall(id, choice)
 	}
@@ -2504,13 +2547,16 @@ func (s *openaiStream) chunkFromOpenAIStreamChoice(id string, choice openai.Chat
 		}
 	}
 	if content == "" {
-		return nil
+		if len(choice.Delta.ExtraContent) == 0 {
+			return nil
+		}
 	}
 	return &llm.ChatChunk{
 		ID: id,
 		Delta: &llm.ChoiceDelta{
 			Role:    llm.ChatRoleAssistant,
 			Content: content,
+			Extra:   choice.Delta.ExtraContent,
 		},
 	}
 }
@@ -2545,7 +2591,7 @@ func (s *openaiStream) hasEmitted() bool {
 	return s.emitted
 }
 
-func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openai.ChatCompletionStreamChoice) *llm.ChatChunk {
+func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStreamChoice) *llm.ChatChunk {
 	for _, tc := range choice.Delta.ToolCalls {
 		if tc.Function.Name == "" && tc.Function.Arguments == "" {
 			continue
@@ -2565,6 +2611,7 @@ func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openai.Cha
 			s.toolCallType = string(tc.Type)
 			s.toolCallName = tc.Function.Name
 			s.toolCallRawArgs = tc.Function.Arguments
+			s.toolCallExtra = tc.ExtraContent
 		} else if tc.Function.Arguments != "" {
 			s.toolCallRawArgs += tc.Function.Arguments
 		}
@@ -2575,17 +2622,19 @@ func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openai.Cha
 	return nil
 }
 
-func (s *openaiStream) finishOpenAIStreamToolCall(id string, choice openai.ChatCompletionStreamChoice) *llm.ChatChunk {
+func (s *openaiStream) finishOpenAIStreamToolCall(id string, choice openAIStreamChoice) *llm.ChatChunk {
 	chunk := &llm.ChatChunk{
 		ID: id,
 		Delta: &llm.ChoiceDelta{
 			Role:    llm.ChatRoleAssistant,
 			Content: choice.Delta.Content,
+			Extra:   choice.Delta.ExtraContent,
 			ToolCalls: []llm.FunctionToolCall{{
 				Type:      s.toolCallType,
 				Name:      s.toolCallName,
 				Arguments: s.toolCallRawArgs,
 				CallID:    s.toolCallID,
+				Extra:     s.toolCallExtra,
 			}},
 		},
 	}
@@ -2595,21 +2644,23 @@ func (s *openaiStream) finishOpenAIStreamToolCall(id string, choice openai.ChatC
 	s.toolCallType = ""
 	s.toolCallName = ""
 	s.toolCallRawArgs = ""
+	s.toolCallExtra = nil
 	return chunk
 }
 
-func isOpenAIStreamToolCallFinish(choice openai.ChatCompletionStreamChoice) bool {
+func isOpenAIStreamToolCallFinish(choice openAIStreamChoice) bool {
 	return choice.FinishReason == openai.FinishReasonToolCalls || choice.FinishReason == openai.FinishReasonStop
 }
 
-func isEmptyOpenAIStreamChoiceDelta(choice openai.ChatCompletionStreamChoice) bool {
+func isEmptyOpenAIStreamChoiceDelta(choice openAIStreamChoice) bool {
 	delta := choice.Delta
 	return delta.Role == "" &&
 		delta.Content == "" &&
 		delta.Refusal == "" &&
 		delta.ReasoningContent == "" &&
 		delta.FunctionCall == nil &&
-		len(delta.ToolCalls) == 0
+		len(delta.ToolCalls) == 0 &&
+		len(delta.ExtraContent) == 0
 }
 
 func openAIStreamRecvError(err error, retryable bool) error {

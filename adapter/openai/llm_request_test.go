@@ -2642,6 +2642,53 @@ func TestOpenAIStreamSplitsUsageAfterToolCallFinish(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamPreservesReferenceExtraContent(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-extra","choices":[{"index":0,"delta":{"extra_content":{"google":{"thought_signature":"sig-text"}}}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-extra","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"},"extra_content":{"google":{"thought_signature":"sig-tool"}}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-extra","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	extraChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("extra Next error = %v, want metadata chunk", err)
+	}
+	if extraChunk == nil || extraChunk.Delta == nil {
+		t.Fatalf("extra chunk = %#v, want delta", extraChunk)
+	}
+	googleExtra, ok := extraChunk.Delta.Extra["google"].(map[string]any)
+	if !ok || googleExtra["thought_signature"] != "sig-text" {
+		t.Fatalf("extra chunk extra = %#v, want google thought signature", extraChunk.Delta.Extra)
+	}
+
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("tool Next error = %v, want tool call chunk", err)
+	}
+	if toolChunk == nil || toolChunk.Delta == nil || len(toolChunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("tool chunk = %#v, want one tool call", toolChunk)
+	}
+	toolExtra, ok := toolChunk.Delta.ToolCalls[0].Extra["google"].(map[string]any)
+	if !ok || toolExtra["thought_signature"] != "sig-tool" {
+		t.Fatalf("tool extra = %#v, want google thought signature", toolChunk.Delta.ToolCalls[0].Extra)
+	}
+}
+
 func TestOpenAIStreamSuppressesReferenceThinkingText(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
