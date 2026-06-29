@@ -1133,6 +1133,9 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			if resp.malformedReferenceResults() {
 				continue
 			}
+			if resp.malformedReferenceLanguage(s.language) {
+				continue
+			}
 			s.setRequestID(resp.Metadata.RequestID)
 			if event := deepgramSpeechEventForLanguageOffset(resp, s.language, s.StartTimeOffset()); event != nil {
 				if !s.speaking {
@@ -1159,6 +1162,18 @@ func (r dgResponse) malformedReferenceResults() bool {
 	}
 	for _, alt := range r.Channel.Alternatives {
 		if deepgramLiveMalformedAlternative(alt) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r dgResponse) malformedReferenceLanguage(languageStr string) bool {
+	if languageStr != "multi" {
+		return false
+	}
+	for _, alt := range r.Channel.Alternatives {
+		if deepgramLiveMissingDetectedLanguage(languageStr, alt) {
 			return true
 		}
 	}
