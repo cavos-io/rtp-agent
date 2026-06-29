@@ -20,6 +20,23 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var slngElevenLabsTTSModelOptionKeys = []string{
+	"inactivity_timeout",
+	"apply_text_normalization",
+	"auto_mode",
+	"enable_logging",
+	"enable_ssml_parsing",
+	"sync_alignment",
+	"language_code",
+	"stability",
+	"similarity_boost",
+	"style",
+	"speed",
+	"use_speaker_boost",
+	"chunk_length_schedule",
+	"preferred_alignment",
+}
+
 type TTS struct {
 	mu             sync.Mutex
 	apiKey         string
@@ -298,6 +315,12 @@ func buildTTSInitPayload(t *TTS) []byte {
 				config["segment"] = value
 			}
 			payload["speaker"] = t.voice
+		case ref.routeProvider == "elevenlabs":
+			for _, key := range slngElevenLabsTTSModelOptionKeys {
+				if value, ok := t.modelOptions[key]; ok {
+					config[key] = value
+				}
+			}
 		case ref.routeProvider == "sarvam" && ref.routeModel == "bulbul":
 			config["speech_sample_rate"] = fmt.Sprint(t.sampleRate)
 			config["pace"] = slngOptionDefault(t.modelOptions, "pace", t.speed)

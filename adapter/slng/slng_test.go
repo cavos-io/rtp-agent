@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -223,6 +224,48 @@ func TestSLNGTTSInitPayloadDefaultsRimeCodaModelID(t *testing.T) {
 	assertSLNGField(t, payload, "speaker", "speaker-456")
 	assertSLNGNestedField(t, payload, "config", "modelId", "coda")
 	assertSLNGNestedFieldAbsent(t, payload, "config", "segment")
+}
+
+func TestSLNGTTSInitPayloadForwardsElevenLabsModelOptions(t *testing.T) {
+	provider := NewTTS("test-key",
+		WithTTSModel("elevenlabs/eleven-flash:2.5"),
+		WithTTSVoice("voice-123"),
+		WithTTSModelOptions(map[string]any{
+			"inactivity_timeout":       30,
+			"apply_text_normalization": "auto",
+			"auto_mode":                true,
+			"enable_logging":           false,
+			"enable_ssml_parsing":      true,
+			"sync_alignment":           true,
+			"language_code":            "id",
+			"stability":                0.44,
+			"similarity_boost":         0.81,
+			"style":                    0.2,
+			"speed":                    1.05,
+			"use_speaker_boost":        true,
+			"chunk_length_schedule":    []any{50, 90, 160},
+			"preferred_alignment":      "normalized",
+			"unsupported_option":       "must-not-leak",
+		}),
+	)
+
+	payload := buildTTSInitPayload(provider)
+
+	assertSLNGNestedField(t, payload, "config", "inactivity_timeout", float64(30))
+	assertSLNGNestedField(t, payload, "config", "apply_text_normalization", "auto")
+	assertSLNGNestedField(t, payload, "config", "auto_mode", true)
+	assertSLNGNestedField(t, payload, "config", "enable_logging", false)
+	assertSLNGNestedField(t, payload, "config", "enable_ssml_parsing", true)
+	assertSLNGNestedField(t, payload, "config", "sync_alignment", true)
+	assertSLNGNestedField(t, payload, "config", "language_code", "id")
+	assertSLNGNestedField(t, payload, "config", "stability", 0.44)
+	assertSLNGNestedField(t, payload, "config", "similarity_boost", 0.81)
+	assertSLNGNestedField(t, payload, "config", "style", 0.2)
+	assertSLNGNestedField(t, payload, "config", "speed", 1.05)
+	assertSLNGNestedField(t, payload, "config", "use_speaker_boost", true)
+	assertSLNGNestedArrayField(t, payload, "config", "chunk_length_schedule", []any{float64(50), float64(90), float64(160)})
+	assertSLNGNestedField(t, payload, "config", "preferred_alignment", "normalized")
+	assertSLNGNestedFieldAbsent(t, payload, "config", "unsupported_option")
 }
 
 func TestSLNGTTSInitPayloadPreservesExplicitZeroSpeed(t *testing.T) {
@@ -1494,6 +1537,25 @@ func assertSLNGNestedFieldAbsent(t *testing.T, payload []byte, parent, key strin
 	}
 	if _, ok := parentMap[key]; ok {
 		t.Fatalf("%s.%s present in %s", parent, key, string(payload))
+	}
+}
+
+func assertSLNGNestedArrayField(t *testing.T, payload []byte, parent, key string, want []any) {
+	t.Helper()
+	var data map[string]any
+	if err := json.Unmarshal(payload, &data); err != nil {
+		t.Fatalf("decode payload: %v", err)
+	}
+	parentMap, _ := data[parent].(map[string]any)
+	if parentMap == nil {
+		t.Fatalf("%s = %#v, want object in %s", parent, data[parent], string(payload))
+	}
+	got, ok := parentMap[key].([]any)
+	if !ok {
+		t.Fatalf("%s.%s = %#v, want array in %s", parent, key, parentMap[key], string(payload))
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s.%s = %#v, want %#v in %s", parent, key, got, want, string(payload))
 	}
 }
 
