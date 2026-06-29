@@ -1582,10 +1582,13 @@ func (s *deepgramStream) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+	shouldSendClose := !s.inputEnded
 	s.closed = true
 	s.inputEnded = true
 	s.closeDraining = true
-	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
+	if shouldSendClose {
+		_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
+	}
 	s.mu.Unlock()
 
 	// Keep receive-side state unlocked so a final transcript can drain after CloseStream.

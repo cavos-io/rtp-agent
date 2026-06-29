@@ -2499,6 +2499,33 @@ func TestDeepgramSTTStreamEndInputTreatsProviderCloseAsExpected(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTCloseAfterEndInputDoesNotSendDuplicateCloseStream(t *testing.T) {
+	var textWrites []string
+	stream := &deepgramStream{
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	closeCount := 0
+	for _, payload := range textWrites {
+		if payload == deepgramSTTCloseStreamMessage {
+			closeCount++
+		}
+	}
+	if closeCount != 1 {
+		t.Fatalf("CloseStream count = %d, want one reference close control", closeCount)
+	}
+}
+
 func TestDeepgramSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
