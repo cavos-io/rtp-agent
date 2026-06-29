@@ -60,11 +60,24 @@ func WithDeepgramTTSMipOptOut(mipOptOut bool) DeepgramTTSOption {
 func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) DeepgramTTSOption {
 	return func(t *DeepgramTTS) {
 		if encoding != "" {
-			t.encoding = encoding
+			t.encoding = deepgramTTSNormalizeEncoding(encoding)
 		}
 		if sampleRate > 0 {
 			t.sampleRate = sampleRate
 		}
+	}
+}
+
+func deepgramTTSNormalizeEncoding(encoding string) string {
+	switch strings.ToLower(encoding) {
+	case "pcm_s16le", "linear_pcm", "pcm_linear":
+		return "linear16"
+	case "pcm_mulaw":
+		return "mulaw"
+	case "pcm_alaw":
+		return "alaw"
+	default:
+		return encoding
 	}
 }
 
@@ -452,9 +465,9 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 
 func deepgramTTSTelephonyToPCM(encoding string, data []byte) []byte {
 	switch strings.ToLower(encoding) {
-	case "mulaw", "mu-law", "ulaw", "u-law":
+	case "mulaw", "mu-law", "ulaw", "u-law", "pcm_mulaw":
 		return deepgramTTSDecodeMuLaw(data)
-	case "alaw", "a-law":
+	case "alaw", "a-law", "pcm_alaw":
 		return deepgramTTSDecodeALaw(data)
 	default:
 		return bytes.Clone(data)

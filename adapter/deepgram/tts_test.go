@@ -73,6 +73,35 @@ func TestDeepgramTTSConstructorOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSAudioFormatNormalizesReferenceEncodingAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "generic pcm_s16le", in: "pcm_s16le", want: "linear16"},
+		{name: "generic linear pcm", in: "linear_pcm", want: "linear16"},
+		{name: "generic pcm linear", in: "pcm_linear", want: "linear16"},
+		{name: "generic pcm mulaw", in: "pcm_mulaw", want: "mulaw"},
+		{name: "generic pcm alaw", in: "pcm_alaw", want: "alaw"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSAudioFormat(tt.in, 8000))
+			if provider.encoding != tt.want {
+				t.Fatalf("encoding = %q, want Deepgram reference encoding %q", provider.encoding, tt.want)
+			}
+
+			query, err := url.Parse(buildDeepgramTTSStreamURL(provider))
+			if err != nil {
+				t.Fatalf("parse stream URL: %v", err)
+			}
+			assertDeepgramTTSQuery(t, query.Query(), "encoding", tt.want)
+		})
+	}
+}
+
 func TestDeepgramTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	t.Setenv("DEEPGRAM_API_KEY", "")
 	provider := NewDeepgramTTS("", "", WithDeepgramTTSBaseURL("://bad-url"))
