@@ -1034,6 +1034,51 @@ func TestDeepgramTTSStreamReturnsAPIConnectionErrorOnDialFailure(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamReturnsAPIStatusErrorOnHandshakeStatus(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSHandshakeStatusServer(serverConn, http.StatusTooManyRequests, `{"err_msg":"rate limited"}`, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	err = stream.Flush()
+	if err == nil {
+		t.Fatal("Flush error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Flush error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
+	}
+	if statusErr.Body == nil || !strings.Contains(fmt.Sprint(statusErr.Body), "rate limited") {
+		t.Fatalf("status body = %v, want provider body", statusErr.Body)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server error = %v", err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams after failed handshake = %d, want 0", len(provider.streams))
+	}
+}
+
 func TestDeepgramTTSStreamTimesOutSilentProviderAfterInput(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -2493,6 +2538,20 @@ func (r *deepgramTTSFinalReadCloser) Read(p []byte) (int, error) {
 
 func (r *deepgramTTSFinalReadCloser) Close() error {
 	return nil
+}
+
+func runDeepgramTTSHandshakeStatusServer(conn net.Conn, statusCode int, body string, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	if _, err := http.ReadRequest(reader); err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 %d %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", statusCode, http.StatusText(statusCode), len(body), body); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
 }
 
 func runDeepgramTTSReadFlushThenCloseServer(conn net.Conn, closed chan<- struct{}, normalClose bool, errCh chan<- error) {

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -606,6 +607,33 @@ func TestDeepgramSTTv2StreamUsesReferenceDefaultLanguage(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2SpeechDataNormalizesReferenceLanguages(t *testing.T) {
+	alts := deepgramV2SpeechData("en", deepgramV2Response{
+		Transcript:       "hello",
+		AudioWindowStart: 1.0,
+		AudioWindowEnd:   1.5,
+		Languages:        []string{"eng", "en_us"},
+		Words: []deepgramV2Word{{
+			Word:           "hello",
+			Start:          1.0,
+			End:            1.5,
+			Confidence:     0.9,
+			parsedJSON:     true,
+			confidenceSeen: true,
+		}},
+	}, 0)
+	if len(alts) != 1 {
+		t.Fatalf("alternatives = %+v, want one", alts)
+	}
+	if got := alts[0].Language; got != "en" {
+		t.Fatalf("language = %q, want normalized primary language en", got)
+	}
+	wantSource := []string{"en", "en-US"}
+	if !reflect.DeepEqual(alts[0].SourceLanguages, wantSource) {
+		t.Fatalf("source languages = %#v, want %#v", alts[0].SourceLanguages, wantSource)
+	}
+}
+
 func TestDeepgramSTTv2EndInputFlushesTailAndClosesReferenceInput(t *testing.T) {
 	closeSeen := make(chan struct{})
 	audioFrames := make(chan []byte, 2)
@@ -785,6 +813,53 @@ func TestDeepgramSTTv2EndInputTreatsProviderCloseAsExpected(t *testing.T) {
 	_, err = stream.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after provider close error = %T %v, want EOF", err, err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2CloseAfterEndInputDoesNotSendDuplicateCloseStream(t *testing.T) {
+	closeCount := make(chan int, 1)
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runDeepgramSTTv2CloseCountingWebsocketServer(serverConn, closeCount, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatalf("stream = %T, want stt.InputEnding", stream)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case got := <-closeCount:
+		if got != 1 {
+			t.Fatalf("CloseStream count = %d, want one reference close control", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream count")
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
@@ -1022,6 +1097,67 @@ func TestDeepgramSTTv2UpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
 	err := provider.UpdateOptions(WithDeepgramSTTv2EagerEOTThreshold(0.9))
 	if err == nil || !strings.Contains(err.Error(), "eager_eot_threshold (0.9) must be less than or equal to eot_threshold (0.8)") {
 		t.Fatalf("UpdateOptions() error = %v, want invalid eager threshold", err)
+	}
+	if after := buildDeepgramSTTv2StreamURL(provider); after != before {
+		t.Fatalf("stream URL after failed update = %s, want unchanged %s", after, before)
+	}
+}
+
+func TestDeepgramSTTv2UpdateOptionsClearsReferenceEagerEOT(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+	)
+
+	if err := provider.UpdateOptions(WithDeepgramSTTv2EagerEOTThreshold(0)); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL: %v", err)
+	}
+	if got := parsed.Query().Get("eager_eot_threshold"); got != "" {
+		t.Fatalf("eager_eot_threshold = %q, want cleared", got)
+	}
+}
+
+func TestDeepgramSTTv2UpdateOptionsClearsReferenceEOTControls(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2EOTThreshold(0.8),
+		WithDeepgramSTTv2EOTTimeout(1500),
+	)
+
+	if err := provider.UpdateOptions(
+		WithDeepgramSTTv2EOTThreshold(0),
+		WithDeepgramSTTv2EOTTimeout(0),
+	); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL: %v", err)
+	}
+	query := parsed.Query()
+	if got := query.Get("eot_threshold"); got != "" {
+		t.Fatalf("eot_threshold = %q, want cleared", got)
+	}
+	if got := query.Get("eot_timeout_ms"); got != "" {
+		t.Fatalf("eot_timeout_ms = %q, want cleared", got)
+	}
+}
+
+func TestDeepgramSTTv2UpdateOptionsRejectsReferenceExplicitZeroEOTWithEager(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+	)
+	before := buildDeepgramSTTv2StreamURL(provider)
+
+	err := provider.UpdateOptions(WithDeepgramSTTv2EOTThreshold(0))
+	if err == nil || !strings.Contains(err.Error(), "eager_eot_threshold (0.6) must be less than or equal to eot_threshold (0)") {
+		t.Fatalf("UpdateOptions() error = %v, want invalid explicit zero EOT threshold", err)
 	}
 	if after := buildDeepgramSTTv2StreamURL(provider); after != before {
 		t.Fatalf("stream URL after failed update = %s, want unchanged %s", after, before)
@@ -1823,6 +1959,33 @@ func runDeepgramSTTv2CloseAfterCloseStreamServer(conn net.Conn, closeSeen chan<-
 		}
 		errCh <- nil
 		return
+	}
+}
+
+func runDeepgramSTTv2CloseCountingWebsocketServer(conn net.Conn, closeCount chan<- int, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	count := 0
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			closeCount <- count
+			errCh <- nil
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "CloseStream" {
+			count++
+		}
 	}
 }
 

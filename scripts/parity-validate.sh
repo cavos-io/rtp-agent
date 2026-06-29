@@ -197,9 +197,31 @@ go_package_import_path() {
   esac
 }
 
+go_test_tags_for_case() {
+  local case_name="$1" input_json
+  input_json="$(case_field "$case_name" 9)"
+  if [[ -z "$input_json" || "$input_json" != "{"* ]]; then
+    return 0
+  fi
+  python3 - "$input_json" <<'PY'
+import json
+import sys
+
+try:
+    data = json.loads(sys.argv[1])
+except json.JSONDecodeError:
+    sys.exit(0)
+tags = data.get("go_tags")
+if isinstance(tags, str):
+    print(tags)
+elif isinstance(tags, list):
+    print(",".join(str(tag) for tag in tags if str(tag)))
+PY
+}
+
 run_go_test_manifest_case() {
   local case_name="$1" tmpdir="$2"
-  local row case_type source_ref target_ref go_package test_name contract behavior expected_package actual_norm
+  local row case_type source_ref target_ref go_package test_name contract behavior tags expected_package actual_norm
   row="$(test_case_row "$case_name")"
   if [[ -z "$row" ]]; then
     echo "[$case_name] missing manifest row in $TEST_CASES_FILE" >&2
@@ -220,10 +242,15 @@ run_go_test_manifest_case() {
     echo "[$case_name] manifest row must set source_ref, target_ref, go_package, go_test, contract, and behavior" >&2
     return 2
   fi
+  tags="$(go_test_tags_for_case "$case_name")"
 
   if ! (
     cd "$REPO_ROOT"
-    GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}" go test "$go_package" -run "^$test_name$" -count=1 -v
+    if [[ -n "$tags" ]]; then
+      GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}" go test -tags "$tags" "$go_package" -run "^$test_name$" -count=1 -v
+    else
+      GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}" go test "$go_package" -run "^$test_name$" -count=1 -v
+    fi
   ) > "$tmpdir/actual.raw" 2>&1; then
     :
   fi
@@ -481,8 +508,8 @@ escape_extended_regex() {
 }
 
 run_go_test_manifest_cases() {
-  local go_package="$1" tmpdir="$2"
-  shift 2
+  local go_package="$1" tags="$2" tmpdir="$3"
+  shift 3
   local case_name case_type source_ref target_ref test_name contract behavior expected_package actual_norm
   local regex="" escaped
 
@@ -515,7 +542,11 @@ run_go_test_manifest_cases() {
 
   if ! (
     cd "$REPO_ROOT"
-    GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}" go test "$go_package" -run "^($regex)$" -count=1 -v
+    if [[ -n "$tags" ]]; then
+      GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}" go test -tags "$tags" "$go_package" -run "^($regex)$" -count=1 -v
+    else
+      GOCACHE="${GOCACHE:-$REPO_ROOT/.tmp/gocache}" go test "$go_package" -run "^($regex)$" -count=1 -v
+    fi
   ) > "$tmpdir/actual.raw" 2>&1; then
     :
   fi
@@ -652,11 +683,13 @@ run_case() {
 }
 
 main() {
-  local case_name case_type go_package failed=0
+  local case_name case_type go_package tags group_key failed=0
   local cases_file
-  local -a go_packages=() other_cases=()
-  declare -A go_package_seen=()
-  declare -A go_package_cases=()
+  local -a go_groups=() other_cases=()
+  declare -A go_group_seen=()
+  declare -A go_group_packages=()
+  declare -A go_group_tags=()
+  declare -A go_group_cases=()
   if (( LIST_ONLY == 1 )); then
     list_cases
     return 0
@@ -671,35 +704,45 @@ main() {
     case_type="$(case_field "$case_name" 2)"
     if [[ "$case_type" == "go-test" ]]; then
       go_package="$(case_field "$case_name" 5)"
+      tags="$(go_test_tags_for_case "$case_name")"
       if [[ -z "$go_package" ]]; then
         echo "[$case_name] manifest row must set go_package" >&2
         failed=1
         continue
       fi
-      if [[ -z "${go_package_seen[$go_package]:-}" ]]; then
-        go_packages+=("$go_package")
-        go_package_seen[$go_package]=1
+      group_key="${go_package}"$'\034'"${tags}"
+      if [[ -z "${go_group_seen[$group_key]:-}" ]]; then
+        go_groups+=("$group_key")
+        go_group_seen[$group_key]=1
+        go_group_packages[$group_key]="$go_package"
+        go_group_tags[$group_key]="$tags"
       fi
-      go_package_cases[$go_package]+="$case_name"$'\n'
+      go_group_cases[$group_key]+="$case_name"$'\n'
     else
       other_cases+=("$case_name")
     fi
   done < "$cases_file"
 
-  for go_package in "${go_packages[@]}"; do
+  for group_key in "${go_groups[@]}"; do
     local tmpdir batch_cases=()
+    go_package="${go_group_packages[$group_key]}"
+    tags="${go_group_tags[$group_key]}"
     tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/parity-validate.go-test.XXXXXX")"
     while IFS= read -r case_name; do
       [[ -z "$case_name" ]] && continue
       batch_cases+=("$case_name")
-    done <<<"${go_package_cases[$go_package]}"
-    if ! run_go_test_manifest_cases "$go_package" "$tmpdir" "${batch_cases[@]}"; then
+    done <<<"${go_group_cases[$group_key]}"
+    if ! run_go_test_manifest_cases "$go_package" "$tags" "$tmpdir" "${batch_cases[@]}"; then
       echo "Temp dir: $tmpdir" >&2
       failed=1
     elif (( KEEP_TEMP == 0 )); then
       rm -rf "$tmpdir"
     else
-      echo "[go-test:$go_package] temp dir: $tmpdir"
+      if [[ -n "$tags" ]]; then
+        echo "[go-test:$go_package -tags $tags] temp dir: $tmpdir"
+      else
+        echo "[go-test:$go_package] temp dir: $tmpdir"
+      fi
     fi
   done
 

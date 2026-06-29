@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	langutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/gorilla/websocket"
 )
 
@@ -34,6 +35,7 @@ type DeepgramSTTv2 struct {
 	language   string
 	eagerEOT   float64
 	eot        float64
+	eotSet     bool
 	eotTimeout int
 	keyterms   []string
 	tags       []string
@@ -95,25 +97,20 @@ func WithDeepgramSTTv2MipOptOut(mipOptOut bool) DeepgramSTTv2Option {
 
 func WithDeepgramSTTv2EagerEOTThreshold(threshold float64) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if threshold > 0 {
-			s.eagerEOT = threshold
-		}
+		s.eagerEOT = threshold
 	}
 }
 
 func WithDeepgramSTTv2EOTThreshold(threshold float64) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if threshold > 0 {
-			s.eot = threshold
-		}
+		s.eot = threshold
+		s.eotSet = true
 	}
 }
 
 func WithDeepgramSTTv2EOTTimeout(timeoutMS int) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if timeoutMS > 0 {
-			s.eotTimeout = timeoutMS
-		}
+		s.eotTimeout = timeoutMS
 	}
 }
 
@@ -165,6 +162,7 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 		language:   s.language,
 		eagerEOT:   s.eagerEOT,
 		eot:        s.eot,
+		eotSet:     s.eotSet,
 		eotTimeout: s.eotTimeout,
 		keyterms:   append([]string(nil), s.keyterms...),
 		tags:       append([]string(nil), s.tags...),
@@ -185,6 +183,7 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 	s.language = next.language
 	s.eagerEOT = next.eagerEOT
 	s.eot = next.eot
+	s.eotSet = next.eotSet
 	s.eotTimeout = next.eotTimeout
 	s.keyterms = next.keyterms
 	s.tags = next.tags
@@ -333,7 +332,7 @@ func buildDeepgramSTTv2StreamURL(s *DeepgramSTTv2) string {
 
 func validateDeepgramSTTv2Options(s *DeepgramSTTv2) error {
 	eot := s.eot
-	if eot == 0 {
+	if !s.eotSet {
 		eot = 0.7
 	}
 	if s.eagerEOT > 0 && s.eagerEOT > eot {
@@ -590,8 +589,14 @@ func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOff
 	if len(resp.Words) > 0 {
 		confidence /= float64(len(resp.Words))
 	}
+	var sourceLanguages []string
+	for _, detected := range resp.Languages {
+		sourceLanguages = append(sourceLanguages, langutil.NormalizeLanguage(detected))
+	}
 	if len(resp.Languages) > 0 {
-		language = resp.Languages[0]
+		language = langutil.NormalizeLanguage(resp.Languages[0])
+	} else {
+		language = langutil.NormalizeLanguage(language)
 	}
 	return []stt.SpeechData{{
 		Language:        language,
@@ -600,7 +605,7 @@ func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOff
 		EndTime:         resp.AudioWindowEnd + startTimeOffset,
 		Confidence:      confidence,
 		Words:           words,
-		SourceLanguages: append([]string(nil), resp.Languages...),
+		SourceLanguages: sourceLanguages,
 	}}
 }
 
@@ -861,9 +866,10 @@ func (s *deepgramV2Stream) Close() error {
 	if s.closed {
 		return nil
 	}
+	shouldSendClose := !s.inputEnded
 	s.closed = true
 	s.inputEnded = true
-	if s.conn != nil {
+	if shouldSendClose && s.conn != nil {
 		_ = s.conn.WriteMessage(websocket.TextMessage, []byte(deepgramSTTv2CloseMessage))
 	}
 	if s.provider != nil {

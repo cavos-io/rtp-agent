@@ -256,6 +256,21 @@ func TestDeepgramSpeechEventUsesReferenceDetectedLanguageForMulti(t *testing.T) 
 	}
 }
 
+func TestDeepgramSpeechEventNormalizesReferenceDetectedLanguageAliases(t *testing.T) {
+	var resp dgResponse
+	if err := json.Unmarshal([]byte(`{"type":"Results","is_final":true,"metadata":{"request_id":"req-lang-alias"},"channel":{"alternatives":[{"transcript":"hello","confidence":0.9,"languages":["eng"],"words":[]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	event := deepgramSpeechEventForLanguage(resp, "multi")
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one alternative", event)
+	}
+	if got := event.Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want normalized detected language en", got)
+	}
+}
+
 func TestDeepgramSpeechEventDropsReferenceEmptyDetectedLanguagesForMulti(t *testing.T) {
 	var resp dgResponse
 	if err := json.Unmarshal([]byte(`{"type":"Results","is_final":true,"metadata":{"request_id":"req-lang-empty"},"channel":{"alternatives":[{"transcript":"hola","confidence":0.9,"languages":[],"words":[{"word":"hola","start":0.1,"end":0.4}]}]}}`), &resp); err != nil {
@@ -484,6 +499,21 @@ func TestDeepgramRecognizeSpeechEventUsesReferenceDetectedLanguage(t *testing.T)
 	}
 	if got := event.Alternatives[0].Language; got != "es" {
 		t.Fatalf("language = %q, want detected language es", got)
+	}
+}
+
+func TestDeepgramRecognizeSpeechEventNormalizesReferenceDetectedLanguageAliases(t *testing.T) {
+	var resp dgRecognitionResponse
+	if err := json.Unmarshal([]byte(`{"results":{"channels":[{"detected_language":"eng","alternatives":[{"transcript":"hello","confidence":0.9,"words":[]}]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	event := deepgramRecognizeSpeechEventForLanguage(resp, "")
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want normalized detected language en", got)
 	}
 }
 
@@ -1009,6 +1039,54 @@ func TestDeepgramSTTRecognizeMalformedChannelReturnsAPIConnectionError(t *testin
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
 			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"req-bad-channel"},"results":{"channels":[{}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestDeepgramSTTRecognizeMalformedNullAlternativesReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"req-null-alts"},"results":{"channels":[{"alternatives":null}]}}`)),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.example/v1/listen"))
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestDeepgramSTTRecognizeMalformedNullWordsReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"metadata":{"request_id":"req-null-words"},"results":{"channels":[{"alternatives":[{"transcript":"bad","confidence":0.5,"words":null}]}]}}`)),
 			Request:    r,
 		}, nil
 	})}
@@ -1839,6 +1917,52 @@ func TestDeepgramSTTStreamDropsReferenceMalformedResultMissingAlternatives(t *te
 	}
 }
 
+func TestDeepgramSTTStreamDropsReferenceMalformedResultNullAlternatives(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	closeServer := make(chan struct{})
+	go runDeepgramNullAlternativesThenValidWebsocketServer(serverConn, closeServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	defer close(closeServer)
+
+	start := nextDeepgramTestSpeechEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech", start.Type)
+	}
+	final := nextDeepgramTestSpeechEvent(t, stream)
+	if final.Type != stt.SpeechEventFinalTranscript || len(final.Alternatives) != 1 || final.Alternatives[0].Text != "valid" {
+		t.Fatalf("second event = %+v, want valid final transcript with no false end_of_speech first", final)
+	}
+	end := nextDeepgramTestSpeechEvent(t, stream)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event type = %s, want end_of_speech", end.Type)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
 func TestDeepgramSTTStreamDropsReferenceMalformedAlternativeMissingConfidence(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -1890,6 +2014,52 @@ func TestDeepgramSTTStreamDropsReferenceMalformedAlternativeMissingWords(t *test
 	serverErr := make(chan error, 1)
 	closeServer := make(chan struct{})
 	go runDeepgramMalformedWordsThenValidWebsocketServer(serverConn, closeServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	defer close(closeServer)
+
+	start := nextDeepgramTestSpeechEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech from valid Results", start.Type)
+	}
+	final := nextDeepgramTestSpeechEvent(t, stream)
+	if final.Type != stt.SpeechEventFinalTranscript || len(final.Alternatives) != 1 || final.Alternatives[0].Text != "valid" {
+		t.Fatalf("second event = %+v, want valid final transcript", final)
+	}
+	end := nextDeepgramTestSpeechEvent(t, stream)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event type = %s, want end_of_speech", end.Type)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	default:
+	}
+}
+
+func TestDeepgramSTTStreamDropsReferenceMalformedAlternativeNullWords(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	closeServer := make(chan struct{})
+	go runDeepgramNullWordsThenValidWebsocketServer(serverConn, closeServer, serverErr)
 
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -2496,6 +2666,33 @@ func TestDeepgramSTTStreamEndInputTreatsProviderCloseAsExpected(t *testing.T) {
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTCloseAfterEndInputDoesNotSendDuplicateCloseStream(t *testing.T) {
+	var textWrites []string
+	stream := &deepgramStream{
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	closeCount := 0
+	for _, payload := range textWrites {
+		if payload == deepgramSTTCloseStreamMessage {
+			closeCount++
+		}
+	}
+	if closeCount != 1 {
+		t.Fatalf("CloseStream count = %d, want one reference close control", closeCount)
 	}
 }
 
@@ -3416,6 +3613,36 @@ func runDeepgramMalformedChannelThenValidWebsocketServer(conn net.Conn, closeSer
 	errCh <- nil
 }
 
+func runDeepgramNullAlternativesThenValidWebsocketServer(conn net.Conn, closeServer <-chan struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
+		errCh <- err
+		return
+	}
+	for _, message := range []string{
+		`{"type":"SpeechStarted"}`,
+		`{"type":"Results","is_final":false,"speech_final":true,"metadata":{"request_id":"req-bad"},"channel":{"alternatives":null}}`,
+		`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-valid"},"channel":{"alternatives":[{"transcript":"valid","confidence":0.9,"words":[]}]}}`,
+	} {
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
+			errCh <- err
+			return
+		}
+	}
+	<-closeServer
+	errCh <- nil
+}
+
 func runDeepgramMalformedAlternativeThenValidWebsocketServer(conn net.Conn, closeServer <-chan struct{}, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -3464,6 +3691,36 @@ func runDeepgramMalformedWordsThenValidWebsocketServer(conn net.Conn, closeServe
 	}
 	for _, message := range []string{
 		`{"type":"Results","is_final":false,"speech_final":false,"metadata":{"request_id":"req-bad"},"channel":{"alternatives":[{"transcript":"bad","confidence":0.5}]}}`,
+		`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-valid"},"channel":{"alternatives":[{"transcript":"valid","confidence":0.9,"words":[]}]}}`,
+	} {
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
+			errCh <- err
+			return
+		}
+	}
+	<-closeServer
+	errCh <- nil
+}
+
+func runDeepgramNullWordsThenValidWebsocketServer(conn net.Conn, closeServer <-chan struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
+		errCh <- err
+		return
+	}
+	for _, message := range []string{
+		`{"type":"SpeechStarted"}`,
+		`{"type":"Results","is_final":false,"speech_final":true,"metadata":{"request_id":"req-bad"},"channel":{"alternatives":[{"transcript":"bad","confidence":0.5,"words":null}]}}`,
 		`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-valid"},"channel":{"alternatives":[{"transcript":"valid","confidence":0.9,"words":[]}]}}`,
 	} {
 		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {

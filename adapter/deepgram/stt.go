@@ -742,6 +742,7 @@ type dgAlternative struct {
 	parsedJSON     bool
 	Words          []dgWord
 	wordsSeen      bool
+	wordsNull      bool
 }
 
 func (a *dgAlternative) UnmarshalJSON(data []byte) error {
@@ -765,7 +766,9 @@ func (a *dgAlternative) UnmarshalJSON(data []byte) error {
 	a.parsedJSON = true
 	_, a.confidenceSeen = fields["confidence"]
 	_, a.languagesSeen = fields["languages"]
-	_, a.wordsSeen = fields["words"]
+	wordsRaw, wordsSeen := fields["words"]
+	a.wordsSeen = wordsSeen
+	a.wordsNull = wordsSeen && bytes.Equal(bytes.TrimSpace(wordsRaw), []byte("null"))
 	return nil
 }
 
@@ -773,6 +776,7 @@ type dgRecognitionChannel struct {
 	Alternatives     []dgAlternative
 	DetectedLanguage string
 	alternativesSeen bool
+	alternativesNull bool
 }
 
 func (c *dgRecognitionChannel) UnmarshalJSON(data []byte) error {
@@ -789,7 +793,9 @@ func (c *dgRecognitionChannel) UnmarshalJSON(data []byte) error {
 	}
 	c.Alternatives = raw.Alternatives
 	c.DetectedLanguage = raw.DetectedLanguage
-	_, c.alternativesSeen = fields["alternatives"]
+	alternativesRaw, alternativesSeen := fields["alternatives"]
+	c.alternativesSeen = alternativesSeen
+	c.alternativesNull = alternativesSeen && bytes.Equal(bytes.TrimSpace(alternativesRaw), []byte("null"))
 	return nil
 }
 
@@ -853,6 +859,7 @@ type dgResponse struct {
 	speechFinalSeen  bool
 	requestIDSeen    bool
 	alternativesSeen bool
+	alternativesNull bool
 }
 
 func (r *dgResponse) UnmarshalJSON(data []byte) error {
@@ -896,7 +903,9 @@ func (r *dgResponse) UnmarshalJSON(data []byte) error {
 	_, r.isFinalSeen = fields["is_final"]
 	_, r.speechFinalSeen = fields["speech_final"]
 	_, r.requestIDSeen = metadataFields["request_id"]
-	_, r.alternativesSeen = channelFields["alternatives"]
+	alternativesRaw, alternativesSeen := channelFields["alternatives"]
+	r.alternativesSeen = alternativesSeen
+	r.alternativesNull = alternativesSeen && bytes.Equal(bytes.TrimSpace(alternativesRaw), []byte("null"))
 	return nil
 }
 
@@ -909,11 +918,11 @@ func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) erro
 		return fmt.Errorf("malformed deepgram recognition response")
 	}
 	channel := resp.Results.Channels[0]
-	if !channel.alternativesSeen {
+	if !channel.alternativesSeen || channel.alternativesNull {
 		return fmt.Errorf("malformed deepgram recognition channel")
 	}
 	for _, alt := range channel.Alternatives {
-		if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen) {
+		if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen || alt.wordsNull) {
 			return fmt.Errorf("malformed deepgram recognition alternative")
 		}
 	}
@@ -946,9 +955,9 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 
 func deepgramRecognizeLanguage(languageStr string, detectedLanguage string) string {
 	if languageStr == "" {
-		return detectedLanguage
+		return language.NormalizeLanguage(detectedLanguage)
 	}
-	return languageStr
+	return language.NormalizeLanguage(languageStr)
 }
 
 func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
@@ -1004,7 +1013,7 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 }
 
 func deepgramLiveMalformedAlternative(alt dgAlternative) bool {
-	return alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen)
+	return alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen || alt.wordsNull)
 }
 
 func deepgramLiveMissingDetectedLanguage(languageStr string, alt dgAlternative) bool {
@@ -1017,9 +1026,9 @@ func deepgramLiveTranscriptTimes(resp dgResponse, words []dgWord) (float64, floa
 
 func deepgramLiveLanguage(languageStr string, detected []string) string {
 	if languageStr == "multi" && len(detected) > 0 {
-		return detected[0]
+		return language.NormalizeLanguage(detected[0])
 	}
-	return languageStr
+	return language.NormalizeLanguage(languageStr)
 }
 
 func deepgramFirstWordStart(words []dgWord) float64 {
@@ -1167,7 +1176,7 @@ func (r dgResponse) malformedReferenceResults() bool {
 	if !r.parsedJSON {
 		return false
 	}
-	if !r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen || !r.alternativesSeen {
+	if !r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen || !r.alternativesSeen || r.alternativesNull {
 		return true
 	}
 	for _, alt := range r.Channel.Alternatives {
@@ -1582,10 +1591,13 @@ func (s *deepgramStream) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+	shouldSendClose := !s.inputEnded
 	s.closed = true
 	s.inputEnded = true
 	s.closeDraining = true
-	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
+	if shouldSendClose {
+		_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
+	}
 	s.mu.Unlock()
 
 	// Keep receive-side state unlocked so a final transcript can drain after CloseStream.

@@ -964,13 +964,21 @@ func (s *deepgramTTSStream) ensureConnectedLocked() error {
 	}
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Token " + s.apiKey}
-	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, header)
+	conn, resp, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, header)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
+		}
+		if resp != nil && resp.StatusCode != 0 {
+			var respBody []byte
+			if resp.Body != nil {
+				respBody, _ = io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+			}
+			return llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
 		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
