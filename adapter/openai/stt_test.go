@@ -3550,6 +3550,49 @@ func TestOpenAIRealtimeSTTCompletedWithoutItemIDClearsCurrentPartial(t *testing.
 	}
 }
 
+func TestOpenAIRealtimeSTTCompletionPreservesInterimThrottle(t *testing.T) {
+	now := time.Unix(100, 0)
+	state := &openAIRealtimeSTTMessageState{
+		now: func() time.Time {
+			return now
+		},
+	}
+
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-1","audio_start_ms":100}`), state); err != nil {
+		t.Fatalf("first speech started: %v", err)
+	}
+	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"old"}`), state)
+	if err != nil {
+		t.Fatalf("first delta: %v", err)
+	}
+	if len(events) != 1 || events[0].Alternatives[0].Text != "old" {
+		t.Fatalf("first events = %+v, want old interim", events)
+	}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-1","transcript":"old","usage":{}}`), state); err != nil {
+		t.Fatalf("completed: %v", err)
+	}
+	if _, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"item-2","audio_start_ms":200}`), state); err != nil {
+		t.Fatalf("second speech started: %v", err)
+	}
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-2","delta":"new"}`), state)
+	if err != nil {
+		t.Fatalf("second first delta: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want reference throttle to persist across completed event", events)
+	}
+
+	now = now.Add(openAIRealtimeSTTDeltaInterval + time.Millisecond)
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-2","delta":" turn"}`), state)
+	if err != nil {
+		t.Fatalf("second post-throttle delta: %v", err)
+	}
+	if len(events) != 1 || events[0].RequestID != "item-2" || events[0].Alternatives[0].Text != "new turn" {
+		t.Fatalf("events = %+v, want accumulated new turn after reference throttle", events)
+	}
+}
+
 func TestOpenAIRealtimeSTTErrorMessageReturnsAPIError(t *testing.T) {
 	_, err := openAIRealtimeSTTEventsFromMessage([]byte(`{
 		"type":"error",
