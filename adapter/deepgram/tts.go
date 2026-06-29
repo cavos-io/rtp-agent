@@ -209,6 +209,7 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		audio:      make(chan *tts.SynthesizedAudio, 10),
 		errCh:      make(chan error, 1),
 		flushed:    make(chan struct{}, 1),
+		closeAck:   make(chan struct{}, 1),
 		sampleRate: t.sampleRate,
 		encoding:   t.encoding,
 		requestID:  uuid.NewString(),
@@ -428,6 +429,7 @@ type deepgramTTSStream struct {
 	writeText    func(string) error
 	closeConn    func() error
 	flushed      chan struct{}
+	closeAck     chan struct{}
 	pendingText  string
 	requestID    string
 	segmentID    string
@@ -446,6 +448,7 @@ func (s *deepgramTTSStream) readLoop() {
 			}
 			return
 		}
+		s.signalCloseAck()
 
 		if msgType == websocket.BinaryMessage {
 			frameData := deepgramTTSTelephonyToPCM(s.encoding, message)
@@ -565,6 +568,16 @@ func (s *deepgramTTSStream) signalFlushed() {
 	}
 	select {
 	case s.flushed <- struct{}{}:
+	default:
+	}
+}
+
+func (s *deepgramTTSStream) signalCloseAck() {
+	if s.closeAck == nil {
+		return
+	}
+	select {
+	case s.closeAck <- struct{}{}:
 	default:
 	}
 }
@@ -742,6 +755,7 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.drainCloseAckLocked()
 	flushErr := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"})
 	closeErr := s.writeTextData(deepgramTTSCloseMessage, map[string]interface{}{"type": "Close"})
 	if flushErr == nil && closeErr == nil {
@@ -756,12 +770,29 @@ func (s *deepgramTTSStream) Close() error {
 	return nil
 }
 
+func (s *deepgramTTSStream) drainCloseAckLocked() {
+	if s.closeAck == nil {
+		return
+	}
+	for {
+		select {
+		case <-s.closeAck:
+		default:
+			return
+		}
+	}
+}
+
 func (s *deepgramTTSStream) waitForFlushedAckLocked() {
-	if s.flushed == nil {
+	ack := s.closeAck
+	if ack == nil {
+		ack = s.flushed
+	}
+	if ack == nil {
 		return
 	}
 	select {
-	case <-s.flushed:
+	case <-ack:
 	case <-time.After(deepgramTTSCloseAckTimeout):
 	}
 }
