@@ -872,6 +872,12 @@ func buildTTSInitPayload(t *TTS) []byte {
 				}
 			}
 			payload["speaker"] = t.voice
+		case ref.routeProvider == "rime" && ref.routeModel == "coda":
+			config["modelId"] = slngOptionDefault(t.modelOptions, "modelId", "coda")
+			if value, ok := t.modelOptions["segment"]; ok {
+				config["segment"] = value
+			}
+			payload["speaker"] = t.voice
 		case ref.routeProvider == "sarvam" && ref.routeModel == "bulbul":
 			config["speech_sample_rate"] = fmt.Sprint(t.sampleRate)
 			config["pace"] = slngOptionDefault(t.modelOptions, "pace", t.speed)
@@ -952,6 +958,11 @@ func resolveDeepgramSTTModel(ref modelRef) string {
 func isRimeArcanaModel(modelName string) bool {
 	ref, err := parseModelRef(modelName)
 	return err == nil && ref.routeProvider == "rime" && ref.routeModel == "arcana"
+}
+
+func isRimeCodaModel(modelName string) bool {
+	ref, err := parseModelRef(modelName)
+	return err == nil && ref.routeProvider == "rime" && ref.routeModel == "coda"
 }
 
 func normalizeLanguageForModel(modelName, language string, options map[string]any) string {

@@ -192,6 +192,39 @@ func TestSLNGGatewayPayloadsMatchReference(t *testing.T) {
 	assertSLNGNestedField(t, ttsPayload, "config", "speed", float64(1.1))
 }
 
+func TestSLNGTTSInitPayloadIncludesRimeCodaOptions(t *testing.T) {
+	provider := NewTTS("test-key",
+		WithTTSModel("rime/coda:0-id"),
+		WithTTSVoice("speaker-123"),
+		WithTTSModelOptions(map[string]any{
+			"modelId": "coda-custom",
+			"segment": "bySentence",
+		}),
+	)
+
+	payload := buildTTSInitPayload(provider)
+
+	assertSLNGField(t, payload, "type", "init")
+	assertSLNGField(t, payload, "model", "rime/coda:0-id")
+	assertSLNGField(t, payload, "voice", "speaker-123")
+	assertSLNGField(t, payload, "speaker", "speaker-123")
+	assertSLNGNestedField(t, payload, "config", "modelId", "coda-custom")
+	assertSLNGNestedField(t, payload, "config", "segment", "bySentence")
+}
+
+func TestSLNGTTSInitPayloadDefaultsRimeCodaModelID(t *testing.T) {
+	provider := NewTTS("test-key",
+		WithTTSModel("slng/rime/coda:0-id"),
+		WithTTSVoice("speaker-456"),
+	)
+
+	payload := buildTTSInitPayload(provider)
+
+	assertSLNGField(t, payload, "speaker", "speaker-456")
+	assertSLNGNestedField(t, payload, "config", "modelId", "coda")
+	assertSLNGNestedFieldAbsent(t, payload, "config", "segment")
+}
+
 func TestSLNGTTSInitPayloadPreservesExplicitZeroSpeed(t *testing.T) {
 	provider := NewTTS("test-key", WithTTSSpeed(0))
 
