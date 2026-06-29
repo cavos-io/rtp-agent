@@ -46,6 +46,7 @@ type OpenAISTT struct {
 	client           *openai.Client
 	httpClient       openai.HTTPDoer
 	apiKey           string
+	azureADToken     string
 	baseURL          string
 	baseURLSet       bool
 	realtimeBaseURL  string
@@ -236,6 +237,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 
 	provider := &OpenAISTT{
 		apiKey:          apiKey,
+		azureADToken:    azureADToken,
 		baseURL:         realtimeBaseURL,
 		realtimeBaseURL: realtimeBaseURL,
 		model:           model,
@@ -557,7 +559,11 @@ func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {
 func buildOpenAIRealtimeSTTHeaders(s *OpenAISTT) http.Header {
 	headers := make(http.Header)
 	headers.Set("User-Agent", "LiveKit Agents")
-	headers.Set("Authorization", "Bearer "+s.apiKey)
+	authToken := s.apiKey
+	if authToken == "" {
+		authToken = s.azureADToken
+	}
+	headers.Set("Authorization", "Bearer "+authToken)
 	return headers
 }
 

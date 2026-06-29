@@ -567,6 +567,26 @@ func TestAzureOpenAIRealtimeSTTWebsocketRequestMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeSTTWebsocketUsesEntraToken(t *testing.T) {
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com/",
+		"stt-deployment",
+		"2024-06-01",
+		"",
+		"entra-token",
+		WithOpenAISTTRealtime(true),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	headers := buildOpenAIRealtimeSTTHeaders(provider)
+	if headers.Get("Authorization") != "Bearer entra-token" {
+		t.Fatalf("authorization = %q, want Entra bearer token", headers.Get("Authorization"))
+	}
+}
+
 func TestAzureOpenAIRealtimeSTTWebsocketUsesReferenceBaseURL(t *testing.T) {
 	provider, err := NewAzureOpenAISTT(
 		"gpt-4o-mini-transcribe",
