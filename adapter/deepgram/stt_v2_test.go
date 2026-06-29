@@ -324,6 +324,52 @@ func TestDeepgramSTTv2EndInputFlushesTailAndClosesReferenceInput(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2EndInputTreatsProviderCloseAsExpected(t *testing.T) {
+	closeSeen := make(chan struct{})
+	serverErr := make(chan error, 1)
+	clientConn, serverConn := net.Pipe()
+	go runDeepgramSTTv2CloseAfterCloseStreamServer(serverConn, closeSeen, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTTv2("test-key", WithDeepgramSTTv2BaseURL("ws://deepgram.test/v2/listen"))
+	stream, err := provider.Stream(context.Background(), "en")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatalf("stream = %T, want stt.InputEnding", stream)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput() error = %v", err)
+	}
+	select {
+	case <-closeSeen:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseStream")
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after provider close error = %T %v, want EOF", err, err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
 	provider := NewDeepgramSTTv2("test-key",
 		WithDeepgramSTTv2BaseURL("https://deepgram.example/v2/listen"),
@@ -938,5 +984,38 @@ func runDeepgramSTTv2DefaultLanguageWebsocketServer(conn net.Conn, closeSeen cha
 			errCh <- nil
 			return
 		}
+	}
+}
+
+func runDeepgramSTTv2CloseAfterCloseStreamServer(conn net.Conn, closeSeen chan<- struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode != websocket.TextMessage || deepgramTestWebsocketMessageType(payload) != "CloseStream" {
+			continue
+		}
+		close(closeSeen)
+		closePayload := websocket.FormatCloseMessage(websocket.CloseNormalClosure, "done")
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, closePayload); err != nil {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+		return
 	}
 }
