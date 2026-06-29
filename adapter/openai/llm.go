@@ -2596,6 +2596,7 @@ func (s *openaiStream) hasEmitted() bool {
 }
 
 func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStreamChoice) *llm.ChatChunk {
+	completedChunks := make([]*llm.ChatChunk, 0)
 	for _, tc := range choice.Delta.ToolCalls {
 		if tc.Function.Name == "" && tc.Function.Arguments == "" {
 			continue
@@ -2604,9 +2605,8 @@ func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStre
 		if tc.Index != nil {
 			index = *tc.Index
 		}
-		var completed *llm.ChatChunk
 		if s.toolCallID != "" && tc.ID != "" && (!s.toolIndexSet || index != s.toolIndex) {
-			completed = s.finishOpenAIStreamToolCall(id, choice)
+			completedChunks = append(completedChunks, s.finishOpenAIStreamToolCall(id, choice))
 		}
 		if tc.Function.Name != "" {
 			s.toolIndex = index
@@ -2619,11 +2619,17 @@ func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStre
 		} else if tc.Function.Arguments != "" {
 			s.toolCallRawArgs += tc.Function.Arguments
 		}
-		if completed != nil {
-			return completed
-		}
 	}
-	return nil
+	if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
+		completedChunks = append(completedChunks, s.finishOpenAIStreamToolCall(id, choice))
+	}
+	if len(completedChunks) == 0 {
+		return nil
+	}
+	for _, chunk := range completedChunks[1:] {
+		s.pushPending(chunk)
+	}
+	return completedChunks[0]
 }
 
 func (s *openaiStream) finishOpenAIStreamToolCall(id string, choice openAIStreamChoice) *llm.ChatChunk {

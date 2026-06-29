@@ -2705,6 +2705,57 @@ func TestOpenAIStreamAppliesToolCallTailBeforeFinish(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamEmitsAllToolCallsFromFinishedDelta(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-two-tools","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}},{"index":1,"id":"call_2","type":"function","function":{"name":"book","arguments":"{\"date\":\"today\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	got := []*llm.ChatChunk{first, second}
+	want := []struct {
+		id   string
+		name string
+		args string
+	}{
+		{id: "call_1", name: "lookup", args: "{}"},
+		{id: "call_2", name: "book", args: `{"date":"today"}`},
+	}
+	for i, chunk := range got {
+		if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+			t.Fatalf("chunk %d = %#v, want one tool call", i, chunk)
+		}
+		call := chunk.Delta.ToolCalls[0]
+		if call.CallID != want[i].id || call.Name != want[i].name || call.Arguments != want[i].args {
+			t.Fatalf("tool call %d = %+v, want %+v", i, call, want[i])
+		}
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after tool calls = %v, want EOF", err)
+	}
+}
+
 func TestOpenAIStreamSplitsUsageAfterToolCallFinish(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
