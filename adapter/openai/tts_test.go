@@ -564,6 +564,46 @@ func TestOpenAITTSSynthesizeUsesOpenAISpeechAPI(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSynthesizeUsesUnknownRequestIDFallback(t *testing.T) {
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader(string([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+	provider, err := NewOpenAITTS("test-key", goopenai.TTSModel1, "",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio.RequestID != "unknown" {
+		t.Fatalf("audio request id = %q, want reference unknown fallback", audio.RequestID)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != "unknown" {
+		t.Fatalf("final = %#v, want final marker with reference unknown request id", final)
+	}
+}
+
 func TestOpenAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	requests := 0
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {

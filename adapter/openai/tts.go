@@ -480,12 +480,15 @@ func (s *openaiTTSChunkedStream) ensureStarted() error {
 
 func openAITTSRequestID(header http.Header) string {
 	if header == nil {
-		return ""
+		return "unknown"
 	}
 	if requestID := header.Get("X-Request-Id"); requestID != "" {
 		return requestID
 	}
-	return header.Get("Openai-Request-Id")
+	if requestID := header.Get("Openai-Request-Id"); requestID != "" {
+		return requestID
+	}
+	return "unknown"
 }
 
 func (s *openaiTTSChunkedStream) nextAudio() (*tts.SynthesizedAudio, error) {
