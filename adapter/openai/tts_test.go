@@ -1234,6 +1234,55 @@ func TestOpenAITTSSSEDoneEmitsTokenUsageMetrics(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEDoneDoesNotEndBeforeLaterAudio(t *testing.T) {
+	const requestID = "req_sse_done_before_audio"
+	firstAudio := []byte{1, 2}
+	secondAudio := []byte{3, 4}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		sse := `data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(firstAudio) + `"}` + "\n\n" +
+			`data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n" +
+			`data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(secondAudio) + `"}` + "\n\n" +
+			"data: [DONE]\n\n"
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "X-Request-Id": []string{requestID}},
+			Body:       io.NopCloser(strings.NewReader(sse)),
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "late audio")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if first == nil || first.IsFinal || !bytes.Equal(first.Frame.Data, firstAudio) {
+		t.Fatalf("first = %#v, want first audio", first)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if second == nil || second.IsFinal || !bytes.Equal(second.Frame.Data, secondAudio) {
+		t.Fatalf("second = %#v, want audio after done usage event", second)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal || final.RequestID != requestID {
+		t.Fatalf("final = %#v, want final marker after DONE sentinel", final)
+	}
+}
+
 func TestOpenAITTSSSEDoneUsageWithoutAudioEmitsReferenceMetrics(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		sse := `data: {"type":"speech.audio.done","usage":{"input_tokens":7,"output_tokens":11}}` + "\n\n"
