@@ -530,11 +530,17 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 			s.finalSent = true
 			return nil
 		}
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		s.cancelRequestLocked()
 		s.finalSent = true
-		return llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
+		message := resp.Status
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
+		if message == "" {
+			message = "Deepgram TTS request failed"
+		}
+		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	s.resp = resp
 	return nil

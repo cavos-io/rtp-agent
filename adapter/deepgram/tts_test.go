@@ -862,8 +862,11 @@ func TestDeepgramTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
-	if statusErr.Body != `{"err_msg":"rate limited"}` {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	if statusErr.Message != http.StatusText(http.StatusTooManyRequests) {
+		t.Fatalf("message = %q, want reference response reason", statusErr.Message)
+	}
+	if statusErr.Body != nil {
+		t.Fatalf("body = %#v, want nil like reference ClientResponseError mapping", statusErr.Body)
 	}
 }
 
