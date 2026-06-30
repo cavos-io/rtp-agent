@@ -690,9 +690,21 @@ func TestDeepgramSTTRejectsKeywordKeytermModelMismatchBeforeRequest(t *testing.T
 			message: "keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models",
 		},
 		{
+			name:    "empty keyword with nova 3",
+			model:   "nova-3",
+			option:  WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "", Boost: 1}}),
+			message: "keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models",
+		},
+		{
 			name:    "keyterm without nova 3",
 			model:   "nova-2",
 			option:  WithDeepgramSTTKeyterms([]string{"LiveKit"}),
+			message: "keyterm Prompting is only available for transcription using the Nova-3 Model",
+		},
+		{
+			name:    "empty keyterm without nova 3",
+			model:   "nova-2",
+			option:  WithDeepgramSTTKeyterms([]string{""}),
 			message: "keyterm Prompting is only available for transcription using the Nova-3 Model",
 		},
 	}
@@ -1653,6 +1665,14 @@ func TestDeepgramSTTUpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
 	if after := buildDeepgramStreamURL(provider, "en-US"); after != before {
 		t.Fatalf("stream URL after failed keyword update = %s, want unchanged %s", after, before)
 	}
+
+	err = provider.UpdateOptions(WithDeepgramSTTModel("nova-3"), WithDeepgramSTTKeywords([]DeepgramKeyword{}))
+	if err == nil || !strings.Contains(err.Error(), "keywords is only available") {
+		t.Fatalf("UpdateOptions() empty keyword error = %v, want invalid keywords for nova-3", err)
+	}
+	if after := buildDeepgramStreamURL(provider, "en-US"); after != before {
+		t.Fatalf("stream URL after failed empty keyword update = %s, want unchanged %s", after, before)
+	}
 }
 
 func TestDeepgramSTTUpdateOptionsReconnectsActiveStream(t *testing.T) {
@@ -2495,6 +2515,59 @@ func TestDeepgramSTTRecognitionUsageCarriesReferenceRequestID(t *testing.T) {
 	}
 	if usage.RequestID != "req-2" {
 		t.Fatalf("usage request id = %q, want latest Deepgram request id req-2", usage.RequestID)
+	}
+}
+
+func TestDeepgramSTTMalformedResultUpdatesReferenceUsageRequestID(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	closeServer := make(chan struct{})
+	go runDeepgramMalformedResultThenSpeechStartedWebsocketServer(serverConn, closeServer, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	defer close(closeServer)
+
+	start := nextDeepgramTestSpeechEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event type = %s, want start_of_speech after malformed Results", start.Type)
+	}
+
+	rawStream, ok := stream.(*deepgramStream)
+	if !ok {
+		t.Fatalf("stream = %T, want *deepgramStream", stream)
+	}
+	rawStream.mu.Lock()
+	rawStream.sendRecognitionUsage(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	rawStream.flushRecognitionUsageLocked()
+	rawStream.mu.Unlock()
+
+	usage := nextDeepgramTestSpeechEvent(t, stream)
+	if usage.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("usage event type = %s, want %s", usage.Type, stt.SpeechEventRecognitionUsage)
+	}
+	if usage.RequestID != "req-bad" {
+		t.Fatalf("usage request id = %q, want malformed Results request id req-bad", usage.RequestID)
 	}
 }
 
@@ -3930,6 +4003,35 @@ func runDeepgramMalformedResultThenValidWebsocketServer(conn net.Conn, closeServ
 	for _, message := range []string{
 		`{"type":"Results","is_final":false,"metadata":{"request_id":"req-bad"},"channel":{"alternatives":[{"transcript":"bad","confidence":0.5,"words":[]}]}}`,
 		`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-valid"},"channel":{"alternatives":[{"transcript":"valid","confidence":0.9,"words":[]}]}}`,
+	} {
+		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
+			errCh <- err
+			return
+		}
+	}
+	<-closeServer
+	errCh <- nil
+}
+
+func runDeepgramMalformedResultThenSpeechStartedWebsocketServer(conn net.Conn, closeServer <-chan struct{}, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
+		errCh <- err
+		return
+	}
+	for _, message := range []string{
+		`{"type":"Results","is_final":false,"speech_final":true,"metadata":{"request_id":"req-bad"},"channel":{}}`,
+		`{"type":"SpeechStarted"}`,
 	} {
 		if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(message)); err != nil {
 			errCh <- err

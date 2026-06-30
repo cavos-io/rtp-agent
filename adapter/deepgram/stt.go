@@ -44,7 +44,9 @@ type DeepgramSTT struct {
 	numerals           bool
 	mipOptOut          bool
 	keywords           []DeepgramKeyword
+	keywordsSet        bool
 	keyterms           []string
+	keytermsSet        bool
 	redact             []string
 	tags               []string
 	baseURL            string
@@ -184,12 +186,14 @@ func WithDeepgramSTTMipOptOut(mipOptOut bool) DeepgramSTTOption {
 func WithDeepgramSTTKeywords(keywords []DeepgramKeyword) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
 		s.keywords = append([]DeepgramKeyword(nil), keywords...)
+		s.keywordsSet = keywords != nil
 	}
 }
 
 func WithDeepgramSTTKeyterms(keyterms []string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
 		s.keyterms = append([]string(nil), keyterms...)
+		s.keytermsSet = keyterms != nil
 	}
 }
 
@@ -307,7 +311,9 @@ func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) error {
 		numerals:          s.numerals,
 		mipOptOut:         s.mipOptOut,
 		keywords:          append([]DeepgramKeyword(nil), s.keywords...),
+		keywordsSet:       s.keywordsSet,
 		keyterms:          append([]string(nil), s.keyterms...),
+		keytermsSet:       s.keytermsSet,
 		redact:            append([]string(nil), s.redact...),
 		tags:              append([]string(nil), s.tags...),
 		baseURL:           s.baseURL,
@@ -338,7 +344,9 @@ func (s *DeepgramSTT) UpdateOptions(opts ...DeepgramSTTOption) error {
 	s.numerals = next.numerals
 	s.mipOptOut = next.mipOptOut
 	s.keywords = next.keywords
+	s.keywordsSet = next.keywordsSet
 	s.keyterms = next.keyterms
+	s.keytermsSet = next.keytermsSet
 	s.redact = next.redact
 	s.tags = next.tags
 	s.baseURL = next.baseURL
@@ -627,17 +635,13 @@ func validateDeepgramSTTOptions(s *DeepgramSTT) error {
 		}
 	}
 	if strings.HasPrefix(s.model, "nova-3") {
-		for _, keyword := range s.keywords {
-			if keyword.Keyword != "" {
-				return fmt.Errorf("keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models; for Nova-3, use Keyterm Prompting")
-			}
+		if s.keywordsSet {
+			return fmt.Errorf("keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models; for Nova-3, use Keyterm Prompting")
 		}
 	}
 	if !strings.HasPrefix(s.model, "nova-3") {
-		for _, keyterm := range s.keyterms {
-			if keyterm != "" {
-				return fmt.Errorf("keyterm Prompting is only available for transcription using the Nova-3 Model; to boost recognition of keywords using another model, use the Keywords feature")
-			}
+		if s.keytermsSet {
+			return fmt.Errorf("keyterm Prompting is only available for transcription using the Nova-3 Model; to boost recognition of keywords using another model, use the Keywords feature")
 		}
 	}
 	return nil
@@ -1211,13 +1215,15 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 
 		case "Results":
+			if resp.referenceRequestIDReady() {
+				s.setRequestID(resp.Metadata.RequestID)
+			}
 			if resp.malformedReferenceResults() {
 				continue
 			}
 			if resp.malformedReferenceLanguage(s.language) {
 				continue
 			}
-			s.setRequestID(resp.Metadata.RequestID)
 			if event := deepgramSpeechEventForLanguageOffset(resp, s.language, s.StartTimeOffset()); event != nil {
 				if !s.speaking {
 					s.speaking = true
@@ -1232,6 +1238,13 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			}
 		}
 	}
+}
+
+func (r dgResponse) referenceRequestIDReady() bool {
+	if !r.parsedJSON {
+		return false
+	}
+	return r.requestIDSeen && r.isFinalSeen && r.speechFinalSeen
 }
 
 func (r dgResponse) malformedReferenceResults() bool {
