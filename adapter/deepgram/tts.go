@@ -67,9 +67,7 @@ func WithDeepgramTTSMipOptOut(mipOptOut bool) DeepgramTTSOption {
 
 func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) DeepgramTTSOption {
 	return func(t *DeepgramTTS) {
-		if encoding != "" {
-			t.encoding = deepgramTTSNormalizeEncoding(encoding)
-		}
+		t.encoding = deepgramTTSNormalizeEncoding(encoding)
 		t.sampleRate = sampleRate
 	}
 }

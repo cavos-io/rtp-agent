@@ -545,6 +545,17 @@ func TestDeepgramTTSConstructorOptionsMatchReference(t *testing.T) {
 	}
 	assertDeepgramTTSQuery(t, parsed.Query(), "sample_rate", "0")
 
+	provider = NewDeepgramTTS("test-key", "", WithDeepgramTTSAudioFormat("", 8000))
+	if provider.encoding != "" {
+		t.Fatalf("encoding with explicit empty = %q, want empty reference encoding", provider.encoding)
+	}
+	requestURL, _ = buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsed, err = url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse empty encoding url: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsed.Query(), "encoding", "")
+
 	provider = NewDeepgramTTS("explicit-key", "")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
