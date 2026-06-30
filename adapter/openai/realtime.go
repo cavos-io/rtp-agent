@@ -1932,6 +1932,9 @@ func (n *openAIRealtimeInputAudioNormalizer) flush() *model.AudioFrame {
 	binary.LittleEndian.PutUint16(out, uint16(n.lastSample))
 	n.remainder = 0
 	n.hasTail = false
+	n.inputSamples = 0
+	n.outputSamples = 0
+	n.lastSample = 0
 	return &model.AudioFrame{
 		Data:              out,
 		SampleRate:        openAIRealtimeInputSampleRate,

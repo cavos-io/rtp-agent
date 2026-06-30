@@ -2202,6 +2202,51 @@ func TestRealtimeInputAudioNormalizerKeepsPhaseAcrossFrames(t *testing.T) {
 	}
 }
 
+func TestRealtimeInputAudioNormalizerFlushStartsFreshSegment(t *testing.T) {
+	priming := make([]byte, 2)
+	binary.LittleEndian.PutUint16(priming, 7)
+	data := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(int16(i*100)))
+	}
+
+	var fresh openAIRealtimeInputAudioNormalizer
+	want, err := fresh.normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("fresh normalize error = %v", err)
+	}
+
+	var flushed openAIRealtimeInputAudioNormalizer
+	if _, err := flushed.normalize(&audiomodel.AudioFrame{
+		Data:              priming,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("priming normalize error = %v", err)
+	}
+	if tail := flushed.flush(); tail == nil {
+		t.Fatal("flush tail = nil, want pending sample")
+	}
+	got, err := flushed.normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("post-flush normalize error = %v", err)
+	}
+	if !bytes.Equal(got.Data, want.Data) {
+		t.Fatalf("post-flush segment differs from fresh segment")
+	}
+}
+
 func TestRealtimeSessionClearAudioDropsBufferedTail(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
