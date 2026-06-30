@@ -3293,6 +3293,16 @@ func openAIRealtimeDecodeAudioBase64(value string) ([]byte, error) {
 	if len(filtered) == 0 {
 		return nil, nil
 	}
+	hasData := false
+	for _, c := range filtered {
+		if c != '=' {
+			hasData = true
+			break
+		}
+	}
+	if !hasData {
+		return nil, nil
+	}
 	return base64.StdEncoding.DecodeString(string(filtered))
 }
 

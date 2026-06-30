@@ -3892,6 +3892,22 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 		t.Fatalf("empty audio event metadata = item %q content %d, want msg_789 content 4", emptyAudioEvent.ItemID, emptyAudioEvent.ContentIndex)
 	}
 
+	paddingOnlyEvent, ok := openAIRealtimeEvent(map[string]any{
+		"type":          "response.output_audio.delta",
+		"item_id":       "msg_pad",
+		"content_index": 5,
+		"delta":         "====%%%%",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent padding-only audio returned ok=false, want reference zero-byte audio event")
+	}
+	if paddingOnlyEvent.Type != llm.RealtimeEventTypeAudio || len(paddingOnlyEvent.Data) != 0 {
+		t.Fatalf("padding-only audio event = %#v, want zero-byte audio delta", paddingOnlyEvent)
+	}
+	if paddingOnlyEvent.ItemID != "msg_pad" || paddingOnlyEvent.ContentIndex != 5 {
+		t.Fatalf("padding-only audio event metadata = item %q content %d, want msg_pad content 5", paddingOnlyEvent.ItemID, paddingOnlyEvent.ContentIndex)
+	}
+
 	if _, ok := openAIRealtimeEvent(map[string]any{
 		"type":    "response.output_audio.delta",
 		"item_id": "msg_bad",

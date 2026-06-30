@@ -2581,6 +2581,7 @@ func TestOpenAITTSSSEIgnoresPunctuationOnlyBase64LikeReference(t *testing.T) {
 	wantAudio := []byte{1, 2, 3, 4}
 	body := &countingDataReadCloser{reader: strings.NewReader(
 		`data: {"type":"speech.audio.delta","delta":"%%%%"}` + "\n\n" +
+			`data: {"type":"speech.audio.delta","delta":"====%%%%"}` + "\n\n" +
 			`data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
 			`data: {"type":"speech.audio.done"}` + "\n\n")}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
