@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestAWSTTSDefaultsMatchReference(t *testing.T) {
@@ -201,6 +202,23 @@ func TestAWSTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.
 	}
 }
 
+func TestAWSTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &awsTTSChunkedStream{
+		stream: erroringAWSReadCloser{err: errors.New("polly read failed")},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read failure", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 
@@ -300,5 +318,17 @@ func (c *countingAWSReadCloser) Close() error {
 	if c.closed > 1 {
 		return io.ErrClosedPipe
 	}
+	return nil
+}
+
+type erroringAWSReadCloser struct {
+	err error
+}
+
+func (c erroringAWSReadCloser) Read([]byte) (int, error) {
+	return 0, c.err
+}
+
+func (c erroringAWSReadCloser) Close() error {
 	return nil
 }

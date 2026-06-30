@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/polly"
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
@@ -239,7 +240,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
 		data, err := io.ReadAll(s.stream)
 		if err != nil {
-			return nil, err
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS response read failed: %v", err))
 		}
 		if len(data) == 0 {
 			s.finalSent = true
