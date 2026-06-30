@@ -2133,6 +2133,7 @@ func (s *realtimeSession) ClearAudio() error {
 	if s.audioBStream != nil {
 		s.audioBStream.Clear()
 	}
+	s.audioNormalizer.reset()
 	s.pushedDuration = 0
 	return nil
 }
