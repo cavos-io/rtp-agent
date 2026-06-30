@@ -742,6 +742,7 @@ type dgAlternative struct {
 	parsedJSON     bool
 	Words          []dgWord
 	wordsSeen      bool
+	wordsNull      bool
 }
 
 func (a *dgAlternative) UnmarshalJSON(data []byte) error {
@@ -765,7 +766,9 @@ func (a *dgAlternative) UnmarshalJSON(data []byte) error {
 	a.parsedJSON = true
 	_, a.confidenceSeen = fields["confidence"]
 	_, a.languagesSeen = fields["languages"]
-	_, a.wordsSeen = fields["words"]
+	wordsRaw, wordsSeen := fields["words"]
+	a.wordsSeen = wordsSeen
+	a.wordsNull = wordsSeen && bytes.Equal(bytes.TrimSpace(wordsRaw), []byte("null"))
 	return nil
 }
 
@@ -913,7 +916,7 @@ func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) erro
 		return fmt.Errorf("malformed deepgram recognition channel")
 	}
 	for _, alt := range channel.Alternatives {
-		if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen) {
+		if alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen || alt.wordsNull) {
 			return fmt.Errorf("malformed deepgram recognition alternative")
 		}
 	}
@@ -1004,7 +1007,7 @@ func deepgramSpeechEventForLanguageOffset(resp dgResponse, languageStr string, s
 }
 
 func deepgramLiveMalformedAlternative(alt dgAlternative) bool {
-	return alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen)
+	return alt.parsedJSON && (!alt.confidenceSeen || !alt.wordsSeen || alt.wordsNull)
 }
 
 func deepgramLiveMissingDetectedLanguage(languageStr string, alt dgAlternative) bool {
