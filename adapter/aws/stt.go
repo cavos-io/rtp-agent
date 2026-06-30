@@ -224,10 +224,12 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	}
 
 	gs := &awsSTTStream{
-		stream:   stream,
-		language: input.LanguageCode,
-		events:   make(chan *stt.SpeechEvent, 10),
-		errCh:    make(chan error, 1),
+		stream:                   stream,
+		language:                 input.LanguageCode,
+		identifyLanguage:         s.identifyLanguage,
+		identifyMultipleLanguage: s.identifyMultipleLanguages,
+		events:                   make(chan *stt.SpeechEvent, 10),
+		errCh:                    make(chan error, 1),
 	}
 	go gs.readLoop()
 
@@ -296,14 +298,16 @@ func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 }
 
 type awsSTTStream struct {
-	stream          awsSTTEventStream
-	language        types.LanguageCode
-	events          chan *stt.SpeechEvent
-	errCh           chan error
-	closed          bool
-	timingMu        sync.Mutex
-	startTimeOffset float64
-	startTime       float64
+	stream                   awsSTTEventStream
+	language                 types.LanguageCode
+	identifyLanguage         bool
+	identifyMultipleLanguage bool
+	events                   chan *stt.SpeechEvent
+	errCh                    chan error
+	closed                   bool
+	timingMu                 sync.Mutex
+	startTimeOffset          float64
+	startTime                float64
 }
 
 func (s *awsSTTStream) readLoop() {
@@ -335,7 +339,7 @@ func (s *awsSTTStream) readLoop() {
 					s.events <- &stt.SpeechEvent{
 						Type: eventType,
 						Alternatives: []stt.SpeechData{
-							awsSpeechDataFromResultOffset(result, s.currentStartTimeOffset(), string(s.language)),
+							awsSpeechDataFromResultOffset(result, s.currentStartTimeOffset(), string(s.language), s.identifyLanguage || s.identifyMultipleLanguage),
 						},
 					}
 				}
@@ -347,18 +351,20 @@ func (s *awsSTTStream) readLoop() {
 	}
 }
 
-func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64, fallbackLanguage string) stt.SpeechData {
+func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64, fallbackLanguage string, includeSourceLanguages bool) stt.SpeechData {
 	if len(result.Alternatives) == 0 {
 		return stt.SpeechData{
-			Language:  awsResultLanguage(result, fallbackLanguage),
-			StartTime: result.StartTime + startTimeOffset,
-			EndTime:   result.EndTime + startTimeOffset,
+			Language:        awsResultLanguage(result, fallbackLanguage),
+			StartTime:       result.StartTime + startTimeOffset,
+			EndTime:         result.EndTime + startTimeOffset,
+			SourceLanguages: awsResultSourceLanguages(result, includeSourceLanguages),
 		}
 	}
 	data := awsSpeechDataFromAlternativeOffset(result.Alternatives[0], startTimeOffset)
 	data.Language = awsResultLanguage(result, fallbackLanguage)
 	data.StartTime = result.StartTime + startTimeOffset
 	data.EndTime = result.EndTime + startTimeOffset
+	data.SourceLanguages = awsResultSourceLanguages(result, includeSourceLanguages)
 	return data
 }
 
@@ -370,6 +376,13 @@ func awsResultLanguage(result types.Result, fallbackLanguage string) string {
 		return fallbackLanguage
 	}
 	return string(types.LanguageCodeEnUs)
+}
+
+func awsResultSourceLanguages(result types.Result, include bool) []string {
+	if !include || result.LanguageCode == "" {
+		return nil
+	}
+	return []string{string(result.LanguageCode)}
 }
 
 func awsSpeechDataFromAlternative(alt types.Alternative) stt.SpeechData {

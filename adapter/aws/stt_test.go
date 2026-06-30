@@ -188,6 +188,60 @@ func TestAWSSTTStreamInputOmitsLanguageWhenIdentifyingLanguage(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamLanguageIdentificationSetsSourceLanguages(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	client := &fakeAWSSTTClient{stream: stream}
+	provider, err := newAWSSTTWithClient(client, WithAWSSTTIdentifyLanguage(true))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+	providerStream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{
+					{
+						IsPartial:    false,
+						StartTime:    0.1,
+						EndTime:      0.3,
+						LanguageCode: types.LanguageCodeEsUs,
+						Alternatives: []types.Alternative{{
+							Transcript: awsconfig.String("hola"),
+						}},
+					},
+				},
+			},
+		},
+	}
+	close(reader.events)
+
+	event, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final transcript", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event type = %q, want final transcript", event.Type)
+	}
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	alt := event.Alternatives[0]
+	if alt.Language != "es-US" {
+		t.Fatalf("language = %q, want es-US", alt.Language)
+	}
+	if len(alt.SourceLanguages) != 1 || alt.SourceLanguages[0] != "es-US" {
+		t.Fatalf("source languages = %#v, want [es-US]", alt.SourceLanguages)
+	}
+}
+
 func TestAWSSTTStreamInputUsesReferenceAdvancedOptions(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTSessionID("session-123"),
