@@ -59,6 +59,19 @@ func TestNewOpenAITTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewOpenAITTSUsesEnvironmentBaseURL(t *testing.T) {
+	t.Setenv(openAIBaseURLEnv, "https://env.openai.test/v1")
+
+	provider, err := NewOpenAITTS("test-key", "", "")
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	if got := provider.Provider(); got != "env.openai.test" {
+		t.Fatalf("Provider() = %q, want OPENAI_BASE_URL host", got)
+	}
+}
+
 func TestNewOpenAITTSRequiresAPIKey(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "")
 

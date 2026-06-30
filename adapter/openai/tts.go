@@ -254,7 +254,7 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 		apiKey:         apiKey,
 		model:          model,
 		voice:          voice,
-		baseURL:        defaultOpenAIBaseURL,
+		baseURL:        openAIBaseURLFromEnv(),
 		speed:          1.0,
 		responseFormat: openai.SpeechResponseFormatMp3,
 		streams:        make(map[*openaiTTSChunkedStream]struct{}),

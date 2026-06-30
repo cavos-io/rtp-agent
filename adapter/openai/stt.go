@@ -37,6 +37,7 @@ const (
 	openAIRealtimeSTTDeltaInterval     = 500 * time.Millisecond
 	openAISTTRecognizeTimeout          = 30 * time.Second
 	openAIAPIKeyEnv                    = "OPENAI_API_KEY"
+	openAIBaseURLEnv                   = "OPENAI_BASE_URL"
 	ovhcloudAPIKeyEnv                  = "OVHCLOUD_API_KEY"
 	defaultOVHCloudOpenAIBaseURL       = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
 	defaultOVHCloudOpenAISTTModel      = "whisper-large-v3-turbo"
@@ -206,7 +207,7 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	}
 	provider := &OpenAISTT{
 		apiKey:        apiKey,
-		baseURL:       defaultOpenAIBaseURL,
+		baseURL:       openAIBaseURLFromEnv(),
 		model:         model,
 		language:      "en",
 		connect:       llm.DefaultAPIConnectOptions(),
@@ -227,6 +228,13 @@ func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAI
 	}
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
+}
+
+func openAIBaseURLFromEnv() string {
+	if baseURL := os.Getenv(openAIBaseURLEnv); baseURL != "" {
+		return baseURL
+	}
+	return defaultOpenAIBaseURL
 }
 
 func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey, azureADToken string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
