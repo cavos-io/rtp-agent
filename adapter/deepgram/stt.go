@@ -776,6 +776,7 @@ type dgRecognitionChannel struct {
 	Alternatives     []dgAlternative
 	DetectedLanguage string
 	alternativesSeen bool
+	alternativesNull bool
 }
 
 func (c *dgRecognitionChannel) UnmarshalJSON(data []byte) error {
@@ -792,7 +793,9 @@ func (c *dgRecognitionChannel) UnmarshalJSON(data []byte) error {
 	}
 	c.Alternatives = raw.Alternatives
 	c.DetectedLanguage = raw.DetectedLanguage
-	_, c.alternativesSeen = fields["alternatives"]
+	alternativesRaw, alternativesSeen := fields["alternatives"]
+	c.alternativesSeen = alternativesSeen
+	c.alternativesNull = alternativesSeen && bytes.Equal(bytes.TrimSpace(alternativesRaw), []byte("null"))
 	return nil
 }
 
@@ -856,6 +859,7 @@ type dgResponse struct {
 	speechFinalSeen  bool
 	requestIDSeen    bool
 	alternativesSeen bool
+	alternativesNull bool
 }
 
 func (r *dgResponse) UnmarshalJSON(data []byte) error {
@@ -899,7 +903,9 @@ func (r *dgResponse) UnmarshalJSON(data []byte) error {
 	_, r.isFinalSeen = fields["is_final"]
 	_, r.speechFinalSeen = fields["speech_final"]
 	_, r.requestIDSeen = metadataFields["request_id"]
-	_, r.alternativesSeen = channelFields["alternatives"]
+	alternativesRaw, alternativesSeen := channelFields["alternatives"]
+	r.alternativesSeen = alternativesSeen
+	r.alternativesNull = alternativesSeen && bytes.Equal(bytes.TrimSpace(alternativesRaw), []byte("null"))
 	return nil
 }
 
@@ -912,7 +918,7 @@ func deepgramRecognizeValidateReferenceResponse(resp dgRecognitionResponse) erro
 		return fmt.Errorf("malformed deepgram recognition response")
 	}
 	channel := resp.Results.Channels[0]
-	if !channel.alternativesSeen {
+	if !channel.alternativesSeen || channel.alternativesNull {
 		return fmt.Errorf("malformed deepgram recognition channel")
 	}
 	for _, alt := range channel.Alternatives {
@@ -1170,7 +1176,7 @@ func (r dgResponse) malformedReferenceResults() bool {
 	if !r.parsedJSON {
 		return false
 	}
-	if !r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen || !r.alternativesSeen {
+	if !r.isFinalSeen || !r.speechFinalSeen || !r.requestIDSeen || !r.alternativesSeen || r.alternativesNull {
 		return true
 	}
 	for _, alt := range r.Channel.Alternatives {
