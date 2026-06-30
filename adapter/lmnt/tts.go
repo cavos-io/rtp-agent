@@ -241,7 +241,7 @@ func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				s.finalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
-			return nil, err
+			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 	}
 }
@@ -254,7 +254,7 @@ func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 		s.started = true
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, err
+			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 		if len(data) == 0 {
 			s.finalSent = true
