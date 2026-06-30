@@ -1148,6 +1148,22 @@ func TestDeepgramSTTv2UpdateOptionsClearsReferenceEOTControls(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2UpdateOptionsRejectsReferenceExplicitZeroEOTWithEager(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+	)
+	before := buildDeepgramSTTv2StreamURL(provider)
+
+	err := provider.UpdateOptions(WithDeepgramSTTv2EOTThreshold(0))
+	if err == nil || !strings.Contains(err.Error(), "eager_eot_threshold (0.6) must be less than or equal to eot_threshold (0)") {
+		t.Fatalf("UpdateOptions() error = %v, want invalid explicit zero EOT threshold", err)
+	}
+	if after := buildDeepgramSTTv2StreamURL(provider); after != before {
+		t.Fatalf("stream URL after failed update = %s, want unchanged %s", after, before)
+	}
+}
+
 func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	requests := make(chan *url.URL, 2)
 	audioMessages := make(chan []byte, 1)

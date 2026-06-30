@@ -35,6 +35,7 @@ type DeepgramSTTv2 struct {
 	language   string
 	eagerEOT   float64
 	eot        float64
+	eotSet     bool
 	eotTimeout int
 	keyterms   []string
 	tags       []string
@@ -103,6 +104,7 @@ func WithDeepgramSTTv2EagerEOTThreshold(threshold float64) DeepgramSTTv2Option {
 func WithDeepgramSTTv2EOTThreshold(threshold float64) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
 		s.eot = threshold
+		s.eotSet = true
 	}
 }
 
@@ -160,6 +162,7 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 		language:   s.language,
 		eagerEOT:   s.eagerEOT,
 		eot:        s.eot,
+		eotSet:     s.eotSet,
 		eotTimeout: s.eotTimeout,
 		keyterms:   append([]string(nil), s.keyterms...),
 		tags:       append([]string(nil), s.tags...),
@@ -180,6 +183,7 @@ func (s *DeepgramSTTv2) UpdateOptions(opts ...DeepgramSTTv2Option) error {
 	s.language = next.language
 	s.eagerEOT = next.eagerEOT
 	s.eot = next.eot
+	s.eotSet = next.eotSet
 	s.eotTimeout = next.eotTimeout
 	s.keyterms = next.keyterms
 	s.tags = next.tags
@@ -328,7 +332,7 @@ func buildDeepgramSTTv2StreamURL(s *DeepgramSTTv2) string {
 
 func validateDeepgramSTTv2Options(s *DeepgramSTTv2) error {
 	eot := s.eot
-	if eot == 0 {
+	if !s.eotSet {
 		eot = 0.7
 	}
 	if s.eagerEOT > 0 && s.eagerEOT > eot {
