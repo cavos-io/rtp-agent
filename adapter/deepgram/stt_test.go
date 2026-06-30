@@ -897,7 +897,7 @@ func TestDeepgramSTTStreamRejectsDetectLanguage(t *testing.T) {
 	}
 }
 
-func TestDeepgramSTTRecognizeReturnsAPIStatusError(t *testing.T) {
+func TestDeepgramSTTRecognizeStatusEnvelopeReturnsAPIConnectionError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -913,17 +913,21 @@ func TestDeepgramSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 
 	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
 	if err == nil {
-		t.Fatal("Recognize error = nil, want APIStatusError")
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatalf("APIConnectionError retryable = false, want true like reference generic parser wrapper")
+	}
+	if connectionErr.Body != nil {
+		t.Fatalf("APIConnectionError body = %#v, want nil because reference drops provider status envelope", connectionErr.Body)
 	}
 	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
-	}
-	if statusErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
-	}
-	if statusErr.Body != `{"err_msg":"rate limited"}` {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	if errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want generic parser APIConnectionError like reference", err, err)
 	}
 }
 
@@ -1308,6 +1312,90 @@ func TestDeepgramSTTStreamCallerCancelReturnsContextCanceled(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTStreamIgnoresReferenceMalformedText(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTMalformedTextThenValidWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	start := nextDeepgramTestSpeechEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech from valid Results", start.Type)
+	}
+	final := nextDeepgramTestSpeechEvent(t, stream)
+	if final.Type != stt.SpeechEventFinalTranscript || len(final.Alternatives) != 1 || final.Alternatives[0].Text != "valid" {
+		t.Fatalf("second event = %+v, want valid final transcript after malformed text", final)
+	}
+	end := nextDeepgramTestSpeechEvent(t, stream)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event type = %s, want end_of_speech from valid Results", end.Type)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTStreamIgnoresReferenceBinaryMessages(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramSTTBinaryThenValidWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	start := nextDeepgramTestSpeechEvent(t, stream)
+	if start.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event type = %s, want start_of_speech from valid text Results", start.Type)
+	}
+	final := nextDeepgramTestSpeechEvent(t, stream)
+	if final.Type != stt.SpeechEventFinalTranscript || len(final.Alternatives) != 1 || final.Alternatives[0].Text != "valid" {
+		t.Fatalf("second event = %+v, want valid final transcript after ignored binary message", final)
+	}
+	end := nextDeepgramTestSpeechEvent(t, stream)
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event type = %s, want end_of_speech from valid text Results", end.Type)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTEnglishOnlyModelFallsBackForNonEnglishLanguage(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "nova-2-meeting")
 
@@ -1364,10 +1452,10 @@ func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 		WithDeepgramSTTProfanityFilter(true),
 		WithDeepgramSTTNumerals(true),
 		WithDeepgramSTTMipOptOut(true),
-		WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "cavos", Boost: 2.5}}),
-		WithDeepgramSTTKeyterms([]string{"LiveKit", "rtp-agent"}),
-		WithDeepgramSTTRedact([]string{"pci", "ssn"}),
-		WithDeepgramSTTTags([]string{"agent", "test"}),
+		WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "cavos", Boost: 2.5}, {Keyword: "", Boost: 1}}),
+		WithDeepgramSTTKeyterms([]string{"LiveKit", "", "rtp-agent"}),
+		WithDeepgramSTTRedact([]string{"pci", "", "ssn"}),
+		WithDeepgramSTTTags([]string{"agent", "", "test"}),
 	)
 
 	caps := provider.Capabilities()
@@ -1397,10 +1485,13 @@ func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 	assertDeepgramQuery(t, query, "profanity_filter", "true")
 	assertDeepgramQuery(t, query, "numerals", "true")
 	assertDeepgramQuery(t, query, "mip_opt_out", "true")
-	assertDeepgramQueryValues(t, query, "keywords", []string{"cavos:2.5"})
-	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "rtp-agent"})
-	assertDeepgramQueryValues(t, query, "redact", []string{"pci", "ssn"})
-	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
+	assertDeepgramQueryValues(t, query, "keywords", []string{"cavos:2.5", ":1"})
+	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "", "rtp-agent"})
+	assertDeepgramQueryValues(t, query, "redact", []string{"pci", "", "ssn"})
+	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "", "test"})
+	if query["keyterm"][1] != "" || query["redact"][1] != "" || query["tag"][1] != "" {
+		t.Fatalf("empty stream query values dropped: keyterm=%#v redact=%#v tag=%#v", query["keyterm"], query["redact"], query["tag"])
+	}
 }
 
 func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
@@ -1481,6 +1572,62 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	}
 	if got := recognizeQuery["tag"]; len(got) != 0 {
 		t.Fatalf("recognize tag query = %#v, want absent like reference", got)
+	}
+
+	if err := provider.UpdateOptions(WithDeepgramSTTModel(""), WithDeepgramSTTKeyterms(nil)); err != nil {
+		t.Fatalf("UpdateOptions(empty model) error = %v", err)
+	}
+	streamURL, err = url.Parse(buildDeepgramStreamURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse stream url after empty model update: %v", err)
+	}
+	assertDeepgramQuery(t, streamURL.Query(), "model", "")
+	recognizeURL, err = url.Parse(buildDeepgramRecognizeURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse recognize url after empty model update: %v", err)
+	}
+	assertDeepgramQuery(t, recognizeURL.Query(), "model", "")
+
+	if err := provider.UpdateOptions(WithDeepgramSTTSampleRate(0)); err != nil {
+		t.Fatalf("UpdateOptions(zero sample rate) error = %v", err)
+	}
+	if provider.InputSampleRate() != 0 {
+		t.Fatalf("InputSampleRate() after zero sample-rate update = %d, want 0", provider.InputSampleRate())
+	}
+	streamURL, err = url.Parse(buildDeepgramStreamURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse stream url after zero sample-rate update: %v", err)
+	}
+	assertDeepgramQuery(t, streamURL.Query(), "sample_rate", "0")
+
+	if err := provider.UpdateOptions(WithDeepgramSTTLanguage("id")); err != nil {
+		t.Fatalf("UpdateOptions(language) error = %v", err)
+	}
+	streamURL, err = url.Parse(buildDeepgramStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream url after language update: %v", err)
+	}
+	assertDeepgramQuery(t, streamURL.Query(), "language", "id")
+	if err := provider.UpdateOptions(WithDeepgramSTTLanguage("")); err != nil {
+		t.Fatalf("UpdateOptions(empty language) error = %v", err)
+	}
+	streamURL, err = url.Parse(buildDeepgramStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream url after empty language update: %v", err)
+	}
+	if got := streamURL.Query().Get("language"); got != "" {
+		t.Fatalf("stream language after empty update = %q, want absent", got)
+	}
+
+	if err := provider.UpdateOptions(WithDeepgramSTTBaseURL("")); err != nil {
+		t.Fatalf("UpdateOptions(empty base URL) error = %v", err)
+	}
+	streamURL, err = url.Parse(buildDeepgramStreamURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse stream url after empty base URL update: %v", err)
+	}
+	if streamURL.Scheme != "" || streamURL.Host != "" {
+		t.Fatalf("stream URL after empty base URL update = %q, want empty reference endpoint", streamURL.String())
 	}
 }
 
@@ -1869,6 +2016,52 @@ func TestDeepgramSTTRecognizeAfterCloseIsRejected(t *testing.T) {
 	}
 	if httpCalls != 0 {
 		t.Fatalf("Recognize after Close sent %d HTTP requests, want none", httpCalls)
+	}
+}
+
+func TestDeepgramSTTProviderCloseCancelsPendingRecognize(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.test/v1/listen"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		event, err := provider.Recognize(ctx, []*model.AudioFrame{{
+			Data:              []byte{0x01, 0x02},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}}, "en-US")
+		if event != nil {
+			errCh <- fmt.Errorf("Recognize returned event after provider Close: %+v", event)
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Recognize did not start provider request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Recognize after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recognize remained blocked after provider Close")
 	}
 }
 
@@ -3389,6 +3582,74 @@ func TestDeepgramSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 			t.Fatalf("iteration %d: Next() event = %+v, want queued final transcript %+v", i, got, want)
 		}
 	}
+}
+
+func runDeepgramSTTMalformedTextThenValidWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{not-json`)); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-valid"},"channel":{"alternatives":[{"transcript":"valid","confidence":0.9,"words":[]}]}}`)); err != nil {
+		errCh <- err
+		return
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		_, _, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed pipe") {
+			errCh <- nil
+			return
+		}
+		errCh <- err
+		return
+	}
+}
+
+func runDeepgramSTTBinaryThenValidWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	go func() {
+		for {
+			if _, _, err := readDeepgramSTTTestClientWebsocketFrame(reader); err != nil {
+				return
+			}
+		}
+	}()
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte(`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-binary"},"channel":{"alternatives":[{"transcript":"binary","confidence":0.9,"words":[]}]}}`)); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Results","is_final":true,"speech_final":true,"metadata":{"request_id":"req-valid"},"channel":{"alternatives":[{"transcript":"valid","confidence":0.9,"words":[]}]}}`)); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
 }
 
 func runDeepgramClosingWebsocketServer(conn net.Conn, closeAfterHandshake <-chan struct{}, closed chan<- struct{}, errCh chan<- error) {

@@ -72,25 +72,19 @@ func NewDeepgramSTTv2(apiKey string, opts ...DeepgramSTTv2Option) *DeepgramSTTv2
 
 func WithDeepgramSTTv2BaseURL(baseURL string) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if baseURL != "" {
-			s.baseURL = baseURL
-		}
+		s.baseURL = baseURL
 	}
 }
 
 func WithDeepgramSTTv2Model(model string) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if model != "" {
-			s.model = model
-		}
+		s.model = model
 	}
 }
 
 func WithDeepgramSTTv2SampleRate(sampleRate int) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if sampleRate > 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
@@ -352,19 +346,13 @@ func buildDeepgramSTTv2StreamURL(s *DeepgramSTTv2) string {
 		q.Set("eot_timeout_ms", strconv.Itoa(s.eotTimeout))
 	}
 	for _, keyterm := range s.keyterms {
-		if keyterm != "" {
-			q.Add("keyterm", keyterm)
-		}
+		q.Add("keyterm", keyterm)
 	}
 	for _, tag := range s.tags {
-		if tag != "" {
-			q.Add("tag", tag)
-		}
+		q.Add("tag", tag)
 	}
 	for _, hint := range s.langHints {
-		if hint != "" {
-			q.Add("language_hint", hint)
-		}
+		q.Add("language_hint", hint)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()

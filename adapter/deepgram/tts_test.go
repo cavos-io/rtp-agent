@@ -534,6 +534,28 @@ func TestDeepgramTTSConstructorOptionsMatchReference(t *testing.T) {
 	assertDeepgramTTSQuery(t, query, "encoding", "mulaw")
 	assertDeepgramTTSQuery(t, query, "sample_rate", "8000")
 
+	provider = NewDeepgramTTS("test-key", "", WithDeepgramTTSAudioFormat("linear16", 0))
+	if provider.sampleRate != 0 {
+		t.Fatalf("sampleRate with explicit zero = %d, want 0", provider.sampleRate)
+	}
+	requestURL, _ = buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsed, err = url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse zero sample-rate url: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsed.Query(), "sample_rate", "0")
+
+	provider = NewDeepgramTTS("test-key", "", WithDeepgramTTSAudioFormat("", 8000))
+	if provider.encoding != "" {
+		t.Fatalf("encoding with explicit empty = %q, want empty reference encoding", provider.encoding)
+	}
+	requestURL, _ = buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsed, err = url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse empty encoding url: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsed.Query(), "encoding", "")
+
 	provider = NewDeepgramTTS("explicit-key", "")
 	if provider.apiKey != "explicit-key" {
 		t.Fatalf("apiKey = %q, want explicit key", provider.apiKey)
@@ -833,6 +855,18 @@ func TestDeepgramTTSSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	if parsed.Scheme != "https" || parsed.Host != "deepgram.example" || parsed.Path != "/v1/speak" {
 		t.Fatalf("url = %q, want configured HTTP base URL", requestURL)
 	}
+
+	provider = NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSBaseURL(""),
+	)
+	requestURL, _ = buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsed, err = url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse empty base url: %v", err)
+	}
+	if parsed.Scheme != "" || parsed.Host != "" {
+		t.Fatalf("url after empty base URL = %q, want empty reference endpoint", requestURL)
+	}
 }
 
 func TestDeepgramTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
@@ -862,8 +896,11 @@ func TestDeepgramTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
-	if statusErr.Body != `{"err_msg":"rate limited"}` {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	if statusErr.Message != http.StatusText(http.StatusTooManyRequests) {
+		t.Fatalf("message = %q, want reference response reason", statusErr.Message)
+	}
+	if statusErr.Body != nil {
+		t.Fatalf("body = %#v, want nil like reference ClientResponseError mapping", statusErr.Body)
 	}
 }
 
@@ -1284,6 +1321,43 @@ func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSChunkedStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
+	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	stream := &deepgramTTSChunkedStream{
+		resp: &http.Response{Body: &deepgramTTSChunkedBody{chunks: [][]byte{
+			{0x11, 0x22, 0x33},
+			{0x44, 0x55, 0x66},
+		}}},
+		sampleRate: 24000,
+		encoding:   "linear16",
+	}
+
+	var got []byte
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		if audio.Frame == nil {
+			continue
+		}
+		data := audio.Frame.Data
+		if len(data)%2 != 0 {
+			t.Fatalf("emitted odd PCM frame length %d bytes: %v", len(data), data)
+		}
+		if int(audio.Frame.SamplesPerChannel) != len(data)/2 {
+			t.Fatalf("SamplesPerChannel = %d, want %d", audio.Frame.SamplesPerChannel, len(data)/2)
+		}
+		got = append(got, data...)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("reassembled PCM = %v, want %v", got, want)
+	}
+}
+
 func TestDeepgramTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &deepgramTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -1402,6 +1476,18 @@ func TestDeepgramTTSStreamURLUsesConfiguredBaseURL(t *testing.T) {
 	}
 	if parsed.Scheme != "wss" || parsed.Host != "deepgram.example" || parsed.Path != "/v1/speak" {
 		t.Fatalf("url = %q, want configured websocket base URL", streamURL)
+	}
+
+	provider = NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSBaseURL(""),
+	)
+	streamURL = buildDeepgramTTSStreamURL(provider)
+	parsed, err = url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse empty stream base url: %v", err)
+	}
+	if parsed.Scheme != "" || parsed.Host != "" {
+		t.Fatalf("stream URL after empty base URL = %q, want empty reference endpoint", streamURL)
 	}
 }
 
@@ -1531,8 +1617,11 @@ func TestDeepgramTTSStreamReturnsAPIStatusErrorOnHandshakeStatus(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
 	}
-	if statusErr.Body == nil || !strings.Contains(fmt.Sprint(statusErr.Body), "rate limited") {
-		t.Fatalf("status body = %v, want provider body", statusErr.Body)
+	if statusErr.Message != http.StatusText(http.StatusTooManyRequests) {
+		t.Fatalf("message = %q, want reference response reason", statusErr.Message)
+	}
+	if statusErr.Body != nil {
+		t.Fatalf("status body = %v, want nil like reference ClientResponseError mapping", statusErr.Body)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("server error = %v", err)
@@ -1671,6 +1760,24 @@ func TestDeepgramTTSUpdateOptionsMatchesReference(t *testing.T) {
 	assertDeepgramTTSQuery(t, parsedStream.Query(), "model", "aura-2-asteria-en")
 	if got := provider.Model(); got != "aura-2-asteria-en" {
 		t.Fatalf("Model() = %q, want aura-2-asteria-en", got)
+	}
+
+	provider.UpdateOptions("")
+	requestURL, _ = buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsedRequest, err = url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse synthesize url after empty update: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsedRequest.Query(), "model", "")
+
+	streamURL = buildDeepgramTTSStreamURL(provider)
+	parsedStream, err = url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url after empty update: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsedStream.Query(), "model", "")
+	if got := provider.Model(); got != "" {
+		t.Fatalf("Model() after empty update = %q, want explicit empty reference model", got)
 	}
 }
 
@@ -2646,6 +2753,66 @@ func TestDeepgramTTSStreamAnnotatesReferenceAudioSegment(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSOddPCMWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	var got []byte
+	for {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		if audio.IsFinal {
+			break
+		}
+		if audio.Frame == nil {
+			t.Fatalf("audio = %+v, want frame or final", audio)
+		}
+		data := audio.Frame.Data
+		if len(data)%2 != 0 {
+			t.Fatalf("emitted odd PCM frame length %d bytes: %v", len(data), data)
+		}
+		if int(audio.Frame.SamplesPerChannel) != len(data)/2 {
+			t.Fatalf("SamplesPerChannel = %d, want %d", audio.Frame.SamplesPerChannel, len(data)/2)
+		}
+		got = append(got, data...)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("reassembled PCM = %v, want %v", got, want)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSStreamDecodesReferenceTelephonyAudio(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -3105,6 +3272,22 @@ func (r *deepgramTTSFinalReadCloser) Close() error {
 	return nil
 }
 
+type deepgramTTSChunkedBody struct {
+	chunks [][]byte
+	index  int
+}
+
+func (b *deepgramTTSChunkedBody) Read(p []byte) (int, error) {
+	if b.index >= len(b.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(p, b.chunks[b.index])
+	b.index++
+	return n, nil
+}
+
+func (b *deepgramTTSChunkedBody) Close() error { return nil }
+
 func runDeepgramTTSHandshakeStatusServer(conn net.Conn, statusCode int, body string, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -3423,6 +3606,43 @@ func runDeepgramTTSAudioSegmentWebsocketServer(conn net.Conn, errCh chan<- error
 		}
 	}
 	if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{0x01, 0x02, 0x03, 0x04}); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
+func runDeepgramTTSOddPCMWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode == websocket.TextMessage && deepgramTestWebsocketMessageType(payload) == "Flush" {
+			break
+		}
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{0x11, 0x22, 0x33}); err != nil {
+		errCh <- err
+		return
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{0x44, 0x55, 0x66}); err != nil {
 		errCh <- err
 		return
 	}

@@ -55,9 +55,7 @@ type DeepgramTTSOption func(*DeepgramTTS)
 
 func WithDeepgramTTSBaseURL(baseURL string) DeepgramTTSOption {
 	return func(t *DeepgramTTS) {
-		if baseURL != "" {
-			t.baseURL = strings.TrimRight(baseURL, "/")
-		}
+		t.baseURL = strings.TrimRight(baseURL, "/")
 	}
 }
 
@@ -69,12 +67,8 @@ func WithDeepgramTTSMipOptOut(mipOptOut bool) DeepgramTTSOption {
 
 func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) DeepgramTTSOption {
 	return func(t *DeepgramTTS) {
-		if encoding != "" {
-			t.encoding = deepgramTTSNormalizeEncoding(encoding)
-		}
-		if sampleRate > 0 {
-			t.sampleRate = sampleRate
-		}
+		t.encoding = deepgramTTSNormalizeEncoding(encoding)
+		t.sampleRate = sampleRate
 	}
 }
 
@@ -131,9 +125,7 @@ func (t *DeepgramTTS) Model() string    { return t.model }
 func (t *DeepgramTTS) Provider() string { return "Deepgram" }
 
 func (t *DeepgramTTS) UpdateOptions(model string) {
-	if model != "" {
-		t.model = model
-	}
+	t.model = model
 }
 
 func (t *DeepgramTTS) Prewarm() {
@@ -377,6 +369,19 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 	return *parsed
 }
 
+func deepgramTTSStatusMessage(resp *http.Response) string {
+	if resp == nil {
+		return "Deepgram TTS request failed"
+	}
+	if message := http.StatusText(resp.StatusCode); message != "" {
+		return message
+	}
+	if resp.Status != "" {
+		return resp.Status
+	}
+	return "Deepgram TTS request failed"
+}
+
 type deepgramTTSChunkedStream struct {
 	ctx          context.Context
 	requestURL   string
@@ -391,6 +396,7 @@ type deepgramTTSChunkedStream struct {
 	pendingFinal bool
 	pendingErr   error
 	finalSent    bool
+	pendingPCM   []byte
 	mu           sync.Mutex
 	readMu       sync.Mutex
 }
@@ -438,45 +444,65 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.mu.Unlock()
 		return nil, err
 	}
-	body := s.resp.Body
-	encoding := s.encoding
-	sampleRate := s.sampleRate
-	requestID := s.requestID
-	s.mu.Unlock()
+	for {
+		body := s.resp.Body
+		encoding := s.encoding
+		sampleRate := s.sampleRate
+		requestID := s.requestID
+		s.mu.Unlock()
 
-	buf := make([]byte, 4096)
-	n, err := body.Read(buf)
+		buf := make([]byte, 4096)
+		n, err := body.Read(buf)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.finalSent {
-		return nil, io.EOF
-	}
-	if err != nil {
-		if err == io.EOF {
-			if n == 0 {
-				return s.emitFinal()
-			}
-			s.pendingFinal = true
-		} else if n > 0 {
-			s.pendingErr = deepgramTTSChunkedReadError(err)
-		} else {
-			s.cancelRequestLocked()
-			s.finalSent = true
-			return nil, deepgramTTSChunkedReadError(err)
+		s.mu.Lock()
+		if s.finalSent {
+			s.mu.Unlock()
+			return nil, io.EOF
 		}
-	}
+		if err != nil {
+			if err == io.EOF {
+				if n == 0 {
+					audio, finalErr := s.emitFinal()
+					s.mu.Unlock()
+					return audio, finalErr
+				}
+				s.pendingFinal = true
+			} else if n > 0 {
+				s.pendingErr = deepgramTTSChunkedReadError(err)
+			} else {
+				s.cancelRequestLocked()
+				s.finalSent = true
+				readErr := deepgramTTSChunkedReadError(err)
+				s.mu.Unlock()
+				return nil, readErr
+			}
+		}
 
-	frameData := deepgramTTSTelephonyToPCM(encoding, buf[:n])
-	return &tts.SynthesizedAudio{
-		RequestID: requestID,
-		Frame: &model.AudioFrame{
-			Data:              frameData,
-			SampleRate:        uint32(sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(len(frameData) / 2),
-		},
-	}, nil
+		frameData := s.chunkedFrameDataLocked(encoding, buf[:n])
+		if len(frameData) == 0 && err != io.EOF {
+			continue
+		}
+		if len(frameData) == 0 {
+			audio, finalErr := s.emitFinal()
+			s.mu.Unlock()
+			return audio, finalErr
+		}
+		audio := &tts.SynthesizedAudio{
+			RequestID: requestID,
+			Frame: &model.AudioFrame{
+				Data:              frameData,
+				SampleRate:        uint32(sampleRate),
+				NumChannels:       1,
+				SamplesPerChannel: uint32(len(frameData) / 2),
+			},
+		}
+		s.mu.Unlock()
+		return audio, nil
+	}
+}
+
+func (s *deepgramTTSChunkedStream) chunkedFrameDataLocked(encoding string, data []byte) []byte {
+	return deepgramTTSFrameData(encoding, &s.pendingPCM, data)
 }
 
 func deepgramTTSChunkedReadError(err error) error {
@@ -530,11 +556,10 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 			s.finalSent = true
 			return nil
 		}
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		s.cancelRequestLocked()
 		s.finalSent = true
-		return llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
+		return llm.NewAPIStatusError(deepgramTTSStatusMessage(resp), resp.StatusCode, "", nil)
 	}
 	s.resp = resp
 	return nil
@@ -613,6 +638,7 @@ type deepgramTTSStream struct {
 	segmentOpen   bool
 	segmentSent   bool
 	flushPending  bool
+	pendingPCM    []byte
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -634,7 +660,10 @@ func (s *deepgramTTSStream) readLoop() {
 		}
 
 		if msgType == websocket.BinaryMessage {
-			frameData := deepgramTTSTelephonyToPCM(s.encoding, message)
+			frameData := deepgramTTSFrameData(s.encoding, &s.pendingPCM, message)
+			if len(frameData) == 0 {
+				continue
+			}
 			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              frameData,
@@ -764,6 +793,25 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
+}
+
+func deepgramTTSFrameData(encoding string, pending *[]byte, data []byte) []byte {
+	switch strings.ToLower(encoding) {
+	case "mulaw", "mu-law", "ulaw", "u-law", "pcm_mulaw", "alaw", "a-law", "pcm_alaw":
+		return deepgramTTSTelephonyToPCM(encoding, data)
+	}
+	if len(*pending) > 0 {
+		combined := make([]byte, 0, len(*pending)+len(data))
+		combined = append(combined, (*pending)...)
+		combined = append(combined, data...)
+		data = combined
+		*pending = nil
+	}
+	if len(data)%2 == 1 {
+		*pending = append((*pending)[:0], data[len(data)-1])
+		data = data[:len(data)-1]
+	}
+	return data
 }
 
 func deepgramTTSTelephonyToPCM(encoding string, data []byte) []byte {
@@ -1113,12 +1161,10 @@ func (s *deepgramTTSStream) ensureConnectedLocked() error {
 			return llm.NewAPITimeoutError(err.Error())
 		}
 		if resp != nil && resp.StatusCode != 0 {
-			var respBody []byte
 			if resp.Body != nil {
-				respBody, _ = io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 			}
-			return llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
+			return llm.NewAPIStatusError(deepgramTTSStatusMessage(resp), resp.StatusCode, "", nil)
 		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
