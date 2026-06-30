@@ -1772,6 +1772,9 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.clientEventsClosed() {
+		return nil
+	}
 	frame, err := s.audioNormalizer.normalize(frame)
 	if err != nil {
 		return err
@@ -1786,6 +1789,15 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		}
 	}
 	return nil
+}
+
+func (s *realtimeSession) clientEventsClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ctx != nil && s.ctx.Err() != nil
 }
 
 func (s *realtimeSession) appendAudioChunk(chunk *model.AudioFrame) error {

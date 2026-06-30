@@ -3585,6 +3585,10 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session error = %v", err)
 	}
+	rtSession, ok := session.(*realtimeSession)
+	if !ok {
+		t.Fatalf("session = %T, want *realtimeSession", session)
+	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -3594,12 +3598,26 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 		t.Fatalf("ClearAudio after Close error = %v, want nil like reference closed send_event", err)
 	}
 	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if buffered := rtSession.audioBStream.Flush(); len(buffered) != 0 {
+		t.Fatalf("PushAudio after Close buffered %d chunks, want no local audio mutation", len(buffered))
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
 		Data:              make([]byte, 2400*2),
 		SampleRate:        24000,
 		NumChannels:       1,
 		SamplesPerChannel: 2400,
 	}); err != nil {
-		t.Fatalf("PushAudio after Close error = %v, want nil like reference closed send_event", err)
+		t.Fatalf("full PushAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if rtSession.pushedDuration != 0 {
+		t.Fatalf("pushedDuration after Close = %v, want no local audio mutation", rtSession.pushedDuration)
 	}
 	if err := session.CommitAudio(); err != nil {
 		t.Fatalf("CommitAudio after Close error = %v, want nil like reference closed send_event", err)
