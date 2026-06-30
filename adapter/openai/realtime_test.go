@@ -7619,7 +7619,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	if !errors.As(errorEvent.Error, &apiErr) {
 		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
 	}
-	if apiErr.Message != "OpenAI Realtime API response failed with error type: invalid_request_error" {
+	if apiErr.Message != "OpenAI Realtime API response failed: [invalid_request_error] inference_rate_limit_exceeded" {
 		t.Fatalf("APIError message = %q", apiErr.Message)
 	}
 	if !apiErr.Retryable {
