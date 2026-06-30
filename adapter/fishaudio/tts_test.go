@@ -225,6 +225,62 @@ func TestFishAudioTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestFishAudioTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: fishAudioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+
+	provider := NewFishAudioTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestFishAudioTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: fishAudioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+
+	provider := NewFishAudioTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestFishAudioTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: fishAudioRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.Canceled
+	})}
+
+	provider := NewFishAudioTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want context.Canceled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Synthesize error = %T %v, want context.Canceled", err, err)
+	}
+}
+
 func TestFishAudioTTSOptionsMatchReference(t *testing.T) {
 	provider := NewFishAudioTTS("test-key", "",
 		WithFishAudioTTSBaseURL("https://fish.example"),
