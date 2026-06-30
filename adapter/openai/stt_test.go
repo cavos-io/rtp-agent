@@ -635,6 +635,41 @@ func TestAzureOpenAIRealtimeSTTWebsocketUsesEntraToken(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIRealtimeSTTWebsocketUsesReferenceEntraTokenProvider(t *testing.T) {
+	tokenCalls := 0
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com/",
+		"stt-deployment",
+		"2024-06-01",
+		"",
+		"",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	var gotAuth string
+	provider.dialWebsocket = func(_ context.Context, _ string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		gotAuth = headers.Get("Authorization")
+		return nil, nil, errors.New("stop")
+	}
+
+	_, _, _ = provider.dialRealtimeSTTWebsocketAttempt(context.Background())
+
+	if tokenCalls != 1 {
+		t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+	}
+	if gotAuth != "Bearer provider-token" {
+		t.Fatalf("authorization = %q, want provider bearer token", gotAuth)
+	}
+}
+
 func TestAzureOpenAIRealtimeSTTWebsocketUsesReferenceBaseURL(t *testing.T) {
 	provider, err := NewAzureOpenAISTT(
 		"gpt-4o-mini-transcribe",
