@@ -55,9 +55,7 @@ type DeepgramTTSOption func(*DeepgramTTS)
 
 func WithDeepgramTTSBaseURL(baseURL string) DeepgramTTSOption {
 	return func(t *DeepgramTTS) {
-		if baseURL != "" {
-			t.baseURL = strings.TrimRight(baseURL, "/")
-		}
+		t.baseURL = strings.TrimRight(baseURL, "/")
 	}
 }
 

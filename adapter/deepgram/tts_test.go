@@ -844,6 +844,18 @@ func TestDeepgramTTSSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	if parsed.Scheme != "https" || parsed.Host != "deepgram.example" || parsed.Path != "/v1/speak" {
 		t.Fatalf("url = %q, want configured HTTP base URL", requestURL)
 	}
+
+	provider = NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSBaseURL(""),
+	)
+	requestURL, _ = buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsed, err = url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse empty base url: %v", err)
+	}
+	if parsed.Scheme != "" || parsed.Host != "" {
+		t.Fatalf("url after empty base URL = %q, want empty reference endpoint", requestURL)
+	}
 }
 
 func TestDeepgramTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
@@ -1416,6 +1428,18 @@ func TestDeepgramTTSStreamURLUsesConfiguredBaseURL(t *testing.T) {
 	}
 	if parsed.Scheme != "wss" || parsed.Host != "deepgram.example" || parsed.Path != "/v1/speak" {
 		t.Fatalf("url = %q, want configured websocket base URL", streamURL)
+	}
+
+	provider = NewDeepgramTTS("test-key", "",
+		WithDeepgramTTSBaseURL(""),
+	)
+	streamURL = buildDeepgramTTSStreamURL(provider)
+	parsed, err = url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse empty stream base url: %v", err)
+	}
+	if parsed.Scheme != "" || parsed.Host != "" {
+		t.Fatalf("stream URL after empty base URL = %q, want empty reference endpoint", streamURL)
 	}
 }
 
