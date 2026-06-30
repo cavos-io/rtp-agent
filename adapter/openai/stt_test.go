@@ -3578,14 +3578,20 @@ func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
 func openAIRealtimeSTTTranscriptionFromSessionUpdate(t *testing.T, payload []byte) map[string]any {
 	t.Helper()
 
+	input := openAIRealtimeSTTInputFromSessionUpdate(t, payload)
+	return input["transcription"].(map[string]any)
+}
+
+func openAIRealtimeSTTInputFromSessionUpdate(t *testing.T, payload []byte) map[string]any {
+	t.Helper()
+
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
 		t.Fatalf("decode session update: %v", err)
 	}
 	session := message["session"].(map[string]any)
 	audio := session["audio"].(map[string]any)
-	input := audio["input"].(map[string]any)
-	return input["transcription"].(map[string]any)
+	return audio["input"].(map[string]any)
 }
 
 func TestOpenAIRealtimeSTTStreamLanguageOverrideUpdatesSessionLanguage(t *testing.T) {
@@ -3743,6 +3749,27 @@ func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
 	input := audio["input"].(map[string]any)
 	if _, ok := input["turn_detection"]; ok {
 		t.Fatalf("turn_detection = %+v, want omitted for realtime whisper model", input["turn_detection"])
+	}
+}
+
+func TestOpenAIRealtimeWhisperIgnoresConfiguredTurnDetection(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTTurnDetection(map[string]interface{}{
+			"type":                "server_vad",
+			"threshold":           0.7,
+			"prefix_padding_ms":   250,
+			"silence_duration_ms": 900,
+		}),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	input := openAIRealtimeSTTInputFromSessionUpdate(t, payload)
+	if _, ok := input["turn_detection"]; ok {
+		t.Fatalf("turn_detection = %+v, want configured value omitted for realtime whisper model", input["turn_detection"])
 	}
 }
 
