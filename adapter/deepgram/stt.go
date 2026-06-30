@@ -473,6 +473,9 @@ func (s *DeepgramSTT) unregisterStream(stream *deepgramStream) {
 }
 
 func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, languageStr string) (*stt.SpeechEvent, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	if err := validateDeepgramSTTAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}

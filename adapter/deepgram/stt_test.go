@@ -1841,6 +1841,37 @@ func TestDeepgramSTTStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTRecognizeAfterCloseIsRejected(t *testing.T) {
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.test/v1/listen"))
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	oldClient := http.DefaultClient
+	httpCalls := 0
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		httpCalls++
+		return nil, errors.New("unexpected deepgram recognize request")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en-US")
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Recognize after Close error = %v, want %v", err, io.ErrClosedPipe)
+	}
+	if event != nil {
+		t.Fatalf("Recognize after Close event = %+v, want nil", event)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("Recognize after Close sent %d HTTP requests, want none", httpCalls)
+	}
+}
+
 func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
