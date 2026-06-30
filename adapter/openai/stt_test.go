@@ -2705,7 +2705,7 @@ func TestOpenAIRealtimeSTTEndInputWithVADWaitsForEndOfSpeech(t *testing.T) {
 	}
 }
 
-func TestOpenAIRealtimeSTTCloseEndsVADInput(t *testing.T) {
+func TestOpenAIRealtimeSTTCloseClosesVADWithoutEndInput(t *testing.T) {
 	vadStream := newFakeOpenAISTTVADStream()
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
 		WithOpenAISTTRealtime(true),
@@ -2740,9 +2740,12 @@ func TestOpenAIRealtimeSTTCloseEndsVADInput(t *testing.T) {
 		t.Fatalf("Close error = %v", err)
 	}
 	select {
-	case <-vadStream.endInputCh:
+	case <-vadStream.closeCh:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for VAD EndInput on close")
+		t.Fatal("timed out waiting for VAD Close on stream close")
+	}
+	if got := vadStream.endInputCalls(); got != 0 {
+		t.Fatalf("VAD EndInput calls = %d, want close without EndInput", got)
 	}
 }
 

@@ -1032,7 +1032,7 @@ func (s *openAIRealtimeSTTStream) Close() error {
 		s.owner.unregisterRealtimeSTTStream(s)
 	}
 	s.cancel()
-	s.closeVADStreamLocked(true)
+	s.closeVADStreamLocked(false)
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
