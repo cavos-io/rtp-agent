@@ -31,6 +31,8 @@ const deepgramTTSRequestTimeout = 30 * time.Second
 const deepgramTTSFlushMessage = `{"type": "Flush"}`
 const deepgramTTSCloseMessage = `{"type": "Close"}`
 
+var errDeepgramTTSReleasedToPool = errors.New("deepgram tts stream released to pool")
+
 type DeepgramTTS struct {
 	apiKey                string
 	baseURL               string
@@ -304,8 +306,25 @@ func (t *DeepgramTTS) takePrewarmedConn(streamURL string) *websocket.Conn {
 	return conn
 }
 
+func (t *DeepgramTTS) storePrewarmedConn(streamURL string, conn *websocket.Conn) bool {
+	if t == nil || conn == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed || t.prewarmConn != nil {
+		return false
+	}
+	t.prewarmConn = conn
+	t.prewarmURL = streamURL
+	return true
+}
+
 func closeDeepgramTTSPrewarmedConn(conn *websocket.Conn) {
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSFlushMessage))
+	_ = conn.SetReadDeadline(time.Now().Add(deepgramTTSCloseAckTimeout))
+	_, _, _ = conn.ReadMessage()
+	_ = conn.SetReadDeadline(time.Time{})
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSCloseMessage))
 	_ = conn.Close()
 }
@@ -617,6 +636,10 @@ func (s *deepgramTTSStream) readLoop() {
 			}
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
+				if errors.Is(err, errDeepgramTTSReleasedToPool) {
+					s.markReadDone()
+					return
+				}
 				s.markReadDone()
 				s.sendError(err)
 				return
@@ -717,7 +740,9 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		s.flushPending = false
 		s.mu.Unlock()
 		s.segmentID = uuid.NewString()
-		s.closeAfterFinal()
+		if s.closeAfterFinal() {
+			return errDeepgramTTSReleasedToPool
+		}
 	case "Error", "error":
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
@@ -1170,21 +1195,34 @@ func (s *deepgramTTSStream) closeAfterWriteFailureLocked() {
 	_ = s.closeConnection()
 }
 
-func (s *deepgramTTSStream) closeAfterFinal() {
+func (s *deepgramTTSStream) closeAfterFinal() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.inputEnded {
-		return
+		return false
 	}
 	if s.closed {
-		return
+		return false
 	}
 	s.closed = true
 	s.drainClosed = true
+	conn := s.conn
+	streamURL := s.streamURL
+	released := false
+	if s.provider != nil && s.provider.storePrewarmedConn(streamURL, conn) {
+		s.conn = nil
+		s.writeJSON = nil
+		s.writeText = nil
+		s.closeConn = nil
+		released = true
+	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
-	_ = s.closeConnection()
+	if !released {
+		_ = s.closeConnection()
+	}
+	return released
 }
 
 func (s *deepgramTTSStream) isClosed() bool {
