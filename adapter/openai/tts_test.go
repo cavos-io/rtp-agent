@@ -637,6 +637,41 @@ func TestAzureOpenAITTSPrewarmUsesReferenceEntraTokenProvider(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAITTSPrewarmUsesReferenceEntraToken(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		return nil, errors.New("prewarm failed")
+	})
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com/",
+		"tts-deployment",
+		"2024-06-01",
+		"",
+		"entra-token",
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	tts.Prewarm(provider)
+
+	select {
+	case req := <-reqCh:
+		if got := req.Header.Get("Authorization"); got != "Bearer entra-token" {
+			t.Fatalf("Authorization = %q, want Entra bearer token", got)
+		}
+		if got := req.Header.Get("api-key"); got != "" {
+			t.Fatalf("api-key = %q, want no Azure API key header", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Azure OpenAI TTS prewarm request")
+	}
+}
+
 func TestOpenAITTSCloseCancelsReferencePrewarm(t *testing.T) {
 	reqCh := make(chan *http.Request, 1)
 	cancelled := make(chan struct{})

@@ -34,6 +34,7 @@ type OpenAITTS struct {
 	httpClient           openai.HTTPDoer
 	apiKey               string
 	azureADTokenProvider func(context.Context) (string, error)
+	azureADToken         string
 	azureAPIKeyAuth      bool
 	model                openai.SpeechModel
 	voice                openai.SpeechVoice
@@ -160,6 +161,7 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 
 	provider := &OpenAITTS{
 		apiKey:          apiKey,
+		azureADToken:    azureADToken,
 		azureAPIKeyAuth: apiKey != "",
 		model:           model,
 		voice:           voice,
@@ -344,6 +346,8 @@ func (t *OpenAITTS) Prewarm() {
 				return
 			}
 			req.Header.Set("Authorization", "Bearer "+token)
+		} else if t.azureADToken != "" {
+			req.Header.Set("Authorization", "Bearer "+t.azureADToken)
 		} else if t.azureAPIKeyAuth && t.apiKey != "" {
 			req.Header.Set("api-key", t.apiKey)
 		} else if t.apiKey != "" {
