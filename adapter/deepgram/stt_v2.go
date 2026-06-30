@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	langutil "github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/gorilla/websocket"
 )
 
@@ -590,8 +591,14 @@ func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOff
 	if len(resp.Words) > 0 {
 		confidence /= float64(len(resp.Words))
 	}
+	var sourceLanguages []string
+	for _, detected := range resp.Languages {
+		sourceLanguages = append(sourceLanguages, langutil.NormalizeLanguage(detected))
+	}
 	if len(resp.Languages) > 0 {
-		language = resp.Languages[0]
+		language = langutil.NormalizeLanguage(resp.Languages[0])
+	} else {
+		language = langutil.NormalizeLanguage(language)
 	}
 	return []stt.SpeechData{{
 		Language:        language,
@@ -600,7 +607,7 @@ func deepgramV2SpeechData(language string, resp deepgramV2Response, startTimeOff
 		EndTime:         resp.AudioWindowEnd + startTimeOffset,
 		Confidence:      confidence,
 		Words:           words,
-		SourceLanguages: append([]string(nil), resp.Languages...),
+		SourceLanguages: sourceLanguages,
 	}}
 }
 

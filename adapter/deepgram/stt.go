@@ -946,9 +946,9 @@ func deepgramRecognizeSpeechEventForLanguage(resp dgRecognitionResponse, languag
 
 func deepgramRecognizeLanguage(languageStr string, detectedLanguage string) string {
 	if languageStr == "" {
-		return detectedLanguage
+		return language.NormalizeLanguage(detectedLanguage)
 	}
-	return languageStr
+	return language.NormalizeLanguage(languageStr)
 }
 
 func deepgramSpeechEvent(resp dgResponse) *stt.SpeechEvent {
@@ -1017,9 +1017,9 @@ func deepgramLiveTranscriptTimes(resp dgResponse, words []dgWord) (float64, floa
 
 func deepgramLiveLanguage(languageStr string, detected []string) string {
 	if languageStr == "multi" && len(detected) > 0 {
-		return detected[0]
+		return language.NormalizeLanguage(detected[0])
 	}
-	return languageStr
+	return language.NormalizeLanguage(languageStr)
 }
 
 func deepgramFirstWordStart(words []dgWord) float64 {

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -603,6 +604,33 @@ func TestDeepgramSTTv2StreamUsesReferenceDefaultLanguage(t *testing.T) {
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
+func TestDeepgramSTTv2SpeechDataNormalizesReferenceLanguages(t *testing.T) {
+	alts := deepgramV2SpeechData("en", deepgramV2Response{
+		Transcript:       "hello",
+		AudioWindowStart: 1.0,
+		AudioWindowEnd:   1.5,
+		Languages:        []string{"eng", "en_us"},
+		Words: []deepgramV2Word{{
+			Word:           "hello",
+			Start:          1.0,
+			End:            1.5,
+			Confidence:     0.9,
+			parsedJSON:     true,
+			confidenceSeen: true,
+		}},
+	}, 0)
+	if len(alts) != 1 {
+		t.Fatalf("alternatives = %+v, want one", alts)
+	}
+	if got := alts[0].Language; got != "en" {
+		t.Fatalf("language = %q, want normalized primary language en", got)
+	}
+	wantSource := []string{"en", "en-US"}
+	if !reflect.DeepEqual(alts[0].SourceLanguages, wantSource) {
+		t.Fatalf("source languages = %#v, want %#v", alts[0].SourceLanguages, wantSource)
 	}
 }
 

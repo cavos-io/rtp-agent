@@ -256,6 +256,21 @@ func TestDeepgramSpeechEventUsesReferenceDetectedLanguageForMulti(t *testing.T) 
 	}
 }
 
+func TestDeepgramSpeechEventNormalizesReferenceDetectedLanguageAliases(t *testing.T) {
+	var resp dgResponse
+	if err := json.Unmarshal([]byte(`{"type":"Results","is_final":true,"metadata":{"request_id":"req-lang-alias"},"channel":{"alternatives":[{"transcript":"hello","confidence":0.9,"languages":["eng"],"words":[]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	event := deepgramSpeechEventForLanguage(resp, "multi")
+	if event == nil || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %+v, want one alternative", event)
+	}
+	if got := event.Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want normalized detected language en", got)
+	}
+}
+
 func TestDeepgramSpeechEventDropsReferenceEmptyDetectedLanguagesForMulti(t *testing.T) {
 	var resp dgResponse
 	if err := json.Unmarshal([]byte(`{"type":"Results","is_final":true,"metadata":{"request_id":"req-lang-empty"},"channel":{"alternatives":[{"transcript":"hola","confidence":0.9,"languages":[],"words":[{"word":"hola","start":0.1,"end":0.4}]}]}}`), &resp); err != nil {
@@ -484,6 +499,21 @@ func TestDeepgramRecognizeSpeechEventUsesReferenceDetectedLanguage(t *testing.T)
 	}
 	if got := event.Alternatives[0].Language; got != "es" {
 		t.Fatalf("language = %q, want detected language es", got)
+	}
+}
+
+func TestDeepgramRecognizeSpeechEventNormalizesReferenceDetectedLanguageAliases(t *testing.T) {
+	var resp dgRecognitionResponse
+	if err := json.Unmarshal([]byte(`{"results":{"channels":[{"detected_language":"eng","alternatives":[{"transcript":"hello","confidence":0.9,"words":[]}]}]}}`), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	event := deepgramRecognizeSpeechEventForLanguage(resp, "")
+	if len(event.Alternatives) != 1 {
+		t.Fatalf("alternatives = %d, want 1", len(event.Alternatives))
+	}
+	if got := event.Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want normalized detected language en", got)
 	}
 }
 
