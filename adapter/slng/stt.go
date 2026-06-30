@@ -346,7 +346,10 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		}
 		conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, buildSTTWebsocketHeaders(&attempt))
 		if err != nil {
-			lastErr = fmt.Errorf("failed to dial slng stt websocket: %w", err)
+			if errors.Is(err, context.Canceled) {
+				return nil, context.Canceled
+			}
+			lastErr = llm.NewAPIConnectionError(fmt.Sprintf("failed to dial slng stt websocket: %v", err))
 			continue
 		}
 		if s.isClosed() {

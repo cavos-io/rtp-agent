@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -202,7 +203,10 @@ func (s *SimplismartSTT) Stream(ctx context.Context, language string) (stt.Recog
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSimplismartSTTStreamURL(s), buildSimplismartSTTHeaders(s))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial simplismart stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial simplismart stt websocket: %v", err))
 	}
 	config, err := buildSimplismartSTTInitialConfig(resolveSimplismartSTTLanguage(s, language))
 	if err != nil {
@@ -239,7 +243,13 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Simplismart STT request failed: %v", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {

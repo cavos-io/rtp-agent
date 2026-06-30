@@ -3,6 +3,7 @@ package cartesia
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -198,7 +199,10 @@ func (s *CartesiaSTT) Stream(ctx context.Context, language string) (stt.Recogniz
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(s, streamLanguage), buildCartesiaSTTHeaders(s))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial cartesia stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial cartesia stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -130,7 +131,10 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxSTTStreamURL(s, language), buildTelnyxSTTHeaders(s))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial telnyx stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		_ = conn.Close()

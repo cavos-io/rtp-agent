@@ -176,7 +176,10 @@ func (t *AsyncAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildAsyncAITTSWebsocketURL(t), nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial asyncai tts websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial asyncai tts websocket: %v", err))
 	}
 	initPayload, err := buildAsyncAITTSInitMessage(t)
 	if err != nil {

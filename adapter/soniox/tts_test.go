@@ -83,6 +83,28 @@ func TestSonioxTTSStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("soniox tts dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSonioxTTS("test-key")
+	stream, err := provider.Stream(context.Background())
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSonioxTTSOptionsBuildReferenceStartConfig(t *testing.T) {
 	bitrate := 64000
 	provider := NewSonioxTTS("test-key",

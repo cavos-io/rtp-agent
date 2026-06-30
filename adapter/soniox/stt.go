@@ -3,6 +3,7 @@ package soniox
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -221,7 +222,10 @@ func (s *SonioxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, s.baseURL, http.Header{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial soniox websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial soniox websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
 		conn.Close()

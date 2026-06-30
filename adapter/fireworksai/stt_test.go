@@ -576,6 +576,42 @@ func TestFireworksSTTStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	provider := NewFireworksSTT("test-key",
+		withFireworksSTTWebsocketDialer(func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.New("dial failed")
+		}),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if stream != nil {
+		t.Fatalf("Stream returned stream %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestFireworksSTTStreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	provider := NewFireworksSTT("test-key",
+		withFireworksSTTWebsocketDialer(func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, context.Canceled
+		}),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en")
+	if stream != nil {
+		t.Fatalf("Stream returned stream %#v, want nil", stream)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream error = %T %v, want context.Canceled", err, err)
+	}
+}
+
 func TestFireworksSTTRequiresAPIKeyBeforeStreamRequest(t *testing.T) {
 	t.Setenv("FIREWORKS_API_KEY", "")
 	provider := NewFireworksSTT("", WithFireworksBaseURL("://bad-url"))

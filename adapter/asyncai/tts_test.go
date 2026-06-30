@@ -80,6 +80,30 @@ func TestAsyncAITTSStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("asyncai websocket dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewAsyncAITTS("test-key", "")
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAsyncAITTSWebsocketURLUsesReferenceQuery(t *testing.T) {
 	provider := NewAsyncAITTS("test-key", "", WithAsyncAITTSBaseURL("https://async.example"))
 

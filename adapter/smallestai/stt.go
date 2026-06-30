@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -233,7 +234,10 @@ func (s *SmallestAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 	s.mu.Unlock()
 	conn, _, err := dialWebsocket(ctx, buildSmallestAISTTStreamURLFromOptions(streamOptions), buildSmallestAISTTHeadersFromAPIKey(streamOptions.apiKey))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial smallestai stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial smallestai stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()

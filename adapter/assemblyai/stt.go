@@ -3,6 +3,7 @@ package assemblyai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -300,7 +301,10 @@ func (s *AssemblyAISTT) Stream(ctx context.Context, language string) (stt.Recogn
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildAssemblyAIStreamURL(s), header)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial AssemblyAI websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()
