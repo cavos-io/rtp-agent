@@ -1327,7 +1327,9 @@ func (s *openAIRealtimeSTTStream) vadLoopFor(vadStream vad.VADStream) {
 		}
 		s.mu.Lock()
 		if !s.closed {
-			if msgErr := s.commitAudioLocked(); msgErr != nil {
+			if msgErr := s.flushAudioLocked(); msgErr != nil {
+				s.sendErrorLocked(msgErr)
+			} else if msgErr := s.commitAudioLocked(); msgErr != nil {
 				s.sendErrorLocked(msgErr)
 			}
 		}

@@ -1505,6 +1505,7 @@ type RealtimeSessionOptions struct {
 	ToolChoice                  ToolChoice
 	ToolChoiceSet               bool
 	Voice                       string
+	VoiceSet                    bool
 	Speed                       float64
 	SpeedSet                    bool
 	MaxResponseOutputTokens     any

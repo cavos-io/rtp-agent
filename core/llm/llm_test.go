@@ -1007,11 +1007,15 @@ func TestRealtimeSessionOptionsExposeToolChoice(t *testing.T) {
 
 func TestRealtimeSessionOptionsExposeVoice(t *testing.T) {
 	options := RealtimeSessionOptions{
-		Voice: "marin",
+		Voice:    "marin",
+		VoiceSet: true,
 	}
 
 	if options.Voice != "marin" {
 		t.Fatalf("Voice = %q, want marin", options.Voice)
+	}
+	if !options.VoiceSet {
+		t.Fatal("VoiceSet = false, want true")
 	}
 }
 

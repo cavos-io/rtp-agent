@@ -857,6 +857,69 @@ func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelUpdateOptionsRefreshesStoredInputOptions(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+			ackOpenAIRealtimeChatContextMessage(t, conn, msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime",
+		WithOpenAIRealtimeTurnDetection(map[string]any{"type": "server_vad"}),
+		WithOpenAIRealtimeInputAudioTranscription(map[string]any{"model": "gpt-4o-transcribe"}),
+		WithOpenAIRealtimeInputAudioNoiseReduction("near_field"),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	<-messages
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetectionSet:            true,
+		InputAudioTranscriptionSet:  true,
+		InputAudioNoiseReductionSet: true,
+	}); err != nil {
+		t.Fatalf("session UpdateOptions clear input config error = %v", err)
+	}
+	<-messages
+
+	if err := realtimeModel.UpdateOptions(llm.RealtimeSessionOptions{Voice: "alloy"}); err != nil {
+		t.Fatalf("model UpdateOptions voice error = %v", err)
+	}
+	refreshUpdate := receiveRealtimeMessage(t, messages, "model update should refresh stored input options")
+	assertRealtimeMessage(t, refreshUpdate, "session.update", "server_vad")
+	assertRealtimeMessage(t, refreshUpdate, "session.update", "gpt-4o-transcribe")
+	assertRealtimeMessage(t, refreshUpdate, "session.update", "near_field")
+
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(refreshUpdate), &msg); err != nil {
+		t.Fatalf("decode refresh update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	if got := input["turn_detection"].(map[string]any)["type"]; got != "server_vad" {
+		t.Fatalf("turn_detection type = %#v, want server_vad", got)
+	}
+	if got := input["transcription"].(map[string]any)["model"]; got != "gpt-4o-transcribe" {
+		t.Fatalf("transcription model = %#v, want gpt-4o-transcribe", got)
+	}
+	if got := input["noise_reduction"].(map[string]any)["type"]; got != "near_field" {
+		t.Fatalf("noise_reduction type = %#v, want near_field", got)
+	}
+}
+
 func TestRealtimeModelUpdateOptionsAppliesToNewSession(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -915,6 +978,41 @@ func TestRealtimeModelConstructorVoiceAppliesToInitialSession(t *testing.T) {
 
 	initialUpdate := <-messages
 	assertRealtimeMessage(t, initialUpdate, "session.update", "alloy")
+}
+
+func TestRealtimeModelConstructorExplicitEmptyVoiceAppliesToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeVoice(""))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(<-messages), &payload); err != nil {
+		t.Fatalf("decode initial session update: %v", err)
+	}
+	sessionPayload := payload["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	voice, ok := output["voice"].(string)
+	if !ok || voice != "" {
+		t.Fatalf("voice = %#v, want explicit empty string", output["voice"])
+	}
 }
 
 func TestRealtimeModelConstructorExplicitZeroSpeedAppliesToInitialSession(t *testing.T) {
@@ -1431,6 +1529,44 @@ func TestRealtimeModelConstructorTextModalitiesApplyToInitialSession(t *testing.
 	}
 }
 
+func TestRealtimeModelConstructorEmptyModalitiesApplyToInitialSession(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime", WithOpenAIRealtimeModalities([]string{}))
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	if realtimeModel.Capabilities().AudioOutput {
+		t.Fatal("AudioOutput capability = true, want false for explicit empty modalities")
+	}
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	initialUpdate := <-messages
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(initialUpdate), &msg); err != nil {
+		t.Fatalf("decode initial update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	modalities := sessionPayload["output_modalities"].([]any)
+	if len(modalities) != 1 || modalities[0] != "text" {
+		t.Fatalf("output_modalities = %#v, want text", modalities)
+	}
+}
+
 func TestRealtimeModelConstructorMaxResponseOutputTokensAppliesToInitialSession(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -1634,7 +1770,9 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.CommitAudio(); err != nil {
 		t.Fatalf("CommitAudio partial error = %v", err)
 	}
-	assertNoRealtimeMessage(t, messages, "commit should wait for more than 100ms of pushed audio")
+	partialAppend := receiveRealtimeMessage(t, messages, "partial audio flush")
+	assertRealtimeMessage(t, partialAppend, "input_audio_buffer.append", base64.StdEncoding.EncodeToString([]byte{5, 6}))
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "audio buffer commit after partial flush"), "input_audio_buffer.commit", "")
 	if err := session.PushAudio(&audiomodel.AudioFrame{Data: audioChunk, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 2400}); err != nil {
 		t.Fatalf("PushAudio second chunk error = %v", err)
 	}
@@ -1685,7 +1823,7 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.CommitAudio(); err != nil {
 		t.Fatalf("CommitAudio error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+	assertNoRealtimeMessage(t, messages, "commit should wait for more than 100ms of audio after previous commit reset")
 
 	if err := session.ClearAudio(); err != nil {
 		t.Fatalf("ClearAudio error = %v", err)
@@ -1716,6 +1854,292 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
+}
+
+func TestRealtimeSessionCommitAudioFlushesBufferedTailBeforeCommit(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+			ackOpenAIRealtimeChatContextMessage(t, conn, msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "initial session update"), "session.update", "gpt-realtime")
+
+	audioData := make([]byte, 2880*2)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              audioData,
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2880,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	first := receiveRealtimeMessage(t, messages, "first 100ms audio append")
+	assertRealtimeMessage(t, first, "input_audio_buffer.append", "")
+	firstPayload := realtimeMessagePayload(t, first, "audio")
+	firstAudio, err := base64.StdEncoding.DecodeString(firstPayload)
+	if err != nil {
+		t.Fatalf("decode first audio payload: %v", err)
+	}
+	if len(firstAudio) != 2400*2 {
+		t.Fatalf("first appended audio bytes = %d, want 100ms chunk", len(firstAudio))
+	}
+	assertNoRealtimeMessage(t, messages, "20ms tail audio should wait for commit flush")
+
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v", err)
+	}
+
+	tail := receiveRealtimeMessage(t, messages, "tail audio append after commit")
+	assertRealtimeMessage(t, tail, "input_audio_buffer.append", "")
+	tailPayload := realtimeMessagePayload(t, tail, "audio")
+	tailAudio, err := base64.StdEncoding.DecodeString(tailPayload)
+	if err != nil {
+		t.Fatalf("decode tail audio payload: %v", err)
+	}
+	if len(tailAudio) != 480*2 {
+		t.Fatalf("tail appended audio bytes = %d, want 20ms flush", len(tailAudio))
+	}
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "audio buffer commit"), "input_audio_buffer.commit", "")
+}
+
+func TestRealtimeSessionCommitAudioFlushesResamplerTail(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "initial session update"), "session.update", "gpt-realtime")
+
+	frame := make([]byte, 2)
+	binary.LittleEndian.PutUint16(frame, 7)
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushAudio single sample error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "single sample should wait for resampler flush")
+
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v", err)
+	}
+
+	raw := receiveRealtimeMessage(t, messages, "flushed resampler tail")
+	assertRealtimeMessage(t, raw, "input_audio_buffer.append", "")
+	payload := realtimeMessagePayload(t, raw, "audio")
+	chunk, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("decode flushed resampler tail: %v", err)
+	}
+	if len(chunk) != 2 {
+		t.Fatalf("flushed resampler tail bytes = %d, want one 16-bit PCM sample", len(chunk))
+	}
+	if got := int16(binary.LittleEndian.Uint16(chunk)); got != 7 {
+		t.Fatalf("flushed resampler tail sample = %d, want 7", got)
+	}
+	assertNoRealtimeMessage(t, messages, "single resampler tail below commit threshold should not commit audio buffer")
+}
+
+func TestRealtimeSessionClearAudioDropsBufferedTail(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "initial session update"), "session.update", "gpt-realtime")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushAudio 20ms tail error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "20ms tail should wait in local buffer before clear")
+
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v", err)
+	}
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "audio buffer clear"), "input_audio_buffer.clear", "")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 1920*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1920,
+	}); err != nil {
+		t.Fatalf("PushAudio 80ms after clear error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "clear should drop stale 20ms tail before new 80ms audio")
+}
+
+func TestRealtimeSessionClearAudioDropsResamplerTail(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "initial session update"), "session.update", "gpt-realtime")
+
+	frame := make([]byte, 2)
+	binary.LittleEndian.PutUint16(frame, 7)
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              frame,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushAudio single sample error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "single sample should wait for resampler flush before clear")
+
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v", err)
+	}
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "audio buffer clear"), "input_audio_buffer.clear", "")
+
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio after clear error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "clear should drop stale resampler tail before later commit")
+}
+
+func TestRealtimeSessionReconnectDropsBufferedInputAudio(t *testing.T) {
+	var dialCount atomic.Int32
+	closeFirst := make(chan struct{})
+	secondConnected := make(chan struct{})
+	secondMessages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			<-closeFirst
+			_ = conn.Close()
+			return
+		}
+		close(secondConnected)
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			secondMessages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushAudio 20ms tail error = %v", err)
+	}
+	close(closeFirst)
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after websocket disconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 1920*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1920,
+	}); err != nil {
+		t.Fatalf("PushAudio 80ms after reconnect error = %v", err)
+	}
+	assertNoRealtimeMessage(t, secondMessages, "reconnect should drop stale buffered 20ms tail before new 80ms audio")
 }
 
 func TestRealtimeSessionResamplesInputAudioWithReferenceStreamTiming(t *testing.T) {
@@ -2588,6 +3012,17 @@ func assertNoRealtimeMessage(t *testing.T, messages <-chan string, reason string
 	}
 }
 
+func receiveRealtimeMessage(t *testing.T, messages <-chan string, reason string) string {
+	t.Helper()
+	select {
+	case msg := <-messages:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for realtime message: %s", reason)
+	}
+	return ""
+}
+
 func TestRealtimeUpdateOptionsMessageMapsNamedToolChoice(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		ToolChoice: map[string]any{
@@ -2633,6 +3068,23 @@ func TestRealtimeUpdateOptionsMessageMapsVoice(t *testing.T) {
 	output := audio["output"].(map[string]any)
 	if output["voice"] != "marin" {
 		t.Fatalf("voice = %#v, want marin", output["voice"])
+	}
+}
+
+func TestRealtimeUpdateOptionsMessageMapsExplicitEmptyVoice(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Voice:    "",
+		VoiceSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["voice"] != "" {
+		t.Fatalf("voice = %#v, want explicit empty string", output["voice"])
 	}
 }
 

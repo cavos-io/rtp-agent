@@ -2155,14 +2155,16 @@ func unsupportedOpenAIParamsForModel(modelName string) map[string]struct{} {
 }
 
 func openAIReasoningEffortToolIncompatible(modelName string) bool {
-	return strings.HasPrefix(modelName, "gpt-5.2") || strings.HasPrefix(modelName, "gpt-5.4")
+	for _, prefix := range []string{"gpt-5.2", "gpt-5.4"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultOpenAIReasoningEffort(model string, hasTools bool) string {
 	modelName := model
-	if slash := strings.LastIndex(modelName, "/"); slash >= 0 {
-		modelName = modelName[slash+1:]
-	}
 	if hasTools && openAIReasoningEffortToolIncompatible(modelName) {
 		return ""
 	}
@@ -2774,6 +2776,9 @@ func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStre
 			s.toolIndexSet = true
 			s.toolCallID = tc.ID
 			s.toolCallType = string(tc.Type)
+			if s.toolCallType == "" {
+				s.toolCallType = "function"
+			}
 			s.toolCallName = tc.Function.Name
 			s.toolCallRawArgs = tc.Function.Arguments
 			s.toolCallExtra = tc.ExtraContent

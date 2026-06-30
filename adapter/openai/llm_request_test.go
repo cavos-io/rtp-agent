@@ -2845,6 +2845,39 @@ func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamDefaultsToolCallTypeLikeReference(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-tool-default-type","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup","arguments":"{}"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool-default-type","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want accumulated tool call chunk", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one tool call", chunk)
+	}
+	if got := chunk.Delta.ToolCalls[0].Type; got != "function" {
+		t.Fatalf("tool call type = %q, want reference default function", got)
+	}
+}
+
 func TestOpenAIStreamAppliesToolCallTailBeforeFinish(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,
@@ -3891,6 +3924,14 @@ func TestBuildOpenAIChatCompletionRequestDefaultsReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestDoesNotDefaultProviderPrefixedReasoning(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("openai/gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{})
+
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want omitted for reference exact model support check", req.ReasoningEffort)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestDropsReasoningEffortWithIncompatibleTools(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-5.2", llm.NewChatContext(), &llm.ChatOptions{
 		Tools: []llm.Tool{requestTestTool{}},
@@ -3905,6 +3946,42 @@ func TestBuildOpenAIChatCompletionRequestDropsReasoningEffortWithIncompatibleToo
 	}
 	if req.MaxCompletionTokens != 128 {
 		t.Fatalf("MaxCompletionTokens = %d, want preserved", req.MaxCompletionTokens)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestDropsGPT54MiniDefaultReasoningWithTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+	})
+
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want dropped for reference gpt-5.4* tool incompatibility", req.ReasoningEffort)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestDropsGPT54MiniExplicitReasoningWithTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+		ExtraParams: map[string]any{
+			"reasoning_effort": "low",
+		},
+	})
+
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want dropped for reference gpt-5.4* tool incompatibility", req.ReasoningEffort)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestDropsProviderPrefixedGPT54MiniReasoningWithTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("openai/gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+		ExtraParams: map[string]any{
+			"reasoning_effort": "low",
+		},
+	})
+
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want dropped after reference provider-prefix stripping", req.ReasoningEffort)
 	}
 }
 
