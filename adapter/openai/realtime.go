@@ -88,6 +88,7 @@ type OpenAIRealtimeOption func(*openAIRealtimeModelOptions)
 func WithOpenAIRealtimeVoice(voice string) OpenAIRealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.sessionOptions.Voice = voice
+		options.sessionOptions.VoiceSet = true
 	}
 }
 
