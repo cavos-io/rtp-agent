@@ -553,17 +553,19 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		if resp.Type == "chunk" && resp.Data != "" {
 			data, err := base64.StdEncoding.DecodeString(resp.Data)
-			if err == nil {
-				s.audio <- &tts.SynthesizedAudio{
-					Frame: &model.AudioFrame{
-						Data:              data,
-						SampleRate:        uint32(s.sampleRate),
-						NumChannels:       1,
-						SamplesPerChannel: uint32(len(data) / 2),
-					},
-				}
-				emittedAudio = true
+			if err != nil {
+				s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to decode Cartesia audio: %v", err))
+				return
 			}
+			s.audio <- &tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              data,
+					SampleRate:        uint32(s.sampleRate),
+					NumChannels:       1,
+					SamplesPerChannel: uint32(len(data) / 2),
+				},
+			}
+			emittedAudio = true
 			continue
 		}
 
