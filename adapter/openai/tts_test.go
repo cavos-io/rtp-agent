@@ -2365,6 +2365,36 @@ func TestOpenAITTSRawAudioStreamKeepsAudioBeforeReadFailure(t *testing.T) {
 	}
 }
 
+func TestOpenAITTSSSEPCMStreamKeepsAudioBeforeReadFailure(t *testing.T) {
+	wantAudio := []byte{1, 0, 2, 0}
+	sse := []byte(`data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n")
+	stream := &openaiTTSChunkedStream{
+		resp:           &dataThenErrorReader{data: sse, err: errors.New("sse socket closed")},
+		responseFormat: goopenai.SpeechResponseFormatPcm,
+		streamFormat:   openAITTSStreamFormatSSE,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want SSE audio before read failure", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, wantAudio) {
+		t.Fatalf("audio = %#v, want SSE PCM data", audio)
+	}
+
+	audio, err = stream.Next()
+	if audio != nil {
+		t.Fatalf("second Next audio = %#v, want stream error only", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "sse socket closed" {
+		t.Fatalf("APIConnectionError message = %q, want sse socket closed", connectionErr.Message)
+	}
+}
+
 func TestOpenAITTSRawPCMFramesPreserveSampleBoundary(t *testing.T) {
 	stream := &openaiTTSChunkedStream{
 		resp: &chunkedReadCloser{chunks: [][]byte{
