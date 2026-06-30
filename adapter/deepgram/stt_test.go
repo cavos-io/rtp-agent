@@ -1570,6 +1570,20 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	if got := recognizeQuery["tag"]; len(got) != 0 {
 		t.Fatalf("recognize tag query = %#v, want absent like reference", got)
 	}
+
+	if err := provider.UpdateOptions(WithDeepgramSTTModel(""), WithDeepgramSTTKeyterms(nil)); err != nil {
+		t.Fatalf("UpdateOptions(empty model) error = %v", err)
+	}
+	streamURL, err = url.Parse(buildDeepgramStreamURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse stream url after empty model update: %v", err)
+	}
+	assertDeepgramQuery(t, streamURL.Query(), "model", "")
+	recognizeURL, err = url.Parse(buildDeepgramRecognizeURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse recognize url after empty model update: %v", err)
+	}
+	assertDeepgramQuery(t, recognizeURL.Query(), "model", "")
 }
 
 func TestDeepgramSTTUpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {

@@ -72,9 +72,7 @@ type DeepgramSTTOption func(*DeepgramSTT)
 
 func WithDeepgramSTTModel(model string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
-		if model != "" {
-			s.model = model
-		}
+		s.model = model
 	}
 }
 
