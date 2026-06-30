@@ -312,10 +312,10 @@ func (t *DeepgramTTS) storePrewarmedConn(conn *websocket.Conn) bool {
 
 func closeDeepgramTTSPrewarmedConn(conn *websocket.Conn) {
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSFlushMessage))
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSCloseMessage))
 	_ = conn.SetReadDeadline(time.Now().Add(deepgramTTSCloseAckTimeout))
 	_, _, _ = conn.ReadMessage()
 	_ = conn.SetReadDeadline(time.Time{})
-	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSCloseMessage))
 	_ = conn.Close()
 }
 

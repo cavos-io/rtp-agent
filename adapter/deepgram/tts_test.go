@@ -112,6 +112,47 @@ func TestDeepgramTTSPrewarmDialsAndReusesReferenceConnection(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSPooledCloseSendsReferenceFlushCloseBeforeAck(t *testing.T) {
+	dials := make(chan net.Conn, 1)
+	serverErr := make(chan error, 1)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			dials <- serverConn
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	tts.Prewarm(provider)
+	serverConn := receiveDeepgramTTSDial(t, dials, "prewarm TTS websocket")
+	go runDeepgramTTSPooledCloseOrderWebsocketServer(serverConn, serverErr)
+	waitDeepgramTTSPrewarmReady(t, provider)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- provider.Close()
+	}()
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("provider Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider Close() did not finish after reference close ack")
+	}
+}
+
 func TestDeepgramTTSStreamsReuseReferencePooledConnection(t *testing.T) {
 	dials := make(chan net.Conn, 2)
 	writes := make(chan string, 8)
@@ -2945,6 +2986,52 @@ func runDeepgramTTSPrewarmedWebsocketServer(conn net.Conn, writes chan<- string,
 	}
 }
 
+func runDeepgramTTSPooledCloseOrderWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage || string(payload) != deepgramTTSFlushMessage {
+		errCh <- fmt.Errorf("first pooled close frame = opcode %d payload %q, want reference Flush", opcode, payload)
+		return
+	}
+
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err = readDeepgramTestClientWebsocketFrame(reader)
+	if err != nil {
+		_ = conn.SetReadDeadline(time.Time{})
+		_ = writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`))
+		errCh <- fmt.Errorf("pooled close waited for ack before Close frame: %w", err)
+		return
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	if opcode != websocket.TextMessage || string(payload) != deepgramTTSCloseMessage {
+		errCh <- fmt.Errorf("second pooled close frame = opcode %d payload %q, want reference Close", opcode, payload)
+		return
+	}
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+		errCh <- err
+		return
+	}
+	errCh <- nil
+}
+
 func runDeepgramTTSReusableWebsocketServer(conn net.Conn, writes chan<- string, errCh chan<- error) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
@@ -2976,12 +3063,26 @@ func runDeepgramTTSReusableWebsocketServer(conn net.Conn, writes chan<- string, 
 		writes <- string(payload)
 		if msgType == "Flush" {
 			flushes++
+			if flushes > 2 {
+				opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				if opcode != websocket.TextMessage || deepgramTestWebsocketMessageType(payload) != "Close" {
+					errCh <- fmt.Errorf("pooled cleanup frame = opcode %d payload %q, want Close", opcode, payload)
+					return
+				}
+				if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+					errCh <- err
+					return
+				}
+				errCh <- nil
+				return
+			}
 			if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
 				errCh <- err
 				return
-			}
-			if flushes == 2 {
-				continue
 			}
 		}
 	}
