@@ -3876,9 +3876,26 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 		t.Fatalf("audio event metadata = item %q content %d, want msg_456 content 3", audioEvent.ItemID, audioEvent.ContentIndex)
 	}
 
+	emptyAudioEvent, ok := openAIRealtimeEvent(map[string]any{
+		"type":          "response.output_audio.delta",
+		"item_id":       "msg_789",
+		"content_index": 4,
+		"delta":         "%%%%",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent punctuation-only audio returned ok=false, want reference zero-byte audio event")
+	}
+	if emptyAudioEvent.Type != llm.RealtimeEventTypeAudio || len(emptyAudioEvent.Data) != 0 {
+		t.Fatalf("empty audio event = %#v, want zero-byte audio delta", emptyAudioEvent)
+	}
+	if emptyAudioEvent.ItemID != "msg_789" || emptyAudioEvent.ContentIndex != 4 {
+		t.Fatalf("empty audio event metadata = item %q content %d, want msg_789 content 4", emptyAudioEvent.ItemID, emptyAudioEvent.ContentIndex)
+	}
+
 	if _, ok := openAIRealtimeEvent(map[string]any{
-		"type":  "response.output_audio.delta",
-		"delta": "not-base64",
+		"type":    "response.output_audio.delta",
+		"item_id": "msg_bad",
+		"delta":   "not-base64",
 	}); ok {
 		t.Fatal("openAIRealtimeEvent invalid audio returned ok=true, want false")
 	}

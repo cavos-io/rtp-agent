@@ -3172,7 +3172,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	case "response.output_audio.delta", "response.audio.delta":
 		itemID, hasItemID := ev["item_id"].(string)
 		if delta, ok := ev["delta"].(string); ok && hasItemID {
-			data, err := base64.StdEncoding.DecodeString(delta)
+			data, err := openAIRealtimeDecodeAudioBase64(delta)
 			if err != nil {
 				return llm.RealtimeEvent{}, false
 			}
@@ -3273,6 +3273,27 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}, true
 	}
 	return llm.RealtimeEvent{}, false
+}
+
+func openAIRealtimeDecodeAudioBase64(value string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return data, nil
+	}
+	filtered := make([]byte, 0, len(value))
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if (c >= 'A' && c <= 'Z') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') ||
+			c == '+' || c == '/' || c == '=' {
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
 
 func (s *realtimeSession) resolveRealtimeChatContextCreateAck(itemID string) {
