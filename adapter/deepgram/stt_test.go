@@ -690,9 +690,21 @@ func TestDeepgramSTTRejectsKeywordKeytermModelMismatchBeforeRequest(t *testing.T
 			message: "keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models",
 		},
 		{
+			name:    "empty keyword with nova 3",
+			model:   "nova-3",
+			option:  WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "", Boost: 1}}),
+			message: "keywords is only available for use with Nova-2, Nova-1, Enhanced, and Base speech to text models",
+		},
+		{
 			name:    "keyterm without nova 3",
 			model:   "nova-2",
 			option:  WithDeepgramSTTKeyterms([]string{"LiveKit"}),
+			message: "keyterm Prompting is only available for transcription using the Nova-3 Model",
+		},
+		{
+			name:    "empty keyterm without nova 3",
+			model:   "nova-2",
+			option:  WithDeepgramSTTKeyterms([]string{""}),
 			message: "keyterm Prompting is only available for transcription using the Nova-3 Model",
 		},
 	}
@@ -1652,6 +1664,14 @@ func TestDeepgramSTTUpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
 	}
 	if after := buildDeepgramStreamURL(provider, "en-US"); after != before {
 		t.Fatalf("stream URL after failed keyword update = %s, want unchanged %s", after, before)
+	}
+
+	err = provider.UpdateOptions(WithDeepgramSTTModel("nova-3"), WithDeepgramSTTKeywords([]DeepgramKeyword{}))
+	if err == nil || !strings.Contains(err.Error(), "keywords is only available") {
+		t.Fatalf("UpdateOptions() empty keyword error = %v, want invalid keywords for nova-3", err)
+	}
+	if after := buildDeepgramStreamURL(provider, "en-US"); after != before {
+		t.Fatalf("stream URL after failed empty keyword update = %s, want unchanged %s", after, before)
 	}
 }
 
