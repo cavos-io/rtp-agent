@@ -388,6 +388,9 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	if len(event.Alternatives[0].Words) != 1 || event.Alternatives[0].Words[0].Text != "hello" {
 		t.Fatalf("words = %#v, want hello word timing", event.Alternatives[0].Words)
 	}
+	if event.Alternatives[0].Language != "en-US" {
+		t.Fatalf("language = %q, want en-US", event.Alternatives[0].Language)
+	}
 
 	end, err := providerStream.Next()
 	if err != nil {

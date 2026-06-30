@@ -217,15 +217,17 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	if language == "" {
 		language = "en-US"
 	}
-	stream, err := s.client.StartStreamTranscription(ctx, buildAWSStartStreamTranscriptionInput(s, language))
+	input := buildAWSStartStreamTranscriptionInput(s, language)
+	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
 		return nil, err
 	}
 
 	gs := &awsSTTStream{
-		stream: stream,
-		events: make(chan *stt.SpeechEvent, 10),
-		errCh:  make(chan error, 1),
+		stream:   stream,
+		language: input.LanguageCode,
+		events:   make(chan *stt.SpeechEvent, 10),
+		errCh:    make(chan error, 1),
 	}
 	go gs.readLoop()
 
@@ -295,6 +297,7 @@ func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 
 type awsSTTStream struct {
 	stream          awsSTTEventStream
+	language        types.LanguageCode
 	events          chan *stt.SpeechEvent
 	errCh           chan error
 	closed          bool
@@ -332,7 +335,7 @@ func (s *awsSTTStream) readLoop() {
 					s.events <- &stt.SpeechEvent{
 						Type: eventType,
 						Alternatives: []stt.SpeechData{
-							awsSpeechDataFromResultOffset(result, s.currentStartTimeOffset()),
+							awsSpeechDataFromResultOffset(result, s.currentStartTimeOffset(), string(s.language)),
 						},
 					}
 				}
@@ -344,17 +347,29 @@ func (s *awsSTTStream) readLoop() {
 	}
 }
 
-func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64) stt.SpeechData {
+func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64, fallbackLanguage string) stt.SpeechData {
 	if len(result.Alternatives) == 0 {
 		return stt.SpeechData{
+			Language:  awsResultLanguage(result, fallbackLanguage),
 			StartTime: result.StartTime + startTimeOffset,
 			EndTime:   result.EndTime + startTimeOffset,
 		}
 	}
 	data := awsSpeechDataFromAlternativeOffset(result.Alternatives[0], startTimeOffset)
+	data.Language = awsResultLanguage(result, fallbackLanguage)
 	data.StartTime = result.StartTime + startTimeOffset
 	data.EndTime = result.EndTime + startTimeOffset
 	return data
+}
+
+func awsResultLanguage(result types.Result, fallbackLanguage string) string {
+	if result.LanguageCode != "" {
+		return string(result.LanguageCode)
+	}
+	if fallbackLanguage != "" {
+		return fallbackLanguage
+	}
+	return string(types.LanguageCodeEnUs)
 }
 
 func awsSpeechDataFromAlternative(alt types.Alternative) stt.SpeechData {
