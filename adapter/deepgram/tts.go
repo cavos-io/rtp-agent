@@ -513,8 +513,13 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.mu.Unlock()
 			return audio, nil
 		}
-		audio := s.chunkedAudioFrameLocked(requestID, sampleRate, frameData, s.pendingFinal)
+		audio := s.chunkedAudioFrameLocked(requestID, sampleRate, frameData, false)
 		if audio == nil {
+			if s.pendingFinal {
+				audio, finalErr := s.emitFinal()
+				s.mu.Unlock()
+				return audio, finalErr
+			}
 			continue
 		}
 		s.mu.Unlock()

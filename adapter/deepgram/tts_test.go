@@ -1343,6 +1343,44 @@ func TestDeepgramTTSChunkedStreamMarksReferenceTailFrameFinal(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSChunkedStreamSplitsReferenceFinalReadTail(t *testing.T) {
+	data := make([]byte, 24)
+	for i := range data {
+		data[i] = byte(i + 1)
+	}
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: &deepgramTTSFinalReadCloser{data: data}},
+		sampleRate: 1000,
+		requestID:  "req-split",
+	}
+	defer stream.Close()
+
+	head, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if head == nil || head.Frame == nil || head.IsFinal {
+		t.Fatalf("first audio = %+v, want non-final head frame", head)
+	}
+	if got := head.Frame.Data; !bytes.Equal(got, data[:4]) {
+		t.Fatalf("head audio data = %v, want %v", got, data[:4])
+	}
+
+	tail, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if tail == nil || tail.Frame == nil || !tail.IsFinal {
+		t.Fatalf("second audio = %+v, want final tail frame", tail)
+	}
+	if got := tail.Frame.Data; !bytes.Equal(got, data[4:]) {
+		t.Fatalf("tail audio data = %v, want %v", got, data[4:])
+	}
+	if next, err := stream.Next(); err != io.EOF || next != nil {
+		t.Fatalf("Next after final tail = (%+v, %v), want nil EOF", next, err)
+	}
+}
+
 func TestDeepgramTTSChunkedStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
 	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
 	stream := &deepgramTTSChunkedStream{
