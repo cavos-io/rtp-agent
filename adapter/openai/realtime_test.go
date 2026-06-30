@@ -7862,6 +7862,23 @@ func TestRealtimeChatContextCreateMessagesDropsNonTextForNonUserRoles(t *testing
 	}
 }
 
+func TestRealtimeChatContextCreateMessagesRejectsUnsupportedRole(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		ID:      "msg_tool",
+		Role:    llm.ChatRole("tool"),
+		Content: []llm.ChatContent{{Text: "bad role"}},
+	})
+
+	_, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err == nil {
+		t.Fatal("openAIRealtimeChatContextCreateMessages error = nil, want unsupported role error")
+	}
+	if got, want := err.Error(), "unsupported role: tool"; got != want {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %q, want %q", got, want)
+	}
+}
+
 func TestRealtimeChatContextUpdateMessagesDeleteRemovedAndRecreateChangedItems(t *testing.T) {
 	oldCtx := llm.NewChatContext()
 	oldCtx.AddMessage(llm.ChatMessageArgs{ID: "keep", Role: llm.ChatRoleUser, Text: "keep"})

@@ -1260,6 +1260,11 @@ func openAIRealtimeCreateChatItemMessage(chatCtx *llm.ChatContext, previousItemI
 func openAIRealtimeChatItemMessage(item llm.ChatItem) (map[string]any, error) {
 	switch it := item.(type) {
 	case *llm.ChatMessage:
+		switch it.Role {
+		case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:
+		default:
+			return nil, fmt.Errorf("unsupported role: %s", it.Role)
+		}
 		content, err := openAIRealtimeChatMessageContent(it)
 		if err != nil {
 			return nil, err
