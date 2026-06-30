@@ -3908,6 +3908,29 @@ func TestBuildOpenAIChatCompletionRequestDropsReasoningEffortWithIncompatibleToo
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestKeepsGPT54MiniDefaultReasoningWithTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+	})
+
+	if req.ReasoningEffort != "minimal" {
+		t.Fatalf("ReasoningEffort = %q, want reference default minimal for gpt-5.4-mini with tools", req.ReasoningEffort)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestKeepsGPT54MiniExplicitReasoningWithTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+		ExtraParams: map[string]any{
+			"reasoning_effort": "low",
+		},
+	})
+
+	if req.ReasoningEffort != "low" {
+		t.Fatalf("ReasoningEffort = %q, want explicit reasoning effort kept for gpt-5.4-mini with tools", req.ReasoningEffort)
+	}
+}
+
 func TestOpenAICompletionUsageHandlesMissingTokenDetails(t *testing.T) {
 	usage := openAICompletionUsage(&openaisdk.Usage{
 		CompletionTokens: 7,
