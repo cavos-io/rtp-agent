@@ -456,6 +456,7 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	}
 
 	req.Header.Set("Content-Type", "audio/wav")
+	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Token "+s.apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
