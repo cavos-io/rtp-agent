@@ -1038,9 +1038,9 @@ func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
 		WithDeepgramSTTv2EagerEOTThreshold(0.6),
 		WithDeepgramSTTv2EOTThreshold(0.8),
 		WithDeepgramSTTv2EOTTimeout(1500),
-		WithDeepgramSTTv2Keyterms([]string{"LiveKit", "rtp-agent"}),
-		WithDeepgramSTTv2Tags([]string{"agent", "test"}),
-		WithDeepgramSTTv2LanguageHints([]string{"en", "es"}),
+		WithDeepgramSTTv2Keyterms([]string{"LiveKit", "", "rtp-agent"}),
+		WithDeepgramSTTv2Tags([]string{"agent", "", "test"}),
+		WithDeepgramSTTv2LanguageHints([]string{"en", "", "es"}),
 	)
 
 	parsed, err := url.Parse(buildDeepgramSTTv2StreamURL(provider))
@@ -1058,9 +1058,12 @@ func TestDeepgramSTTv2StreamURLUsesReferenceTurnOptions(t *testing.T) {
 	assertDeepgramQuery(t, query, "eager_eot_threshold", "0.6")
 	assertDeepgramQuery(t, query, "eot_threshold", "0.8")
 	assertDeepgramQuery(t, query, "eot_timeout_ms", "1500")
-	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "rtp-agent"})
-	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
-	assertDeepgramQueryValues(t, query, "language_hint", []string{"en", "es"})
+	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "", "rtp-agent"})
+	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "", "test"})
+	assertDeepgramQueryValues(t, query, "language_hint", []string{"en", "", "es"})
+	if query["keyterm"][1] != "" || query["tag"][1] != "" || query["language_hint"][1] != "" {
+		t.Fatalf("empty repeated query values dropped: keyterm=%#v tag=%#v language_hint=%#v", query["keyterm"], query["tag"], query["language_hint"])
+	}
 }
 
 func TestDeepgramSTTv2RejectsReferenceInvalidTurnOptions(t *testing.T) {

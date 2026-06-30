@@ -346,19 +346,13 @@ func buildDeepgramSTTv2StreamURL(s *DeepgramSTTv2) string {
 		q.Set("eot_timeout_ms", strconv.Itoa(s.eotTimeout))
 	}
 	for _, keyterm := range s.keyterms {
-		if keyterm != "" {
-			q.Add("keyterm", keyterm)
-		}
+		q.Add("keyterm", keyterm)
 	}
 	for _, tag := range s.tags {
-		if tag != "" {
-			q.Add("tag", tag)
-		}
+		q.Add("tag", tag)
 	}
 	for _, hint := range s.langHints {
-		if hint != "" {
-			q.Add("language_hint", hint)
-		}
+		q.Add("language_hint", hint)
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
