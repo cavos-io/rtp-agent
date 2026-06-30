@@ -912,6 +912,28 @@ func TestCartesiaTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial failed")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewCartesiaTTS("test-key", "", "")
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		defer stream.Close()
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestCartesiaTTSUnexpectedNormalCloseReturnsAPIConnectionError(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})
@@ -995,6 +1017,110 @@ func TestCartesiaTTSStreamProviderErrorReturnsAPIConnectionError(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for provider error server")
+	}
+}
+
+func TestCartesiaTTSStreamMalformedMessageReturnsAPIConnectionError(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadThenMalformedWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(err, &connectionErr) {
+			t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next timed out, want malformed provider message to terminate stream like reference")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for malformed message server")
+	}
+}
+
+func TestCartesiaTTSStreamMalformedAudioReturnsAPIConnectionError(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadThenMalformedAudioWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	result := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		result <- err
+	}()
+
+	select {
+	case err := <-result:
+		var connectionErr *llm.APIConnectionError
+		if !errors.As(err, &connectionErr) {
+			t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next timed out, want malformed provider audio to terminate stream like reference")
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for malformed audio server")
 	}
 }
 
@@ -1417,6 +1543,70 @@ func runCartesiaReadThenErrorWebsocketServer(conn net.Conn, errCh chan<- error) 
 				return
 			}
 			errCh <- ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"error","error":"bad stream"}`))
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaReadThenMalformedWebsocketServer(conn net.Conn, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"chunk"`)); err != nil {
+				errCh <- err
+				return
+			}
+			_, _, err = ws.ReadMessage()
+			if err == nil {
+				errCh <- errors.New("expected client close after malformed message")
+				return
+			}
+			errCh <- nil
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaReadThenMalformedAudioWebsocketServer(conn net.Conn, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			if _, _, err := ws.ReadMessage(); err != nil {
+				errCh <- err
+				return
+			}
+			if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"chunk","data":"%%%%%"}`)); err != nil {
+				errCh <- err
+				return
+			}
+			_, _, err = ws.ReadMessage()
+			if err == nil {
+				errCh <- errors.New("expected client close after malformed audio")
+				return
+			}
+			errCh <- nil
 		}),
 	}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {

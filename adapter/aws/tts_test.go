@@ -5,12 +5,17 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/polly"
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestAWSTTSDefaultsMatchReference(t *testing.T) {
@@ -201,6 +206,23 @@ func TestAWSTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.
 	}
 }
 
+func TestAWSTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &awsTTSChunkedStream{
+		stream: erroringAWSReadCloser{err: errors.New("polly read failed")},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read failure", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 
@@ -208,6 +230,31 @@ func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "client is not configured") {
 		t.Fatalf("Synthesize error = %v, want configured-client error", err)
+	}
+}
+
+func TestAWSTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("polly dial failed")
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil on provider failure", stream)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -301,4 +348,22 @@ func (c *countingAWSReadCloser) Close() error {
 		return io.ErrClosedPipe
 	}
 	return nil
+}
+
+type erroringAWSReadCloser struct {
+	err error
+}
+
+func (c erroringAWSReadCloser) Read([]byte) (int, error) {
+	return 0, c.err
+}
+
+func (c erroringAWSReadCloser) Close() error {
+	return nil
+}
+
+type awsHTTPClientFunc func(*http.Request) (*http.Response, error)
+
+func (f awsHTTPClientFunc) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
 }

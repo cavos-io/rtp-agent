@@ -397,7 +397,10 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaStreamURL(t), buildCartesiaStreamHeaders(t))
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if t.isClosed() {
 		conn.Close()
@@ -539,7 +542,8 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		var resp cartesiaWSResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
-			continue
+			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to parse Cartesia message: %v", err))
+			return
 		}
 
 		if resp.Type == "error" {
@@ -549,17 +553,19 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		if resp.Type == "chunk" && resp.Data != "" {
 			data, err := base64.StdEncoding.DecodeString(resp.Data)
-			if err == nil {
-				s.audio <- &tts.SynthesizedAudio{
-					Frame: &model.AudioFrame{
-						Data:              data,
-						SampleRate:        uint32(s.sampleRate),
-						NumChannels:       1,
-						SamplesPerChannel: uint32(len(data) / 2),
-					},
-				}
-				emittedAudio = true
+			if err != nil {
+				s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to decode Cartesia audio: %v", err))
+				return
 			}
+			s.audio <- &tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              data,
+					SampleRate:        uint32(s.sampleRate),
+					NumChannels:       1,
+					SamplesPerChannel: uint32(len(data) / 2),
+				},
+			}
+			emittedAudio = true
 			continue
 		}
 

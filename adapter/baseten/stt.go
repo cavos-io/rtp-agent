@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -204,7 +205,10 @@ func (s *BasetenSTT) Stream(ctx context.Context, language string) (stt.Recognize
 	}
 	conn, _, err := dialer(ctx, endpoint, headers)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial baseten stt websocket: %w", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial baseten stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()
@@ -655,7 +659,7 @@ func (s *basetenSTTStream) SetStartTime(startTime float64) {
 func processBasetenSTTMessage(state *basetenSTTStreamState, payload []byte) ([]*stt.SpeechEvent, error) {
 	var data map[string]interface{}
 	if err := json.Unmarshal(payload, &data); err != nil {
-		return nil, err
+		return nil, nil
 	}
 	if msgType, _ := data["type"].(string); msgType != "" && msgType != "transcription" {
 		return nil, nil
