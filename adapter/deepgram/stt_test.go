@@ -1452,10 +1452,10 @@ func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 		WithDeepgramSTTProfanityFilter(true),
 		WithDeepgramSTTNumerals(true),
 		WithDeepgramSTTMipOptOut(true),
-		WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "cavos", Boost: 2.5}}),
-		WithDeepgramSTTKeyterms([]string{"LiveKit", "rtp-agent"}),
-		WithDeepgramSTTRedact([]string{"pci", "ssn"}),
-		WithDeepgramSTTTags([]string{"agent", "test"}),
+		WithDeepgramSTTKeywords([]DeepgramKeyword{{Keyword: "cavos", Boost: 2.5}, {Keyword: "", Boost: 1}}),
+		WithDeepgramSTTKeyterms([]string{"LiveKit", "", "rtp-agent"}),
+		WithDeepgramSTTRedact([]string{"pci", "", "ssn"}),
+		WithDeepgramSTTTags([]string{"agent", "", "test"}),
 	)
 
 	caps := provider.Capabilities()
@@ -1485,10 +1485,13 @@ func TestDeepgramSTTAdvancedOptionsUseReferenceQueryParams(t *testing.T) {
 	assertDeepgramQuery(t, query, "profanity_filter", "true")
 	assertDeepgramQuery(t, query, "numerals", "true")
 	assertDeepgramQuery(t, query, "mip_opt_out", "true")
-	assertDeepgramQueryValues(t, query, "keywords", []string{"cavos:2.5"})
-	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "rtp-agent"})
-	assertDeepgramQueryValues(t, query, "redact", []string{"pci", "ssn"})
-	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "test"})
+	assertDeepgramQueryValues(t, query, "keywords", []string{"cavos:2.5", ":1"})
+	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit", "", "rtp-agent"})
+	assertDeepgramQueryValues(t, query, "redact", []string{"pci", "", "ssn"})
+	assertDeepgramQueryValues(t, query, "tag", []string{"agent", "", "test"})
+	if query["keyterm"][1] != "" || query["redact"][1] != "" || query["tag"][1] != "" {
+		t.Fatalf("empty stream query values dropped: keyterm=%#v redact=%#v tag=%#v", query["keyterm"], query["redact"], query["tag"])
+	}
 }
 
 func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
