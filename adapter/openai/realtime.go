@@ -1382,13 +1382,15 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 		s.mu.Unlock()
 		return nil
 	}
-	s.mu.Unlock()
-	msg["session"] = changedSession
-	changedSession["type"] = "realtime"
-	if err := s.sendMsg(msg); err != nil {
-		return err
+	type previousOption struct {
+		value any
+		ok    bool
 	}
-	s.mu.Lock()
+	previousOptions := make(map[string]previousOption, len(changedOptions))
+	for key := range changedOptions {
+		value, ok := s.optionsState[key]
+		previousOptions[key] = previousOption{value: openAIRealtimeCloneOptionValue(value), ok: ok}
+	}
 	if s.optionsState == nil {
 		s.optionsState = make(map[string]any, len(changedOptions))
 	}
@@ -1396,6 +1398,20 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 		s.optionsState[key] = value
 	}
 	s.mu.Unlock()
+	msg["session"] = changedSession
+	changedSession["type"] = "realtime"
+	if err := s.sendMsg(msg); err != nil {
+		s.mu.Lock()
+		for key, previous := range previousOptions {
+			if !previous.ok {
+				delete(s.optionsState, key)
+				continue
+			}
+			s.optionsState[key] = previous.value
+		}
+		s.mu.Unlock()
+		return err
+	}
 	return nil
 }
 
