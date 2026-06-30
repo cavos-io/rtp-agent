@@ -8080,8 +8080,12 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	if !errors.As(errorEvent.Error, &apiErr) {
 		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
 	}
-	if apiErr.Message != "OpenAI Realtime API response failed: [invalid_request_error] inference_rate_limit_exceeded" {
+	if apiErr.Message != "OpenAI Realtime API response failed with error type: invalid_request_error" {
 		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok || body["code"] != "inference_rate_limit_exceeded" {
+		t.Fatalf("APIError body = %#v, want provider error body with code", apiErr.Body)
 	}
 	if !apiErr.Retryable {
 		t.Fatal("APIError Retryable = false, want true")
@@ -8163,6 +8167,44 @@ func TestRealtimeResponseDoneFailedStringStatusDetailsReportsUnknownError(t *tes
 	}
 	if !apiErr.Retryable {
 		t.Fatal("APIError Retryable = false, want true")
+	}
+}
+
+func TestRealtimeResponseDoneFailedReasonReportsUnknownError(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_failed",
+			"status": "failed",
+			"status_details": map[string]any{
+				"type":   "server_error",
+				"reason": "rate_limited",
+			},
+		},
+	}
+
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  messageCh,
+			functionCh: functionCh,
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want failed response error event")
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response failed with unknown error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if apiErr.Body != nil {
+		t.Fatalf("APIError body = %#v, want nil without status_details.error", apiErr.Body)
 	}
 }
 

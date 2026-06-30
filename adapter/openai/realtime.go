@@ -2803,14 +2803,8 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 		if errorType == "" {
 			errorType = "unknown"
 		}
-		if errorCode := openAIRealtimeString(errorBody["code"]); errorCode != "" {
-			message = fmt.Sprintf("OpenAI Realtime API response %s: [%s] %s", status, errorType, errorCode)
-		} else {
-			message = fmt.Sprintf("OpenAI Realtime API response %s with error type: %s", status, errorType)
-		}
+		message = fmt.Sprintf("OpenAI Realtime API response %s with error type: %s", status, errorType)
 		body = errorBody
-	} else if reason := openAIRealtimeString(statusDetails["reason"]); reason != "" {
-		message = fmt.Sprintf("OpenAI Realtime API response %s: %s", status, reason)
 	}
 	return llm.RealtimeEvent{
 		Type:  llm.RealtimeEventTypeError,
