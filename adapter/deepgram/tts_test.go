@@ -101,11 +101,8 @@ func TestDeepgramTTSPrewarmDialsAndReusesReferenceConnection(t *testing.T) {
 		t.Fatal("Stream opened a second websocket instead of reusing prewarmed connection")
 	default:
 	}
-	if audio, err := stream.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
-		t.Fatalf("Next() = (%+v, %v), want provider audio before final marker", audio, err)
-	}
-	if audio, err := stream.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("Next() final = (%+v, %v), want Flushed final marker", audio, err)
+	if audio, err := stream.Next(); err != nil || audio == nil || !audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("Next() = (%+v, %v), want final provider audio", audio, err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -314,11 +311,8 @@ func TestDeepgramTTSExpiresReferencePooledConnection(t *testing.T) {
 	if !reflect.DeepEqual(gotWrites, wantWrites) {
 		t.Fatalf("fresh websocket writes = %#v, want %#v", gotWrites, wantWrites)
 	}
-	if audio, err := stream.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
-		t.Fatalf("Next() = (%+v, %v), want provider audio before fresh final marker", audio, err)
-	}
-	if audio, err := stream.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("Next() final = (%+v, %v), want final marker from fresh websocket", audio, err)
+	if audio, err := stream.Next(); err != nil || audio == nil || !audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("Next() = (%+v, %v), want final provider audio from fresh websocket", audio, err)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close() error = %v", err)
@@ -364,11 +358,8 @@ func TestDeepgramTTSStreamsReuseReferencePooledConnection(t *testing.T) {
 	if err := <-firstEnd; err != nil {
 		t.Fatalf("first EndInput() error = %v", err)
 	}
-	if audio, err := first.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
-		t.Fatalf("first Next() = (%+v, %v), want provider audio", audio, err)
-	}
-	if audio, err := first.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("first Next() final = (%+v, %v), want final marker", audio, err)
+	if audio, err := first.Next(); err != nil || audio == nil || !audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("first Next() = (%+v, %v), want final provider audio", audio, err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("first Close() error = %v", err)
@@ -413,11 +404,8 @@ func TestDeepgramTTSStreamsReuseReferencePooledConnection(t *testing.T) {
 	if !reflect.DeepEqual(gotWrites, wantWrites) {
 		t.Fatalf("pooled websocket writes = %#v, want %#v", gotWrites, wantWrites)
 	}
-	if audio, err := second.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
-		t.Fatalf("second Next() = (%+v, %v), want provider audio", audio, err)
-	}
-	if audio, err := second.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("second Next() final = (%+v, %v), want final marker", audio, err)
+	if audio, err := second.Next(); err != nil || audio == nil || !audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("second Next() = (%+v, %v), want final provider audio", audio, err)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close() error = %v", err)
@@ -462,11 +450,8 @@ func TestDeepgramTTSUpdateOptionsKeepsReferencePooledConnection(t *testing.T) {
 	if err := <-firstEnd; err != nil {
 		t.Fatalf("first EndInput() error = %v", err)
 	}
-	if audio, err := first.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
-		t.Fatalf("first Next() = (%+v, %v), want provider audio", audio, err)
-	}
-	if audio, err := first.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("first Next() final = (%+v, %v), want final marker", audio, err)
+	if audio, err := first.Next(); err != nil || audio == nil || !audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("first Next() = (%+v, %v), want final provider audio", audio, err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("first Close() error = %v", err)
@@ -512,11 +497,8 @@ func TestDeepgramTTSUpdateOptionsKeepsReferencePooledConnection(t *testing.T) {
 	if !reflect.DeepEqual(gotWrites, wantWrites) {
 		t.Fatalf("pooled websocket writes after update_options = %#v, want %#v", gotWrites, wantWrites)
 	}
-	if audio, err := second.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
-		t.Fatalf("second Next() = (%+v, %v), want provider audio", audio, err)
-	}
-	if audio, err := second.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("second Next() final = (%+v, %v), want final marker", audio, err)
+	if audio, err := second.Next(); err != nil || audio == nil || !audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("second Next() = (%+v, %v), want final provider audio", audio, err)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close() error = %v", err)
@@ -2877,25 +2859,66 @@ func TestDeepgramTTSStreamAnnotatesReferenceAudioSegment(t *testing.T) {
 	if audio == nil || audio.Frame == nil {
 		t.Fatalf("audio = %+v, want frame", audio)
 	}
+	if !audio.IsFinal {
+		t.Fatalf("audio = %+v, want final audio frame", audio)
+	}
 	if audio.RequestID == "" {
 		t.Fatal("audio RequestID is empty, want stable stream request id")
 	}
 	if audio.SegmentID == "" {
 		t.Fatal("audio SegmentID is empty, want current segment id")
 	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
 
-	final, err := stream.Next()
+func TestDeepgramTTSStreamMarksReferenceTailFrameFinal(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSAudioSegmentWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"), WithDeepgramTTSAudioFormat("linear16", 1000))
+	stream, err := provider.Stream(context.Background())
 	if err != nil {
-		t.Fatalf("Next() final error = %v", err)
+		t.Fatalf("Stream() error = %v", err)
 	}
-	if final == nil || !final.IsFinal {
-		t.Fatalf("final = %+v, want final marker", final)
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
 	}
-	if final.RequestID != audio.RequestID {
-		t.Fatalf("final RequestID = %q, want %q", final.RequestID, audio.RequestID)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
 	}
-	if final.SegmentID != audio.SegmentID {
-		t.Fatalf("final SegmentID = %q, want %q", final.SegmentID, audio.SegmentID)
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !audio.IsFinal {
+		t.Fatalf("audio = %+v, want final audio frame", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("final audio data = %v, want provider PCM bytes", got)
+	}
+	select {
+	case extra, ok := <-stream.(*deepgramTTSStream).audio:
+		if ok {
+			t.Fatalf("extra audio after final tail = %+v, want no boundary-only marker", extra)
+		}
+	default:
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("test websocket server error: %v", err)
@@ -2939,9 +2962,6 @@ func TestDeepgramTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Next() error = %v", err)
 		}
-		if audio.IsFinal {
-			break
-		}
 		if audio.Frame == nil {
 			t.Fatalf("audio = %+v, want frame or final", audio)
 		}
@@ -2953,6 +2973,9 @@ func TestDeepgramTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
 			t.Fatalf("SamplesPerChannel = %d, want %d", audio.Frame.SamplesPerChannel, len(data)/2)
 		}
 		got = append(got, data...)
+		if audio.IsFinal {
+			break
+		}
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("reassembled PCM = %v, want %v", got, want)

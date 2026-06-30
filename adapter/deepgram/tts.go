@@ -663,6 +663,7 @@ type deepgramTTSStream struct {
 	segmentHadAudio atomic.Bool
 	flushPending    bool
 	pendingPCM      []byte
+	pendingTailPCM  []byte
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -684,25 +685,15 @@ func (s *deepgramTTSStream) readLoop() {
 		}
 
 		if msgType == websocket.BinaryMessage {
-			frameData := deepgramTTSFrameData(s.encoding, &s.pendingPCM, message)
-			if len(frameData) == 0 {
+			audio := s.handleBinaryMessage(message)
+			s.signalCloseAck()
+			if audio == nil {
 				continue
 			}
-			s.markSegmentHadAudio()
-			audio := &tts.SynthesizedAudio{
-				Frame: &model.AudioFrame{
-					Data:              frameData,
-					SampleRate:        uint32(s.sampleRate),
-					NumChannels:       1,
-					SamplesPerChannel: uint32(len(frameData) / 2),
-				},
-			}
-			s.annotateAudio(audio)
 			if !s.sendAudio(audio) {
 				s.markReadDone()
 				return
 			}
-			s.signalCloseAck()
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
 				if errors.Is(err, errDeepgramTTSReleasedToPool) {
@@ -722,6 +713,29 @@ func (s *deepgramTTSStream) markReadDone() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.readDone = true
+}
+
+func (s *deepgramTTSStream) handleBinaryMessage(message []byte) *tts.SynthesizedAudio {
+	frameData := deepgramTTSFrameData(s.encoding, &s.pendingPCM, message)
+	if len(frameData) == 0 {
+		return nil
+	}
+	s.markSegmentHadAudio()
+	if len(s.pendingTailPCM) > 0 {
+		combined := make([]byte, 0, len(s.pendingTailPCM)+len(frameData))
+		combined = append(combined, s.pendingTailPCM...)
+		combined = append(combined, frameData...)
+		frameData = combined
+		s.pendingTailPCM = nil
+	}
+	tailBytes := deepgramTTSFinalTailBytes(s.sampleRate)
+	if len(frameData) <= tailBytes {
+		s.pendingTailPCM = append(s.pendingTailPCM[:0], frameData...)
+		return nil
+	}
+	tailStart := len(frameData) - tailBytes
+	s.pendingTailPCM = append(s.pendingTailPCM[:0], frameData[tailStart:]...)
+	return s.audioFrame(frameData[:tailStart], false)
 }
 
 func deepgramTTSReadError(err error) error {
@@ -810,8 +824,7 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 			}
 			return nil
 		}
-		audio := &tts.SynthesizedAudio{IsFinal: true}
-		s.annotateAudio(audio)
+		audio := s.finalAudio()
 		s.mu.Lock()
 		s.flushPending = false
 		s.segmentText = ""
@@ -830,6 +843,31 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
+}
+
+func (s *deepgramTTSStream) finalAudio() *tts.SynthesizedAudio {
+	if len(s.pendingTailPCM) > 0 {
+		frameData := append([]byte(nil), s.pendingTailPCM...)
+		s.pendingTailPCM = nil
+		return s.audioFrame(frameData, true)
+	}
+	audio := &tts.SynthesizedAudio{IsFinal: true}
+	s.annotateAudio(audio)
+	return audio
+}
+
+func (s *deepgramTTSStream) audioFrame(frameData []byte, final bool) *tts.SynthesizedAudio {
+	audio := &tts.SynthesizedAudio{
+		IsFinal: final,
+		Frame: &model.AudioFrame{
+			Data:              frameData,
+			SampleRate:        uint32(s.sampleRate),
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(frameData) / 2),
+		},
+	}
+	s.annotateAudio(audio)
+	return audio
 }
 
 func (s *deepgramTTSStream) markSegmentHadAudio() {
@@ -876,6 +914,14 @@ func deepgramTTSFrameData(encoding string, pending *[]byte, data []byte) []byte 
 		data = data[:len(data)-1]
 	}
 	return data
+}
+
+func deepgramTTSFinalTailBytes(sampleRate int) int {
+	tailSamples := sampleRate * 10 / 1000
+	if tailSamples <= 0 {
+		return 2
+	}
+	return tailSamples * 2
 }
 
 func deepgramTTSTelephonyToPCM(encoding string, data []byte) []byte {
