@@ -568,7 +568,7 @@ func minimaxAudioFromSSELine(line string, fallbackTraceID string) ([]byte, error
 		} `json:"base_resp"`
 	}
 	if err := json.Unmarshal([]byte(line), &data); err != nil {
-		return nil, err
+		return nil, minimaxTTSConnectionError("MiniMax TTS malformed SSE payload", err)
 	}
 	if data.BaseResp.StatusCode != 0 {
 		return nil, minimaxStatusPayloadError(
@@ -584,7 +584,11 @@ func minimaxAudioFromSSELine(line string, fallbackTraceID string) ([]byte, error
 	if data.Data.Audio == "" {
 		return nil, nil
 	}
-	return hex.DecodeString(data.Data.Audio)
+	audio, err := hex.DecodeString(data.Data.Audio)
+	if err != nil {
+		return nil, minimaxTTSConnectionError("MiniMax TTS audio decode failed", err)
+	}
+	return audio, nil
 }
 
 func buildMinimaxTTSWebsocketURL(t *MinimaxTTS) *url.URL {
@@ -863,7 +867,7 @@ func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sa
 		} `json:"base_resp"`
 	}
 	if err := json.Unmarshal(payload, &data); err != nil {
-		return nil, false, fallbackTraceID, err
+		return nil, false, fallbackTraceID, minimaxTTSConnectionError("MiniMax websocket payload decode failed", err)
 	}
 	traceID := data.TraceID
 	if traceID == "" {
@@ -892,7 +896,7 @@ func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sa
 		}
 		audio, err := hex.DecodeString(data.Data.Audio)
 		if err != nil {
-			return nil, false, traceID, err
+			return nil, false, traceID, minimaxTTSConnectionError("MiniMax websocket audio decode failed", err)
 		}
 		if len(audio) == 0 {
 			return nil, false, traceID, nil
@@ -901,10 +905,17 @@ func minimaxAudioFromWebsocketMessage(payload []byte, fallbackTraceID string, sa
 	case "task_finished":
 		return &tts.SynthesizedAudio{RequestID: traceID, IsFinal: true}, true, traceID, nil
 	case "task_failed":
-		return nil, false, traceID, fmt.Errorf("minimax websocket task failed: %s", string(payload))
+		return nil, false, traceID, llm.NewAPIConnectionError(fmt.Sprintf("MiniMax websocket task failed: %s", string(payload)))
 	default:
 		return nil, false, traceID, nil
 	}
+}
+
+func minimaxTTSConnectionError(message string, err error) *llm.APIConnectionError {
+	if err == nil {
+		return llm.NewAPIConnectionError(message)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func minimaxStatusPayloadError(provider string, statusCode int, statusMsg, rootTraceID, baseTraceID, fallbackTraceID string, payload []byte) *llm.APIStatusError {
