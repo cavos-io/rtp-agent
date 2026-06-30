@@ -228,6 +228,9 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
 		t.Fatalf("event = %#v, want final hello transcript", event)
 	}
+	if event.Alternatives[0].Language != "en-US" {
+		t.Fatalf("language = %q, want en-US", event.Alternatives[0].Language)
+	}
 }
 
 func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
@@ -317,6 +320,9 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 	if event.Type != stt.SpeechEventFinalTranscript || event.Alternatives[0].Text != "streamed" {
 		t.Fatalf("event = %#v, want final streamed transcript", event)
+	}
+	if event.Alternatives[0].Language != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", event.Alternatives[0].Language)
 	}
 
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); err != nil {
