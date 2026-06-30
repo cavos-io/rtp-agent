@@ -556,6 +556,44 @@ func TestOpenAITTSPrewarmSendsReferenceRootRequest(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAITTSPrewarmUsesReferenceAPIKeyHeader(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		return nil, errors.New("prewarm failed")
+	})
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com/",
+		"tts-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	tts.Prewarm(provider)
+
+	select {
+	case req := <-reqCh:
+		if got := req.URL.String(); got != "https://resource.openai.azure.com/" {
+			t.Fatalf("prewarm URL = %q, want Azure resource root", got)
+		}
+		if got := req.Header.Get("api-key"); got != "azure-key" {
+			t.Fatalf("api-key = %q, want Azure API key", got)
+		}
+		if got := req.Header.Get("Authorization"); got != "" {
+			t.Fatalf("Authorization = %q, want no bearer auth for Azure API key", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Azure OpenAI TTS prewarm request")
+	}
+}
+
 func TestOpenAITTSCloseCancelsReferencePrewarm(t *testing.T) {
 	reqCh := make(chan *http.Request, 1)
 	cancelled := make(chan struct{})
