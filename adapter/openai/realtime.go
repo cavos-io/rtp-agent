@@ -44,6 +44,7 @@ type RealtimeModel struct {
 	mu                          sync.Mutex
 	options                     llm.RealtimeSessionOptions
 	modalities                  []string
+	modalitiesSet               bool
 	maxSession                  time.Duration
 	connect                     llm.APIConnectOptions
 	sessions                    map[*realtimeSession]struct{}
@@ -71,6 +72,7 @@ type openAIRealtimeDialResult struct {
 type openAIRealtimeModelOptions struct {
 	sessionOptions              llm.RealtimeSessionOptions
 	modalities                  []string
+	modalitiesSet               bool
 	baseURL                     string
 	maxSession                  time.Duration
 	maxSessionSet               bool
@@ -151,6 +153,7 @@ func WithOpenAIRealtimeTurnDetection(turnDetection any) OpenAIRealtimeOption {
 func WithOpenAIRealtimeModalities(modalities []string) OpenAIRealtimeOption {
 	return func(options *openAIRealtimeModelOptions) {
 		options.modalities = append([]string(nil), modalities...)
+		options.modalitiesSet = true
 	}
 }
 
@@ -266,6 +269,7 @@ func newRealtimeModel(apiKey, model string, options openAIRealtimeModelOptions) 
 		sessionCloseMetricsHook:     options.sessionCloseMetricsHook,
 		options:                     options.sessionOptions,
 		modalities:                  options.modalities,
+		modalitiesSet:               options.modalitiesSet,
 		maxSession:                  maxSession,
 		connect:                     connectOptions,
 	}
@@ -332,6 +336,13 @@ func (m *RealtimeModel) Model() string {
 	return m.model
 }
 
+func (m *RealtimeModel) initialRealtimeModalities() [][]string {
+	if m == nil || !m.modalitiesSet {
+		return nil
+	}
+	return [][]string{append([]string(nil), m.modalities...)}
+}
+
 func (m *RealtimeModel) Provider() string {
 	u, err := url.Parse(m.baseURL)
 	if err != nil || u.Host == "" {
@@ -382,6 +393,7 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	m.mu.Lock()
 	options := m.options
 	modalities := append([]string(nil), m.modalities...)
+	modalitiesSet := m.modalitiesSet
 	m.mu.Unlock()
 
 	return llm.RealtimeCapabilities{
@@ -389,7 +401,7 @@ func (m *RealtimeModel) Capabilities() llm.RealtimeCapabilities {
 		TurnDetection:           !(options.TurnDetectionSet && options.TurnDetection == nil),
 		UserTranscription:       !(options.InputAudioTranscriptionSet && options.InputAudioTranscription == nil),
 		AutoToolReplyGeneration: false,
-		AudioOutput:             len(modalities) == 0 || realtimeModalitiesInclude(modalities, "audio"),
+		AudioOutput:             !modalitiesSet || realtimeModalitiesInclude(modalities, "audio"),
 		ManualFunctionCalls:     true,
 		MutableChatContext:      true,
 		MutableInstructions:     true,
@@ -591,7 +603,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	initialSession := openAIRealtimeInitialSession(m.model, m.modalities)
+	initialSession := openAIRealtimeInitialSession(m.model, m.initialRealtimeModalities()...)
 	m.mu.Lock()
 	initialOptions := m.options
 	m.mu.Unlock()
@@ -836,7 +848,7 @@ func openAIRealtimeInitialSession(model string, modalities ...[]string) map[stri
 		"rate": openAIRealtimeInputSampleRate,
 	}
 	outputModality := "audio"
-	if len(modalities) > 0 && len(modalities[0]) > 0 && !realtimeModalitiesInclude(modalities[0], "audio") {
+	if len(modalities) > 0 && !realtimeModalitiesInclude(modalities[0], "audio") {
 		outputModality = "text"
 	}
 	return map[string]any{
@@ -2491,7 +2503,7 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	}
 	s.mu.Unlock()
 
-	initialSession := openAIRealtimeInitialSession(s.model.model, s.model.modalities)
+	initialSession := openAIRealtimeInitialSession(s.model.model, s.model.initialRealtimeModalities()...)
 	openAIRealtimeMergeSessionPayload(initialSession, openAIRealtimeSessionFromOptionEntries(optionsState))
 	if s.model.isAzure {
 		if _, ok := optionsState["audio.input.noise_reduction"]; !ok {
@@ -2979,7 +2991,7 @@ func (s *realtimeSession) setRealtimeMessageModalities(itemID string, modalities
 }
 
 func (s *realtimeSession) defaultRealtimeMessageModalities() []string {
-	if s != nil && s.model != nil && len(s.model.modalities) > 0 {
+	if s != nil && s.model != nil && s.model.modalitiesSet {
 		return append([]string(nil), s.model.modalities...)
 	}
 	return []string{"text", "audio"}
