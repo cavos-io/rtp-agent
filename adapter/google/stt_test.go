@@ -382,6 +382,65 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamCombinesReferenceFinalResultSegments(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{
+				{
+					IsFinal: true,
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "good ",
+						Confidence: 0.9,
+						Words: []*speechpb.WordInfo{{
+							Word:       "good",
+							StartTime:  durationpb.New(100 * 1000 * 1000),
+							EndTime:    durationpb.New(300 * 1000 * 1000),
+							Confidence: 0.91,
+						}},
+					}},
+				},
+				{
+					IsFinal: true,
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "morning",
+						Confidence: 0.8,
+						Words: []*speechpb.WordInfo{{
+							Word:       "morning",
+							StartTime:  durationpb.New(400 * 1000 * 1000),
+							EndTime:    durationpb.New(900 * 1000 * 1000),
+							Confidence: 0.81,
+						}},
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	got := event.Alternatives[0]
+	if got.Text != "good morning" {
+		t.Fatalf("text = %q, want good morning", got.Text)
+	}
+	if len(got.Words) != 2 || got.Words[0].Text != "good" || got.Words[1].Text != "morning" {
+		t.Fatalf("words = %#v, want all final result words in order", got.Words)
+	}
+	if math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.9) > 0.000001 {
+		t.Fatalf("timing = %v-%v, want full final result span", got.StartTime, got.EndTime)
+	}
+}
+
 func TestGoogleSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
