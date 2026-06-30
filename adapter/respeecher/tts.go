@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -279,50 +280,40 @@ func validateRespeecherAPIKey(apiKey string) error {
 }
 
 type respeecherTTSChunkedStream struct {
-	resp         *http.Response
-	sampleRate   int
-	pendingFinal bool
-	closed       bool
-	finalSent    bool
+	resp       *http.Response
+	sampleRate int
+	decoded    bool
+	emitted    bool
+	audio      *model.AudioFrame
+	closed     bool
+	finalSent  bool
 }
 
 func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
 		return nil, io.EOF
 	}
-	if s.pendingFinal {
-		s.pendingFinal = false
-		return s.emitFinal()
-	}
-	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
-	if n > 0 {
-		if err == io.EOF {
-			s.pendingFinal = true
+	if !s.decoded {
+		s.decoded = true
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("Respeecher TTS response read failed: %v", err))
 		}
+		if len(data) > 0 {
+			frame, err := decodeRespeecherWAVPCM16(data)
+			if err != nil {
+				return nil, llm.NewAPIConnectionError(fmt.Sprintf("Respeecher TTS response decode failed: %v", err))
+			}
+			s.audio = frame
+		}
+	}
+	if s.audio != nil && !s.emitted {
+		s.emitted = true
 		return &tts.SynthesizedAudio{
-			Frame: &model.AudioFrame{
-				Data:              buf[:n],
-				SampleRate:        uint32(s.sampleRate),
-				NumChannels:       1,
-				SamplesPerChannel: uint32(n / 2),
-			},
+			Frame: s.audio,
 		}, nil
 	}
-	if err != nil {
-		if err == io.EOF {
-			return s.emitFinal()
-		}
-		return nil, err
-	}
-	return &tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}, nil
+	return s.emitFinal()
 }
 
 func (s *respeecherTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
@@ -337,6 +328,56 @@ func (s *respeecherTTSChunkedStream) Close() error {
 	s.closed = true
 	s.finalSent = true
 	return s.resp.Body.Close()
+}
+
+func decodeRespeecherWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid respeecher wav data")
+	}
+	offset := 12
+	var sampleRate uint32
+	var channels uint16
+	var bitsPerSample uint16
+	var pcm []byte
+	for offset+8 <= len(data) {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid respeecher wav chunk size")
+		}
+		switch chunkID {
+		case "fmt ":
+			if chunkSize < 16 {
+				return nil, fmt.Errorf("invalid respeecher wav fmt chunk")
+			}
+			audioFormat := binary.LittleEndian.Uint16(data[offset : offset+2])
+			channels = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+			sampleRate = binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+			bitsPerSample = binary.LittleEndian.Uint16(data[offset+14 : offset+16])
+			if audioFormat != 1 || bitsPerSample != 16 {
+				return nil, fmt.Errorf("unsupported respeecher wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+			}
+		case "data":
+			pcm = bytes.Clone(data[offset : offset+chunkSize])
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if sampleRate == 0 || channels == 0 || bitsPerSample == 0 {
+		return nil, fmt.Errorf("missing respeecher wav format metadata")
+	}
+	if pcm == nil {
+		return nil, fmt.Errorf("missing respeecher wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(channels),
+		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
+	}, nil
 }
 
 func buildRespeecherTTSWebsocketURL(t *RespeecherTTS) *url.URL {
