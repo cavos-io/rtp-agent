@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -2156,6 +2157,48 @@ func TestRealtimeInputAudioNormalizerInterpolatesFractionalSamples(t *testing.T)
 	}
 	if got := int16(binary.LittleEndian.Uint16(frame.Data[2:4])); got != 183 {
 		t.Fatalf("second sample = %d, want fractional interpolation sample 183", got)
+	}
+}
+
+func TestRealtimeInputAudioNormalizerKeepsPhaseAcrossFrames(t *testing.T) {
+	data := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(int16(i*100)))
+	}
+
+	var wholeNormalizer openAIRealtimeInputAudioNormalizer
+	whole, err := wholeNormalizer.normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("whole normalize error = %v", err)
+	}
+
+	var splitNormalizer openAIRealtimeInputAudioNormalizer
+	first, err := splitNormalizer.normalize(&audiomodel.AudioFrame{
+		Data:              data[:50*2],
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 50,
+	})
+	if err != nil {
+		t.Fatalf("first split normalize error = %v", err)
+	}
+	second, err := splitNormalizer.normalize(&audiomodel.AudioFrame{
+		Data:              data[50*2:],
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 50,
+	})
+	if err != nil {
+		t.Fatalf("second split normalize error = %v", err)
+	}
+	splitData := append(append([]byte(nil), first.Data...), second.Data...)
+	if !bytes.Equal(splitData, whole.Data) {
+		t.Fatalf("split resampled audio differs from whole-frame resampled audio")
 	}
 }
 
