@@ -545,19 +545,11 @@ func (s *OpenAISTT) dialRealtimeSTTWebsocket(ctx context.Context) (*websocket.Co
 
 func (s *OpenAISTT) dialRealtimeSTTWebsocketAttempt(ctx context.Context) (*websocket.Conn, *http.Response, error) {
 	if s.connect.Timeout <= 0 {
-		headers, err := buildOpenAIRealtimeSTTHeadersForConnect(ctx, s)
-		if err != nil {
-			return nil, nil, err
-		}
-		return s.dialWebsocket(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), headers)
+		return s.dialWebsocket(ctx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, s.connect.Timeout)
 	defer cancel()
-	headers, err := buildOpenAIRealtimeSTTHeadersForConnect(dialCtx, s)
-	if err != nil {
-		return nil, nil, err
-	}
-	return s.dialWebsocket(dialCtx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), headers)
+	return s.dialWebsocket(dialCtx, buildOpenAIRealtimeSTTWebsocketURL(s).String(), buildOpenAIRealtimeSTTHeaders(s))
 }
 
 func buildOpenAIRealtimeSTTWebsocketURL(s *OpenAISTT) *url.URL {
@@ -587,19 +579,6 @@ func buildOpenAIRealtimeSTTHeaders(s *OpenAISTT) http.Header {
 	}
 	headers.Set("Authorization", "Bearer "+authToken)
 	return headers
-}
-
-func buildOpenAIRealtimeSTTHeadersForConnect(ctx context.Context, s *OpenAISTT) (http.Header, error) {
-	if s.azureADTokenProvider == nil {
-		return buildOpenAIRealtimeSTTHeaders(s), nil
-	}
-	token, err := s.azureADTokenProvider(ctx)
-	if err != nil {
-		return nil, err
-	}
-	headers := buildOpenAIRealtimeSTTHeaders(s)
-	headers.Set("Authorization", "Bearer "+token)
-	return headers, nil
 }
 
 func buildOpenAIRealtimeSTTSessionUpdate(s *OpenAISTT) ([]byte, error) {
