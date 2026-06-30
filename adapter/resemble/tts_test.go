@@ -253,6 +253,62 @@ func TestResembleTTSChunkedStreamDecodesReferenceResponse(t *testing.T) {
 	}
 }
 
+func TestResembleTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: resembleRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("resemble transport failed")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewResembleTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestResembleTTSChunkedStreamMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "malformed json",
+			body: `{`,
+		},
+		{
+			name: "malformed base64",
+			body: `{"success":true,"audio_content":"not-base64"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := &resembleTTSChunkedStream{
+				resp:       &http.Response{Body: io.NopCloser(strings.NewReader(tc.body))},
+				sampleRate: 24000,
+			}
+			defer stream.Close()
+
+			_, err := stream.Next()
+			if err == nil {
+				t.Fatal("Next error = nil, want APIConnectionError")
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+			}
+		})
+	}
+}
+
 func TestResembleTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &resembleCloseErrorBody{}
 	stream := &resembleTTSChunkedStream{resp: &http.Response{Body: body}}
@@ -431,6 +487,39 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 
 	if audio, done, requestID, err := resembleTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":"bad text","request_id":7}`)); err != nil || audio != nil || done || requestID != 7 {
 		t.Fatalf("error message = audio=%+v done=%v requestID=%d err=%v, want ignored message with request id", audio, done, requestID, err)
+	}
+}
+
+func TestResembleTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{
+			name:    "malformed json",
+			payload: []byte(`{`),
+		},
+		{
+			name:    "malformed base64",
+			payload: []byte(`{"type":"audio","request_id":7,"audio_content":"not-base64"}`),
+		},
+		{
+			name:    "malformed mp3",
+			payload: []byte(`{"type":"audio","request_id":7,"audio_content":"` + base64.StdEncoding.EncodeToString([]byte("not-mp3")) + `"}`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := resembleTTSAudioFromWebsocketMessage(tc.payload)
+			if err == nil {
+				t.Fatal("error = nil, want APIConnectionError")
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+			}
+		})
 	}
 }
 
