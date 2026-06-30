@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -274,7 +275,10 @@ func (t *BasetenTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	conn, _, err := dialer(ctx, endpoint, headers)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial baseten tts websocket: %w", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial baseten tts websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, startMessage); err != nil {
 		conn.Close()

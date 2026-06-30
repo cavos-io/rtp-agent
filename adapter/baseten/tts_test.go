@@ -959,8 +959,13 @@ func TestBasetenTTSStreamDialErrorReturnsFailure(t *testing.T) {
 			return nil, nil, errors.New("dial failed")
 		}),
 	)
-	if _, err := provider.Stream(context.Background()); err == nil {
-		t.Fatal("stream error = nil, want dial failure")
+	_, err := provider.Stream(context.Background())
+	if err == nil {
+		t.Fatal("stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
