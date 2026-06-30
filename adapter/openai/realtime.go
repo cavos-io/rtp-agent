@@ -2093,6 +2093,16 @@ func openAIRealtimeTruncatedTranscriptChatContext(oldCtx *llm.ChatContext, optio
 }
 
 func (s *realtimeSession) CommitAudio() error {
+	if tail := s.audioNormalizer.flush(); tail != nil {
+		if s.audioBStream == nil {
+			s.audioBStream = newOpenAIRealtimeAudioByteStream()
+		}
+		for _, chunk := range s.audioBStream.Push(tail.Data) {
+			if err := s.appendAudioChunk(chunk); err != nil {
+				return err
+			}
+		}
+	}
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
 			if err := s.appendAudioChunk(chunk); err != nil {
