@@ -1424,6 +1424,45 @@ func TestRealtimeUpdateOptionsSnapshotsMutableTurnDetection(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsKeepsStateAfterSendFailure(t *testing.T) {
+	session := &realtimeSession{
+		ctx: context.Background(),
+		optionsState: openAIRealtimeOptionEntries(openAIRealtimeInitialSession(
+			"gpt-realtime",
+			[]string{"text", "audio"},
+		)),
+	}
+
+	err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		Voice:                    "marin",
+		Speed:                    1.25,
+		TurnDetection:            map[string]any{"type": "server_vad", "threshold": 0.7},
+		InputAudioNoiseReduction: map[string]any{"type": "far_field"},
+	})
+	if err == nil {
+		t.Fatal("UpdateOptions error = nil, want disconnected send error")
+	}
+
+	session.mu.Lock()
+	replaySession := openAIRealtimeSessionFromOptionEntries(session.optionsState)
+	session.mu.Unlock()
+
+	audio := replaySession["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" || turnDetection["threshold"] != 0.7 {
+		t.Fatalf("stored turn_detection = %#v, want updated server_vad", turnDetection)
+	}
+	noiseReduction := input["noise_reduction"].(map[string]any)
+	if noiseReduction["type"] != "far_field" {
+		t.Fatalf("stored noise_reduction = %#v, want far_field", noiseReduction)
+	}
+	if output["voice"] != "marin" || output["speed"] != 1.25 {
+		t.Fatalf("stored output = %#v, want voice marin speed 1.25", output)
+	}
+}
+
 func TestRealtimeUpdateOptionsSnapshotsMutableReasoning(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
