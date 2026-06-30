@@ -2845,6 +2845,39 @@ func TestOpenAIStreamAccumulatesAzureToolCallDeltas(t *testing.T) {
 	}
 }
 
+func TestOpenAIStreamDefaultsToolCallTypeLikeReference(t *testing.T) {
+	capture := &sequenceHTTPClient{responses: []*http.Response{
+		openAITestResponse(http.StatusOK,
+			`data: {"id":"chatcmpl-tool-default-type","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup","arguments":"{}"}}]}}]}`+"\n\n"+
+				`data: {"id":"chatcmpl-tool-default-type","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`+"\n\n"+
+				"data: [DONE]\n\n"),
+	}}
+	config := openaisdk.DefaultConfig("test-key")
+	config.HTTPClient = capture
+	model := mustNewOpenAILLMWithConfig(t, config, "gpt-4o")
+
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want accumulated tool call chunk", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one tool call", chunk)
+	}
+	if got := chunk.Delta.ToolCalls[0].Type; got != "function" {
+		t.Fatalf("tool call type = %q, want reference default function", got)
+	}
+}
+
 func TestOpenAIStreamAppliesToolCallTailBeforeFinish(t *testing.T) {
 	capture := &sequenceHTTPClient{responses: []*http.Response{
 		openAITestResponse(http.StatusOK,

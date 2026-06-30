@@ -2776,6 +2776,9 @@ func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStre
 			s.toolIndexSet = true
 			s.toolCallID = tc.ID
 			s.toolCallType = string(tc.Type)
+			if s.toolCallType == "" {
+				s.toolCallType = "function"
+			}
 			s.toolCallName = tc.Function.Name
 			s.toolCallRawArgs = tc.Function.Arguments
 			s.toolCallExtra = tc.ExtraContent
