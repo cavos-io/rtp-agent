@@ -217,7 +217,7 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	data, err := io.ReadAll(s.resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("speechify TTS response read failed: %v", err))
 	}
 	if len(data) == 0 {
 		s.finalSent = true
@@ -225,7 +225,7 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	frame, err := decodeSpeechifyWAVPCM16(data)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("speechify TTS response decode failed: %v", err))
 	}
 	s.hasAudio = true
 

@@ -206,6 +206,63 @@ func TestSpitchSTTResponsePreservesReferenceSegments(t *testing.T) {
 	}
 }
 
+func TestSpitchSTTRecognizeReturnsAPIStatusError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: spitchRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+
+	provider := NewSpitchSTT("test-key")
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x00},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en")
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if body, ok := statusErr.Body.(string); !ok || !strings.Contains(body, "rate limited") {
+		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
+	}
+}
+
+func TestSpitchSTTRecognizeDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: spitchRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`not-json`)),
+		}, nil
+	})}
+
+	provider := NewSpitchSTT("test-key")
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x00},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en")
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message == "" {
+		t.Fatal("connection error message empty, want decode failure context")
+	}
+}
+
 func TestNewSpitchTTSUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("SPITCH_API_KEY", "env-key")
 
@@ -363,6 +420,28 @@ func TestSpitchTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyWAVAudio(t *te
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after final marker err = %v, want EOF", err)
+	}
+}
+
+func TestSpitchTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &spitchTTSChunkedStream{
+		resp:         &http.Response{Body: io.NopCloser(strings.NewReader("not wav"))},
+		outputFormat: "wav",
+		sampleRate:   24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil on malformed provider audio", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message == "" {
+		t.Fatal("connection error message empty, want decode failure context")
 	}
 }
 

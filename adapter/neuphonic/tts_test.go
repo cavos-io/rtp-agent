@@ -877,6 +877,26 @@ func TestNeuphonicTTSAudioFromStreamMessage(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSAudioFromStreamMessageIgnoresMalformedReferencePayloads(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`not-json`),
+		[]byte(`{"data":{"audio":"%","context_id":"segment-1"}}`),
+	} {
+		audio, done, err := neuphonicAudioFromStreamMessage(payload, "segment-1", 22050)
+		if err != nil || audio != nil || done {
+			t.Fatalf("payload %q = audio=%+v done=%v err=%v, want ignored message", payload, audio, done, err)
+		}
+	}
+
+	finished, done, err := neuphonicAudioFromStreamMessage([]byte(`{"data":{"context_id":"segment-1","stop":true}}`), "segment-1", 22050)
+	if err != nil {
+		t.Fatalf("stop after malformed messages error = %v", err)
+	}
+	if finished == nil || !finished.IsFinal || !done {
+		t.Fatalf("finished=%+v done=%v, want final marker after malformed messages", finished, done)
+	}
+}
+
 func TestNeuphonicTTSAudioFromStreamMessageReturnsAPIError(t *testing.T) {
 	_, _, err := neuphonicAudioFromStreamMessage([]byte(`{"type":"error","message":"voice unavailable"}`), "segment-1", 22050)
 

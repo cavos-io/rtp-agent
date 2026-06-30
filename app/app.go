@@ -3001,6 +3001,11 @@ func fallbackSTTFromProvider(cfg AppConfig, provider string) (corestt.STT, error
 		if len(focusSpeakers) > 0 || len(ignoreSpeakers) > 0 || focusMode != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerFocus(focusSpeakers, ignoreSpeakers, focusMode))
 		}
+		speakerActiveFormat := modelOptionString(cfg.STTModelOptions, "speaker_active_format")
+		speakerPassiveFormat := modelOptionString(cfg.STTModelOptions, "speaker_passive_format")
+		if speakerActiveFormat != "" || speakerPassiveFormat != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerFormats(speakerActiveFormat, speakerPassiveFormat))
+		}
 		if speakers := speechmaticsKnownSpeakers(modelOptionString(cfg.STTModelOptions, "known_speakers")); len(speakers) > 0 {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTKnownSpeakers(speakers))
 		}
@@ -5484,6 +5489,11 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		focusMode := modelOptionString(cfg.STTModelOptions, "focus_mode")
 		if len(focusSpeakers) > 0 || len(ignoreSpeakers) > 0 || focusMode != "" {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerFocus(focusSpeakers, ignoreSpeakers, focusMode))
+		}
+		speakerActiveFormat := modelOptionString(cfg.STTModelOptions, "speaker_active_format")
+		speakerPassiveFormat := modelOptionString(cfg.STTModelOptions, "speaker_passive_format")
+		if speakerActiveFormat != "" || speakerPassiveFormat != "" {
+			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTSpeakerFormats(speakerActiveFormat, speakerPassiveFormat))
 		}
 		if speakers := speechmaticsKnownSpeakers(modelOptionString(cfg.STTModelOptions, "known_speakers")); len(speakers) > 0 {
 			sttOpts = append(sttOpts, speechmatics.WithSpeechmaticsSTTKnownSpeakers(speakers))

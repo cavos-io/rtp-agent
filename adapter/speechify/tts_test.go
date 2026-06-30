@@ -311,6 +311,27 @@ func TestSpeechifyTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *te
 	}
 }
 
+func TestSpeechifyTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &speechifyTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(strings.NewReader("not wav"))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil on malformed provider audio", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message == "" {
+		t.Fatal("connection error message empty, want decode failure context")
+	}
+}
+
 func TestSpeechifyTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &speechifyCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &speechifyTTSChunkedStream{

@@ -7242,6 +7242,22 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 			authorization: r.Header.Get("Authorization"),
 			message:       message,
 		}
+		if err := conn.WriteJSON(map[string]any{
+			"message": "AddSegment",
+			"segments": []map[string]any{{
+				"text":       "hello",
+				"language":   "en",
+				"speaker_id": "agent",
+				"is_active":  true,
+				"metadata": map[string]any{
+					"start_time": 0.1,
+					"end_time":   0.4,
+				},
+			}},
+		}); err != nil {
+			t.Errorf("write speechmatics segment: %v", err)
+			return
+		}
 	})
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -7272,7 +7288,7 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		STTInterimResults:                       &includePartials,
 		STTDiarization:                          &diarization,
 		STTKeytermsPrompt:                       []string{"LiveKit:live kit|livekit"},
-		STTModelOptions:                         map[string]any{"focus_speakers": "agent|user", "ignore_speakers": "noise", "focus_mode": "retain", "known_speakers": "agent:spk-1", "speaker_sensitivity": "0.7"},
+		STTModelOptions:                         map[string]any{"focus_speakers": "agent|user", "ignore_speakers": "noise", "focus_mode": "retain", "speaker_active_format": "@{speaker_id}: {text}", "speaker_passive_format": "@{speaker_id} [background]: {text}", "known_speakers": "agent:spk-1", "speaker_sensitivity": "0.7"},
 		STTOperatingPoint:                       "enhanced",
 		STTTextTimeoutSeconds:                   &maxDelay,
 		STTVADSilenceThresholdSeconds:           &silenceTrigger,
@@ -7305,6 +7321,17 @@ func TestSpeechmaticsSTTFallbackPassesReferenceOptions(t *testing.T) {
 		t.Fatalf("Stream() error = %v", err)
 	}
 	defer stream.Close()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("Speechmatics event = %#v, want final transcript", event)
+	}
+	if got, want := event.Alternatives[0].Text, "@agent: hello"; got != want {
+		t.Fatalf("Speechmatics formatted transcript = %q, want %q", got, want)
+	}
 
 	select {
 	case record := <-records:

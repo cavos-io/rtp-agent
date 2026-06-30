@@ -654,7 +654,7 @@ func neuphonicAudioFromStreamMessage(payload []byte, contextID string, sampleRat
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, nil
 	}
 	if message.Type == "error" {
 		body := string(payload)
@@ -666,7 +666,7 @@ func neuphonicAudioFromStreamMessage(payload []byte, contextID string, sampleRat
 	if message.Data.Audio != "" {
 		audio, err := base64.StdEncoding.DecodeString(message.Data.Audio)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil
 		}
 		if len(audio) > 0 {
 			return neuphonicTTSAudioFrame(audio, sampleRate), false, nil

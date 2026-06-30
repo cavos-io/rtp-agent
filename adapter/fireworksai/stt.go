@@ -360,6 +360,8 @@ type fireworksStream struct {
 	cancel context.CancelFunc
 	state  *fireworksStreamState
 	audio  bytes.Buffer
+
+	pendingAudioDuration float64
 }
 
 func (s *fireworksStream) readLoop(conn *websocket.Conn) {
@@ -425,6 +427,7 @@ func (s *fireworksStream) updateOptions(endpoint string, headers http.Header, di
 		_ = oldConn.Close()
 	}
 	s.endSpeechForReconnect()
+	s.flushRecognitionUsage()
 	newConn, _, err := dialer(s.ctx, endpoint, headers)
 	if err != nil {
 		s.mu.Lock()
@@ -524,6 +527,7 @@ func (s *fireworksStream) writeBufferedAudioLocked(flush bool) error {
 		if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 			return err
 		}
+		s.pendingAudioDuration += fireworksAudioDuration(len(chunk))
 	}
 	if !flush || s.audio.Len() == 0 {
 		return nil
@@ -533,7 +537,30 @@ func (s *fireworksStream) writeBufferedAudioLocked(flush bool) error {
 	if err := s.conn.WriteMessage(websocket.BinaryMessage, chunk); err != nil {
 		return err
 	}
+	s.pendingAudioDuration += fireworksAudioDuration(len(chunk))
 	return nil
+}
+
+func (s *fireworksStream) flushRecognitionUsage() {
+	s.mu.Lock()
+	if s.events == nil || s.pendingAudioDuration <= 0 {
+		s.mu.Unlock()
+		return
+	}
+	duration := s.pendingAudioDuration
+	s.pendingAudioDuration = 0
+	s.mu.Unlock()
+	s.events <- &stt.SpeechEvent{
+		Type:             stt.SpeechEventRecognitionUsage,
+		RecognitionUsage: &stt.RecognitionUsage{AudioDuration: duration},
+	}
+}
+
+func fireworksAudioDuration(bytesLen int) float64 {
+	if bytesLen <= 0 {
+		return 0
+	}
+	return float64(bytesLen/fireworksPCMBytesPerSample) / float64(defaultSampleRate)
 }
 
 func (s *fireworksStream) Close() error {

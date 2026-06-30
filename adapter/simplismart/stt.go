@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -232,11 +233,7 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 		return nil, err
 	}
 
-	var audio bytes.Buffer
-	for _, frame := range frames {
-		audio.Write(frame.Data)
-	}
-	req, err := buildSimplismartSTTRecognizeRequest(ctx, s, audio.Bytes(), language)
+	req, err := buildSimplismartSTTRecognizeRequest(ctx, s, simplismartSTTWAVBytes(frames), language)
 	if err != nil {
 		return nil, err
 	}
@@ -254,6 +251,44 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 		return nil, err
 	}
 	return simplismartSTTSpeechEvent(resolveSimplismartSTTLanguage(s, language), result), nil
+}
+
+func simplismartSTTWAVBytes(frames []*model.AudioFrame) []byte {
+	var pcm bytes.Buffer
+	sampleRate := uint32(defaultSimplismartSTTSampleRate)
+	numChannels := uint32(1)
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && pcm.Len() == 0 {
+			sampleRate = frame.SampleRate
+		}
+		if frame.NumChannels > 0 && pcm.Len() == 0 {
+			numChannels = frame.NumChannels
+		}
+		pcm.Write(frame.Data)
+	}
+	data := pcm.Bytes()
+	dataSize := uint32(len(data))
+	blockAlign := uint16(numChannels * 2)
+	byteRate := sampleRate * numChannels * 2
+	var wav bytes.Buffer
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36)+dataSize)
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(numChannels))
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, dataSize)
+	wav.Write(data)
+	return wav.Bytes()
 }
 
 func validateSimplismartSTTAPIKey(apiKey string) error {

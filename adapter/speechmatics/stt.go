@@ -32,6 +32,8 @@ type SpeechmaticsSTT struct {
 	focusSpeakers        []string
 	ignoreSpeakers       []string
 	focusMode            string
+	speakerActiveFormat  string
+	speakerPassiveFormat string
 	knownSpeakers        []SpeechmaticsSpeakerIdentifier
 	operatingPoint       string
 	maxDelay             *float64
@@ -130,6 +132,13 @@ func WithSpeechmaticsSTTSpeakerFocus(focusSpeakers []string, ignoreSpeakers []st
 		if focusMode != "" {
 			s.focusMode = focusMode
 		}
+	}
+}
+
+func WithSpeechmaticsSTTSpeakerFormats(activeFormat string, passiveFormat string) SpeechmaticsSTTOption {
+	return func(s *SpeechmaticsSTT) {
+		s.speakerActiveFormat = activeFormat
+		s.speakerPassiveFormat = passiveFormat
 	}
 }
 
@@ -252,8 +261,11 @@ func (s *SpeechmaticsSTT) Stream(ctx context.Context, language string) (stt.Reco
 		conn:   conn,
 		events: make(chan *stt.SpeechEvent, 10),
 		errCh:  make(chan error, 1),
-		state:  &speechmaticsStreamState{},
-		owner:  s,
+		state: &speechmaticsStreamState{
+			speakerActiveFormat:  s.speakerActiveFormat,
+			speakerPassiveFormat: s.speakerPassiveFormat,
+		},
+		owner: s,
 	}
 	stream.writeBinary = stream.writeBinaryMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -427,9 +439,11 @@ type speechmaticsSTTStream struct {
 }
 
 type speechmaticsStreamState struct {
-	speechDuration  float64
-	startTimeOffset float64
-	startTime       float64
+	speechDuration       float64
+	startTimeOffset      float64
+	startTime            float64
+	speakerActiveFormat  string
+	speakerPassiveFormat string
 }
 
 type smResponse struct {
@@ -452,6 +466,7 @@ type smResponse struct {
 		Text      string `json:"text"`
 		Language  string `json:"language"`
 		SpeakerID string `json:"speaker_id"`
+		IsActive  *bool  `json:"is_active"`
 		Metadata  struct {
 			StartTime float64 `json:"start_time"`
 			EndTime   float64 `json:"end_time"`
@@ -529,11 +544,12 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 
 	events := make([]*stt.SpeechEvent, 0, len(resp.Segments))
 	for _, segment := range resp.Segments {
+		text := speechmaticsFormattedSegmentText(segment.Text, segment.SpeakerID, segment.IsActive, state)
 		events = append(events, &stt.SpeechEvent{
 			Type: eventType,
 			Alternatives: []stt.SpeechData{
 				{
-					Text:      segment.Text,
+					Text:      text,
 					Language:  segment.Language,
 					SpeakerID: segment.SpeakerID,
 					StartTime: segment.Metadata.StartTime + startTimeOffset,
@@ -543,6 +559,29 @@ func speechmaticsSegmentEvents(resp smResponse, state *speechmaticsStreamState) 
 		})
 	}
 	return events
+}
+
+func speechmaticsFormattedSegmentText(text, speakerID string, isActive *bool, state *speechmaticsStreamState) string {
+	format := ""
+	active := true
+	if isActive != nil {
+		active = *isActive
+	}
+	if state != nil {
+		if active {
+			format = state.speakerActiveFormat
+		} else {
+			format = state.speakerPassiveFormat
+		}
+	}
+	if format == "" {
+		format = "{text}"
+	}
+	if speakerID == "" {
+		speakerID = "UU"
+	}
+	format = strings.ReplaceAll(format, "{speaker_id}", speakerID)
+	return strings.ReplaceAll(format, "{text}", text)
 }
 
 func speechmaticsStartTimeOffset(state *speechmaticsStreamState) float64 {

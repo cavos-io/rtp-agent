@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -221,7 +222,7 @@ func TestRespeecherTTSOptionsMatchReference(t *testing.T) {
 
 func TestRespeecherTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &respeecherTTSChunkedStream{
-		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(respeecherTestWAV([]byte{0x01, 0x02}, 48000, 1)))},
 		sampleRate: 48000,
 	}
 
@@ -234,9 +235,32 @@ func TestRespeecherTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestRespeecherTTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x02, 0x00}
+	stream := &respeecherTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(respeecherTestWAV(pcm, 24000, 1)))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("frame data = %#v, want decoded PCM %#v", audio.Frame.Data, pcm)
+	}
+	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("frame shape = rate %d channels %d samples %d, want 24000/1/2", audio.Frame.SampleRate, audio.Frame.NumChannels, audio.Frame.SamplesPerChannel)
+	}
+	if bytes.HasPrefix(audio.Frame.Data, []byte("RIFF")) {
+		t.Fatal("frame data still contains WAV header")
+	}
+}
+
 func TestRespeecherTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &respeecherTTSChunkedStream{
-		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(respeecherTestWAV([]byte{0x01, 0x02}, 48000, 1)))},
 		sampleRate: 48000,
 	}
 	defer stream.Close()
@@ -263,7 +287,7 @@ func TestRespeecherTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 
 func TestRespeecherTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	stream := &respeecherTTSChunkedStream{
-		resp:       &http.Response{Body: &respeecherFinalEOFReader{data: []byte{0x01, 0x02}}},
+		resp:       &http.Response{Body: &respeecherFinalEOFReader{data: respeecherTestWAV([]byte{0x01, 0x02}, 48000, 1)}},
 		sampleRate: 48000,
 	}
 	defer stream.Close()
@@ -806,6 +830,27 @@ type respeecherRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f respeecherRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func respeecherTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	blockAlign := channels * 2
+	byteRate := sampleRate * uint32(blockAlign)
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func TestRespeecherTTSAudioFromStreamMessage(t *testing.T) {

@@ -366,6 +366,48 @@ func TestAsyncAITTSWebsocketLogMessageDoesNotAbortReferenceStream(t *testing.T) 
 	}
 }
 
+func TestAsyncAITTSWebsocketInvalidAudioDoesNotAbortReferenceStream(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		messages := [][]byte{
+			[]byte(`{"context_id":"ctx-1","audio":"%"}`),
+			[]byte(`{"context_id":"ctx-1","final":true}`),
+		}
+		for _, message := range messages {
+			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+				t.Errorf("write message: %v", err)
+				return
+			}
+		}
+		if err := conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "")); err != nil {
+			t.Errorf("write close message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	stream := &asyncAITTSWebsocketChunkedStream{conn: conn, sampleRate: 32000}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v, want final marker after invalid audio", err)
+	}
+	if final == nil || !final.IsFinal || final.SegmentID != "ctx-1" {
+		t.Fatalf("final = %#v, want reference final marker with segment", final)
+	}
+}
+
 func TestAsyncAITTSWebsocketNextUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
