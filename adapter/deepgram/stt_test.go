@@ -1872,6 +1872,52 @@ func TestDeepgramSTTRecognizeAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTProviderCloseCancelsPendingRecognize(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("https://deepgram.test/v1/listen"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		event, err := provider.Recognize(ctx, []*model.AudioFrame{{
+			Data:              []byte{0x01, 0x02},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		}}, "en-US")
+		if event != nil {
+			errCh <- fmt.Errorf("Recognize returned event after provider Close: %+v", event)
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Recognize did not start provider request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Recognize after provider Close error = %T %v, want io.ErrClosedPipe", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Recognize remained blocked after provider Close")
+	}
+}
+
 func TestDeepgramSTTStreamPreservesReferenceSpeechState(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)

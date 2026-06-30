@@ -51,10 +51,15 @@ type DeepgramSTT struct {
 	mu                 sync.Mutex
 	streams            map[*deepgramStream]struct{}
 	pendingStreamDials map[*deepgramSTTPendingDial]struct{}
+	pendingRecognizes  map[*deepgramSTTPendingRecognize]struct{}
 	closed             bool
 }
 
 type deepgramSTTPendingDial struct {
+	cancel context.CancelFunc
+}
+
+type deepgramSTTPendingRecognize struct {
 	cancel context.CancelFunc
 }
 
@@ -265,11 +270,19 @@ func (s *DeepgramSTT) Close() error {
 	for pending := range s.pendingStreamDials {
 		pendingDials = append(pendingDials, pending)
 	}
+	pendingRecognizes := make([]*deepgramSTTPendingRecognize, 0, len(s.pendingRecognizes))
+	for pending := range s.pendingRecognizes {
+		pendingRecognizes = append(pendingRecognizes, pending)
+	}
 	s.streams = make(map[*deepgramStream]struct{})
 	s.pendingStreamDials = make(map[*deepgramSTTPendingDial]struct{})
+	s.pendingRecognizes = make(map[*deepgramSTTPendingRecognize]struct{})
 	s.mu.Unlock()
 
 	for _, pending := range pendingDials {
+		pending.cancel()
+	}
+	for _, pending := range pendingRecognizes {
 		pending.cancel()
 	}
 	var closeErr error
@@ -466,6 +479,25 @@ func (s *DeepgramSTT) unregisterPendingStreamDial(pending *deepgramSTTPendingDia
 	delete(s.pendingStreamDials, pending)
 }
 
+func (s *DeepgramSTT) registerPendingRecognize(pending *deepgramSTTPendingRecognize) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.pendingRecognizes == nil {
+		s.pendingRecognizes = make(map[*deepgramSTTPendingRecognize]struct{})
+	}
+	s.pendingRecognizes[pending] = struct{}{}
+	return true
+}
+
+func (s *DeepgramSTT) unregisterPendingRecognize(pending *deepgramSTTPendingRecognize) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pendingRecognizes, pending)
+}
+
 func (s *DeepgramSTT) unregisterStream(stream *deepgramStream) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -492,6 +524,11 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 
 	reqCtx, cancel := context.WithTimeout(ctx, deepgramSTTRequestTimeout)
 	defer cancel()
+	pendingRecognize := &deepgramSTTPendingRecognize{cancel: cancel}
+	if !s.registerPendingRecognize(pendingRecognize) {
+		return nil, io.ErrClosedPipe
+	}
+	defer s.unregisterPendingRecognize(pendingRecognize)
 
 	req, err := http.NewRequestWithContext(reqCtx, "POST", buildDeepgramRecognizeURL(s, languageStr), bytes.NewReader(wav))
 	if err != nil {
@@ -505,6 +542,9 @@ func (s *DeepgramSTT) Recognize(ctx context.Context, frames []*model.AudioFrame,
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
+			if s.isClosed() {
+				return nil, io.ErrClosedPipe
+			}
 			return nil, context.Canceled
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
