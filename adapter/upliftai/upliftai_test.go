@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 type upliftAIFinalEOFReader struct {
@@ -24,6 +26,14 @@ func (r *upliftAIFinalEOFReader) Read(p []byte) (int, error) {
 }
 
 func (r *upliftAIFinalEOFReader) Close() error { return nil }
+
+type upliftAIErrorReader struct{}
+
+func (upliftAIErrorReader) Read([]byte) (int, error) {
+	return 0, errors.New("upliftai read failed")
+}
+
+func (upliftAIErrorReader) Close() error { return nil }
 
 func TestUpliftAIPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.upliftai" {
@@ -151,6 +161,27 @@ func TestUpliftAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("upliftai transport failed")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewUpliftAITTS("test-key", "")
 	if err := provider.Close(); err != nil {
@@ -268,6 +299,20 @@ func TestUpliftAITTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 	if audio, err := stream.Next(); audio != nil || err != io.EOF {
 		t.Fatalf("third Next() = (%#v, %v), want EOF", audio, err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: upliftAIErrorReader{}}}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 

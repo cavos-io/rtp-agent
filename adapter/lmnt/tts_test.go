@@ -356,6 +356,26 @@ func TestLMNTTTSChunkedStreamKeepsRawAudioReturnedWithEOF(t *testing.T) {
 	}
 }
 
+func TestLMNTTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &lmntTTSChunkedStream{
+		resp:       &http.Response{Body: lmntErrorReadBody{}},
+		format:     "raw",
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want nil on read failure", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "lmnt read failed") {
+		t.Fatalf("Next error = %q, want read failure context", err)
+	}
+}
+
 func TestLMNTTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &lmntCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &lmntTTSChunkedStream{resp: &http.Response{Body: body}, format: "raw", sampleRate: 24000}
@@ -420,6 +440,16 @@ func (b *lmntFinalReadBody) Read(p []byte) (int, error) {
 }
 
 func (b *lmntFinalReadBody) Close() error {
+	return nil
+}
+
+type lmntErrorReadBody struct{}
+
+func (lmntErrorReadBody) Read([]byte) (int, error) {
+	return 0, errors.New("lmnt read failed")
+}
+
+func (lmntErrorReadBody) Close() error {
 	return nil
 }
 

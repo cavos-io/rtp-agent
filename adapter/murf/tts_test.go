@@ -265,6 +265,44 @@ func TestMurfTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	}
 }
 
+func TestMurfTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: murfTTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("murf transport failed")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewMurfTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestMurfTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &murfTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(murfReadErrorReader{})},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestMurfTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &murfTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -1011,6 +1049,35 @@ func TestMurfTTSAudioFromStreamMessage(t *testing.T) {
 	}
 }
 
+func TestMurfTTSAudioFromStreamMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{
+			name:    "malformed json",
+			payload: []byte(`{`),
+		},
+		{
+			name:    "malformed audio",
+			payload: []byte(`{"audio":"not-base64"}`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := murfAudioFromStreamMessage(tc.payload, 24000)
+			if err == nil {
+				t.Fatal("error = nil, want APIConnectionError")
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+			}
+		})
+	}
+}
+
 func TestMurfTTSImplementsStreamingInterface(t *testing.T) {
 	var _ tts.TTS = NewMurfTTS("test-key", "")
 }
@@ -1034,6 +1101,12 @@ func (r *finalReadMurfReader) Read(p []byte) (int, error) {
 	copy(p, r.data)
 	r.done = true
 	return len(r.data), io.EOF
+}
+
+type murfReadErrorReader struct{}
+
+func (murfReadErrorReader) Read([]byte) (int, error) {
+	return 0, errors.New("murf read failed")
 }
 
 type murfCloseErrorBody struct {

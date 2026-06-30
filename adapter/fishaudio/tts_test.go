@@ -34,6 +34,14 @@ func (r *fishAudioFinalEOFReader) Read(p []byte) (int, error) {
 
 func (r *fishAudioFinalEOFReader) Close() error { return nil }
 
+type fishAudioErrorReader struct{}
+
+func (fishAudioErrorReader) Read([]byte) (int, error) {
+	return 0, errors.New("fishaudio read failed")
+}
+
+func (fishAudioErrorReader) Close() error { return nil }
+
 func TestFishAudioTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewFishAudioTTS("test-key", "")
 
@@ -414,6 +422,24 @@ func TestFishAudioTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestFishAudioTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &fishaudioTTSChunkedStream{
+		resp:       &http.Response{Body: fishAudioErrorReader{}},
+		sampleRate: 24000,
+		format:     "pcm",
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -999,6 +1025,41 @@ func TestFishAudioTTSAudioFromStreamMessage(t *testing.T) {
 	}
 	if statusErr.StatusCode != -1 {
 		t.Fatalf("status code = %d, want -1", statusErr.StatusCode)
+	}
+}
+
+func TestFishAudioTTSAudioFromStreamMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+		format  string
+	}{
+		{
+			name:    "malformed msgpack",
+			payload: []byte{0xc1},
+			format:  "wav",
+		},
+		{
+			name: "malformed wav audio",
+			payload: mustFishMessage(t, map[string]any{
+				"event": "audio",
+				"audio": []byte("not-wav"),
+			}),
+			format: "wav",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := fishAudioTTSAudioFromStreamMessage(tc.payload, 24000, tc.format)
+			if err == nil {
+				t.Fatal("error = nil, want APIConnectionError")
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+			}
+		})
 	}
 }
 

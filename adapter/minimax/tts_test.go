@@ -414,6 +414,27 @@ func TestMinimaxTTSChunkedStreamStatusPayloadReturnsAPIStatusError(t *testing.T)
 	}
 }
 
+func TestMinimaxTTSChunkedStreamMalformedAudioReturnsAPIConnectionError(t *testing.T) {
+	stream := &minimaxTTSChunkedStream{
+		resp: &http.Response{
+			Body:   io.NopCloser(strings.NewReader("data: {\"data\":{\"audio\":\"not-hex\"},\"base_resp\":{\"status_code\":0}}\n\n")),
+			Header: http.Header{"Trace-Id": []string{"trace-malformed"}},
+		},
+		audioFormat: "pcm",
+		sampleRate:  16000,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next returned nil error, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestMinimaxTTSChunkedStreamEmitsReferenceFinalMarkerAfterSSEAudio(t *testing.T) {
 	stream := &minimaxTTSChunkedStream{
 		resp: &http.Response{
@@ -1126,6 +1147,39 @@ func TestMinimaxTTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 	if _, _, _, err := minimaxAudioFromWebsocketMessage([]byte(`{"event":"task_failed","trace_id":"trace-3"}`), "fallback", 24000); err == nil {
 		t.Fatal("task_failed returned nil error, want stream error")
+	}
+}
+
+func TestMinimaxTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{
+			name:    "malformed json",
+			payload: []byte(`{`),
+		},
+		{
+			name:    "malformed audio",
+			payload: []byte(`{"event":"task_continued","trace_id":"trace-1","data":{"audio":"not-hex"}}`),
+		},
+		{
+			name:    "task failed",
+			payload: []byte(`{"event":"task_failed","trace_id":"trace-2"}`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := minimaxAudioFromWebsocketMessage(tc.payload, "fallback", 24000)
+			if err == nil {
+				t.Fatal("error = nil, want APIConnectionError")
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+			}
+		})
 	}
 }
 

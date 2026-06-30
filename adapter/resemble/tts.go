@@ -173,7 +173,7 @@ func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, resembleTTSConnectionError("Resemble TTS request failed", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -305,7 +305,7 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		Issues       []string `json:"issues"`
 	}
 	if err := json.NewDecoder(s.resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, resembleTTSConnectionError("Resemble TTS response decode failed", err)
 	}
 	if !result.Success {
 		issues := "unknown error"
@@ -316,11 +316,11 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	audio, err := base64.StdEncoding.DecodeString(result.AudioContent)
 	if err != nil {
-		return nil, err
+		return nil, resembleTTSConnectionError("Resemble TTS audio decode failed", err)
 	}
 	frame, err := decodeResembleAudio(audio, s.sampleRate)
 	if err != nil {
-		return nil, err
+		return nil, resembleTTSConnectionError("Resemble TTS audio frame decode failed", err)
 	}
 
 	return &tts.SynthesizedAudio{
@@ -579,7 +579,7 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 		Message      string `json:"message"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, 0, err
+		return nil, false, 0, resembleTTSConnectionError("Resemble websocket payload decode failed", err)
 	}
 	switch message.Type {
 	case "audio":
@@ -588,14 +588,14 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 		}
 		audio, err := base64.StdEncoding.DecodeString(message.AudioContent)
 		if err != nil {
-			return nil, false, message.RequestID, err
+			return nil, false, message.RequestID, resembleTTSConnectionError("Resemble websocket audio decode failed", err)
 		}
 		if len(audio) == 0 {
 			return nil, false, message.RequestID, nil
 		}
 		decoded, err := resembleTTSMP3AudioFrame(audio)
 		if err != nil {
-			return nil, false, message.RequestID, err
+			return nil, false, message.RequestID, resembleTTSConnectionError("Resemble websocket audio frame decode failed", err)
 		}
 		return decoded, false, message.RequestID, nil
 	case "audio_end":
@@ -605,6 +605,13 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 	default:
 		return nil, false, message.RequestID, nil
 	}
+}
+
+func resembleTTSConnectionError(message string, err error) *llm.APIConnectionError {
+	if err == nil {
+		return llm.NewAPIConnectionError(message)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func resembleTTSMP3AudioFrame(audio []byte) (*tts.SynthesizedAudio, error) {

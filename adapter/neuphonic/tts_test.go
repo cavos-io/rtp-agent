@@ -157,6 +157,28 @@ func TestNeuphonicTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: neuphonicRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network down")
+	})}
+
+	provider := NewNeuphonicTTS("test-key", "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		defer stream.Close()
+	}
+	if err == nil {
+		t.Fatal("Synthesize returned nil error, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestNeuphonicTTSOptionsMatchReference(t *testing.T) {
 	provider := NewNeuphonicTTS("test-key", "",
 		WithNeuphonicTTSBaseURL("https://neuphonic.example"),
@@ -336,6 +358,38 @@ func TestNeuphonicTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
+func TestNeuphonicTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &neuphonicTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(neuphonicReadErrorReader{})},
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next returned nil error, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestNeuphonicTTSChunkedStreamMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
+	stream := &neuphonicTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(
+			"data: {bad json}\n\n",
+		)))},
+	}
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next returned nil error, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -944,4 +998,10 @@ type neuphonicRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f neuphonicRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type neuphonicReadErrorReader struct{}
+
+func (neuphonicReadErrorReader) Read([]byte) (int, error) {
+	return 0, errors.New("read failed")
 }

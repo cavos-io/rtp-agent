@@ -202,7 +202,7 @@ func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, neuphonicTTSConnectionError("Neuphonic TTS request failed", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -337,7 +337,7 @@ func (s *neuphonicTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		audio, err := neuphonicAudioFromSSEData(strings.TrimPrefix(line, "data: "))
 		if err != nil {
-			return nil, err
+			return nil, neuphonicTTSConnectionError("Neuphonic TTS stream decode failed", err)
 		}
 		if len(audio) == 0 {
 			continue
@@ -352,7 +352,7 @@ func (s *neuphonicTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}, nil
 	}
 	if err := s.scanner.Err(); err != nil {
-		return nil, err
+		return nil, neuphonicTTSConnectionError("Neuphonic TTS stream read failed", err)
 	}
 	if s.finalSent {
 		return nil, io.EOF
@@ -389,6 +389,13 @@ func neuphonicAudioFromSSEData(data string) ([]byte, error) {
 		return nil, nil
 	}
 	return base64.StdEncoding.DecodeString(parsed.Data.Audio)
+}
+
+func neuphonicTTSConnectionError(message string, err error) error {
+	if err == nil {
+		return llm.NewAPIConnectionError(message)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func optionalFloat(value *float64) interface{} {
