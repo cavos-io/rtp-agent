@@ -2155,7 +2155,12 @@ func unsupportedOpenAIParamsForModel(modelName string) map[string]struct{} {
 }
 
 func openAIReasoningEffortToolIncompatible(modelName string) bool {
-	return modelName == "gpt-5.2" || modelName == "gpt-5.4"
+	for _, prefix := range []string{"gpt-5.2", "gpt-5.4"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultOpenAIReasoningEffort(model string, hasTools bool) string {

@@ -3908,17 +3908,17 @@ func TestBuildOpenAIChatCompletionRequestDropsReasoningEffortWithIncompatibleToo
 	}
 }
 
-func TestBuildOpenAIChatCompletionRequestKeepsGPT54MiniDefaultReasoningWithTools(t *testing.T) {
+func TestBuildOpenAIChatCompletionRequestDropsGPT54MiniDefaultReasoningWithTools(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{
 		Tools: []llm.Tool{requestTestTool{}},
 	})
 
-	if req.ReasoningEffort != "minimal" {
-		t.Fatalf("ReasoningEffort = %q, want reference default minimal for gpt-5.4-mini with tools", req.ReasoningEffort)
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want dropped for reference gpt-5.4* tool incompatibility", req.ReasoningEffort)
 	}
 }
 
-func TestBuildOpenAIChatCompletionRequestKeepsGPT54MiniExplicitReasoningWithTools(t *testing.T) {
+func TestBuildOpenAIChatCompletionRequestDropsGPT54MiniExplicitReasoningWithTools(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{
 		Tools: []llm.Tool{requestTestTool{}},
 		ExtraParams: map[string]any{
@@ -3926,8 +3926,21 @@ func TestBuildOpenAIChatCompletionRequestKeepsGPT54MiniExplicitReasoningWithTool
 		},
 	})
 
-	if req.ReasoningEffort != "low" {
-		t.Fatalf("ReasoningEffort = %q, want explicit reasoning effort kept for gpt-5.4-mini with tools", req.ReasoningEffort)
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want dropped for reference gpt-5.4* tool incompatibility", req.ReasoningEffort)
+	}
+}
+
+func TestBuildOpenAIChatCompletionRequestDropsProviderPrefixedGPT54MiniReasoningWithTools(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("openai/gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{
+		Tools: []llm.Tool{requestTestTool{}},
+		ExtraParams: map[string]any{
+			"reasoning_effort": "low",
+		},
+	})
+
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want dropped after reference provider-prefix stripping", req.ReasoningEffort)
 	}
 }
 
