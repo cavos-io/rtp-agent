@@ -2605,21 +2605,24 @@ func buildOpenAIToolOutput(toolOutput *llm.FunctionCallOutput) openai.ChatComple
 }
 
 type openaiStream struct {
-	stream          *openai.ChatCompletionStream
-	cancel          context.CancelFunc
-	provider        *OpenAILLM
-	mu              sync.Mutex
-	closed          bool
-	pending         []*llm.ChatChunk
-	toolIndex       int
-	toolIndexSet    bool
-	toolCallID      string
-	toolCallType    string
-	toolCallName    string
-	toolCallRawArgs string
-	toolCallExtra   map[string]any
-	thinking        bool
-	emitted         bool
+	stream        *openai.ChatCompletionStream
+	cancel        context.CancelFunc
+	provider      *OpenAILLM
+	mu            sync.Mutex
+	closed        bool
+	pending       []*llm.ChatChunk
+	toolCalls     map[int]*openAIStreamToolCallState
+	toolCallOrder []int
+	thinking      bool
+	emitted       bool
+}
+
+type openAIStreamToolCallState struct {
+	id      string
+	typ     string
+	name    string
+	rawArgs string
+	extra   map[string]any
 }
 
 func (s *openaiStream) Next() (*llm.ChatChunk, error) {
@@ -2721,8 +2724,8 @@ func (s *openaiStream) chunkFromOpenAIStreamChoice(id string, choice openAIStrea
 			return chunk
 		}
 	}
-	if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
-		return s.finishOpenAIStreamToolCall(id, choice)
+	if isOpenAIStreamToolCallFinish(choice) && s.hasOpenAIStreamToolCalls() {
+		return s.finishOpenAIStreamToolCalls(id, choice)
 	}
 	if isEmptyOpenAIStreamChoiceDelta(choice) {
 		return nil
@@ -2784,7 +2787,6 @@ func (s *openaiStream) hasEmitted() bool {
 }
 
 func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStreamChoice) *llm.ChatChunk {
-	completedChunks := make([]*llm.ChatChunk, 0)
 	for _, tc := range choice.Delta.ToolCalls {
 		if tc.Function.Name == "" && tc.Function.Arguments == "" {
 			continue
@@ -2793,27 +2795,58 @@ func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStre
 		if tc.Index != nil {
 			index = *tc.Index
 		}
-		if s.toolCallID != "" && tc.ID != "" && (!s.toolIndexSet || index != s.toolIndex) {
-			completedChunks = append(completedChunks, s.finishOpenAIStreamToolCall(id, choice))
+		state := s.openAIStreamToolCallState(index)
+		if tc.ID != "" {
+			state.id = tc.ID
 		}
 		if tc.Function.Name != "" {
-			s.toolIndex = index
-			s.toolIndexSet = true
-			s.toolCallID = tc.ID
-			s.toolCallType = string(tc.Type)
-			if s.toolCallType == "" {
-				s.toolCallType = "function"
+			state.typ = string(tc.Type)
+			if state.typ == "" {
+				state.typ = "function"
 			}
-			s.toolCallName = tc.Function.Name
-			s.toolCallRawArgs = tc.Function.Arguments
-			s.toolCallExtra = tc.ExtraContent
+			state.name = tc.Function.Name
+			state.rawArgs += tc.Function.Arguments
 		} else if tc.Function.Arguments != "" {
-			s.toolCallRawArgs += tc.Function.Arguments
+			state.rawArgs += tc.Function.Arguments
+		}
+		if tc.ExtraContent != nil {
+			state.extra = tc.ExtraContent
 		}
 	}
-	if isOpenAIStreamToolCallFinish(choice) && s.toolCallID != "" {
-		completedChunks = append(completedChunks, s.finishOpenAIStreamToolCall(id, choice))
+	if !isOpenAIStreamToolCallFinish(choice) || !s.hasOpenAIStreamToolCalls() {
+		return nil
 	}
+	return s.finishOpenAIStreamToolCalls(id, choice)
+}
+
+func (s *openaiStream) openAIStreamToolCallState(index int) *openAIStreamToolCallState {
+	if s.toolCalls == nil {
+		s.toolCalls = make(map[int]*openAIStreamToolCallState)
+	}
+	state := s.toolCalls[index]
+	if state == nil {
+		state = &openAIStreamToolCallState{}
+		s.toolCalls[index] = state
+		s.toolCallOrder = append(s.toolCallOrder, index)
+	}
+	return state
+}
+
+func (s *openaiStream) hasOpenAIStreamToolCalls() bool {
+	return len(s.toolCallOrder) > 0
+}
+
+func (s *openaiStream) finishOpenAIStreamToolCalls(id string, choice openAIStreamChoice) *llm.ChatChunk {
+	completedChunks := make([]*llm.ChatChunk, 0, len(s.toolCallOrder))
+	for _, index := range s.toolCallOrder {
+		state := s.toolCalls[index]
+		if state == nil {
+			continue
+		}
+		completedChunks = append(completedChunks, s.finishOpenAIStreamToolCall(id, choice, state))
+	}
+	s.toolCalls = nil
+	s.toolCallOrder = nil
 	if len(completedChunks) == 0 {
 		return nil
 	}
@@ -2823,30 +2856,22 @@ func (s *openaiStream) processOpenAIStreamToolCalls(id string, choice openAIStre
 	return completedChunks[0]
 }
 
-func (s *openaiStream) finishOpenAIStreamToolCall(id string, choice openAIStreamChoice) *llm.ChatChunk {
-	chunk := &llm.ChatChunk{
+func (s *openaiStream) finishOpenAIStreamToolCall(id string, choice openAIStreamChoice, state *openAIStreamToolCallState) *llm.ChatChunk {
+	return &llm.ChatChunk{
 		ID: id,
 		Delta: &llm.ChoiceDelta{
 			Role:    llm.ChatRoleAssistant,
 			Content: choice.Delta.Content,
 			Extra:   choice.Delta.ExtraContent,
 			ToolCalls: []llm.FunctionToolCall{{
-				Type:      s.toolCallType,
-				Name:      s.toolCallName,
-				Arguments: s.toolCallRawArgs,
-				CallID:    s.toolCallID,
-				Extra:     s.toolCallExtra,
+				Type:      state.typ,
+				Name:      state.name,
+				Arguments: state.rawArgs,
+				CallID:    state.id,
+				Extra:     state.extra,
 			}},
 		},
 	}
-	s.toolIndex = 0
-	s.toolIndexSet = false
-	s.toolCallID = ""
-	s.toolCallType = ""
-	s.toolCallName = ""
-	s.toolCallRawArgs = ""
-	s.toolCallExtra = nil
-	return chunk
 }
 
 func isOpenAIStreamToolCallFinish(choice openAIStreamChoice) bool {

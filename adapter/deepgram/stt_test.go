@@ -424,6 +424,52 @@ func TestDeepgramSTTKeepAliveIntervalMatchesReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTControlMessagesMatchReferenceJSONDumps(t *testing.T) {
+	want := map[string]string{
+		"keepalive":    `{"type": "KeepAlive"}`,
+		"finalize":     `{"type": "Finalize"}`,
+		"close_stream": `{"type": "CloseStream"}`,
+	}
+	got := map[string]string{
+		"keepalive":    deepgramSTTKeepAliveMessage,
+		"finalize":     deepgramSTTFinalizeMessage,
+		"close_stream": deepgramSTTCloseStreamMessage,
+	}
+	for name, wantPayload := range want {
+		if got[name] != wantPayload {
+			t.Fatalf("%s control message = %q, want Python json.dumps payload %q", name, got[name], wantPayload)
+		}
+	}
+}
+
+func TestDeepgramSTTStreamSendsReferenceImmediateKeepAlive(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramImmediateKeepAliveWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramSTTUsesEnvAPIKeyWhenOmitted(t *testing.T) {
 	t.Setenv("DEEPGRAM_API_KEY", "env-key")
 
@@ -1190,6 +1236,7 @@ func TestDeepgramSTTRecognitionUsageCarriesReferenceRequestID(t *testing.T) {
 		NumChannels:       1,
 		SamplesPerChannel: 800,
 	})
+	rawStream.flushRecognitionUsageLocked()
 	rawStream.mu.Unlock()
 
 	usage := nextDeepgramTestSpeechEvent(t, stream)
@@ -1387,7 +1434,7 @@ func TestDeepgramSTTStreamUnexpectedNormalCloseReturnsAPIStatusError(t *testing.
 
 func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	var binaryWrites [][]byte
-	var jsonWrites []any
+	var textWrites []string
 	stream := &deepgramStream{
 		sampleRate:  16000,
 		numChannels: 1,
@@ -1395,8 +1442,8 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 			binaryWrites = append(binaryWrites, append([]byte(nil), data...))
 			return nil
 		},
-		writeJSON: func(payload any) error {
-			jsonWrites = append(jsonWrites, payload)
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
 			return nil
 		},
 	}
@@ -1429,15 +1476,11 @@ func TestDeepgramSTTStreamChunksAndFinalizesReferenceAudio(t *testing.T) {
 	if got := len(binaryWrites[1]); got != 400 {
 		t.Fatalf("flush binary write length = %d, want 400", got)
 	}
-	if len(jsonWrites) != 1 {
-		t.Fatalf("json writes after Flush = %d, want Finalize", len(jsonWrites))
+	if len(textWrites) != 1 {
+		t.Fatalf("text writes after Flush = %d, want Finalize", len(textWrites))
 	}
-	finalize, ok := jsonWrites[0].(map[string]string)
-	if !ok {
-		t.Fatalf("Finalize payload = %T, want map[string]string", jsonWrites[0])
-	}
-	if got := finalize["type"]; got != "Finalize" {
-		t.Fatalf("Finalize type = %q, want Finalize", got)
+	if got := textWrites[0]; got != deepgramSTTFinalizeMessage {
+		t.Fatalf("Finalize payload = %q, want exact reference payload", got)
 	}
 }
 
@@ -1466,12 +1509,106 @@ func TestDeepgramSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("PushFrame() error = %v", err)
 	}
-	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.05)
+	assertNoDeepgramRecognitionUsageEvent(t, stream.events)
 
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
-	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.0125)
+	assertDeepgramRecognitionUsageEvent(t, stream.events, 0.0625)
+}
+
+func TestDeepgramSTTStreamFlushWithoutBufferedFrameIsReferenceNoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var textWrites []string
+	stream := &deepgramStream{
+		ctx:         ctx,
+		events:      make(chan *stt.SpeechEvent, 1),
+		sampleRate:  16000,
+		numChannels: 1,
+		writeBinary: func([]byte) error {
+			return nil
+		},
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(empty) error = %v", err)
+	}
+	if len(textWrites) != 0 {
+		t.Fatalf("text writes after empty Flush = %d, want 0", len(textWrites))
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame(exact chunk) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(exact chunk) error = %v", err)
+	}
+	if len(textWrites) != 0 {
+		t.Fatalf("text writes after exact-chunk Flush = %d, want 0", len(textWrites))
+	}
+	assertNoDeepgramRecognitionUsageEvent(t, stream.events)
+}
+
+func TestDeepgramSTTStreamCloseEmitsReferenceRecognitionUsageRemainder(t *testing.T) {
+	closed := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramHoldOpenWebsocketServer(serverConn, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket close")
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want recognition usage remainder", err)
+	}
+	if event.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("event type = %s, want %s", event.Type, stt.SpeechEventRecognitionUsage)
+	}
+	if event.RecognitionUsage == nil {
+		t.Fatal("RecognitionUsage = nil")
+	}
+	if event.RecognitionUsage.AudioDuration <= 0 {
+		t.Fatalf("AudioDuration = %v, want positive connection-lifetime remainder", event.RecognitionUsage.AudioDuration)
+	}
 }
 
 func TestDeepgramSTTStreamChunksReferenceAudioUsingStreamFormat(t *testing.T) {
@@ -1522,9 +1659,8 @@ func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
 		ctx:    ctx,
 		cancel: cancel,
 		events: make(chan *stt.SpeechEvent, 1),
-		writeJSON: func(payload any) error {
-			msg, ok := payload.(map[string]string)
-			if ok && msg["type"] == "CloseStream" {
+		writeText: func(payload string) error {
+			if payload == deepgramSTTCloseStreamMessage {
 				close(closeSent)
 			}
 			return nil
@@ -1566,6 +1702,26 @@ func TestDeepgramSTTStreamCloseDrainsFinalTranscript(t *testing.T) {
 
 	if err := <-closeDone; err != nil {
 		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestDeepgramSTTStreamCloseSendsReferenceCloseStreamText(t *testing.T) {
+	var textWrites []string
+	stream := &deepgramStream{
+		writeText: func(payload string) error {
+			textWrites = append(textWrites, payload)
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if len(textWrites) != 1 {
+		t.Fatalf("text writes after Close = %d, want CloseStream", len(textWrites))
+	}
+	if got := textWrites[0]; got != deepgramSTTCloseStreamMessage {
+		t.Fatalf("CloseStream payload = %q, want exact reference payload", got)
 	}
 }
 
@@ -1655,6 +1811,10 @@ func runDeepgramSTTNormalCloseWebsocketServer(conn net.Conn, closeAfterHandshake
 		errCh <- err
 		return
 	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
+		errCh <- err
+		return
+	}
 	<-closeAfterHandshake
 	if err := writeDeepgramTestWebsocketFrame(conn, websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "normal provider close")); err != nil {
 		errCh <- err
@@ -1676,13 +1836,68 @@ func runDeepgramHoldOpenWebsocketServer(conn net.Conn, closed chan<- struct{}, e
 		errCh <- err
 		return
 	}
-	_, _, err = readDeepgramSTTTestClientWebsocketFrame(reader)
-	if err != nil && !errors.Is(err, io.EOF) && !strings.Contains(err.Error(), "closed pipe") {
+	for {
+		opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+		if err != nil {
+			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "closed pipe") {
+				close(closed)
+				errCh <- nil
+				return
+			}
+			errCh <- err
+			return
+		}
+		if opcode == websocket.CloseMessage || (opcode == websocket.TextMessage && strings.Contains(string(payload), "CloseStream")) {
+			close(closed)
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func runDeepgramImmediateKeepAliveWebsocketServer(conn net.Conn, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
 		errCh <- err
 		return
 	}
-	close(closed)
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		errCh <- err
+		return
+	}
+	opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if opcode != websocket.TextMessage || string(payload) != deepgramSTTKeepAliveMessage {
+		errCh <- fmt.Errorf("first websocket frame = opcode %d payload %q, want immediate KeepAlive", opcode, payload)
+		return
+	}
 	errCh <- nil
+}
+
+func readDeepgramSTTInitialKeepAlive(conn net.Conn, reader *bufio.Reader) error {
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		return err
+	}
+	opcode, payload, err := readDeepgramSTTTestClientWebsocketFrame(reader)
+	if deadlineErr := conn.SetReadDeadline(time.Time{}); deadlineErr != nil && err == nil {
+		err = deadlineErr
+	}
+	if err != nil {
+		return err
+	}
+	if opcode != websocket.TextMessage || string(payload) != deepgramSTTKeepAliveMessage {
+		return fmt.Errorf("first websocket frame = opcode %d payload %q, want immediate KeepAlive", opcode, payload)
+	}
+	return nil
 }
 
 func deepgramTestAcceptKey(key string) string {
@@ -1699,6 +1914,10 @@ func runDeepgramSpeechStateWebsocketServer(conn net.Conn, closeServer <-chan str
 		return
 	}
 	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
 		errCh <- err
 		return
 	}
@@ -1728,6 +1947,10 @@ func runDeepgramTimingOffsetWebsocketServer(conn net.Conn, closeServer <-chan st
 		return
 	}
 	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+	if err := readDeepgramSTTInitialKeepAlive(conn, reader); err != nil {
 		errCh <- err
 		return
 	}
@@ -1879,6 +2102,15 @@ func assertDeepgramRecognitionUsageEvent(t *testing.T, events <-chan *stt.Speech
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for recognition usage event")
+	}
+}
+
+func assertNoDeepgramRecognitionUsageEvent(t *testing.T, events <-chan *stt.SpeechEvent) {
+	t.Helper()
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected event before reference usage flush: %+v", event)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 

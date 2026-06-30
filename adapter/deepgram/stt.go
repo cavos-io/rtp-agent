@@ -61,6 +61,10 @@ type DeepgramKeyword struct {
 type DeepgramSTTOption func(*DeepgramSTT)
 
 const deepgramSTTKeepAliveInterval = 5 * time.Second
+const deepgramSTTUsageInterval = 5 * time.Second
+const deepgramSTTKeepAliveMessage = `{"type": "KeepAlive"}`
+const deepgramSTTFinalizeMessage = `{"type": "Finalize"}`
+const deepgramSTTCloseStreamMessage = `{"type": "CloseStream"}`
 
 func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
@@ -313,6 +317,7 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 		sampleRate:  s.sampleRate,
 		numChannels: s.numChannels,
 		language:    languageStr,
+		connStart:   time.Now(),
 	}
 	if !s.registerStream(stream) {
 		cancel()
@@ -594,18 +599,22 @@ func deepgramBaseURL(s *DeepgramSTT, websocketURL bool) (*url.URL, url.Values) {
 }
 
 type deepgramStream struct {
-	provider      *DeepgramSTT
-	conn          *websocket.Conn
-	streamURL     string
-	events        chan *stt.SpeechEvent
-	errCh         chan error
-	mu            sync.Mutex
-	closed        bool
-	speaking      bool
-	reconnectNext bool
-	requestID     string
-	start         float64
-	offset        float64
+	provider       *DeepgramSTT
+	conn           *websocket.Conn
+	streamURL      string
+	events         chan *stt.SpeechEvent
+	errCh          chan error
+	mu             sync.Mutex
+	closed         bool
+	speaking       bool
+	reconnectNext  bool
+	requestID      string
+	start          float64
+	offset         float64
+	connStart      time.Time
+	reportedAudio  float64
+	usageTotal     float64
+	usageLastFlush time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -616,6 +625,7 @@ type deepgramStream struct {
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
 	writeJSON    func(any) error
+	writeText    func(string) error
 }
 
 type dgWord struct {
@@ -820,11 +830,20 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 	defer func() {
 		s.mu.Lock()
 		stale := conn != s.conn
+		if !stale && !s.closed {
+			s.closed = true
+			if s.cancel != nil {
+				s.cancel()
+			}
+			if s.provider != nil {
+				s.provider.unregisterStream(s)
+			}
+			_ = s.closeConnection()
+		}
 		s.mu.Unlock()
 		if stale {
 			return
 		}
-		_ = s.Close()
 		close(s.events)
 	}()
 
@@ -882,18 +901,23 @@ func deepgramSTTUnexpectedCloseError(err error) error {
 func (s *deepgramStream) keepAliveLoop() {
 	ticker := time.NewTicker(deepgramSTTKeepAliveInterval)
 	defer ticker.Stop()
+	s.sendKeepAlive()
 
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			s.mu.Lock()
-			if !s.closed {
-				_ = s.conn.WriteJSON(map[string]string{"type": "KeepAlive"})
-			}
-			s.mu.Unlock()
+			s.sendKeepAlive()
 		}
+	}
+}
+
+func (s *deepgramStream) sendKeepAlive() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		_ = s.writeTextData(deepgramSTTKeepAliveMessage, map[string]string{"type": "KeepAlive"})
 	}
 }
 
@@ -912,6 +936,21 @@ func (s *deepgramStream) sendRecognitionUsage(frame *model.AudioFrame) {
 	if duration <= 0 {
 		return
 	}
+	s.usageTotal += duration
+	if s.usageLastFlush.IsZero() {
+		s.usageLastFlush = time.Now()
+		return
+	}
+	if time.Since(s.usageLastFlush) >= deepgramSTTUsageInterval {
+		s.flushRecognitionUsageLocked()
+	}
+}
+
+func (s *deepgramStream) sendRecognitionUsageDuration(duration float64) {
+	if s.ctx == nil || s.events == nil || duration <= 0 {
+		return
+	}
+	s.reportedAudio += duration
 	s.sendEvent(&stt.SpeechEvent{
 		Type:      stt.SpeechEventRecognitionUsage,
 		RequestID: s.requestID,
@@ -919,6 +958,16 @@ func (s *deepgramStream) sendRecognitionUsage(frame *model.AudioFrame) {
 			AudioDuration: duration,
 		},
 	})
+}
+
+func (s *deepgramStream) flushRecognitionUsageLocked() {
+	if s.usageTotal <= 0 {
+		return
+	}
+	duration := s.usageTotal
+	s.usageTotal = 0
+	s.usageLastFlush = time.Now()
+	s.sendRecognitionUsageDuration(duration)
 }
 
 func (s *deepgramStream) sendError(err error) {
@@ -999,8 +1048,10 @@ func (s *deepgramStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	flushedFrame := false
 	if s.audioBStream != nil {
 		for _, chunk := range s.audioBStream.Flush() {
+			flushedFrame = true
 			if err := s.writeBinaryData(chunk.Data); err != nil {
 				s.closeAfterWriteFailureLocked()
 				return err
@@ -1008,11 +1059,28 @@ func (s *deepgramStream) Flush() error {
 			s.sendRecognitionUsage(chunk)
 		}
 	}
-	if err := s.writeJSONData(map[string]string{"type": "Finalize"}); err != nil {
+	if !flushedFrame {
+		return nil
+	}
+	s.flushRecognitionUsageLocked()
+	if err := s.writeTextData(deepgramSTTFinalizeMessage, map[string]string{"type": "Finalize"}); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
 	return nil
+}
+
+func (s *deepgramStream) sendConnectionUsageRemainderLocked() {
+	if s.connStart.IsZero() {
+		return
+	}
+	s.flushRecognitionUsageLocked()
+	remainder := time.Since(s.connStart).Seconds() - s.reportedAudio
+	s.connStart = time.Time{}
+	s.reportedAudio = 0
+	if remainder > 0 {
+		s.sendRecognitionUsageDuration(remainder)
+	}
 }
 
 func (s *deepgramStream) Close() error {
@@ -1022,9 +1090,10 @@ func (s *deepgramStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	_ = s.writeJSONData(map[string]string{"type": "CloseStream"})
+	_ = s.writeTextData(deepgramSTTCloseStreamMessage, map[string]string{"type": "CloseStream"})
 	// Wait a tiny bit for the final transcript
 	time.Sleep(50 * time.Millisecond)
+	s.sendConnectionUsageRemainderLocked()
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -1068,6 +1137,8 @@ func (s *deepgramStream) reconnectLocked() error {
 	}
 	oldConn := s.conn
 	s.conn = conn
+	s.sendConnectionUsageRemainderLocked()
+	s.connStart = time.Now()
 	_ = oldConn.Close()
 	go s.readLoop(conn)
 	return nil
@@ -1105,6 +1176,16 @@ func (s *deepgramStream) writeJSONData(payload any) error {
 	return s.conn.WriteJSON(payload)
 }
 
+func (s *deepgramStream) writeTextData(payload string, fallback any) error {
+	if s.writeText != nil {
+		return s.writeText(payload)
+	}
+	if s.conn != nil {
+		return s.conn.WriteMessage(websocket.TextMessage, []byte(payload))
+	}
+	return s.writeJSONData(fallback)
+}
+
 func (s *deepgramStream) closeAfterWriteFailureLocked() {
 	s.closed = true
 	if s.cancel != nil {
@@ -1133,6 +1214,11 @@ func (s *deepgramStream) Next() (*stt.SpeechEvent, error) {
 			if ok {
 				return event, nil
 			}
+		default:
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
 		default:
 		}
 		return nil, io.EOF

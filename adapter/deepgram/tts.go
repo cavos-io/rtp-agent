@@ -14,16 +14,20 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
 const defaultDeepgramTTSBaseURL = "https://api.deepgram.com/v1/speak"
 const deepgramTTSCloseAckTimeout = time.Second
+const deepgramTTSFlushMessage = `{"type": "Flush"}`
+const deepgramTTSCloseMessage = `{"type": "Close"}`
 
 type DeepgramTTS struct {
 	apiKey     string
@@ -162,6 +166,7 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	return &deepgramTTSChunkedStream{
 		resp:       resp,
 		sampleRate: t.sampleRate,
+		requestID:  uuid.NewString(),
 	}, nil
 }
 
@@ -208,6 +213,8 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		errCh:      make(chan error, 1),
 		flushed:    make(chan struct{}, 1),
 		sampleRate: t.sampleRate,
+		requestID:  uuid.NewString(),
+		segmentID:  uuid.NewString(),
 	}
 	stream.writeJSON = stream.writeJSONMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -278,6 +285,7 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 type deepgramTTSChunkedStream struct {
 	resp         *http.Response
 	sampleRate   int
+	requestID    string
 	pendingFinal bool
 	finalSent    bool
 	mu           sync.Mutex
@@ -311,6 +319,7 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 
 	return &tts.SynthesizedAudio{
+		RequestID: s.requestID,
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
 			SampleRate:        uint32(s.sampleRate),
@@ -330,7 +339,7 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 		s.resp = nil
 		_ = body.Close()
 	}
-	return &tts.SynthesizedAudio{IsFinal: true}, nil
+	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
 
 func (s *deepgramTTSChunkedStream) Close() error {
@@ -356,9 +365,13 @@ type deepgramTTSStream struct {
 
 	sampleRate  int
 	writeJSON   func(any) error
+	writeText   func(string) error
 	closeConn   func() error
 	flushed     chan struct{}
 	pendingText string
+	requestID   string
+	segmentID   string
+	segmentOpen bool
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -373,7 +386,7 @@ func (s *deepgramTTSStream) readLoop() {
 		}
 
 		if msgType == websocket.BinaryMessage {
-			s.audio <- &tts.SynthesizedAudio{
+			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              message,
 					SampleRate:        uint32(s.sampleRate),
@@ -381,6 +394,8 @@ func (s *deepgramTTSStream) readLoop() {
 					SamplesPerChannel: uint32(len(message) / 2),
 				},
 			}
+			s.annotateAudio(audio)
+			s.audio <- audio
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
 				s.errCh <- err
@@ -406,12 +421,23 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	}
 	switch metadata["type"] {
 	case "Flushed":
-		s.audio <- &tts.SynthesizedAudio{IsFinal: true}
+		audio := &tts.SynthesizedAudio{IsFinal: true}
+		s.annotateAudio(audio)
+		s.audio <- audio
+		s.segmentID = uuid.NewString()
 		s.signalFlushed()
 	case "Error", "error":
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
+}
+
+func (s *deepgramTTSStream) annotateAudio(audio *tts.SynthesizedAudio) {
+	if audio == nil {
+		return
+	}
+	audio.RequestID = s.requestID
+	audio.SegmentID = s.segmentID
 }
 
 func (s *deepgramTTSStream) signalFlushed() {
@@ -433,6 +459,7 @@ func (s *deepgramTTSStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	s.segmentOpen = true
 	s.pendingText += text
 	return s.sendCompletedWordsLocked()
 }
@@ -450,17 +477,19 @@ func (s *deepgramTTSStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if !s.segmentOpen {
+		s.pendingText = ""
+		return nil
+	}
 	if err := s.sendPendingWordsLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
-	msg := map[string]interface{}{
-		"type": "Flush",
-	}
-	if err := s.writeJSONData(msg); err != nil {
+	if err := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"}); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
+	s.segmentOpen = false
 	return nil
 }
 
@@ -491,11 +520,48 @@ func (s *deepgramTTSStream) sendPendingWordsLocked() error {
 }
 
 func (s *deepgramTTSStream) sendSpeakLocked(text string) error {
-	msg := map[string]interface{}{
+	speakText := deepgramTTSSpeakText(text)
+	payload := fmt.Sprintf(`{"type": "Speak", "text": %s}`, deepgramTTSPythonJSONString(speakText))
+	return s.writeTextData(payload, map[string]interface{}{
 		"type": "Speak",
-		"text": deepgramTTSSpeakText(text),
+		"text": speakText,
+	})
+}
+
+func deepgramTTSPythonJSONString(value string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range value {
+		switch r {
+		case '\\', '"':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			switch {
+			case r < 0x20:
+				fmt.Fprintf(&b, `\u%04x`, r)
+			case r < utf8.RuneSelf:
+				b.WriteRune(r)
+			case r <= 0xffff:
+				fmt.Fprintf(&b, `\u%04x`, r)
+			default:
+				r -= 0x10000
+				fmt.Fprintf(&b, `\u%04x\u%04x`, 0xd800+(r>>10), 0xdc00+(r&0x3ff))
+			}
+		}
 	}
-	return s.writeJSONData(msg)
+	b.WriteByte('"')
+	return b.String()
 }
 
 func (s *deepgramTTSStream) consumePendingToken(token string) {
@@ -513,8 +579,8 @@ func (s *deepgramTTSStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	flushErr := s.writeJSONData(map[string]interface{}{"type": "Flush"})
-	closeErr := s.writeJSONData(map[string]interface{}{"type": "Close"})
+	flushErr := s.writeTextData(deepgramTTSFlushMessage, map[string]interface{}{"type": "Flush"})
+	closeErr := s.writeTextData(deepgramTTSCloseMessage, map[string]interface{}{"type": "Close"})
 	if flushErr == nil && closeErr == nil {
 		s.waitForFlushedAckLocked()
 	}
@@ -546,6 +612,16 @@ func (s *deepgramTTSStream) writeJSONData(v any) error {
 
 func (s *deepgramTTSStream) writeJSONMessage(v any) error {
 	return s.conn.WriteJSON(v)
+}
+
+func (s *deepgramTTSStream) writeTextData(payload string, fallback any) error {
+	if s.writeText != nil {
+		return s.writeText(payload)
+	}
+	if s.conn != nil {
+		return s.conn.WriteMessage(websocket.TextMessage, []byte(payload))
+	}
+	return s.writeJSONData(fallback)
 }
 
 func (s *deepgramTTSStream) closeConnection() error {
