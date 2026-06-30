@@ -502,21 +502,7 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *deepgramTTSChunkedStream) chunkedFrameDataLocked(encoding string, data []byte) []byte {
-	if strings.EqualFold(encoding, "mulaw") || strings.EqualFold(encoding, "alaw") {
-		return deepgramTTSTelephonyToPCM(encoding, data)
-	}
-	if len(s.pendingPCM) > 0 {
-		combined := make([]byte, 0, len(s.pendingPCM)+len(data))
-		combined = append(combined, s.pendingPCM...)
-		combined = append(combined, data...)
-		data = combined
-		s.pendingPCM = nil
-	}
-	if len(data)%2 == 1 {
-		s.pendingPCM = append(s.pendingPCM[:0], data[len(data)-1])
-		data = data[:len(data)-1]
-	}
-	return data
+	return deepgramTTSFrameData(encoding, &s.pendingPCM, data)
 }
 
 func deepgramTTSChunkedReadError(err error) error {
@@ -652,6 +638,7 @@ type deepgramTTSStream struct {
 	segmentOpen   bool
 	segmentSent   bool
 	flushPending  bool
+	pendingPCM    []byte
 }
 
 func (s *deepgramTTSStream) readLoop() {
@@ -673,7 +660,10 @@ func (s *deepgramTTSStream) readLoop() {
 		}
 
 		if msgType == websocket.BinaryMessage {
-			frameData := deepgramTTSTelephonyToPCM(s.encoding, message)
+			frameData := deepgramTTSFrameData(s.encoding, &s.pendingPCM, message)
+			if len(frameData) == 0 {
+				continue
+			}
 			audio := &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              frameData,
@@ -803,6 +793,25 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		return llm.NewAPIError("Deepgram TTS returned error", metadata, true)
 	}
 	return nil
+}
+
+func deepgramTTSFrameData(encoding string, pending *[]byte, data []byte) []byte {
+	switch strings.ToLower(encoding) {
+	case "mulaw", "mu-law", "ulaw", "u-law", "pcm_mulaw", "alaw", "a-law", "pcm_alaw":
+		return deepgramTTSTelephonyToPCM(encoding, data)
+	}
+	if len(*pending) > 0 {
+		combined := make([]byte, 0, len(*pending)+len(data))
+		combined = append(combined, (*pending)...)
+		combined = append(combined, data...)
+		data = combined
+		*pending = nil
+	}
+	if len(data)%2 == 1 {
+		*pending = append((*pending)[:0], data[len(data)-1])
+		data = data[:len(data)-1]
+	}
+	return data
 }
 
 func deepgramTTSTelephonyToPCM(encoding string, data []byte) []byte {
