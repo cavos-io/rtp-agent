@@ -315,27 +315,27 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	var text string
 	var confidence float64
 	var count int
-	var firstAlt *speechpb.SpeechRecognitionAlternative
+	var words []*speechpb.WordInfo
 	for _, result := range results {
 		if len(result.GetAlternatives()) == 0 {
 			continue
 		}
 		alt := result.GetAlternatives()[0]
-		if firstAlt == nil {
-			firstAlt = alt
-		}
 		text += alt.GetTranscript()
 		confidence += float64(alt.GetConfidence())
+		words = append(words, alt.GetWords()...)
 		count++
 	}
 	if count == 0 {
 		return []stt.SpeechData{}
 	}
-	return []stt.SpeechData{{
+	data := stt.SpeechData{
 		Text:       text,
 		Confidence: confidence / float64(count),
-		Words:      googleTimedStrings(firstAlt.GetWords()),
-	}}
+		Words:      googleTimedStrings(words),
+	}
+	googleApplySpeechDataTiming(&data, words, 0)
+	return []stt.SpeechData{data}
 }
 
 func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {
