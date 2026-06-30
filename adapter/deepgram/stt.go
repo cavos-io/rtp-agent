@@ -1201,7 +1201,7 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 	}()
 
 	for {
-		_, message, err := conn.ReadMessage()
+		msgType, message, err := conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() && !s.hasInputEnded() {
 				if reconnectErr := s.reconnectAfterUnexpectedClose(conn); reconnectErr == nil {
@@ -1212,6 +1212,9 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 				}
 			}
 			return
+		}
+		if msgType != websocket.TextMessage {
+			continue
 		}
 
 		var resp dgResponse
