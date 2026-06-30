@@ -149,9 +149,7 @@ func WithDeepgramSTTFillerWords(fillerWords bool) DeepgramSTTOption {
 
 func WithDeepgramSTTSampleRate(sampleRate int) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
-		if sampleRate > 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
