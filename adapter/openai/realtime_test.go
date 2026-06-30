@@ -19,6 +19,7 @@ import (
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/gorilla/websocket"
 )
 
@@ -3674,6 +3675,14 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	if rtSession.pushedDuration != 0 {
 		t.Fatalf("pushedDuration after Close = %v, want no local audio mutation", rtSession.pushedDuration)
 	}
+	if err := session.PushVideo(&images.VideoFrame{
+		Data:   []byte{255, 0, 0},
+		Width:  1,
+		Height: 1,
+		Format: "rgb24",
+	}); err != nil {
+		t.Fatalf("PushVideo after Close error = %v, want nil like reference closed send_event", err)
+	}
 	if err := session.CommitAudio(); err != nil {
 		t.Fatalf("CommitAudio after Close error = %v, want nil like reference closed send_event", err)
 	}
@@ -3709,6 +3718,50 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	}
 	if item.TextContent() != "original transcript" {
 		t.Fatalf("remote transcript after closed Truncate = %q, want original transcript", item.TextContent())
+	}
+}
+
+func TestRealtimeSessionCloseClearsPendingResponse(t *testing.T) {
+	messages := make(chan string, 2)
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		messages <- string(msg)
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	rtSession, ok := session.(*realtimeSession)
+	if !ok {
+		t.Fatalf("session = %T, want *realtimeSession", session)
+	}
+	defer close(releaseServer)
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "pending"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "pending")
+	if got := len(rtSession.pendingResponses); got != 1 {
+		t.Fatalf("pending responses before Close = %d, want 1", got)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if got := len(rtSession.pendingResponses); got != 0 {
+		t.Fatalf("pending responses after Close = %d, want 0", got)
 	}
 }
 

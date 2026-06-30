@@ -2021,6 +2021,14 @@ func (s *realtimeSession) clearPendingRealtimeResponse(eventID string) {
 	}
 }
 
+func (s *realtimeSession) clearPendingRealtimeResponses() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for pendingID := range s.pendingResponses {
+		delete(s.pendingResponses, pendingID)
+	}
+}
+
 func (s *realtimeSession) consumePendingRealtimeResponse(eventID string) bool {
 	if eventID == "" {
 		return false
@@ -2213,6 +2221,7 @@ func (s *realtimeSession) Close() error {
 		}
 		s.emitSessionCloseMetrics()
 		s.closeRealtimeGeneration()
+		s.clearPendingRealtimeResponses()
 		s.cancel()
 		s.mu.Lock()
 		defer s.mu.Unlock()
