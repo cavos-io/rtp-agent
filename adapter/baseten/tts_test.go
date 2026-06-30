@@ -355,6 +355,24 @@ func TestBasetenTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 }
 
+func TestBasetenTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &basetenTTSChunkedStream{
+		body:       basetenErrorReadCloser{err: errors.New("socket closed")},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read failure", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestBasetenTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &basetenCloseErrorBody{reader: strings.NewReader("ab")}
 	stream := &basetenTTSChunkedStream{
@@ -1030,6 +1048,18 @@ func (b *basetenCloseErrorBody) Close() error {
 	if b.closeCount > 1 {
 		return errors.New("already closed")
 	}
+	return nil
+}
+
+type basetenErrorReadCloser struct {
+	err error
+}
+
+func (b basetenErrorReadCloser) Read([]byte) (int, error) {
+	return 0, b.err
+}
+
+func (b basetenErrorReadCloser) Close() error {
 	return nil
 }
 
