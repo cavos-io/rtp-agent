@@ -85,9 +85,7 @@ const deepgramSTTCloseStreamMessage = `{"type": "CloseStream"}`
 
 func WithDeepgramSTTBaseURL(baseURL string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
-		if baseURL != "" {
-			s.baseURL = strings.TrimRight(baseURL, "/")
-		}
+		s.baseURL = strings.TrimRight(baseURL, "/")
 	}
 }
 
