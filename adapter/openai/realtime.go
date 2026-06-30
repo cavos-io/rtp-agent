@@ -1864,26 +1864,14 @@ func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) 
 	channelCount := int(frame.NumChannels)
 	n.hasTail = false
 	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
-		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(openAIRealtimeInputSampleRate))
-		if srcIdx >= samplesPerChannel {
-			srcIdx = samplesPerChannel - 1
-		}
-		var sum int32
-		for ch := 0; ch < channelCount; ch++ {
-			offset := (int(srcIdx)*channelCount + ch) * 2
-			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
-		}
-		sample := sum / int32(channelCount)
-		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(int16(sample)))
+		srcPos := uint64(outIdx) * uint64(frame.SampleRate)
+		srcIdx := uint32(srcPos / uint64(openAIRealtimeInputSampleRate))
+		frac := srcPos % uint64(openAIRealtimeInputSampleRate)
+		sample := openAIRealtimeInterpolatedInputSample(frame, srcIdx, frac, uint64(openAIRealtimeInputSampleRate), samplesPerChannel, channelCount)
+		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(sample))
 	}
 	if n.remainder > 0 {
-		srcIdx := samplesPerChannel - 1
-		var sum int32
-		for ch := 0; ch < channelCount; ch++ {
-			offset := (int(srcIdx)*channelCount + ch) * 2
-			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
-		}
-		n.lastSample = int16(sum / int32(channelCount))
+		n.lastSample = openAIRealtimeInputSample(frame, samplesPerChannel-1, samplesPerChannel, channelCount)
 		n.hasTail = true
 	}
 
@@ -1893,6 +1881,27 @@ func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) 
 		NumChannels:       openAIRealtimeInputNumChannels,
 		SamplesPerChannel: outSamples,
 	}, nil
+}
+
+func openAIRealtimeInputSample(frame *model.AudioFrame, sampleIndex uint32, samplesPerChannel uint32, channelCount int) int16 {
+	if sampleIndex >= samplesPerChannel {
+		sampleIndex = samplesPerChannel - 1
+	}
+	var sum int32
+	for ch := 0; ch < channelCount; ch++ {
+		offset := (int(sampleIndex)*channelCount + ch) * 2
+		sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+	}
+	return int16(sum / int32(channelCount))
+}
+
+func openAIRealtimeInterpolatedInputSample(frame *model.AudioFrame, sampleIndex uint32, frac uint64, denom uint64, samplesPerChannel uint32, channelCount int) int16 {
+	current := openAIRealtimeInputSample(frame, sampleIndex, samplesPerChannel, channelCount)
+	if frac == 0 || denom == 0 || sampleIndex+1 >= samplesPerChannel {
+		return current
+	}
+	next := openAIRealtimeInputSample(frame, sampleIndex+1, samplesPerChannel, channelCount)
+	return int16(int64(current) + (int64(next)-int64(current))*int64(frac)/int64(denom))
 }
 
 func (n *openAIRealtimeInputAudioNormalizer) flush() *model.AudioFrame {

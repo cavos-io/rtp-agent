@@ -2126,6 +2126,39 @@ func TestRealtimeSessionCommitAudioFlushesResamplerTail(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "single resampler tail below commit threshold should not commit audio buffer")
 }
 
+func TestRealtimeInputAudioNormalizerInterpolatesFractionalSamples(t *testing.T) {
+	var normalizer openAIRealtimeInputAudioNormalizer
+	data := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(int16(i*100)))
+	}
+
+	frame, err := normalizer.normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("normalize error = %v", err)
+	}
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want 24000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want 1", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 54 {
+		t.Fatalf("SamplesPerChannel = %d, want 54", frame.SamplesPerChannel)
+	}
+	if got := int16(binary.LittleEndian.Uint16(frame.Data[0:2])); got != 0 {
+		t.Fatalf("first sample = %d, want 0", got)
+	}
+	if got := int16(binary.LittleEndian.Uint16(frame.Data[2:4])); got != 183 {
+		t.Fatalf("second sample = %d, want fractional interpolation sample 183", got)
+	}
+}
+
 func TestRealtimeSessionClearAudioDropsBufferedTail(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
