@@ -51,11 +51,17 @@ func TestBasetenLLMChatDelegatesToOpenAICompatibleEndpoint(t *testing.T) {
 		t.Fatalf("newBasetenLLMWithBaseURL error = %v", err)
 	}
 
-	_, err = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	stream, err := provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream like reference", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Chat error = %T %v, want APIStatusError from local endpoint", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError from local endpoint", err, err)
 	}
 	if client.authorization != "Bearer test-key" {
 		t.Fatalf("Authorization = %q, want Bearer test-key", client.authorization)
