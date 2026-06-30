@@ -2577,8 +2577,57 @@ func TestOpenAITTSDecodeFailureUnregistersReferenceStream(t *testing.T) {
 	}
 }
 
-func TestOpenAITTSSSEInvalidBase64ClosesReferenceStream(t *testing.T) {
-	body := &countingDataReadCloser{reader: strings.NewReader(`data: {"type":"speech.audio.delta","delta":"%%%%"}` + "\n\n")}
+func TestOpenAITTSSSEIgnoresPunctuationOnlyBase64LikeReference(t *testing.T) {
+	wantAudio := []byte{1, 2, 3, 4}
+	body := &countingDataReadCloser{reader: strings.NewReader(
+		`data: {"type":"speech.audio.delta","delta":"%%%%"}` + "\n\n" +
+			`data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
+			`data: {"type":"speech.audio.done"}` + "\n\n")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want reference decoder to ignore punctuation-only base64", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, wantAudio) {
+		t.Fatalf("audio = %#v, want later valid PCM audio after ignored punctuation-only delta", audio)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final = %#v, want final marker after valid audio", final)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after final marker", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want finalized SSE stream unregistered", streamCount)
+	}
+}
+
+func TestOpenAITTSSSEInvalidBase64PaddingClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: strings.NewReader(`data: {"type":"speech.audio.delta","delta":"not-base64"}` + "\n\n")}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,

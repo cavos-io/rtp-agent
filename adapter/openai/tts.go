@@ -707,7 +707,7 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 			if audioB64 == "" {
 				continue
 			}
-			audioData, err := base64.StdEncoding.DecodeString(audioB64)
+			audioData, err := openAITTSDecodeSSEAudioBase64(audioB64)
 			if err != nil {
 				return nil, s.terminalDecodeError(llm.NewAPIConnectionError(err.Error()))
 			}
@@ -1056,7 +1056,7 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 			if audioB64 == "" {
 				continue
 			}
-			audioData, err := base64.StdEncoding.DecodeString(audioB64)
+			audioData, err := openAITTSDecodeSSEAudioBase64(audioB64)
 			if err != nil {
 				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
 				return
@@ -1089,6 +1089,27 @@ func openAITTSReadError(err error) error {
 		return llm.NewAPITimeoutError("")
 	}
 	return llm.NewAPIConnectionError(openAIConnectionErrorMessage(err))
+}
+
+func openAITTSDecodeSSEAudioBase64(value string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return data, nil
+	}
+	filtered := make([]byte, 0, len(value))
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if (c >= 'A' && c <= 'Z') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') ||
+			c == '+' || c == '/' || c == '=' {
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
 
 func (s *openaiTTSChunkedStream) terminalReadError(err error) error {
