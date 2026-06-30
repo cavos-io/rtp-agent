@@ -931,13 +931,13 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 			"instructions": instructions,
 		},
 	}
-	if err := s.sendMsg(msg); err != nil {
-		return err
-	}
 	s.mu.Lock()
 	s.instructions = instructions
 	s.instructionsSet = true
 	s.mu.Unlock()
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1260,6 +1260,11 @@ func openAIRealtimeCreateChatItemMessage(chatCtx *llm.ChatContext, previousItemI
 func openAIRealtimeChatItemMessage(item llm.ChatItem) (map[string]any, error) {
 	switch it := item.(type) {
 	case *llm.ChatMessage:
+		switch it.Role {
+		case llm.ChatRoleSystem, llm.ChatRoleDeveloper, llm.ChatRoleUser, llm.ChatRoleAssistant:
+		default:
+			return nil, fmt.Errorf("unsupported role: %s", it.Role)
+		}
 		content, err := openAIRealtimeChatMessageContent(it)
 		if err != nil {
 			return nil, err
@@ -1377,13 +1382,6 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 		s.mu.Unlock()
 		return nil
 	}
-	s.mu.Unlock()
-	msg["session"] = changedSession
-	changedSession["type"] = "realtime"
-	if err := s.sendMsg(msg); err != nil {
-		return err
-	}
-	s.mu.Lock()
 	if s.optionsState == nil {
 		s.optionsState = make(map[string]any, len(changedOptions))
 	}
@@ -1391,6 +1389,11 @@ func (s *realtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) erro
 		s.optionsState[key] = value
 	}
 	s.mu.Unlock()
+	msg["session"] = changedSession
+	changedSession["type"] = "realtime"
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1964,7 +1967,7 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	eventID, _ := msg["event_id"].(string)
 	s.addPendingRealtimeResponse(eventID)
 	if err := s.sendMsg(msg); err != nil {
-		s.clearPendingRealtimeResponse(eventID)
+		s.startResponseCreateTimeout(eventID)
 		return err
 	}
 	s.startResponseCreateTimeout(eventID)
@@ -2159,15 +2162,13 @@ func openAIRealtimeCommitAudioMessage() map[string]any {
 }
 
 func (s *realtimeSession) ClearAudio() error {
-	if err := s.sendMsg(openAIRealtimeClearAudioMessage()); err != nil {
-		return err
-	}
+	err := s.sendMsg(openAIRealtimeClearAudioMessage())
 	if s.audioBStream != nil {
 		s.audioBStream.Clear()
 	}
 	s.audioNormalizer.reset()
 	s.pushedDuration = 0
-	return nil
+	return err
 }
 
 func openAIRealtimeClearAudioMessage() map[string]any {
@@ -2703,6 +2704,12 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}
 		delta, _ := ev["delta"].(string)
 		s.trackRealtimeOutputTranscript(itemID, delta)
+	case "response.output_audio.delta", "response.audio.delta":
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
+			return llm.RealtimeEvent{}, false
+		}
+		s.trackRealtimeOutputAudioDelta(itemID)
 	case "response.done":
 		hadGeneration := s.generation != nil
 		response, _ := ev["response"].(map[string]any)
@@ -2759,6 +2766,18 @@ func (s *realtimeSession) trackRealtimeOutputTranscript(itemID, delta string) {
 	}
 	if msg := s.generation.messages[itemID]; msg != nil {
 		msg.transcript += delta
+	}
+}
+
+func (s *realtimeSession) trackRealtimeOutputAudioDelta(itemID string) {
+	if s.generation == nil {
+		return
+	}
+	if msg := s.generation.messages[itemID]; msg != nil {
+		if s.generation.timing.firstTokenAt.IsZero() {
+			s.generation.timing.firstTokenAt = time.Now()
+		}
+		s.setRealtimeMessageModalities(itemID, []string{"audio", "text"})
 	}
 }
 
@@ -3172,7 +3191,7 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 	case "response.output_audio.delta", "response.audio.delta":
 		itemID, hasItemID := ev["item_id"].(string)
 		if delta, ok := ev["delta"].(string); ok && hasItemID {
-			data, err := base64.StdEncoding.DecodeString(delta)
+			data, err := openAIRealtimeDecodeAudioBase64(delta)
 			if err != nil {
 				return llm.RealtimeEvent{}, false
 			}
@@ -3273,6 +3292,37 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		}, true
 	}
 	return llm.RealtimeEvent{}, false
+}
+
+func openAIRealtimeDecodeAudioBase64(value string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return data, nil
+	}
+	filtered := make([]byte, 0, len(value))
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if (c >= 'A' && c <= 'Z') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') ||
+			c == '+' || c == '/' || c == '=' {
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	hasData := false
+	for _, c := range filtered {
+		if c != '=' {
+			hasData = true
+			break
+		}
+	}
+	if !hasData {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
 
 func (s *realtimeSession) resolveRealtimeChatContextCreateAck(itemID string) {

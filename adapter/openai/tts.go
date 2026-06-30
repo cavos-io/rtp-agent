@@ -36,6 +36,7 @@ type OpenAITTS struct {
 	azureADTokenProvider func(context.Context) (string, error)
 	azureADToken         string
 	azureAPIKeyAuth      bool
+	extraHeaders         map[string]string
 	model                openai.SpeechModel
 	voice                openai.SpeechVoice
 	baseURL              string
@@ -116,6 +117,23 @@ func WithOpenAITTSAzureADTokenProvider(provider func(context.Context) (string, e
 	}
 }
 
+func WithOpenAITTSOrganization(organization string) OpenAITTSOption {
+	return withOpenAITTSExtraHeader("OpenAI-Organization", organization)
+}
+
+func WithOpenAITTSProject(project string) OpenAITTSOption {
+	return withOpenAITTSExtraHeader("OpenAI-Project", project)
+}
+
+func withOpenAITTSExtraHeader(key string, value string) OpenAITTSOption {
+	return func(t *OpenAITTS) {
+		if t.extraHeaders == nil {
+			t.extraHeaders = map[string]string{}
+		}
+		t.extraHeaders[key] = value
+	}
+}
+
 func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) (*OpenAITTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -184,6 +202,17 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	if apiVersion != "" {
 		config.APIVersion = apiVersion
 	}
+	if orgID := os.Getenv(openAIOrgIDEnv); orgID != "" {
+		config.OrgID = orgID
+	}
+	if projectID := os.Getenv(openAIProjectIDEnv); projectID != "" {
+		if provider.extraHeaders == nil {
+			provider.extraHeaders = map[string]string{}
+		}
+		if _, ok := provider.extraHeaders["OpenAI-Project"]; !ok {
+			provider.extraHeaders["OpenAI-Project"] = projectID
+		}
+	}
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
 	}
@@ -203,6 +232,12 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 			provider: provider.azureADTokenProvider,
 		}
 	}
+	if len(provider.extraHeaders) > 0 {
+		config.HTTPClient = &extraHeadersHTTPClient{
+			base:    config.HTTPClient,
+			headers: cloneOpenAIStringMap(provider.extraHeaders),
+		}
+	}
 	provider.client = openai.NewClientWithConfig(config)
 	return provider, nil
 }
@@ -219,7 +254,7 @@ func newOpenAITTS(client *openai.Client, apiKey string, model openai.SpeechModel
 		apiKey:         apiKey,
 		model:          model,
 		voice:          voice,
-		baseURL:        defaultOpenAIBaseURL,
+		baseURL:        openAIBaseURLFromEnv(),
 		speed:          1.0,
 		responseFormat: openai.SpeechResponseFormatMp3,
 		streams:        make(map[*openaiTTSChunkedStream]struct{}),
@@ -700,14 +735,14 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		eventType, _ := event["type"].(string)
 		switch eventType {
 		case "speech.audio.delta":
-			audioB64, _ := event["delta"].(string)
-			if audioB64 == "" {
-				audioB64, _ = event["audio"].(string)
+			audioB64, ok, err := openAITTSSSEAudioBase64(event)
+			if err != nil {
+				return nil, s.terminalDecodeError(llm.NewAPIConnectionError(err.Error()))
 			}
-			if audioB64 == "" {
+			if !ok {
 				continue
 			}
-			audioData, err := base64.StdEncoding.DecodeString(audioB64)
+			audioData, err := openAITTSDecodeSSEAudioBase64(audioB64)
 			if err != nil {
 				return nil, s.terminalDecodeError(llm.NewAPIConnectionError(err.Error()))
 			}
@@ -1049,14 +1084,15 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 		eventType, _ := event["type"].(string)
 		switch eventType {
 		case "speech.audio.delta":
-			audioB64, _ := event["delta"].(string)
-			if audioB64 == "" {
-				audioB64, _ = event["audio"].(string)
+			audioB64, ok, err := openAITTSSSEAudioBase64(event)
+			if err != nil {
+				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
+				return
 			}
-			if audioB64 == "" {
+			if !ok {
 				continue
 			}
-			audioData, err := base64.StdEncoding.DecodeString(audioB64)
+			audioData, err := openAITTSDecodeSSEAudioBase64(audioB64)
 			if err != nil {
 				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
 				return
@@ -1089,6 +1125,78 @@ func openAITTSReadError(err error) error {
 		return llm.NewAPITimeoutError("")
 	}
 	return llm.NewAPIConnectionError(openAIConnectionErrorMessage(err))
+}
+
+func openAITTSDecodeSSEAudioBase64(value string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return data, nil
+	}
+	filtered := make([]byte, 0, len(value))
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if (c >= 'A' && c <= 'Z') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') ||
+			c == '+' || c == '/' || c == '=' {
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	hasData := false
+	for _, c := range filtered {
+		if c != '=' {
+			hasData = true
+			break
+		}
+	}
+	if !hasData {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
+}
+
+func openAITTSSSEAudioBase64(event map[string]any) (string, bool, error) {
+	if value, ok := event["delta"]; ok {
+		if audio, ok := value.(string); ok {
+			if audio != "" {
+				return audio, true, nil
+			}
+		} else if openAITTSSSETruthy(value) {
+			return "", false, fmt.Errorf("argument should be a bytes-like object or ASCII string, not %T", value)
+		}
+	}
+	if value, ok := event["audio"]; ok {
+		if audio, ok := value.(string); ok {
+			if audio != "" {
+				return audio, true, nil
+			}
+		} else if openAITTSSSETruthy(value) {
+			return "", false, fmt.Errorf("argument should be a bytes-like object or ASCII string, not %T", value)
+		}
+	}
+	return "", false, nil
+}
+
+func openAITTSSSETruthy(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case string:
+		return v != ""
+	case float64:
+		return v != 0
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	default:
+		return true
+	}
 }
 
 func (s *openaiTTSChunkedStream) terminalReadError(err error) error {

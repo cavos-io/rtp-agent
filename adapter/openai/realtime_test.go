@@ -1424,6 +1424,63 @@ func TestRealtimeUpdateOptionsSnapshotsMutableTurnDetection(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsKeepsStateAfterSendFailure(t *testing.T) {
+	session := &realtimeSession{
+		ctx: context.Background(),
+		optionsState: openAIRealtimeOptionEntries(openAIRealtimeInitialSession(
+			"gpt-realtime",
+			[]string{"text", "audio"},
+		)),
+	}
+
+	err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		Voice:                    "marin",
+		Speed:                    1.25,
+		TurnDetection:            map[string]any{"type": "server_vad", "threshold": 0.7},
+		InputAudioNoiseReduction: map[string]any{"type": "far_field"},
+	})
+	if err == nil {
+		t.Fatal("UpdateOptions error = nil, want disconnected send error")
+	}
+
+	session.mu.Lock()
+	replaySession := openAIRealtimeSessionFromOptionEntries(session.optionsState)
+	session.mu.Unlock()
+
+	audio := replaySession["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	turnDetection := input["turn_detection"].(map[string]any)
+	if turnDetection["type"] != "server_vad" || turnDetection["threshold"] != 0.7 {
+		t.Fatalf("stored turn_detection = %#v, want updated server_vad", turnDetection)
+	}
+	noiseReduction := input["noise_reduction"].(map[string]any)
+	if noiseReduction["type"] != "far_field" {
+		t.Fatalf("stored noise_reduction = %#v, want far_field", noiseReduction)
+	}
+	if output["voice"] != "marin" || output["speed"] != 1.25 {
+		t.Fatalf("stored output = %#v, want voice marin speed 1.25", output)
+	}
+}
+
+func TestRealtimeUpdateInstructionsKeepsStateAfterSendFailure(t *testing.T) {
+	session := &realtimeSession{ctx: context.Background()}
+
+	err := session.UpdateInstructions("answer briefly")
+	if err == nil {
+		t.Fatal("UpdateInstructions error = nil, want disconnected send error")
+	}
+
+	session.mu.Lock()
+	instructions := session.instructions
+	instructionsSet := session.instructionsSet
+	session.mu.Unlock()
+
+	if !instructionsSet || instructions != "answer briefly" {
+		t.Fatalf("stored instructions = %q (set=%v), want answer briefly", instructions, instructionsSet)
+	}
+}
+
 func TestRealtimeUpdateOptionsSnapshotsMutableReasoning(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -2072,6 +2129,63 @@ func TestRealtimeSessionClearAudioDropsBufferedTail(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "clear should drop stale 20ms tail before new 80ms audio")
 }
 
+func TestRealtimeSessionClearAudioSendFailureDropsBufferedTail(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "initial session update"), "session.update", "gpt-realtime")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushAudio 20ms tail error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "20ms tail should wait in local buffer before clear")
+
+	rtSession := session.(*realtimeSession)
+	rtSession.mu.Lock()
+	_ = rtSession.conn.Close()
+	rtSession.mu.Unlock()
+	if err := session.ClearAudio(); err == nil {
+		t.Fatal("ClearAudio error = nil, want websocket write failure")
+	}
+
+	rtSession.mu.Lock()
+	pushedDuration := rtSession.pushedDuration
+	var bufferedChunks []*audiomodel.AudioFrame
+	if rtSession.audioBStream != nil {
+		bufferedChunks = rtSession.audioBStream.Flush()
+	}
+	rtSession.mu.Unlock()
+	if pushedDuration != 0 {
+		t.Fatalf("pushedDuration = %v, want reset after failed clear", pushedDuration)
+	}
+	if len(bufferedChunks) != 0 {
+		t.Fatalf("buffered chunks after failed clear = %d, want stale audio dropped", len(bufferedChunks))
+	}
+}
+
 func TestRealtimeSessionClearAudioDropsResamplerTail(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -2550,6 +2664,40 @@ func TestRealtimeGenerateReplyTimeoutClearsPendingResponse(t *testing.T) {
 		t.Fatalf("Interrupt error = %v", err)
 	}
 	assertNoRealtimeMessage(t, messages, "timed-out response.create should not leave stale pending response")
+}
+
+func TestRealtimeGenerateReplySendFailureKeepsPendingUntilTimeout(t *testing.T) {
+	session := &realtimeSession{
+		ctx:                   context.Background(),
+		pendingResponses:      make(map[string]struct{}),
+		responseCreateTimeout: 10 * time.Millisecond,
+	}
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "fail send"}); err == nil {
+		t.Fatal("GenerateReply error = nil, want send failure")
+	}
+
+	session.mu.Lock()
+	pendingAfterFailure := len(session.pendingResponses)
+	session.mu.Unlock()
+	if pendingAfterFailure != 1 {
+		t.Fatalf("pending responses after send failure = %d, want 1 like reference future", pendingAfterFailure)
+	}
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		session.mu.Lock()
+		pending := len(session.pendingResponses)
+		session.mu.Unlock()
+		if pending == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("pending responses = %d, want timeout cleanup after send failure", pending)
+		case <-time.After(time.Millisecond):
+		}
+	}
 }
 
 func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
@@ -3876,9 +4024,42 @@ func TestRealtimeEventMapsOutputTextAndAudioAliases(t *testing.T) {
 		t.Fatalf("audio event metadata = item %q content %d, want msg_456 content 3", audioEvent.ItemID, audioEvent.ContentIndex)
 	}
 
+	emptyAudioEvent, ok := openAIRealtimeEvent(map[string]any{
+		"type":          "response.output_audio.delta",
+		"item_id":       "msg_789",
+		"content_index": 4,
+		"delta":         "%%%%",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent punctuation-only audio returned ok=false, want reference zero-byte audio event")
+	}
+	if emptyAudioEvent.Type != llm.RealtimeEventTypeAudio || len(emptyAudioEvent.Data) != 0 {
+		t.Fatalf("empty audio event = %#v, want zero-byte audio delta", emptyAudioEvent)
+	}
+	if emptyAudioEvent.ItemID != "msg_789" || emptyAudioEvent.ContentIndex != 4 {
+		t.Fatalf("empty audio event metadata = item %q content %d, want msg_789 content 4", emptyAudioEvent.ItemID, emptyAudioEvent.ContentIndex)
+	}
+
+	paddingOnlyEvent, ok := openAIRealtimeEvent(map[string]any{
+		"type":          "response.output_audio.delta",
+		"item_id":       "msg_pad",
+		"content_index": 5,
+		"delta":         "====%%%%",
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent padding-only audio returned ok=false, want reference zero-byte audio event")
+	}
+	if paddingOnlyEvent.Type != llm.RealtimeEventTypeAudio || len(paddingOnlyEvent.Data) != 0 {
+		t.Fatalf("padding-only audio event = %#v, want zero-byte audio delta", paddingOnlyEvent)
+	}
+	if paddingOnlyEvent.ItemID != "msg_pad" || paddingOnlyEvent.ContentIndex != 5 {
+		t.Fatalf("padding-only audio event metadata = item %q content %d, want msg_pad content 5", paddingOnlyEvent.ItemID, paddingOnlyEvent.ContentIndex)
+	}
+
 	if _, ok := openAIRealtimeEvent(map[string]any{
-		"type":  "response.output_audio.delta",
-		"delta": "not-base64",
+		"type":    "response.output_audio.delta",
+		"item_id": "msg_bad",
+		"delta":   "not-base64",
 	}); ok {
 		t.Fatal("openAIRealtimeEvent invalid audio returned ok=true, want false")
 	}
@@ -4302,6 +4483,68 @@ func TestRealtimeSessionRoutesContentPartModalitiesToGenerationStream(t *testing
 	case modalities := <-msg.ModalitiesCh:
 		t.Fatalf("unexpected duplicate modalities = %#v", modalities)
 	default:
+	}
+}
+
+func TestRealtimeSessionInvalidOutputAudioDeltaSetsReferenceModalities(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_bad_audio",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio.delta",
+		"item_id": "msg_bad_audio",
+		"delta":   "not-base64",
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio.delta",
+		"item_id": "msg_bad_audio",
+		"delta":   "not-base64",
+	}); ok {
+		t.Fatalf("openAIRealtimeEvent = %#v, true; want invalid audio ignored after modality side effect", ev)
+	}
+
+	select {
+	case frame := <-msg.AudioCh:
+		t.Fatalf("audio frame = %#v, want none for invalid provider audio", frame)
+	default:
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":   "msg_bad_audio",
+			"type": "message",
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent done = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case modalities := <-msg.ModalitiesCh:
+		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+			t.Fatalf("modalities = %#v, want reference audio,text after invalid audio delta", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for modalities")
 	}
 }
 
@@ -7764,6 +8007,23 @@ func TestRealtimeChatContextCreateMessagesDropsNonTextForNonUserRoles(t *testing
 	assistantContent := assistantItem["content"].([]map[string]any)
 	if len(assistantContent) != 1 || assistantContent[0]["type"] != "output_text" || assistantContent[0]["text"] != "assistant text" {
 		t.Fatalf("assistant content = %#v, want only text content", assistantContent)
+	}
+}
+
+func TestRealtimeChatContextCreateMessagesRejectsUnsupportedRole(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Append(&llm.ChatMessage{
+		ID:      "msg_tool",
+		Role:    llm.ChatRole("tool"),
+		Content: []llm.ChatContent{{Text: "bad role"}},
+	})
+
+	_, err := openAIRealtimeChatContextCreateMessages(chatCtx)
+	if err == nil {
+		t.Fatal("openAIRealtimeChatContextCreateMessages error = nil, want unsupported role error")
+	}
+	if got, want := err.Error(), "unsupported role: tool"; got != want {
+		t.Fatalf("openAIRealtimeChatContextCreateMessages error = %q, want %q", got, want)
 	}
 }
 

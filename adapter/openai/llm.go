@@ -394,6 +394,7 @@ func NewOpenAILLM(apiKey string, model string, opts ...OpenAILLMOption) (*OpenAI
 		return nil, fmt.Errorf("%s", openAIAPIKeyRequiredMessage)
 	}
 	config := openai.DefaultConfig(apiKey)
+	config.BaseURL = openAIBaseURLFromEnv()
 	return newOpenAILLMWithConfigAndModel(config, model, opts...)
 }
 

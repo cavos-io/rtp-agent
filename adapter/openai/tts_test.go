@@ -59,6 +59,19 @@ func TestNewOpenAITTSUsesEnvironmentAPIKey(t *testing.T) {
 	}
 }
 
+func TestNewOpenAITTSUsesEnvironmentBaseURL(t *testing.T) {
+	t.Setenv(openAIBaseURLEnv, "https://env.openai.test/v1")
+
+	provider, err := NewOpenAITTS("test-key", "", "")
+	if err != nil {
+		t.Fatalf("NewOpenAITTS error = %v", err)
+	}
+
+	if got := provider.Provider(); got != "env.openai.test" {
+		t.Fatalf("Provider() = %q, want OPENAI_BASE_URL host", got)
+	}
+}
+
 func TestNewOpenAITTSRequiresAPIKey(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "")
 
@@ -145,11 +158,17 @@ func TestNewAzureOpenAITTSFallsBackToReferenceEnvironment(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
 	t.Setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
 	t.Setenv("OPENAI_API_VERSION", "2024-08-01-preview")
+	t.Setenv("OPENAI_ORG_ID", "env-org")
+	t.Setenv("OPENAI_PROJECT_ID", "env-project")
 	var gotAPIKey string
+	var gotOrganization string
+	var gotProject string
 	var gotPath string
 	var gotQuery string
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotOrganization = r.Header.Get("OpenAI-Organization")
+		gotProject = r.Header.Get("OpenAI-Project")
 		gotPath = r.URL.Path
 		gotQuery = r.URL.RawQuery
 		return &http.Response{
@@ -189,6 +208,63 @@ func TestNewAzureOpenAITTSFallsBackToReferenceEnvironment(t *testing.T) {
 	}
 	if gotAPIKey != "env-azure-key" {
 		t.Fatalf("api-key header = %q, want env Azure API key", gotAPIKey)
+	}
+	if gotOrganization != "env-org" {
+		t.Fatalf("OpenAI-Organization header = %q, want env organization", gotOrganization)
+	}
+	if gotProject != "env-project" {
+		t.Fatalf("OpenAI-Project header = %q, want env project", gotProject)
+	}
+}
+
+func TestNewAzureOpenAITTSUsesExplicitOrganizationProjectOptions(t *testing.T) {
+	t.Setenv("OPENAI_ORG_ID", "env-org")
+	t.Setenv("OPENAI_PROJECT_ID", "env-project")
+	var gotOrganization string
+	var gotProject string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotOrganization = r.Header.Get("OpenAI-Organization")
+		gotProject = r.Header.Get("OpenAI-Project")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com",
+		"tts-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		WithOpenAITTSOrganization("explicit-org"),
+		WithOpenAITTSProject("explicit-project"),
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if gotOrganization != "explicit-org" {
+		t.Fatalf("OpenAI-Organization header = %q, want explicit organization", gotOrganization)
+	}
+	if gotProject != "explicit-project" {
+		t.Fatalf("OpenAI-Project header = %q, want explicit project", gotProject)
 	}
 }
 
@@ -2577,8 +2653,58 @@ func TestOpenAITTSDecodeFailureUnregistersReferenceStream(t *testing.T) {
 	}
 }
 
-func TestOpenAITTSSSEInvalidBase64ClosesReferenceStream(t *testing.T) {
-	body := &countingDataReadCloser{reader: strings.NewReader(`data: {"type":"speech.audio.delta","delta":"%%%%"}` + "\n\n")}
+func TestOpenAITTSSSEIgnoresPunctuationOnlyBase64LikeReference(t *testing.T) {
+	wantAudio := []byte{1, 2, 3, 4}
+	body := &countingDataReadCloser{reader: strings.NewReader(
+		`data: {"type":"speech.audio.delta","delta":"%%%%"}` + "\n\n" +
+			`data: {"type":"speech.audio.delta","delta":"====%%%%"}` + "\n\n" +
+			`data: {"type":"speech.audio.delta","delta":"` + base64.StdEncoding.EncodeToString(wantAudio) + `"}` + "\n\n" +
+			`data: {"type":"speech.audio.done"}` + "\n\n")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want reference decoder to ignore punctuation-only base64", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, wantAudio) {
+		t.Fatalf("audio = %#v, want later valid PCM audio after ignored punctuation-only delta", audio)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final = %#v, want final marker after valid audio", final)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after final marker", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want finalized SSE stream unregistered", streamCount)
+	}
+}
+
+func TestOpenAITTSSSEInvalidBase64PaddingClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: strings.NewReader(`data: {"type":"speech.audio.delta","delta":"not-base64"}` + "\n\n")}
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -2613,6 +2739,45 @@ func TestOpenAITTSSSEInvalidBase64ClosesReferenceStream(t *testing.T) {
 	provider.mu.Unlock()
 	if streamCount != 0 {
 		t.Fatalf("registered streams = %d, want malformed SSE stream unregistered", streamCount)
+	}
+}
+
+func TestOpenAITTSSSENonStringAudioClosesReferenceStream(t *testing.T) {
+	body := &countingDataReadCloser{reader: strings.NewReader(`data: {"type":"speech.audio.delta","delta":123}` + "\n\n")}
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})
+	provider := mustNewOpenAITTS(t, "test-key", goopenai.TTSModelGPT4oMini, goopenai.VoiceAsh,
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		withOpenAITTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("audio = %#v, want no synthesized audio for non-string SSE audio", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after non-string SSE audio", body.closed)
+	}
+	provider.mu.Lock()
+	streamCount := len(provider.streams)
+	provider.mu.Unlock()
+	if streamCount != 0 {
+		t.Fatalf("registered streams = %d, want non-string SSE stream unregistered", streamCount)
 	}
 }
 
