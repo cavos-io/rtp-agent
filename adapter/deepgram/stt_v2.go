@@ -86,9 +86,7 @@ func WithDeepgramSTTv2Model(model string) DeepgramSTTv2Option {
 
 func WithDeepgramSTTv2SampleRate(sampleRate int) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if sampleRate > 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
