@@ -541,7 +541,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 						Name:      part.FunctionCall.Name,
 						Arguments: string(args),
 						Type:      "function",
-						CallID:    "call_" + part.FunctionCall.Name, // Gemini doesn't always provide CallID natively like OpenAI
+						CallID:    googleFunctionCallID(part.FunctionCall),
 					})
 				}
 			}
@@ -557,6 +557,16 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 	}
 
 	return chunk, nil
+}
+
+func googleFunctionCallID(call *genai.FunctionCall) string {
+	if call == nil {
+		return ""
+	}
+	if call.ID != "" {
+		return call.ID
+	}
+	return "call_" + call.Name
 }
 
 func (s *googleLLMStream) Close() error {

@@ -287,6 +287,49 @@ func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "provider-call-123",
+								Name: "lookup",
+								Args: map[string]any{"query": "weather"},
+							},
+						}},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one tool call", chunk)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.CallID != "provider-call-123" {
+		t.Fatalf("CallID = %q, want provider-call-123", call.CallID)
+	}
+	if call.Name != "lookup" || call.Type != "function" {
+		t.Fatalf("tool call = %#v, want lookup function", call)
+	}
+	if call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("Arguments = %q, want compact JSON args", call.Arguments)
+	}
+}
+
 func assertGoogleTextPart(t *testing.T, parts []*genai.Part, index int, want string) {
 	t.Helper()
 	if len(parts) <= index {
