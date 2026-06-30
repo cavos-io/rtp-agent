@@ -205,6 +205,99 @@ func TestDeepgramTTSStreamsReuseReferencePooledConnection(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSUpdateOptionsKeepsReferencePooledConnection(t *testing.T) {
+	dials := make(chan net.Conn, 2)
+	writes := make(chan string, 8)
+	serverErr := make(chan error, 1)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			dials <- serverConn
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "aura-2-andromeda-en", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	first, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("first Stream() error = %v", err)
+	}
+	if err := first.PushText("first"); err != nil {
+		t.Fatalf("first PushText() error = %v", err)
+	}
+	firstEnd := make(chan error, 1)
+	go func() {
+		firstEnd <- tts.EndSynthesizeStreamInput(first)
+	}()
+	firstConn := receiveDeepgramTTSDial(t, dials, "first TTS websocket")
+	go runDeepgramTTSReusableWebsocketServer(firstConn, writes, serverErr)
+	if err := <-firstEnd; err != nil {
+		t.Fatalf("first EndInput() error = %v", err)
+	}
+	if audio, err := first.Next(); err != nil || audio == nil || !audio.IsFinal {
+		t.Fatalf("first Next() = (%+v, %v), want final marker", audio, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+
+	provider.UpdateOptions("aura-2-asteria-en")
+	second, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("second Stream() error = %v", err)
+	}
+	defer second.Close()
+	if err := second.PushText("second"); err != nil {
+		t.Fatalf("second PushText() error = %v", err)
+	}
+	secondEnd := make(chan error, 1)
+	go func() {
+		secondEnd <- tts.EndSynthesizeStreamInput(second)
+	}()
+	select {
+	case extra := <-dials:
+		_ = extra.Close()
+		t.Fatal("updated TTS stream opened a new websocket instead of reusing reference pooled connection")
+	case err := <-secondEnd:
+		if err != nil {
+			t.Fatalf("second EndInput() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second EndInput() did not finish on pooled websocket after update_options")
+	}
+
+	gotWrites := []string{
+		receiveDeepgramTTSWrite(t, writes, "first Speak"),
+		receiveDeepgramTTSWrite(t, writes, "first Flush"),
+		receiveDeepgramTTSWrite(t, writes, "second Speak"),
+		receiveDeepgramTTSWrite(t, writes, "second Flush"),
+	}
+	wantWrites := []string{
+		`{"type": "Speak", "text": "first "}`,
+		deepgramTTSFlushMessage,
+		`{"type": "Speak", "text": "second "}`,
+		deepgramTTSFlushMessage,
+	}
+	if !reflect.DeepEqual(gotWrites, wantWrites) {
+		t.Fatalf("pooled websocket writes after update_options = %#v, want %#v", gotWrites, wantWrites)
+	}
+	if audio, err := second.Next(); err != nil || audio == nil || !audio.IsFinal {
+		t.Fatalf("second Next() = (%+v, %v), want final marker", audio, err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSConstructorOptionsMatchReference(t *testing.T) {
 	t.Setenv("DEEPGRAM_API_KEY", "env-key")
 
@@ -1508,6 +1601,66 @@ func TestDeepgramTTSFinalCloseDrainsQueuedAudio(t *testing.T) {
 	}
 	if audio != final {
 		t.Fatalf("Next() final = %#v, want %#v", audio, final)
+	}
+}
+
+func TestDeepgramTTSStreamReleasesReferencePoolBeforeFinalMarker(t *testing.T) {
+	provider := NewDeepgramTTS("test-key", "")
+	stream := &deepgramTTSStream{
+		provider:    provider,
+		audio:       make(chan *tts.SynthesizedAudio),
+		errCh:       make(chan error, 1),
+		inputEnded:  true,
+		inputClosed: true,
+	}
+	if !provider.registerStream(stream) {
+		t.Fatal("registerStream returned false")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- stream.handleTextMessage([]byte(`{"type":"Flushed"}`))
+	}()
+
+	deadline := time.After(100 * time.Millisecond)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	releasedBeforeFinal := false
+	for !releasedBeforeFinal {
+		stream.mu.Lock()
+		releasedBeforeFinal = stream.closed && stream.drainClosed
+		stream.mu.Unlock()
+		if releasedBeforeFinal {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline:
+			select {
+			case audio := <-stream.audio:
+				if audio == nil || !audio.IsFinal {
+					t.Fatalf("released late and audio = %#v, want final marker", audio)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("handleTextMessage neither released pool nor exposed final marker")
+			}
+			if err := <-done; err != nil {
+				t.Fatalf("handleTextMessage error = %v", err)
+			}
+			t.Fatal("final marker became readable before stream released the reference pooled connection")
+		}
+	}
+
+	select {
+	case audio := <-stream.audio:
+		if audio == nil || !audio.IsFinal {
+			t.Fatalf("audio = %#v, want final marker", audio)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for final marker")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("handleTextMessage error = %v", err)
 	}
 }
 

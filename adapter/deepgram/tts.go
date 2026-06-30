@@ -45,7 +45,6 @@ type DeepgramTTS struct {
 	streams               map[*deepgramTTSStream]struct{}
 	closed                bool
 	prewarmConn           *websocket.Conn
-	prewarmURL            string
 	prewarming            bool
 }
 
@@ -157,14 +156,13 @@ func (t *DeepgramTTS) Prewarm() {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.prewarming = false
-		if err != nil || t.closed || t.prewarmConn != nil || streamURL != buildDeepgramTTSStreamURL(t) {
+		if err != nil || t.closed || t.prewarmConn != nil {
 			if conn != nil {
 				closeDeepgramTTSPrewarmedConn(conn)
 			}
 			return
 		}
 		t.prewarmConn = conn
-		t.prewarmURL = streamURL
 	}()
 }
 
@@ -178,7 +176,6 @@ func (t *DeepgramTTS) Close() error {
 	t.streams = make(map[*deepgramTTSStream]struct{})
 	prewarmConn := t.prewarmConn
 	t.prewarmConn = nil
-	t.prewarmURL = ""
 	t.mu.Unlock()
 
 	var closeErr error
@@ -286,7 +283,7 @@ func (t *DeepgramTTS) unregisterStream(stream *deepgramTTSStream) {
 	delete(t.streams, stream)
 }
 
-func (t *DeepgramTTS) takePrewarmedConn(streamURL string) *websocket.Conn {
+func (t *DeepgramTTS) takePrewarmedConn() *websocket.Conn {
 	if t == nil {
 		return nil
 	}
@@ -296,17 +293,11 @@ func (t *DeepgramTTS) takePrewarmedConn(streamURL string) *websocket.Conn {
 	if conn == nil {
 		return nil
 	}
-	prewarmURL := t.prewarmURL
 	t.prewarmConn = nil
-	t.prewarmURL = ""
-	if streamURL != prewarmURL && prewarmURL != "" {
-		closeDeepgramTTSPrewarmedConn(conn)
-		return nil
-	}
 	return conn
 }
 
-func (t *DeepgramTTS) storePrewarmedConn(streamURL string, conn *websocket.Conn) bool {
+func (t *DeepgramTTS) storePrewarmedConn(conn *websocket.Conn) bool {
 	if t == nil || conn == nil {
 		return false
 	}
@@ -316,7 +307,6 @@ func (t *DeepgramTTS) storePrewarmedConn(streamURL string, conn *websocket.Conn)
 		return false
 	}
 	t.prewarmConn = conn
-	t.prewarmURL = streamURL
 	return true
 }
 
@@ -575,6 +565,7 @@ type deepgramTTSStream struct {
 	errCh       chan error
 	mu          sync.Mutex
 	closed      bool
+	closing     bool
 	inputClosed bool
 	inputEnded  bool
 	drainClosed bool
@@ -617,7 +608,6 @@ func (s *deepgramTTSStream) readLoop() {
 			}
 			return
 		}
-		s.signalCloseAck()
 
 		if msgType == websocket.BinaryMessage {
 			frameData := deepgramTTSTelephonyToPCM(s.encoding, message)
@@ -634,6 +624,7 @@ func (s *deepgramTTSStream) readLoop() {
 				s.markReadDone()
 				return
 			}
+			s.signalCloseAck()
 		} else {
 			if err := s.handleTextMessage(message); err != nil {
 				if errors.Is(err, errDeepgramTTSReleasedToPool) {
@@ -644,6 +635,7 @@ func (s *deepgramTTSStream) readLoop() {
 				s.sendError(err)
 				return
 			}
+			s.signalCloseAck()
 		}
 	}
 }
@@ -732,15 +724,16 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	case "Flushed":
 		audio := &tts.SynthesizedAudio{IsFinal: true}
 		s.annotateAudio(audio)
-		if !s.sendAudio(audio) {
-			return nil
-		}
-		s.signalFlushed()
 		s.mu.Lock()
 		s.flushPending = false
 		s.mu.Unlock()
 		s.segmentID = uuid.NewString()
-		if s.closeAfterFinal() {
+		released := s.closeAfterFinal()
+		if !s.sendAudio(audio) {
+			return nil
+		}
+		s.signalFlushed()
+		if released {
 			return errDeepgramTTSReleasedToPool
 		}
 	case "Error", "error":
@@ -1025,17 +1018,20 @@ func (s *deepgramTTSStream) consumePendingToken(token string) {
 
 func (s *deepgramTTSStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.closing {
+		s.mu.Unlock()
 		return nil
 	}
-	s.closed = true
+	s.closing = true
 	s.inputClosed = true
 	if !s.hasConnectionLocked() {
+		s.closed = true
+		s.closing = false
 		s.markInputSent()
 		if s.provider != nil {
 			s.provider.unregisterStream(s)
 		}
+		s.mu.Unlock()
 		return nil
 	}
 	s.drainCloseAckLocked()
@@ -1043,15 +1039,22 @@ func (s *deepgramTTSStream) Close() error {
 	closeErr := s.writeTextData(deepgramTTSCloseMessage, map[string]interface{}{"type": "Close"})
 	s.markInputSent()
 	s.closeDoneIfAudioDeliveryWouldBlockLocked()
-	if flushErr == nil && closeErr == nil && !s.readDone {
+	shouldWait := flushErr == nil && closeErr == nil && !s.readDone
+	s.mu.Unlock()
+	if shouldWait {
 		s.waitForFlushedAckLocked()
 	}
+	s.mu.Lock()
+	s.closed = true
+	s.closing = false
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
 	if err := s.closeConnection(); err != nil {
+		s.mu.Unlock()
 		return err
 	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -1060,7 +1063,7 @@ func (s *deepgramTTSStream) ensureConnectedLocked() error {
 		return nil
 	}
 	if s.provider != nil {
-		if conn := s.provider.takePrewarmedConn(s.streamURL); conn != nil {
+		if conn := s.provider.takePrewarmedConn(); conn != nil {
 			if s.closed || s.provider.isClosed() {
 				closeDeepgramTTSPrewarmedConn(conn)
 				return io.ErrClosedPipe
@@ -1201,15 +1204,14 @@ func (s *deepgramTTSStream) closeAfterFinal() bool {
 	if !s.inputEnded {
 		return false
 	}
-	if s.closed {
+	if s.closed || s.closing {
 		return false
 	}
 	s.closed = true
 	s.drainClosed = true
 	conn := s.conn
-	streamURL := s.streamURL
 	released := false
-	if s.provider != nil && s.provider.storePrewarmedConn(streamURL, conn) {
+	if s.provider != nil && s.provider.storePrewarmedConn(conn) {
 		s.conn = nil
 		s.writeJSON = nil
 		s.writeText = nil
