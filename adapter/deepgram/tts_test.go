@@ -1678,6 +1678,24 @@ func TestDeepgramTTSUpdateOptionsMatchesReference(t *testing.T) {
 	if got := provider.Model(); got != "aura-2-asteria-en" {
 		t.Fatalf("Model() = %q, want aura-2-asteria-en", got)
 	}
+
+	provider.UpdateOptions("")
+	requestURL, _ = buildDeepgramTTSSynthesizeRequest(provider, "hello")
+	parsedRequest, err = url.Parse(requestURL)
+	if err != nil {
+		t.Fatalf("parse synthesize url after empty update: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsedRequest.Query(), "model", "")
+
+	streamURL = buildDeepgramTTSStreamURL(provider)
+	parsedStream, err = url.Parse(streamURL)
+	if err != nil {
+		t.Fatalf("parse stream url after empty update: %v", err)
+	}
+	assertDeepgramTTSQuery(t, parsedStream.Query(), "model", "")
+	if got := provider.Model(); got != "" {
+		t.Fatalf("Model() after empty update = %q, want explicit empty reference model", got)
+	}
 }
 
 func TestDeepgramTTSStreamCloseSendsReferenceFlushAndClose(t *testing.T) {

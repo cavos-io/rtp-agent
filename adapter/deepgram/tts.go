@@ -131,9 +131,7 @@ func (t *DeepgramTTS) Model() string    { return t.model }
 func (t *DeepgramTTS) Provider() string { return "Deepgram" }
 
 func (t *DeepgramTTS) UpdateOptions(model string) {
-	if model != "" {
-		t.model = model
-	}
+	t.model = model
 }
 
 func (t *DeepgramTTS) Prewarm() {
