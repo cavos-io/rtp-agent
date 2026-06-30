@@ -254,9 +254,11 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		return nil, err
 	}
 
+	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &deepgramTTSStream{
 		provider:   t,
-		ctx:        ctx,
+		ctx:        streamCtx,
+		cancel:     cancel,
 		apiKey:     t.apiKey,
 		streamURL:  buildDeepgramTTSStreamURL(t),
 		audio:      make(chan *tts.SynthesizedAudio, 10),
@@ -579,6 +581,7 @@ func (s *deepgramTTSChunkedStream) cancelRequestLocked() {
 type deepgramTTSStream struct {
 	provider    *DeepgramTTS
 	ctx         context.Context
+	cancel      context.CancelFunc
 	apiKey      string
 	streamURL   string
 	conn        *websocket.Conn
@@ -1038,6 +1041,9 @@ func (s *deepgramTTSStream) consumePendingToken(token string) {
 }
 
 func (s *deepgramTTSStream) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.mu.Lock()
 	if s.closed || s.closing {
 		s.mu.Unlock()
