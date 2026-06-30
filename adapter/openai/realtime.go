@@ -2703,6 +2703,12 @@ func (s *realtimeSession) trackOpenAIRealtimeEvent(ev map[string]any) (llm.Realt
 		}
 		delta, _ := ev["delta"].(string)
 		s.trackRealtimeOutputTranscript(itemID, delta)
+	case "response.output_audio.delta", "response.audio.delta":
+		itemID, hasItemID := ev["item_id"].(string)
+		if !hasItemID {
+			return llm.RealtimeEvent{}, false
+		}
+		s.trackRealtimeOutputAudioDelta(itemID)
 	case "response.done":
 		hadGeneration := s.generation != nil
 		response, _ := ev["response"].(map[string]any)
@@ -2759,6 +2765,18 @@ func (s *realtimeSession) trackRealtimeOutputTranscript(itemID, delta string) {
 	}
 	if msg := s.generation.messages[itemID]; msg != nil {
 		msg.transcript += delta
+	}
+}
+
+func (s *realtimeSession) trackRealtimeOutputAudioDelta(itemID string) {
+	if s.generation == nil {
+		return
+	}
+	if msg := s.generation.messages[itemID]; msg != nil {
+		if s.generation.timing.firstTokenAt.IsZero() {
+			s.generation.timing.firstTokenAt = time.Now()
+		}
+		s.setRealtimeMessageModalities(itemID, []string{"audio", "text"})
 	}
 }
 

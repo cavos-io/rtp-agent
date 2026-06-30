@@ -4338,6 +4338,68 @@ func TestRealtimeSessionRoutesContentPartModalitiesToGenerationStream(t *testing
 	}
 }
 
+func TestRealtimeSessionInvalidOutputAudioDeltaSetsReferenceModalities(t *testing.T) {
+	session := &realtimeSession{}
+	created := session.trackRealtimeEvent(llm.RealtimeEvent{
+		Type:       llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{},
+	})
+	session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.added",
+		"item": map[string]any{
+			"id":   "msg_bad_audio",
+			"type": "message",
+		},
+	})
+
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio.delta",
+		"item_id": "msg_bad_audio",
+		"delta":   "not-base64",
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want side effect only", ev)
+	}
+	if ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":    "response.output_audio.delta",
+		"item_id": "msg_bad_audio",
+		"delta":   "not-base64",
+	}); ok {
+		t.Fatalf("openAIRealtimeEvent = %#v, true; want invalid audio ignored after modality side effect", ev)
+	}
+
+	select {
+	case frame := <-msg.AudioCh:
+		t.Fatalf("audio frame = %#v, want none for invalid provider audio", frame)
+	default:
+	}
+
+	if ev, ok := session.trackOpenAIRealtimeEvent(map[string]any{
+		"type": "response.output_item.done",
+		"item": map[string]any{
+			"id":   "msg_bad_audio",
+			"type": "message",
+		},
+	}); ok {
+		t.Fatalf("trackOpenAIRealtimeEvent done = %#v, true; want side effect only", ev)
+	}
+
+	select {
+	case modalities := <-msg.ModalitiesCh:
+		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
+			t.Fatalf("modalities = %#v, want reference audio,text after invalid audio delta", modalities)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for modalities")
+	}
+}
+
 func TestRealtimeSessionRoutesContentPartWithEmptyItemID(t *testing.T) {
 	session := &realtimeSession{}
 	created := session.trackRealtimeEvent(llm.RealtimeEvent{
