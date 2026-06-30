@@ -700,11 +700,11 @@ func (s *openaiTTSChunkedStream) nextSSE() (*tts.SynthesizedAudio, error) {
 		eventType, _ := event["type"].(string)
 		switch eventType {
 		case "speech.audio.delta":
-			audioB64, _ := event["delta"].(string)
-			if audioB64 == "" {
-				audioB64, _ = event["audio"].(string)
+			audioB64, ok, err := openAITTSSSEAudioBase64(event)
+			if err != nil {
+				return nil, s.terminalDecodeError(llm.NewAPIConnectionError(err.Error()))
 			}
-			if audioB64 == "" {
+			if !ok {
 				continue
 			}
 			audioData, err := openAITTSDecodeSSEAudioBase64(audioB64)
@@ -1049,11 +1049,12 @@ func (s *openaiTTSChunkedStream) feedSSEDecodedAudio() {
 		eventType, _ := event["type"].(string)
 		switch eventType {
 		case "speech.audio.delta":
-			audioB64, _ := event["delta"].(string)
-			if audioB64 == "" {
-				audioB64, _ = event["audio"].(string)
+			audioB64, ok, err := openAITTSSSEAudioBase64(event)
+			if err != nil {
+				s.sendDecodeReadError(llm.NewAPIConnectionError(err.Error()))
+				return
 			}
-			if audioB64 == "" {
+			if !ok {
 				continue
 			}
 			audioData, err := openAITTSDecodeSSEAudioBase64(audioB64)
@@ -1120,6 +1121,47 @@ func openAITTSDecodeSSEAudioBase64(value string) ([]byte, error) {
 		return nil, nil
 	}
 	return base64.StdEncoding.DecodeString(string(filtered))
+}
+
+func openAITTSSSEAudioBase64(event map[string]any) (string, bool, error) {
+	if value, ok := event["delta"]; ok {
+		if audio, ok := value.(string); ok {
+			if audio != "" {
+				return audio, true, nil
+			}
+		} else if openAITTSSSETruthy(value) {
+			return "", false, fmt.Errorf("argument should be a bytes-like object or ASCII string, not %T", value)
+		}
+	}
+	if value, ok := event["audio"]; ok {
+		if audio, ok := value.(string); ok {
+			if audio != "" {
+				return audio, true, nil
+			}
+		} else if openAITTSSSETruthy(value) {
+			return "", false, fmt.Errorf("argument should be a bytes-like object or ASCII string, not %T", value)
+		}
+	}
+	return "", false, nil
+}
+
+func openAITTSSSETruthy(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case string:
+		return v != ""
+	case float64:
+		return v != 0
+	case []any:
+		return len(v) > 0
+	case map[string]any:
+		return len(v) > 0
+	default:
+		return true
+	}
 }
 
 func (s *openaiTTSChunkedStream) terminalReadError(err error) error {
