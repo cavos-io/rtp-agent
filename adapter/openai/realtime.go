@@ -2728,8 +2728,9 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 	if status != "failed" && status != "incomplete" {
 		return llm.RealtimeEvent{}, false
 	}
-	statusDetails, hasDetails := response["status_details"].(map[string]any)
-	if status == "incomplete" && !hasDetails {
+	rawDetails, detailsPresent := response["status_details"]
+	statusDetails, hasDetails := rawDetails.(map[string]any)
+	if status == "incomplete" && detailsPresent && !hasDetails {
 		return llm.RealtimeEvent{}, false
 	}
 	errorBody, hasError := statusDetails["error"].(map[string]any)
