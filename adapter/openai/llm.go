@@ -298,10 +298,15 @@ func WithOpenAILLMMetadata(metadata map[string]string) OpenAILLMOption {
 
 func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
-		if l.extraParams == nil {
-			l.extraParams = map[string]any{}
+		if l.extraBody == nil {
+			l.extraBody = map[string]any{}
 		}
-		l.extraParams["verbosity"] = verbosity
+		text := map[string]any{}
+		if existing, ok := l.extraBody["text"].(map[string]any); ok {
+			text = cloneOpenAIAnyMap(existing)
+		}
+		text["verbosity"] = verbosity
+		l.extraBody["text"] = text
 	}
 }
 
