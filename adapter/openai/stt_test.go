@@ -539,6 +539,54 @@ func TestNewAzureOpenAISTTUsesEntraTokenWhenAPIKeyEmpty(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAISTTUsesReferenceEntraTokenProvider(t *testing.T) {
+	var gotAPIKey string
+	var gotAuth string
+	tokenCalls := 0
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotAuth = r.Header.Get("Authorization")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com",
+		"stt-deployment",
+		"2024-06-01",
+		"",
+		"",
+		withOpenAISTTHTTPClient(client),
+		WithOpenAISTTAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if tokenCalls != 1 {
+		t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+	}
+	if gotAPIKey != "" {
+		t.Fatalf("api-key header = %q, want removed for Entra token provider auth", gotAPIKey)
+	}
+	if gotAuth != "Bearer provider-token" {
+		t.Fatalf("Authorization = %q, want provider bearer token", gotAuth)
+	}
+}
+
 func TestAzureOpenAIRealtimeSTTWebsocketRequestMatchesReference(t *testing.T) {
 	provider, err := NewAzureOpenAISTT(
 		"gpt-4o-mini-transcribe",

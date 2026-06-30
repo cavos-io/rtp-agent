@@ -43,34 +43,35 @@ const (
 )
 
 type OpenAISTT struct {
-	client           *openai.Client
-	httpClient       openai.HTTPDoer
-	apiKey           string
-	azureADToken     string
-	baseURL          string
-	baseURLSet       bool
-	realtimeBaseURL  string
-	model            string
-	language         string
-	languageSet      bool
-	languageValue    string
-	detectLanguage   bool
-	detectOptionSet  bool
-	prompt           string
-	turnDetection    map[string]interface{}
-	turnDetectionSet bool
-	noiseReduction   string
-	useRealtime      bool
-	connect          llm.APIConnectOptions
-	maxSession       time.Duration
-	dialWebsocket    openAIRealtimeSTTWebsocketDialer
-	vad              vad.VAD
-	vadSet           bool
-	streamsMu        sync.Mutex
-	streams          map[*openAIRealtimeSTTStream]struct{}
-	nextRequestID    uint64
-	requestCancels   map[uint64]context.CancelFunc
-	closed           bool
+	client               *openai.Client
+	httpClient           openai.HTTPDoer
+	apiKey               string
+	azureADToken         string
+	azureADTokenProvider func(context.Context) (string, error)
+	baseURL              string
+	baseURLSet           bool
+	realtimeBaseURL      string
+	model                string
+	language             string
+	languageSet          bool
+	languageValue        string
+	detectLanguage       bool
+	detectOptionSet      bool
+	prompt               string
+	turnDetection        map[string]interface{}
+	turnDetectionSet     bool
+	noiseReduction       string
+	useRealtime          bool
+	connect              llm.APIConnectOptions
+	maxSession           time.Duration
+	dialWebsocket        openAIRealtimeSTTWebsocketDialer
+	vad                  vad.VAD
+	vadSet               bool
+	streamsMu            sync.Mutex
+	streams              map[*openAIRealtimeSTTStream]struct{}
+	nextRequestID        uint64
+	requestCancels       map[uint64]context.CancelFunc
+	closed               bool
 }
 
 type OpenAISTTOption func(*OpenAISTT)
@@ -169,6 +170,12 @@ func withOpenAISTTHTTPClient(client openai.HTTPDoer) OpenAISTTOption {
 	}
 }
 
+func WithOpenAISTTAzureADTokenProvider(provider func(context.Context) (string, error)) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		s.azureADTokenProvider = provider
+	}
+}
+
 func NewOpenAISTT(apiKey string, model string, opts ...OpenAISTTOption) (*OpenAISTT, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -227,7 +234,7 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if azureEndpoint == "" && !preflight.baseURLSet {
 		return nil, fmt.Errorf("%s is required for Azure OpenAI STT", azureOpenAIEndpointEnv)
 	}
-	if apiKey == "" && azureADToken == "" {
+	if apiKey == "" && azureADToken == "" && preflight.azureADTokenProvider == nil {
 		return nil, fmt.Errorf("%s or %s is required for Azure OpenAI STT", azureOpenAIAPIKeyEnv, azureOpenAIADTokenEnv)
 	}
 	if azureDeployment == "" {
@@ -236,15 +243,16 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	realtimeBaseURL := openAISTTAzureRealtimeBaseURL(azureEndpoint, azureDeployment)
 
 	provider := &OpenAISTT{
-		apiKey:          apiKey,
-		azureADToken:    azureADToken,
-		baseURL:         realtimeBaseURL,
-		realtimeBaseURL: realtimeBaseURL,
-		model:           model,
-		language:        "en",
-		connect:         llm.DefaultAPIConnectOptions(),
-		maxSession:      10 * time.Minute,
-		dialWebsocket:   defaultOpenAIRealtimeSTTWebsocketDialer,
+		apiKey:               apiKey,
+		azureADToken:         azureADToken,
+		azureADTokenProvider: preflight.azureADTokenProvider,
+		baseURL:              realtimeBaseURL,
+		realtimeBaseURL:      realtimeBaseURL,
+		model:                model,
+		language:             "en",
+		connect:              llm.DefaultAPIConnectOptions(),
+		maxSession:           10 * time.Minute,
+		dialWebsocket:        defaultOpenAIRealtimeSTTWebsocketDialer,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -274,6 +282,12 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		config.HTTPClient = &azureADTokenHTTPClient{
 			base:  config.HTTPClient,
 			token: azureADToken,
+		}
+	}
+	if provider.azureADTokenProvider != nil {
+		config.HTTPClient = &azureADTokenProviderHTTPClient{
+			base:     config.HTTPClient,
+			provider: provider.azureADTokenProvider,
 		}
 	}
 	provider.client = openai.NewClientWithConfig(config)
