@@ -2,6 +2,6 @@ package liveavatar
 
 const (
 	PluginTitle   = "rtp-agent.plugins.liveavatar"
-	PluginVersion = "v0.1.3"
+	PluginVersion = "v0.1.4"
 	PluginPackage = "rtp-agent.plugins.liveavatar"
 )
