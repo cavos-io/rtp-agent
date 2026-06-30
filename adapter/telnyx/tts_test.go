@@ -387,6 +387,20 @@ func TestTelnyxTTSAudioFromMessageDecodesBase64Audio(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSAudioFromMessageReturnsAPIConnectionErrorOnMalformedAudio(t *testing.T) {
+	audioBytes, done, err := telnyxTTSAudioBytesFromMessage([]byte(`{"audio":"not-base64"}`))
+	if audioBytes != nil || done {
+		t.Fatalf("malformed audio = audio=%v done=%v, want no audio and not done", audioBytes, done)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("malformed audio error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx TTS audio decode failed") {
+		t.Fatalf("malformed audio error = %q, want decode context", err)
+	}
+}
+
 func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {

@@ -466,7 +466,7 @@ func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
 	}
 	data, err := base64.StdEncoding.DecodeString(message.Audio)
 	if err != nil {
-		return nil, false, err
+		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 	}
 	return data, false, nil
 }
