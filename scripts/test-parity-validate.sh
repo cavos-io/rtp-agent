@@ -4,12 +4,23 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMPDIR="${TMPDIR:-/tmp}"
 WORKDIR="$(mktemp -d "$TMPDIR/parity-validate-test.XXXXXX")"
-trap 'rm -rf "$WORKDIR"' EXIT
+TAGGED_GO_TEST_FILE="$ROOT/library/utils/parity_tagged_test.go"
+trap 'rm -rf "$WORKDIR"; rm -f "$TAGGED_GO_TEST_FILE"' EXIT
 
 VALID_MANIFEST="$WORKDIR/test-cases.tsv"
 BAD_MANIFEST="$WORKDIR/bad-test-cases.tsv"
 INCOMPLETE_CROSS_MANIFEST="$WORKDIR/incomplete-cross-test-cases.tsv"
 JSON_SCENARIO="$WORKDIR/dev-mode-json-scenario.json"
+
+cat > "$TAGGED_GO_TEST_FILE" <<'GO'
+//go:build parity_tag_test
+
+package utils
+
+import "testing"
+
+func TestTaggedGoTestManifest(t *testing.T) {}
+GO
 
 cat > "$JSON_SCENARIO" <<'JSON'
 {
@@ -35,6 +46,7 @@ exp-filter-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/e
 moving-average-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/moving_average.py	library/math/filter.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"moving-average-window","window_size":3,"sample_values":[1,2,3,4]}	moving-average-window	MovingAverage tracks rolling average, size, and reset behavior.	Smoke test for rolling-window cross-runtime runner dispatch.
 bounded-dict-cross	cross-runtime	refs/agents/livekit-agents/livekit/agents/utils/bounded_dict.py	library/utils/bounded_dict.go			python3 scripts/parity-runners/python-utils.py	go run ./scripts/parity-runners/go-utils	{"contract":"bounded-dict-pop-if-order"}	bounded-dict-pop-if-order	BoundedDict PopIf follows reference predicate and oldest-pop order.	Smoke test for object-result cross-runtime runner dispatch.
 TSV
+printf 'go-tagged-mode\tgo-test\trefs/agents/livekit-agents/livekit/agents/utils/misc.py\tlibrary/utils/misc_test.go\t./library/utils\tTestTaggedGoTestManifest\t\t\t{"go_tags":"parity_tag_test"}\tgo-test-tags\tGo-test manifest rows can opt into build tags through input_json.\tSmoke test for tagged go-test manifest dispatch.\n' >> "$VALID_MANIFEST"
 printf 'dev-mode-json-scenario\tjson-scenario\trefs/agents/livekit-agents/livekit/agents/utils/misc.py\tscripts/parity-runners/go-scenario\t\t\tpython3 scripts/parity-runners/python-scenario.py\tgo run ./scripts/parity-runners/go-scenario\t%s\tdev-mode-env-exact\tDevelopment mode is enabled only when LIVEKIT_DEV_MODE is exactly 1.\tSmoke test for JSON scenario runner dispatch.\n' "$JSON_SCENARIO" >> "$VALID_MANIFEST"
 
 cat > "$BAD_MANIFEST" <<'TSV'
@@ -87,6 +99,8 @@ PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --li
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'go-hosted-mode'
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
+  | grep -Fxq 'go-tagged-mode'
+PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'dev-mode-cross'
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --list \
   | grep -Fxq 'hosted-cross'
@@ -127,9 +141,13 @@ grep -q '^\[bounded-dict-cross\] ok$' "$WORKDIR/bounded-dict-cross.out"
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case dev-mode-json-scenario > "$WORKDIR/dev-mode-json-scenario.out" 2>&1
 grep -q '^\[dev-mode-json-scenario\] ok$' "$WORKDIR/dev-mode-json-scenario.out"
 
+PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" --case go-tagged-mode > "$WORKDIR/go-tagged-mode.out" 2>&1
+grep -q '^\[go-tagged-mode\] ok$' "$WORKDIR/go-tagged-mode.out"
+
 PARITY_TEST_CASES_FILE="$VALID_MANIFEST" "$ROOT/scripts/parity-validate.sh" > "$WORKDIR/all-cross.out" 2>&1
 grep -q '^\[go-dev-mode\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[go-hosted-mode\] ok$' "$WORKDIR/all-cross.out"
+grep -q '^\[go-tagged-mode\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[dev-mode-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[hosted-cross\] ok$' "$WORKDIR/all-cross.out"
 grep -q '^\[cloud-cross\] ok$' "$WORKDIR/all-cross.out"
