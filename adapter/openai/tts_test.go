@@ -145,11 +145,17 @@ func TestNewAzureOpenAITTSFallsBackToReferenceEnvironment(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
 	t.Setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
 	t.Setenv("OPENAI_API_VERSION", "2024-08-01-preview")
+	t.Setenv("OPENAI_ORG_ID", "env-org")
+	t.Setenv("OPENAI_PROJECT_ID", "env-project")
 	var gotAPIKey string
+	var gotOrganization string
+	var gotProject string
 	var gotPath string
 	var gotQuery string
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotOrganization = r.Header.Get("OpenAI-Organization")
+		gotProject = r.Header.Get("OpenAI-Project")
 		gotPath = r.URL.Path
 		gotQuery = r.URL.RawQuery
 		return &http.Response{
@@ -189,6 +195,63 @@ func TestNewAzureOpenAITTSFallsBackToReferenceEnvironment(t *testing.T) {
 	}
 	if gotAPIKey != "env-azure-key" {
 		t.Fatalf("api-key header = %q, want env Azure API key", gotAPIKey)
+	}
+	if gotOrganization != "env-org" {
+		t.Fatalf("OpenAI-Organization header = %q, want env organization", gotOrganization)
+	}
+	if gotProject != "env-project" {
+		t.Fatalf("OpenAI-Project header = %q, want env project", gotProject)
+	}
+}
+
+func TestNewAzureOpenAITTSUsesExplicitOrganizationProjectOptions(t *testing.T) {
+	t.Setenv("OPENAI_ORG_ID", "env-org")
+	t.Setenv("OPENAI_PROJECT_ID", "env-project")
+	var gotOrganization string
+	var gotProject string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotOrganization = r.Header.Get("OpenAI-Organization")
+		gotProject = r.Header.Get("OpenAI-Project")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader(openAITTSTestSSEPCM([]byte{1, 2, 3, 4}))),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com",
+		"tts-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAITTSResponseFormat(goopenai.SpeechResponseFormatPcm),
+		WithOpenAITTSOrganization("explicit-org"),
+		WithOpenAITTSProject("explicit-project"),
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil && !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if gotOrganization != "explicit-org" {
+		t.Fatalf("OpenAI-Organization header = %q, want explicit organization", gotOrganization)
+	}
+	if gotProject != "explicit-project" {
+		t.Fatalf("OpenAI-Project header = %q, want explicit project", gotProject)
 	}
 }
 

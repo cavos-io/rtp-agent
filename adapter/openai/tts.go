@@ -36,6 +36,7 @@ type OpenAITTS struct {
 	azureADTokenProvider func(context.Context) (string, error)
 	azureADToken         string
 	azureAPIKeyAuth      bool
+	extraHeaders         map[string]string
 	model                openai.SpeechModel
 	voice                openai.SpeechVoice
 	baseURL              string
@@ -116,6 +117,23 @@ func WithOpenAITTSAzureADTokenProvider(provider func(context.Context) (string, e
 	}
 }
 
+func WithOpenAITTSOrganization(organization string) OpenAITTSOption {
+	return withOpenAITTSExtraHeader("OpenAI-Organization", organization)
+}
+
+func WithOpenAITTSProject(project string) OpenAITTSOption {
+	return withOpenAITTSExtraHeader("OpenAI-Project", project)
+}
+
+func withOpenAITTSExtraHeader(key string, value string) OpenAITTSOption {
+	return func(t *OpenAITTS) {
+		if t.extraHeaders == nil {
+			t.extraHeaders = map[string]string{}
+		}
+		t.extraHeaders[key] = value
+	}
+}
+
 func NewOpenAITTS(apiKey string, model openai.SpeechModel, voice openai.SpeechVoice, opts ...OpenAITTSOption) (*OpenAITTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(openAIAPIKeyEnv)
@@ -184,6 +202,17 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 	if apiVersion != "" {
 		config.APIVersion = apiVersion
 	}
+	if orgID := os.Getenv(openAIOrgIDEnv); orgID != "" {
+		config.OrgID = orgID
+	}
+	if projectID := os.Getenv(openAIProjectIDEnv); projectID != "" {
+		if provider.extraHeaders == nil {
+			provider.extraHeaders = map[string]string{}
+		}
+		if _, ok := provider.extraHeaders["OpenAI-Project"]; !ok {
+			provider.extraHeaders["OpenAI-Project"] = projectID
+		}
+	}
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
 	}
@@ -201,6 +230,12 @@ func NewAzureOpenAITTS(model openai.SpeechModel, voice openai.SpeechVoice, azure
 		config.HTTPClient = &azureADTokenProviderHTTPClient{
 			base:     config.HTTPClient,
 			provider: provider.azureADTokenProvider,
+		}
+	}
+	if len(provider.extraHeaders) > 0 {
+		config.HTTPClient = &extraHeadersHTTPClient{
+			base:    config.HTTPClient,
+			headers: cloneOpenAIStringMap(provider.extraHeaders),
 		}
 	}
 	provider.client = openai.NewClientWithConfig(config)
