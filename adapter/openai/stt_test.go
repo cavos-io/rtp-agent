@@ -374,11 +374,17 @@ func TestNewAzureOpenAISTTFallsBackToReferenceEnvironment(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://env-resource.openai.azure.com")
 	t.Setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
 	t.Setenv("OPENAI_API_VERSION", "2024-08-01-preview")
+	t.Setenv("OPENAI_ORG_ID", "env-org")
+	t.Setenv("OPENAI_PROJECT_ID", "env-project")
 	var gotAPIKey string
+	var gotOrganization string
+	var gotProject string
 	var gotPath string
 	var gotQuery string
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		gotAPIKey = r.Header.Get(goopenai.AzureAPIKeyHeader)
+		gotOrganization = r.Header.Get("OpenAI-Organization")
+		gotProject = r.Header.Get("OpenAI-Project")
 		gotPath = r.URL.Path
 		gotQuery = r.URL.RawQuery
 		return &http.Response{
@@ -410,6 +416,56 @@ func TestNewAzureOpenAISTTFallsBackToReferenceEnvironment(t *testing.T) {
 	}
 	if gotAPIKey != "env-azure-key" {
 		t.Fatalf("api-key header = %q, want env Azure API key", gotAPIKey)
+	}
+	if gotOrganization != "env-org" {
+		t.Fatalf("OpenAI-Organization header = %q, want env organization", gotOrganization)
+	}
+	if gotProject != "env-project" {
+		t.Fatalf("OpenAI-Project header = %q, want env project", gotProject)
+	}
+}
+
+func TestNewAzureOpenAISTTUsesExplicitOrganizationProjectOptions(t *testing.T) {
+	t.Setenv("OPENAI_ORG_ID", "env-org")
+	t.Setenv("OPENAI_PROJECT_ID", "env-project")
+	var gotOrganization string
+	var gotProject string
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		gotOrganization = r.Header.Get("OpenAI-Organization")
+		gotProject = r.Header.Get("OpenAI-Project")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"text":"hello"}`)),
+			Request:    r,
+		}, nil
+	})
+
+	provider, err := NewAzureOpenAISTT(
+		"gpt-4o-mini-transcribe",
+		"https://resource.openai.azure.com",
+		"stt-deployment",
+		"2024-06-01",
+		"azure-key",
+		"",
+		WithOpenAISTTOrganization("explicit-org"),
+		WithOpenAISTTProject("explicit-project"),
+		withOpenAISTTHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAISTT error = %v", err)
+	}
+
+	if _, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{1, 2, 3}}}, "en"); err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+
+	if gotOrganization != "explicit-org" {
+		t.Fatalf("OpenAI-Organization header = %q, want explicit organization", gotOrganization)
+	}
+	if gotProject != "explicit-project" {
+		t.Fatalf("OpenAI-Project header = %q, want explicit project", gotProject)
 	}
 }
 

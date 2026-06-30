@@ -48,6 +48,7 @@ type OpenAISTT struct {
 	apiKey               string
 	azureADToken         string
 	azureADTokenProvider func(context.Context) (string, error)
+	extraHeaders         map[string]string
 	baseURL              string
 	baseURLSet           bool
 	realtimeBaseURL      string
@@ -113,6 +114,23 @@ func WithOpenAISTTPrompt(prompt string) OpenAISTTOption {
 func WithOpenAISTTNoiseReductionType(noiseReductionType string) OpenAISTTOption {
 	return func(s *OpenAISTT) {
 		s.noiseReduction = noiseReductionType
+	}
+}
+
+func WithOpenAISTTOrganization(organization string) OpenAISTTOption {
+	return withOpenAISTTExtraHeader("OpenAI-Organization", organization)
+}
+
+func WithOpenAISTTProject(project string) OpenAISTTOption {
+	return withOpenAISTTExtraHeader("OpenAI-Project", project)
+}
+
+func withOpenAISTTExtraHeader(key string, value string) OpenAISTTOption {
+	return func(s *OpenAISTT) {
+		if s.extraHeaders == nil {
+			s.extraHeaders = map[string]string{}
+		}
+		s.extraHeaders[key] = value
 	}
 }
 
@@ -272,6 +290,17 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 	if apiVersion != "" {
 		config.APIVersion = apiVersion
 	}
+	if orgID := os.Getenv(openAIOrgIDEnv); orgID != "" {
+		config.OrgID = orgID
+	}
+	if projectID := os.Getenv(openAIProjectIDEnv); projectID != "" {
+		if provider.extraHeaders == nil {
+			provider.extraHeaders = map[string]string{}
+		}
+		if _, ok := provider.extraHeaders["OpenAI-Project"]; !ok {
+			provider.extraHeaders["OpenAI-Project"] = projectID
+		}
+	}
 	if provider.httpClient != nil {
 		config.HTTPClient = provider.httpClient
 	}
@@ -288,6 +317,12 @@ func NewAzureOpenAISTT(model, azureEndpoint, azureDeployment, apiVersion, apiKey
 		config.HTTPClient = &azureADTokenProviderHTTPClient{
 			base:     config.HTTPClient,
 			provider: provider.azureADTokenProvider,
+		}
+	}
+	if len(provider.extraHeaders) > 0 {
+		config.HTTPClient = &extraHeadersHTTPClient{
+			base:    config.HTTPClient,
+			headers: cloneOpenAIStringMap(provider.extraHeaders),
 		}
 	}
 	provider.client = openai.NewClientWithConfig(config)
