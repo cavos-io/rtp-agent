@@ -2716,6 +2716,37 @@ func TestDeepgramTTSStreamEmptyFlushIsReferenceNoop(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamWhitespaceFlushDoesNotEmitReferenceFinalMarker(t *testing.T) {
+	stream := &deepgramTTSStream{
+		audio:   make(chan *tts.SynthesizedAudio, 1),
+		errCh:   make(chan error, 1),
+		flushed: make(chan struct{}, 1),
+		writeJSON: func(any) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushText("   "); err != nil {
+		t.Fatalf("PushText(whitespace) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(whitespace) error = %v", err)
+	}
+	if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
+		t.Fatalf("handleTextMessage Flushed error = %v", err)
+	}
+	select {
+	case audio := <-stream.audio:
+		t.Fatalf("whitespace Flushed audio = %+v, want no final marker", audio)
+	default:
+	}
+	select {
+	case <-stream.flushed:
+	default:
+		t.Fatal("whitespace Flushed did not signal Flush acknowledgement")
+	}
+}
+
 func TestDeepgramTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	var writes []string
 	stream := &deepgramTTSStream{

@@ -803,6 +803,13 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 		if err := s.noAudioErrorIfNeeded(); err != nil {
 			return err
 		}
+		if s.shouldSuppressSilentWhitespaceFinal() {
+			s.signalFlushed()
+			if s.closeAfterFinal() {
+				return errDeepgramTTSReleasedToPool
+			}
+			return nil
+		}
 		audio := &tts.SynthesizedAudio{IsFinal: true}
 		s.annotateAudio(audio)
 		s.mu.Lock()
@@ -837,6 +844,19 @@ func (s *deepgramTTSStream) noAudioErrorIfNeeded() error {
 		return nil
 	}
 	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.segmentText), nil, true)
+}
+
+func (s *deepgramTTSStream) shouldSuppressSilentWhitespaceFinal() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.segmentSent || s.segmentHadAudio.Load() || strings.TrimSpace(s.segmentText) != "" {
+		return false
+	}
+	s.flushPending = false
+	s.segmentText = ""
+	s.segmentHadAudio.Store(false)
+	s.segmentID = uuid.NewString()
+	return true
 }
 
 func deepgramTTSFrameData(encoding string, pending *[]byte, data []byte) []byte {
