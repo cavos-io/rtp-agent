@@ -1215,13 +1215,15 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			s.sendEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech})
 
 		case "Results":
+			if resp.referenceRequestIDReady() {
+				s.setRequestID(resp.Metadata.RequestID)
+			}
 			if resp.malformedReferenceResults() {
 				continue
 			}
 			if resp.malformedReferenceLanguage(s.language) {
 				continue
 			}
-			s.setRequestID(resp.Metadata.RequestID)
 			if event := deepgramSpeechEventForLanguageOffset(resp, s.language, s.StartTimeOffset()); event != nil {
 				if !s.speaking {
 					s.speaking = true
@@ -1236,6 +1238,13 @@ func (s *deepgramStream) readLoop(conn *websocket.Conn) {
 			}
 		}
 	}
+}
+
+func (r dgResponse) referenceRequestIDReady() bool {
+	if !r.parsedJSON {
+		return false
+	}
+	return r.requestIDSeen && r.isFinalSeen && r.speechFinalSeen
 }
 
 func (r dgResponse) malformedReferenceResults() bool {
