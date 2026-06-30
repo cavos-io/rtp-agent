@@ -1940,6 +1940,72 @@ func TestRealtimeSessionClearAudioDropsResamplerTail(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "clear should drop stale resampler tail before later commit")
 }
 
+func TestRealtimeSessionReconnectDropsBufferedInputAudio(t *testing.T) {
+	var dialCount atomic.Int32
+	closeFirst := make(chan struct{})
+	secondConnected := make(chan struct{})
+	secondMessages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		attempt := dialCount.Add(1)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if attempt == 1 {
+			<-closeFirst
+			_ = conn.Close()
+			return
+		}
+		close(secondConnected)
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			secondMessages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushAudio 20ms tail error = %v", err)
+	}
+	close(closeFirst)
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("session did not reconnect after websocket disconnect")
+	}
+	reconnected := assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if reconnected.Reconnect == nil {
+		t.Fatal("Reconnect payload = nil")
+	}
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 1920*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1920,
+	}); err != nil {
+		t.Fatalf("PushAudio 80ms after reconnect error = %v", err)
+	}
+	assertNoRealtimeMessage(t, secondMessages, "reconnect should drop stale buffered 20ms tail before new 80ms audio")
+}
+
 func TestRealtimeSessionResamplesInputAudioWithReferenceStreamTiming(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {

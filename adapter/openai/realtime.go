@@ -2554,6 +2554,11 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 	s.conn = conn
 	s.pendingResponses = make(map[string]struct{})
 	s.inputTranscripts = nil
+	if s.audioBStream != nil {
+		s.audioBStream.Clear()
+	}
+	s.audioNormalizer.reset()
+	s.pushedDuration = 0
 	s.startMaxSessionRecycle(conn)
 	s.mu.Unlock()
 
