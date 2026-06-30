@@ -3,6 +3,8 @@ package simplismart
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -185,6 +187,53 @@ func TestSimplismartSTTRecognizeLanguageOverride(t *testing.T) {
 		t.Fatalf("decode request body: %v", err)
 	}
 	assertSimplismartPayload(t, payload, "language", "de")
+}
+
+func TestSimplismartSTTRecognizeSendsReferenceWAVAudio(t *testing.T) {
+	var wav []byte
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: simplismartSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		encoded, _ := payload["audio_data"].(string)
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			t.Fatalf("decode audio_data: %v", err)
+		}
+		wav = decoded
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"request_id":"req-1","transcription":[],"timestamps":[],"info":{"language":"en"}}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSimplismartSTT("test-key")
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02, 0x03, 0x04},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 2,
+	}}, "")
+
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if len(wav) < 44 {
+		t.Fatalf("wav bytes = %d, want RIFF header", len(wav))
+	}
+	if string(wav[0:4]) != "RIFF" || string(wav[8:12]) != "WAVE" || string(wav[36:40]) != "data" {
+		t.Fatalf("wav header = %q/%q/%q, want RIFF/WAVE/data", wav[0:4], wav[8:12], wav[36:40])
+	}
+	if got := binary.LittleEndian.Uint32(wav[24:28]); got != 16000 {
+		t.Fatalf("wav sample rate = %d, want frame sample rate", got)
+	}
+	if got := binary.LittleEndian.Uint32(wav[40:44]); got != 4 {
+		t.Fatalf("wav data size = %d, want pcm byte size", got)
+	}
 }
 
 func TestSimplismartSTTRecognizeReturnsAPIStatusError(t *testing.T) {
