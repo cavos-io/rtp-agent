@@ -6647,6 +6647,18 @@ func TestRealtimeSessionUsesPendingDeleteForEmptyDeletedItemID(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionDeleteSendFailureClearsPendingDeleteFallback(t *testing.T) {
+	session := &realtimeSession{}
+
+	err := session.sendMsg(openAIRealtimeDeleteChatItemMessage("removed"))
+	if err == nil {
+		t.Fatal("sendMsg error = nil, want disconnected websocket error")
+	}
+	if len(session.pendingDeleteItemIDs) != 0 {
+		t.Fatalf("pendingDeleteItemIDs = %#v, want no fallback for unsent delete", session.pendingDeleteItemIDs)
+	}
+}
+
 func TestRealtimeSessionAccumulatesInputAudioTranscriptionDeltas(t *testing.T) {
 	session := &realtimeSession{}
 

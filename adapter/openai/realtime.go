@@ -2215,12 +2215,18 @@ func (s *realtimeSession) sendMsg(msg any) error {
 	s.mu.Unlock()
 	b, err := json.Marshal(msg)
 	if err != nil {
+		s.untrackPendingRealtimeDelete(msg)
 		return err
 	}
 	if conn == nil {
+		s.untrackPendingRealtimeDelete(msg)
 		return fmt.Errorf("OpenAI realtime websocket is not connected")
 	}
-	return conn.WriteMessage(websocket.TextMessage, b)
+	if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+		s.untrackPendingRealtimeDelete(msg)
+		return err
+	}
+	return nil
 }
 
 func (s *realtimeSession) trackPendingRealtimeDelete(msg any) {
@@ -2233,6 +2239,25 @@ func (s *realtimeSession) trackPendingRealtimeDelete(msg any) {
 		return
 	}
 	s.pendingDeleteItemIDs = append(s.pendingDeleteItemIDs, itemID)
+}
+
+func (s *realtimeSession) untrackPendingRealtimeDelete(msg any) {
+	payload, ok := msg.(map[string]any)
+	if !ok || payload["type"] != "conversation.item.delete" {
+		return
+	}
+	itemID, ok := payload["item_id"].(string)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.pendingDeleteItemIDs) - 1; i >= 0; i-- {
+		if s.pendingDeleteItemIDs[i] == itemID {
+			s.pendingDeleteItemIDs = append(s.pendingDeleteItemIDs[:i], s.pendingDeleteItemIDs[i+1:]...)
+			return
+		}
+	}
 }
 
 func (s *realtimeSession) prepareClientMessage(msg any) any {
