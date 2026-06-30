@@ -217,7 +217,7 @@ func (t *MurfTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, murfTTSConnectionError("Murf TTS request failed", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -396,7 +396,7 @@ func (s *murfTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.finalSent = true
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
-		return nil, err
+		return nil, murfTTSConnectionError("Murf TTS stream read failed", err)
 	}
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
@@ -631,12 +631,12 @@ func murfAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Synthesize
 		Final bool   `json:"final"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, murfTTSConnectionError("Murf AI websocket payload decode failed", err)
 	}
 	if message.Audio != "" {
 		audio, err := base64.StdEncoding.DecodeString(message.Audio)
 		if err != nil {
-			return nil, false, err
+			return nil, false, murfTTSConnectionError("Murf AI websocket audio decode failed", err)
 		}
 		if len(audio) > 0 {
 			return murfTTSAudioFrame(audio, sampleRate), false, nil
@@ -646,6 +646,13 @@ func murfAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Synthesize
 		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	}
 	return nil, false, nil
+}
+
+func murfTTSConnectionError(message string, err error) *llm.APIConnectionError {
+	if err == nil {
+		return llm.NewAPIConnectionError(message)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func murfTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
