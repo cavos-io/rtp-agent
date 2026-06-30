@@ -338,7 +338,13 @@ func (t *OpenAITTS) Prewarm() {
 		if err != nil {
 			return
 		}
-		if t.azureAPIKeyAuth && t.apiKey != "" {
+		if t.azureADTokenProvider != nil {
+			token, err := t.azureADTokenProvider(ctx)
+			if err != nil {
+				return
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+		} else if t.azureAPIKeyAuth && t.apiKey != "" {
 			req.Header.Set("api-key", t.apiKey)
 		} else if t.apiKey != "" {
 			req.Header.Set("Authorization", "Bearer "+t.apiKey)

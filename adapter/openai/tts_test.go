@@ -594,6 +594,49 @@ func TestAzureOpenAITTSPrewarmUsesReferenceAPIKeyHeader(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAITTSPrewarmUsesReferenceEntraTokenProvider(t *testing.T) {
+	reqCh := make(chan *http.Request, 1)
+	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
+		reqCh <- r
+		return nil, errors.New("prewarm failed")
+	})
+	tokenCalls := 0
+	provider, err := NewAzureOpenAITTS(
+		goopenai.TTSModelGPT4oMini,
+		goopenai.VoiceAsh,
+		"https://resource.openai.azure.com/",
+		"tts-deployment",
+		"2024-06-01",
+		"",
+		"",
+		WithOpenAITTSAzureADTokenProvider(func(context.Context) (string, error) {
+			tokenCalls++
+			return "provider-token", nil
+		}),
+		withOpenAITTSHTTPClient(client),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAITTS error = %v", err)
+	}
+
+	tts.Prewarm(provider)
+
+	select {
+	case req := <-reqCh:
+		if tokenCalls != 1 {
+			t.Fatalf("token provider calls = %d, want 1", tokenCalls)
+		}
+		if got := req.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("Authorization = %q, want provider bearer token", got)
+		}
+		if got := req.Header.Get("api-key"); got != "" {
+			t.Fatalf("api-key = %q, want no Azure API key header", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for Azure OpenAI TTS prewarm request")
+	}
+}
+
 func TestOpenAITTSCloseCancelsReferencePrewarm(t *testing.T) {
 	reqCh := make(chan *http.Request, 1)
 	cancelled := make(chan struct{})
