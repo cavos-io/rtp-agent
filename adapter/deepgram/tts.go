@@ -479,6 +479,20 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 
 		frameData := s.chunkedFrameDataLocked(encoding, buf[:n])
+		if len(frameData) == 0 && s.pendingErr != nil {
+			err := s.pendingErr
+			s.pendingErr = nil
+			s.pendingPCM = nil
+			s.finalSent = true
+			if s.resp != nil && s.resp.Body != nil {
+				body := s.resp.Body
+				s.resp = nil
+				_ = body.Close()
+			}
+			s.cancelRequestLocked()
+			s.mu.Unlock()
+			return nil, err
+		}
 		if len(frameData) == 0 && err != io.EOF {
 			continue
 		}

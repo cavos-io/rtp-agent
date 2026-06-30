@@ -2069,6 +2069,31 @@ func TestDeepgramTTSSynthesizeReturnsPartialAudioBeforeReadError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSSynthesizeDropsPartialSampleBeforeReadError(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Body: &deepgramTTSErrorAfterDataReadCloser{
+				data: []byte{0x01},
+				err:  io.ErrUnexpectedEOF,
+			},
+		},
+		sampleRate: 24000,
+		encoding:   "linear16",
+		requestID:  "req-audio",
+		started:    true,
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next() audio = %#v, want no incomplete PCM frame", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError after partial sample is dropped", err, err)
+	}
+}
+
 func TestDeepgramTTSStreamCloseUnblocksBackpressuredAudioSend(t *testing.T) {
 	audioWritten := make(chan struct{})
 	clientConn, serverConn := net.Pipe()
