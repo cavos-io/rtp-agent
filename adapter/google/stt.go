@@ -225,6 +225,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	gs := &googleSTTStream{
 		owner:         s,
 		stream:        stream,
+		language:      language,
 		minConfidence: s.minConfidence,
 		events:        make(chan *stt.SpeechEvent, 10),
 		errCh:         make(chan error, 1),
@@ -265,7 +266,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	return &stt.SpeechEvent{
 		Type:         stt.SpeechEventFinalTranscript,
-		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results),
+		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results, language),
 	}, nil
 }
 
@@ -308,34 +309,35 @@ func googleSpeechDataFromAlternativeOffset(alt *speechpb.SpeechRecognitionAltern
 	return data
 }
 
-func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionResult) []stt.SpeechData {
+func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionResult, language string) []stt.SpeechData {
 	if len(results) == 0 {
 		return []stt.SpeechData{}
 	}
 	var text string
 	var confidence float64
 	var count int
-	var firstAlt *speechpb.SpeechRecognitionAlternative
+	var words []*speechpb.WordInfo
 	for _, result := range results {
 		if len(result.GetAlternatives()) == 0 {
 			continue
 		}
 		alt := result.GetAlternatives()[0]
-		if firstAlt == nil {
-			firstAlt = alt
-		}
 		text += alt.GetTranscript()
 		confidence += float64(alt.GetConfidence())
+		words = append(words, alt.GetWords()...)
 		count++
 	}
 	if count == 0 {
 		return []stt.SpeechData{}
 	}
-	return []stt.SpeechData{{
+	data := stt.SpeechData{
+		Language:   language,
 		Text:       text,
 		Confidence: confidence / float64(count),
-		Words:      googleTimedStrings(firstAlt.GetWords()),
-	}}
+		Words:      googleTimedStrings(words),
+	}
+	googleApplySpeechDataTiming(&data, words, 0)
+	return []stt.SpeechData{data}
 }
 
 func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {
@@ -369,6 +371,7 @@ type googleSTTStream struct {
 	mu              sync.Mutex
 	owner           *GoogleSTT
 	stream          speechpb.Speech_StreamingRecognizeClient
+	language        string
 	minConfidence   float64
 	events          chan *stt.SpeechEvent
 	errCh           chan error
@@ -398,7 +401,7 @@ func (s *googleSTTStream) readLoop() {
 		}
 
 		if resp.GetSpeechEventType() == speechpb.StreamingRecognizeResponse_SPEECH_EVENT_UNSPECIFIED {
-			if data, eventType, ok := googleSpeechDataFromStreamingResultsOffset(resp.Results, s.minConfidence, s.currentStartTimeOffset()); ok {
+			if data, eventType, ok := googleSpeechDataFromStreamingResultsOffset(resp.Results, s.minConfidence, s.currentStartTimeOffset(), s.language); ok {
 				s.events <- &stt.SpeechEvent{
 					Type:         eventType,
 					Alternatives: []stt.SpeechData{data},
@@ -432,27 +435,25 @@ func googleStreamingAudioDuration(resp *speechpb.StreamingRecognizeResponse, las
 	return total - lastUsageEventTime
 }
 
-func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRecognitionResult, minConfidence float64, startTimeOffset float64) (stt.SpeechData, stt.SpeechEventType, bool) {
+func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRecognitionResult, minConfidence float64, startTimeOffset float64, language string) (stt.SpeechData, stt.SpeechEventType, bool) {
 	if len(results) == 0 {
 		return stt.SpeechData{}, "", false
+	}
+	if data, ok := googleFinalSpeechDataFromStreamingResults(results, startTimeOffset, language); ok {
+		return data, stt.SpeechEventFinalTranscript, true
 	}
 	var text string
 	var confidence float64
 	var count int
-	var firstAlt *speechpb.SpeechRecognitionAlternative
+	var words []*speechpb.WordInfo
 	for _, result := range results {
 		if len(result.GetAlternatives()) == 0 {
 			continue
 		}
 		alt := result.GetAlternatives()[0]
-		if result.GetIsFinal() {
-			return googleSpeechDataFromAlternativeOffset(alt, startTimeOffset), stt.SpeechEventFinalTranscript, true
-		}
-		if firstAlt == nil {
-			firstAlt = alt
-		}
 		text += alt.GetTranscript()
 		confidence += float64(alt.GetConfidence())
+		words = append(words, alt.GetWords()...)
 		count++
 	}
 	if count == 0 || text == "" {
@@ -463,12 +464,41 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 		return stt.SpeechData{}, "", false
 	}
 	data := stt.SpeechData{
+		Language:   language,
 		Text:       text,
 		Confidence: confidence,
-		Words:      googleTimedStringsOffset(firstAlt.GetWords(), startTimeOffset),
+		Words:      googleTimedStringsOffset(words, startTimeOffset),
 	}
-	googleApplySpeechDataTiming(&data, firstAlt.GetWords(), startTimeOffset)
+	googleApplySpeechDataTiming(&data, words, startTimeOffset)
 	return data, stt.SpeechEventInterimTranscript, true
+}
+
+func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, startTimeOffset float64, language string) (stt.SpeechData, bool) {
+	var text string
+	var confidence float64
+	var count int
+	var words []*speechpb.WordInfo
+	for _, result := range results {
+		if !result.GetIsFinal() || len(result.GetAlternatives()) == 0 {
+			continue
+		}
+		alt := result.GetAlternatives()[0]
+		text += alt.GetTranscript()
+		confidence += float64(alt.GetConfidence())
+		words = append(words, alt.GetWords()...)
+		count++
+	}
+	if count == 0 {
+		return stt.SpeechData{}, false
+	}
+	data := stt.SpeechData{
+		Language:   language,
+		Text:       text,
+		Confidence: confidence / float64(count),
+		Words:      googleTimedStringsOffset(words, startTimeOffset),
+	}
+	googleApplySpeechDataTiming(&data, words, startTimeOffset)
+	return data, true
 }
 
 func googleApplySpeechDataTiming(data *stt.SpeechData, words []*speechpb.WordInfo, startTimeOffset float64) {

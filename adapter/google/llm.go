@@ -7,6 +7,7 @@ import (
 	"io"
 	"iter"
 	"os"
+	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"google.golang.org/genai"
@@ -104,45 +105,60 @@ func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructio
 
 func buildGoogleFunctionDeclaration(t llm.Tool) *genai.FunctionDeclaration {
 	schemaMap := llm.ToolParameters(t)
-	var properties map[string]*genai.Schema
-
-	if props, ok := schemaMap["properties"].(map[string]any); ok {
-		properties = make(map[string]*genai.Schema)
-		for k, v := range props {
-			if typeMap, ok := v.(map[string]any); ok {
-				typeStr, _ := typeMap["type"].(string)
-				descStr, _ := typeMap["description"].(string)
-				properties[k] = &genai.Schema{
-					Type:        genai.Type(typeStr),
-					Description: descStr,
-				}
-			}
-		}
-	}
+	parameters := googleSchemaFromMap(schemaMap)
+	parameters.Type = genai.TypeObject
 
 	return &genai.FunctionDeclaration{
 		Name:        t.Name(),
 		Description: t.Description(),
-		Parameters: &genai.Schema{
-			Type:       genai.TypeObject,
-			Properties: properties,
-			Required:   googleRequiredFields(schemaMap["required"]),
-		},
+		Parameters:  parameters,
 	}
 }
 
-func googleRequiredFields(value any) []string {
-	switch reqs := value.(type) {
-	case []string:
-		return append([]string(nil), reqs...)
-	case []any:
-		required := make([]string, 0, len(reqs))
-		for _, r := range reqs {
-			if reqStr, ok := r.(string); ok {
-				required = append(required, reqStr)
+func googleSchemaFromMap(schemaMap map[string]any) *genai.Schema {
+	schema := &genai.Schema{
+		Type:        googleSchemaType(schemaMap["type"]),
+		Description: googleStringParam(schemaMap["description"]),
+		Format:      googleStringParam(schemaMap["format"]),
+		Enum:        googleStringList(schemaMap["enum"]),
+		Required:    googleStringList(schemaMap["required"]),
+	}
+	if props, ok := schemaMap["properties"].(map[string]any); ok {
+		schema.Properties = make(map[string]*genai.Schema, len(props))
+		for name, value := range props {
+			if propMap, ok := value.(map[string]any); ok {
+				schema.Properties[name] = googleSchemaFromMap(propMap)
 			}
 		}
-		return required
+	}
+	if itemMap, ok := schemaMap["items"].(map[string]any); ok {
+		schema.Items = googleSchemaFromMap(itemMap)
+	}
+	return schema
+}
+
+func googleSchemaType(value any) genai.Type {
+	typeStr, _ := value.(string)
+	return genai.Type(strings.ToUpper(typeStr))
+}
+
+func googleStringParam(value any) string {
+	str, _ := value.(string)
+	return str
+}
+
+func googleStringList(value any) []string {
+	switch items := value.(type) {
+	case []string:
+		return append([]string(nil), items...)
+	case []any:
+		result := make([]string, 0, len(items))
+		for _, item := range items {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
 	default:
 		return nil
 	}
@@ -512,51 +528,78 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		return nil, io.EOF
 	}
 
-	resp, err, ok := s.next()
-	if !ok {
-		return nil, io.EOF
-	}
-	if err != nil {
-		if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
+	for {
+		resp, err, ok := s.next()
+		if !ok {
 			return nil, io.EOF
 		}
-		return nil, err
-	}
+		if err != nil {
+			if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
+				return nil, io.EOF
+			}
+			return nil, err
+		}
 
-	chunk := &llm.ChatChunk{
-		Delta: &llm.ChoiceDelta{
-			Role: llm.ChatRoleAssistant,
-		},
-	}
+		chunk := &llm.ChatChunk{
+			Delta: &llm.ChoiceDelta{
+				Role: llm.ChatRoleAssistant,
+			},
+		}
 
-	if len(resp.Candidates) > 0 {
-		cand := resp.Candidates[0]
-		if cand.Content != nil {
-			for _, part := range cand.Content.Parts {
-				if part.Text != "" {
-					chunk.Delta.Content += part.Text
-				} else if part.FunctionCall != nil {
-					args, _ := json.Marshal(part.FunctionCall.Args)
-					chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
-						Name:      part.FunctionCall.Name,
-						Arguments: string(args),
-						Type:      "function",
-						CallID:    "call_" + part.FunctionCall.Name, // Gemini doesn't always provide CallID natively like OpenAI
-					})
+		if len(resp.Candidates) > 0 {
+			cand := resp.Candidates[0]
+			if cand.Content != nil {
+				for _, part := range cand.Content.Parts {
+					if part.Text != "" {
+						chunk.Delta.Content += part.Text
+					} else if part.FunctionCall != nil {
+						args, _ := json.Marshal(part.FunctionCall.Args)
+						chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
+							Name:      part.FunctionCall.Name,
+							Arguments: string(args),
+							Type:      "function",
+							CallID:    googleFunctionCallID(part.FunctionCall),
+						})
+					}
 				}
 			}
 		}
-	}
 
-	if resp.UsageMetadata != nil {
-		chunk.Usage = &llm.CompletionUsage{
-			PromptTokens:     int(resp.UsageMetadata.PromptTokenCount),
-			CompletionTokens: int(resp.UsageMetadata.CandidatesTokenCount),
-			TotalTokens:      int(resp.UsageMetadata.TotalTokenCount),
+		if resp.UsageMetadata != nil {
+			chunk.Usage = &llm.CompletionUsage{
+				PromptTokens:     int(resp.UsageMetadata.PromptTokenCount),
+				CompletionTokens: int(resp.UsageMetadata.CandidatesTokenCount),
+				TotalTokens:      int(resp.UsageMetadata.TotalTokenCount),
+			}
+		}
+
+		if googleChatChunkHasOutput(chunk) {
+			return chunk, nil
 		}
 	}
+}
 
-	return chunk, nil
+func googleFunctionCallID(call *genai.FunctionCall) string {
+	if call == nil {
+		return ""
+	}
+	if call.ID != "" {
+		return call.ID
+	}
+	return "call_" + call.Name
+}
+
+func googleChatChunkHasOutput(chunk *llm.ChatChunk) bool {
+	if chunk == nil {
+		return false
+	}
+	if chunk.Usage != nil {
+		return true
+	}
+	if chunk.Delta == nil {
+		return false
+	}
+	return chunk.Delta.Content != "" || len(chunk.Delta.ToolCalls) > 0
 }
 
 func (s *googleLLMStream) Close() error {

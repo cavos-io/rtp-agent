@@ -238,6 +238,38 @@ func TestGoogleTTSStreamEmitsReferenceFinalMarkerAfterAudio(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamSkipsEmptyAudioResponses(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{
+				{},
+				{AudioContent: []byte{1, 2, 3, 4}},
+			},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.(*googleTTSSynthesizeStream).EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want first non-empty provider audio", audio)
+	}
+}
+
 func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
@@ -554,6 +586,30 @@ func TestGoogleTTSSpeakingRateMatchesReferenceRequests(t *testing.T) {
 	}
 	if got := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig().GetSpeakingRate(); got != 0.8 {
 		t.Fatalf("stream speaking rate = %v, want 0.8", got)
+	}
+}
+
+func TestGoogleTTSStreamKeepsCreationAudioOptions(t *testing.T) {
+	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSpeakingRate(1.25))
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions(WithGoogleTTSSpeakingRate(0.8))
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	if got := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig().GetSpeakingRate(); got != 1.25 {
+		t.Fatalf("stream speaking rate = %v, want creation-time 1.25", got)
 	}
 }
 

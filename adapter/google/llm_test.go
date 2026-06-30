@@ -31,6 +31,39 @@ func (googleRequestTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
 
+type googleNestedSchemaTestTool struct{}
+
+func (googleNestedSchemaTestTool) ID() string          { return "schedule" }
+func (googleNestedSchemaTestTool) Name() string        { return "schedule" }
+func (googleNestedSchemaTestTool) Description() string { return "schedule a callback" }
+func (googleNestedSchemaTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"priority": map[string]any{
+				"type":        "string",
+				"description": "callback priority",
+				"enum":        []any{"low", "high"},
+			},
+			"window": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"start": map[string]any{"type": "string", "description": "start time"},
+				},
+				"required": []any{"start"},
+			},
+			"tags": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+		},
+		"required": []any{"priority", "window"},
+	}
+}
+func (googleNestedSchemaTestTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+
 func TestNewGoogleLLMUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "env-key")
 
@@ -194,6 +227,42 @@ func TestBuildGoogleFunctionDeclarationKeepsStringRequiredFields(t *testing.T) {
 	}
 }
 
+func TestBuildGoogleFunctionDeclarationPreservesNestedSchema(t *testing.T) {
+	declaration := buildGoogleFunctionDeclaration(googleNestedSchemaTestTool{})
+
+	params := declaration.Parameters
+	if params.Type != genai.TypeObject {
+		t.Fatalf("parameters type = %q, want OBJECT", params.Type)
+	}
+	if !reflect.DeepEqual(params.Required, []string{"priority", "window"}) {
+		t.Fatalf("required = %#v, want priority/window", params.Required)
+	}
+	priority := params.Properties["priority"]
+	if priority == nil {
+		t.Fatalf("priority property missing: %#v", params.Properties)
+	}
+	if priority.Type != genai.TypeString || priority.Description != "callback priority" {
+		t.Fatalf("priority schema = %#v, want string with description", priority)
+	}
+	if !reflect.DeepEqual(priority.Enum, []string{"low", "high"}) {
+		t.Fatalf("priority enum = %#v, want low/high", priority.Enum)
+	}
+	window := params.Properties["window"]
+	if window == nil || window.Type != genai.TypeObject {
+		t.Fatalf("window schema = %#v, want object", window)
+	}
+	if !reflect.DeepEqual(window.Required, []string{"start"}) {
+		t.Fatalf("window required = %#v, want start", window.Required)
+	}
+	if window.Properties["start"] == nil || window.Properties["start"].Type != genai.TypeString {
+		t.Fatalf("window start schema = %#v, want string", window.Properties["start"])
+	}
+	tags := params.Properties["tags"]
+	if tags == nil || tags.Type != genai.TypeArray || tags.Items == nil || tags.Items.Type != genai.TypeString {
+		t.Fatalf("tags schema = %#v, want string array", tags)
+	}
+}
+
 func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
 	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
 		"type": "function",
@@ -284,6 +353,80 @@ func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	}
 	if !stopped {
 		t.Fatal("Close() did not stop provider iterator")
+	}
+}
+
+func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "provider-call-123",
+								Name: "lookup",
+								Args: map[string]any{"query": "weather"},
+							},
+						}},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one tool call", chunk)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.CallID != "provider-call-123" {
+		t.Fatalf("CallID = %q, want provider-call-123", call.CallID)
+	}
+	if call.Name != "lookup" || call.Type != "function" {
+		t.Fatalf("tool call = %#v, want lookup function", call)
+	}
+	if call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("Arguments = %q, want compact JSON args", call.Arguments)
+	}
+}
+
+func TestGoogleLLMStreamSkipsEmptyProviderDeltas(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{
+		{},
+		{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{Text: "hello"}},
+				},
+			}},
+		},
+	}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("chunk = %#v, want first non-empty delta", chunk)
 	}
 }
 

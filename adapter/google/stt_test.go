@@ -228,6 +228,9 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
 		t.Fatalf("event = %#v, want final hello transcript", event)
 	}
+	if event.Alternatives[0].Language != "en-US" {
+		t.Fatalf("language = %q, want en-US", event.Alternatives[0].Language)
+	}
 }
 
 func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
@@ -250,6 +253,12 @@ func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
 					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
 						Transcript: "world",
 						Confidence: 0.6,
+						Words: []*speechpb.WordInfo{{
+							Word:       "world",
+							StartTime:  durationpb.New(400 * 1000 * 1000),
+							EndTime:    durationpb.New(700 * 1000 * 1000),
+							Confidence: 0.61,
+						}},
 					}},
 				},
 			},
@@ -272,8 +281,11 @@ func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
 	if math.Abs(got.Confidence-0.7) > 0.000001 {
 		t.Fatalf("confidence = %v, want averaged confidence 0.7", got.Confidence)
 	}
-	if len(got.Words) != 1 || got.Words[0].Text != "hello" {
-		t.Fatalf("words = %#v, want first-result word details", got.Words)
+	if len(got.Words) != 2 || got.Words[0].Text != "hello" || got.Words[1].Text != "world" {
+		t.Fatalf("words = %#v, want all result word details in transcript order", got.Words)
+	}
+	if math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.7) > 0.000001 {
+		t.Fatalf("timing = %v-%v, want first word start through last word end", got.StartTime, got.EndTime)
 	}
 }
 
@@ -309,6 +321,9 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	if event.Type != stt.SpeechEventFinalTranscript || event.Alternatives[0].Text != "streamed" {
 		t.Fatalf("event = %#v, want final streamed transcript", event)
 	}
+	if event.Alternatives[0].Language != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", event.Alternatives[0].Language)
+	}
 
 	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); err != nil {
 		t.Fatalf("PushFrame returned error: %v", err)
@@ -335,12 +350,24 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
 						Transcript: "hello ",
 						Confidence: 0.8,
+						Words: []*speechpb.WordInfo{{
+							Word:       "hello",
+							StartTime:  durationpb.New(100 * 1000 * 1000),
+							EndTime:    durationpb.New(300 * 1000 * 1000),
+							Confidence: 0.81,
+						}},
 					}},
 				},
 				{
 					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
 						Transcript: "world",
 						Confidence: 0.6,
+						Words: []*speechpb.WordInfo{{
+							Word:       "world",
+							StartTime:  durationpb.New(400 * 1000 * 1000),
+							EndTime:    durationpb.New(700 * 1000 * 1000),
+							Confidence: 0.61,
+						}},
 					}},
 				},
 			},
@@ -367,9 +394,74 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	if math.Abs(got.Confidence-0.7) > 0.000001 {
 		t.Fatalf("confidence = %v, want averaged confidence 0.7", got.Confidence)
 	}
+	if len(got.Words) != 2 || got.Words[0].Text != "hello" || got.Words[1].Text != "world" {
+		t.Fatalf("words = %#v, want all interim result words in order", got.Words)
+	}
+	if math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.7) > 0.000001 {
+		t.Fatalf("timing = %v-%v, want full interim result span", got.StartTime, got.EndTime)
+	}
 
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("second Next error = %v, want EOF after one combined event", err)
+	}
+}
+
+func TestGoogleSTTStreamCombinesReferenceFinalResultSegments(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{
+				{
+					IsFinal: true,
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "good ",
+						Confidence: 0.9,
+						Words: []*speechpb.WordInfo{{
+							Word:       "good",
+							StartTime:  durationpb.New(100 * 1000 * 1000),
+							EndTime:    durationpb.New(300 * 1000 * 1000),
+							Confidence: 0.91,
+						}},
+					}},
+				},
+				{
+					IsFinal: true,
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "morning",
+						Confidence: 0.8,
+						Words: []*speechpb.WordInfo{{
+							Word:       "morning",
+							StartTime:  durationpb.New(400 * 1000 * 1000),
+							EndTime:    durationpb.New(900 * 1000 * 1000),
+							Confidence: 0.81,
+						}},
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	got := event.Alternatives[0]
+	if got.Text != "good morning" {
+		t.Fatalf("text = %q, want good morning", got.Text)
+	}
+	if len(got.Words) != 2 || got.Words[0].Text != "good" || got.Words[1].Text != "morning" {
+		t.Fatalf("words = %#v, want all final result words in order", got.Words)
+	}
+	if math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.9) > 0.000001 {
+		t.Fatalf("timing = %v-%v, want full final result span", got.StartTime, got.EndTime)
 	}
 }
 
