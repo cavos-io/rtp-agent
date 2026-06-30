@@ -1787,6 +1787,56 @@ func TestRealtimeSessionCommitAudioFlushesBufferedTailBeforeCommit(t *testing.T)
 	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "audio buffer commit"), "input_audio_buffer.commit", "")
 }
 
+func TestRealtimeSessionClearAudioDropsBufferedTail(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "initial session update"), "session.update", "gpt-realtime")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushAudio 20ms tail error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "20ms tail should wait in local buffer before clear")
+
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v", err)
+	}
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "audio buffer clear"), "input_audio_buffer.clear", "")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 1920*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 1920,
+	}); err != nil {
+		t.Fatalf("PushAudio 80ms after clear error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "clear should drop stale 20ms tail before new 80ms audio")
+}
+
 func TestRealtimeSessionResamplesInputAudioWithReferenceStreamTiming(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {

@@ -2120,6 +2120,9 @@ func (s *realtimeSession) ClearAudio() error {
 	if err := s.sendMsg(openAIRealtimeClearAudioMessage()); err != nil {
 		return err
 	}
+	if s.audioBStream != nil {
+		s.audioBStream.Clear()
+	}
 	s.pushedDuration = 0
 	return nil
 }
