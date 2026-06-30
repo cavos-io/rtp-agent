@@ -705,10 +705,14 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		}
 		return rimeTTSAudioFrame(audio, sampleRate), false, "", nil
 	case "timestamps":
-		if len(message.WordTimestamps.Words) == 0 {
+		timed := rimeTTSTimedTranscript(message.WordTimestamps.Words, message.WordTimestamps.Start, message.WordTimestamps.End)
+		if len(timed) == 0 {
 			return nil, false, "", nil
 		}
-		return nil, false, strings.Join(message.WordTimestamps.Words, " ") + " ", nil
+		return &tts.SynthesizedAudio{
+			DeltaText:       rimeTTSTimedTranscriptText(timed),
+			TimedTranscript: timed,
+		}, false, "", nil
 	case "done":
 		return &tts.SynthesizedAudio{IsFinal: true}, true, "", nil
 	case "error":
@@ -719,6 +723,33 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 	default:
 		return nil, false, "", nil
 	}
+}
+
+func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
+	count := min(len(words), len(starts), len(ends))
+	if count == 0 {
+		return nil
+	}
+	timed := make([]tts.TimedString, 0, count)
+	for i := 0; i < count; i++ {
+		timed = append(timed, tts.TimedString{
+			Text:      words[i] + " ",
+			StartTime: starts[i],
+			EndTime:   ends[i],
+		})
+	}
+	return timed
+}
+
+func rimeTTSTimedTranscriptText(timed []tts.TimedString) string {
+	if len(timed) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	for _, word := range timed {
+		builder.WriteString(word.Text)
+	}
+	return builder.String()
 }
 
 func rimeTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {

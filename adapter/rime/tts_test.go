@@ -759,12 +759,29 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("frame = %+v, want 24000 Hz mono", audio.Frame)
 	}
 
-	_, done, transcript, err = rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":[0.1],"end":[0.2]}}`), 24000)
+	timedAudio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":["hi","there"],"start":[0.1,0.3],"end":[0.2,0.5]}}`), 24000)
 	if err != nil {
 		t.Fatalf("timestamps message: %v", err)
 	}
-	if done || transcript != "hi " {
-		t.Fatalf("done=%v transcript=%q, want aligned transcript delta", done, transcript)
+	if done || transcript != "" {
+		t.Fatalf("done=%v transcript=%q, want timed transcript audio event", done, transcript)
+	}
+	if timedAudio == nil || timedAudio.DeltaText != "hi there " || len(timedAudio.TimedTranscript) != 2 {
+		t.Fatalf("timed audio = %+v, want two aligned transcript words", timedAudio)
+	}
+	if timedAudio.TimedTranscript[0].Text != "hi " || timedAudio.TimedTranscript[0].StartTime != 0.1 || timedAudio.TimedTranscript[0].EndTime != 0.2 {
+		t.Fatalf("first timed word = %+v, want hi timing", timedAudio.TimedTranscript[0])
+	}
+	if timedAudio.TimedTranscript[1].Text != "there " || timedAudio.TimedTranscript[1].StartTime != 0.3 || timedAudio.TimedTranscript[1].EndTime != 0.5 {
+		t.Fatalf("second timed word = %+v, want there timing", timedAudio.TimedTranscript[1])
+	}
+
+	truncated, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":["keep","drop"],"start":[0.4],"end":[0.6]}}`), 24000)
+	if err != nil {
+		t.Fatalf("mismatched timestamps message: %v", err)
+	}
+	if done || transcript != "" || truncated == nil || truncated.DeltaText != "keep " || len(truncated.TimedTranscript) != 1 {
+		t.Fatalf("truncated timestamps = audio:%+v done:%v transcript:%q, want shortest zip", truncated, done, transcript)
 	}
 
 	finished, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"done"}`), 24000)
