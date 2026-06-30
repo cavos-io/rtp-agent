@@ -2240,6 +2240,48 @@ func TestDeepgramTTSStreamMalformedTextReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSStreamNullTextReturnsAPIConnectionError(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runDeepgramTTSMalformedTextPayloadWebsocketServer(serverConn, serverErr, []byte(`null`))
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next() error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSStreamErrorDeliveryDoesNotBlockReadLoop(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -2766,6 +2808,10 @@ func runDeepgramTTSTelephonyAudioWebsocketServer(conn net.Conn, errCh chan<- err
 }
 
 func runDeepgramTTSMalformedTextWebsocketServer(conn net.Conn, errCh chan<- error) {
+	runDeepgramTTSMalformedTextPayloadWebsocketServer(conn, errCh, []byte(`{"type":`))
+}
+
+func runDeepgramTTSMalformedTextPayloadWebsocketServer(conn net.Conn, errCh chan<- error, payload []byte) {
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
@@ -2787,7 +2833,7 @@ func runDeepgramTTSMalformedTextWebsocketServer(conn net.Conn, errCh chan<- erro
 			break
 		}
 	}
-	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":`)); err != nil {
+	if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, payload); err != nil {
 		errCh <- err
 		return
 	}

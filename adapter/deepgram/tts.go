@@ -633,6 +633,9 @@ func (s *deepgramTTSStream) handleTextMessage(message []byte) error {
 	if err := json.Unmarshal(message, &metadata); err != nil {
 		return llm.NewAPIConnectionError(err.Error())
 	}
+	if metadata == nil {
+		return llm.NewAPIConnectionError("Deepgram TTS returned null text control")
+	}
 	switch metadata["type"] {
 	case "Flushed":
 		audio := &tts.SynthesizedAudio{IsFinal: true}
