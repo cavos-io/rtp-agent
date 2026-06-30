@@ -550,7 +550,6 @@ func (s *cartesiaTTSStream) readLoop() {
 		if resp.Type == "chunk" && resp.Data != "" {
 			data, err := base64.StdEncoding.DecodeString(resp.Data)
 			if err == nil {
-				isFinal := resp.Done
 				s.audio <- &tts.SynthesizedAudio{
 					Frame: &model.AudioFrame{
 						Data:              data,
@@ -558,11 +557,10 @@ func (s *cartesiaTTSStream) readLoop() {
 						NumChannels:       1,
 						SamplesPerChannel: uint32(len(data) / 2),
 					},
-					IsFinal: isFinal,
 				}
 				emittedAudio = true
-				emittedFinal = emittedFinal || isFinal
 			}
+			continue
 		}
 
 		if len(resp.WordTimestamps.Words) > 0 {

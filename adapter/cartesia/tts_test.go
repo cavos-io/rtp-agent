@@ -1,6 +1,7 @@
 package cartesia
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1083,6 +1084,9 @@ func TestCartesiaTTSStreamAudioDoneAfterEndInputEmitsFinalMarker(t *testing.T) {
 	if audio == nil || audio.Frame == nil {
 		t.Fatalf("audio = %#v, want frame", audio)
 	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio data = %v, want decoded chunk bytes", got)
+	}
 	if audio.IsFinal {
 		t.Fatal("audio IsFinal = true, want false until provider done")
 	}
@@ -1322,7 +1326,7 @@ func runCartesiaReadEndInputThenAudioDoneWebsocketServer(conn net.Conn, errCh ch
 				return
 			}
 			if msg["continue"] == false {
-				if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"chunk","data":"AQIDBA=="}`)); err != nil {
+				if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"chunk","data":"AQIDBA==","done":true}`)); err != nil {
 					errCh <- err
 					return
 				}
