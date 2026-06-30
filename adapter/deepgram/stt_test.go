@@ -897,7 +897,7 @@ func TestDeepgramSTTStreamRejectsDetectLanguage(t *testing.T) {
 	}
 }
 
-func TestDeepgramSTTRecognizeReturnsAPIStatusError(t *testing.T) {
+func TestDeepgramSTTRecognizeStatusEnvelopeReturnsAPIConnectionError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: deepgramRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
@@ -913,17 +913,21 @@ func TestDeepgramSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 
 	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte{0x01, 0x02}}}, "en-US")
 	if err == nil {
-		t.Fatal("Recognize error = nil, want APIStatusError")
+		t.Fatal("Recognize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatalf("APIConnectionError retryable = false, want true like reference generic parser wrapper")
+	}
+	if connectionErr.Body != nil {
+		t.Fatalf("APIConnectionError body = %#v, want nil because reference drops provider status envelope", connectionErr.Body)
 	}
 	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
-	}
-	if statusErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
-	}
-	if statusErr.Body != `{"err_msg":"rate limited"}` {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	if errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want generic parser APIConnectionError like reference", err, err)
 	}
 }
 
