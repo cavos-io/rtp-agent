@@ -366,6 +366,28 @@ func TestSpitchTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyWAVAudio(t *te
 	}
 }
 
+func TestSpitchTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &spitchTTSChunkedStream{
+		resp:         &http.Response{Body: io.NopCloser(strings.NewReader("not wav"))},
+		outputFormat: "wav",
+		sampleRate:   24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil on malformed provider audio", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message == "" {
+		t.Fatal("connection error message empty, want decode failure context")
+	}
+}
+
 func TestSpitchTTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {

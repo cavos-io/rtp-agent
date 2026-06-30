@@ -181,7 +181,7 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	data, err := io.ReadAll(s.resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response read failed: %v", err))
 	}
 	if len(data) == 0 {
 		s.finalSent = true
@@ -189,7 +189,7 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	frame, err := decodeSpitchWAVPCM16(data)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response decode failed: %v", err))
 	}
 
 	return &tts.SynthesizedAudio{
@@ -206,7 +206,7 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, err
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response read failed: %v", err))
 		}
 		if len(data) == 0 {
 			s.finalSent = true
@@ -228,7 +228,7 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 			}
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response decode failed: %v", err))
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
