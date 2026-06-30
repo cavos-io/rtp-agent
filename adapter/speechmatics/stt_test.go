@@ -152,6 +152,55 @@ func TestSpeechmaticsSegmentEventsApplyReferenceStartTimeOffset(t *testing.T) {
 	}
 }
 
+func TestSpeechmaticsSegmentEventsApplyReferenceSpeakerFormats(t *testing.T) {
+	state := &speechmaticsStreamState{
+		speakerActiveFormat:  "@{speaker_id}: {text}",
+		speakerPassiveFormat: "@{speaker_id} [background]: {text}",
+	}
+	var resp smResponse
+	if err := json.Unmarshal([]byte(`{
+		"message":"AddSegment",
+		"segments":[{
+			"text":"active words",
+			"language":"en",
+			"speaker_id":"S1",
+			"is_active":true,
+			"metadata":{"start_time":0.1,"end_time":0.4}
+		},{
+			"text":"passive words",
+			"language":"en",
+			"speaker_id":"S2",
+			"is_active":false,
+			"metadata":{"start_time":0.5,"end_time":0.8}
+		},{
+			"text":"default active",
+			"language":"en",
+			"speaker_id":"S3",
+			"metadata":{"start_time":0.9,"end_time":1.2}
+		}]
+	}`), &resp); err != nil {
+		t.Fatalf("unmarshal segment response: %v", err)
+	}
+
+	events := speechmaticsEvents(resp, state)
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want three formatted transcripts", len(events))
+	}
+	want := []string{
+		"@S1: active words",
+		"@S2 [background]: passive words",
+		"@S3: default active",
+	}
+	for i, event := range events {
+		if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+			t.Fatalf("event[%d] = %#v, want final transcript", i, event)
+		}
+		if got := event.Alternatives[0].Text; got != want[i] {
+			t.Fatalf("event[%d] text = %q, want %q", i, got, want[i])
+		}
+	}
+}
+
 func TestSpeechmaticsTurnBoundaryEventsMatchReference(t *testing.T) {
 	state := &speechmaticsStreamState{speechDuration: 1.25}
 
