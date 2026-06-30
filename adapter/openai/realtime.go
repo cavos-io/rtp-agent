@@ -2947,7 +2947,7 @@ func (s *realtimeSession) defaultRealtimeMessageModalities() []string {
 	if s != nil && s.model != nil && len(s.model.modalities) > 0 {
 		return append([]string(nil), s.model.modalities...)
 	}
-	return []string{"audio", "text"}
+	return []string{"text", "audio"}
 }
 
 func (s *realtimeSession) closeRealtimeGeneration() {

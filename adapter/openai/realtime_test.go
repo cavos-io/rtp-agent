@@ -3945,11 +3945,20 @@ func TestRealtimeSessionResolvesDefaultModalitiesWhenItemDone(t *testing.T) {
 		if !ok {
 			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
 		}
-		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
-			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+			t.Fatalf("modalities = %#v, want default text and audio", modalities)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for default modalities")
+	}
+}
+
+func TestRealtimeSessionDefaultModalitiesUseReferenceOrder(t *testing.T) {
+	session := &realtimeSession{}
+
+	modalities := session.defaultRealtimeMessageModalities()
+	if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+		t.Fatalf("modalities = %#v, want default text and audio", modalities)
 	}
 }
 
@@ -4226,8 +4235,8 @@ func TestRealtimeSessionCloseClosesActiveGenerationStreams(t *testing.T) {
 		if !ok {
 			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
 		}
-		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
-			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+			t.Fatalf("modalities = %#v, want default text and audio", modalities)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for default modalities")
@@ -4334,8 +4343,8 @@ func TestRealtimeSessionDisconnectClosesActiveGenerationStreams(t *testing.T) {
 		if !ok {
 			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
 		}
-		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
-			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+			t.Fatalf("modalities = %#v, want default text and audio", modalities)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for default modalities")
@@ -5598,8 +5607,8 @@ func TestRealtimeSessionResolvesDefaultModalitiesWhenResponseDone(t *testing.T) 
 		if !ok {
 			t.Fatal("ModalitiesCh closed before default modalities, want default modalities")
 		}
-		if len(modalities) != 2 || modalities[0] != "audio" || modalities[1] != "text" {
-			t.Fatalf("modalities = %#v, want default audio and text", modalities)
+		if len(modalities) != 2 || modalities[0] != "text" || modalities[1] != "audio" {
+			t.Fatalf("modalities = %#v, want default text and audio", modalities)
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("timed out waiting for default modalities")
