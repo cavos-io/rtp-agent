@@ -400,6 +400,7 @@ type deepgramTTSChunkedStream struct {
 	pendingErr   error
 	finalSent    bool
 	pendingPCM   []byte
+	pendingTail  []byte
 	audioSent    bool
 	mu           sync.Mutex
 	readMu       sync.Mutex
@@ -487,6 +488,7 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			err := s.pendingErr
 			s.pendingErr = nil
 			s.pendingPCM = nil
+			s.pendingTail = nil
 			s.finalSent = true
 			if s.resp != nil && s.resp.Body != nil {
 				body := s.resp.Body
@@ -506,14 +508,14 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return audio, finalErr
 		}
 		s.audioSent = true
-		audio := &tts.SynthesizedAudio{
-			RequestID: requestID,
-			Frame: &model.AudioFrame{
-				Data:              frameData,
-				SampleRate:        uint32(sampleRate),
-				NumChannels:       1,
-				SamplesPerChannel: uint32(len(frameData) / 2),
-			},
+		if s.pendingErr != nil {
+			audio := deepgramTTSChunkedAudioFrame(requestID, sampleRate, frameData, false)
+			s.mu.Unlock()
+			return audio, nil
+		}
+		audio := s.chunkedAudioFrameLocked(requestID, sampleRate, frameData, s.pendingFinal)
+		if audio == nil {
+			continue
 		}
 		s.mu.Unlock()
 		return audio, nil
@@ -522,6 +524,42 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 func (s *deepgramTTSChunkedStream) chunkedFrameDataLocked(encoding string, data []byte) []byte {
 	return deepgramTTSFrameData(encoding, &s.pendingPCM, data)
+}
+
+func (s *deepgramTTSChunkedStream) chunkedAudioFrameLocked(requestID string, sampleRate int, frameData []byte, final bool) *tts.SynthesizedAudio {
+	if len(s.pendingTail) > 0 {
+		combined := make([]byte, 0, len(s.pendingTail)+len(frameData))
+		combined = append(combined, s.pendingTail...)
+		combined = append(combined, frameData...)
+		frameData = combined
+		s.pendingTail = nil
+	}
+	if final {
+		s.pendingFinal = false
+		s.finishLocked()
+		return deepgramTTSChunkedAudioFrame(requestID, sampleRate, frameData, true)
+	}
+	tailBytes := deepgramTTSFinalTailBytes(sampleRate)
+	if len(frameData) <= tailBytes {
+		s.pendingTail = append(s.pendingTail[:0], frameData...)
+		return nil
+	}
+	tailStart := len(frameData) - tailBytes
+	s.pendingTail = append(s.pendingTail[:0], frameData[tailStart:]...)
+	return deepgramTTSChunkedAudioFrame(requestID, sampleRate, frameData[:tailStart], false)
+}
+
+func deepgramTTSChunkedAudioFrame(requestID string, sampleRate int, frameData []byte, final bool) *tts.SynthesizedAudio {
+	return &tts.SynthesizedAudio{
+		RequestID: requestID,
+		IsFinal:   final,
+		Frame: &model.AudioFrame{
+			Data:              frameData,
+			SampleRate:        uint32(sampleRate),
+			NumChannels:       1,
+			SamplesPerChannel: uint32(len(frameData) / 2),
+		},
+	}
 }
 
 func deepgramTTSChunkedReadError(err error) error {
@@ -588,6 +626,20 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
 	}
+	if len(s.pendingTail) > 0 {
+		frameData := append([]byte(nil), s.pendingTail...)
+		s.pendingTail = nil
+		s.finishLocked()
+		return deepgramTTSChunkedAudioFrame(s.requestID, s.sampleRate, frameData, true), nil
+	}
+	s.finishLocked()
+	if !s.audioSent && strings.TrimSpace(s.inputText) != "" {
+		return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
+	}
+	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
+}
+
+func (s *deepgramTTSChunkedStream) finishLocked() {
 	s.finalSent = true
 	if s.resp != nil && s.resp.Body != nil {
 		body := s.resp.Body
@@ -595,10 +647,6 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 		_ = body.Close()
 	}
 	s.cancelRequestLocked()
-	if !s.audioSent && strings.TrimSpace(s.inputText) != "" {
-		return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
-	}
-	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
 
 func (s *deepgramTTSChunkedStream) Close() error {

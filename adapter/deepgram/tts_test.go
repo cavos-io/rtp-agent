@@ -936,9 +936,13 @@ func TestDeepgramTTSSynthesizeAcceptsReferenceSuccessStatusClass(t *testing.T) {
 				if err != nil {
 					t.Fatalf("audio Next() error = %v, want successful 2xx audio", err)
 				}
-				if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, tt.body) {
-					t.Fatalf("audio Next() = %+v, want body bytes %v", audio, tt.body)
+				if audio == nil || audio.Frame == nil || !audio.IsFinal || !bytes.Equal(audio.Frame.Data, tt.body) {
+					t.Fatalf("audio Next() = %+v, want final body bytes %v", audio, tt.body)
 				}
+				if next, err := stream.Next(); err != io.EOF || next != nil {
+					t.Fatalf("Next after final audio = (%+v, %v), want nil EOF", next, err)
+				}
+				return
 			}
 
 			final, err := stream.Next()
@@ -1298,8 +1302,8 @@ func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next() error = %v, want final audio bytes", err)
 	}
-	if audio == nil || audio.Frame == nil {
-		t.Fatalf("Next() = %+v, want audio frame", audio)
+	if audio == nil || audio.Frame == nil || !audio.IsFinal {
+		t.Fatalf("Next() = %+v, want final audio frame", audio)
 	}
 	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
 		t.Fatalf("audio bytes = %v, want final read bytes", got)
@@ -1308,15 +1312,34 @@ func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 		t.Fatalf("samples per channel = %d, want 2", got)
 	}
 
-	final, err := stream.Next()
-	if err != nil {
-		t.Fatalf("final Next() error = %v, want final marker", err)
-	}
-	if final == nil || !final.IsFinal || final.Frame != nil {
-		t.Fatalf("final Next() = %+v, want boundary-only final marker", final)
-	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
-		t.Fatalf("third Next() error = %v, want EOF", err)
+		t.Fatalf("second Next() error = %v, want EOF", err)
+	}
+}
+
+func TestDeepgramTTSChunkedStreamMarksReferenceTailFrameFinal(t *testing.T) {
+	stream := &deepgramTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02, 0x03, 0x04}))},
+		sampleRate: 1000,
+		requestID:  "req-tail",
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !audio.IsFinal {
+		t.Fatalf("audio = %+v, want final audio frame", audio)
+	}
+	if audio.RequestID != "req-tail" {
+		t.Fatalf("audio RequestID = %q, want req-tail", audio.RequestID)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{0x01, 0x02, 0x03, 0x04}) {
+		t.Fatalf("final audio data = %v, want provider PCM bytes", got)
+	}
+	if next, err := stream.Next(); err != io.EOF || next != nil {
+		t.Fatalf("Next after final audio = (%+v, %v), want nil EOF", next, err)
 	}
 }
 
@@ -1368,19 +1391,11 @@ func TestDeepgramTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first Next returned error: %v", err)
 	}
-	if audio == nil || audio.Frame == nil || audio.IsFinal {
-		t.Fatalf("first audio = %#v, want audio frame", audio)
-	}
-
-	final, err := stream.Next()
-	if err != nil {
-		t.Fatalf("second Next returned error before final marker: %v", err)
-	}
-	if final == nil || !final.IsFinal || final.Frame != nil {
-		t.Fatalf("second audio = %#v, want final marker", final)
+	if audio == nil || audio.Frame == nil || !audio.IsFinal {
+		t.Fatalf("first audio = %#v, want final audio frame", audio)
 	}
 	if _, err := stream.Next(); err != io.EOF {
-		t.Fatalf("third Next error = %v, want EOF", err)
+		t.Fatalf("second Next error = %v, want EOF", err)
 	}
 }
 
@@ -1464,22 +1479,11 @@ func TestDeepgramTTSChunkedStreamAnnotatesReferenceRequestID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("audio Next() error = %v", err)
 	}
-	if audio == nil || audio.Frame == nil {
-		t.Fatalf("audio = %+v, want frame", audio)
+	if audio == nil || audio.Frame == nil || !audio.IsFinal {
+		t.Fatalf("audio = %+v, want final frame", audio)
 	}
 	if audio.RequestID == "" {
 		t.Fatal("audio RequestID is empty, want reference request id")
-	}
-
-	final, err := stream.Next()
-	if err != nil {
-		t.Fatalf("final Next() error = %v", err)
-	}
-	if final == nil || !final.IsFinal {
-		t.Fatalf("final = %+v, want final marker", final)
-	}
-	if final.RequestID != audio.RequestID {
-		t.Fatalf("final RequestID = %q, want %q", final.RequestID, audio.RequestID)
 	}
 }
 
