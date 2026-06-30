@@ -502,6 +502,7 @@ func (s *OpenAISTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		},
 		owner: s,
 	}
+	stream.startTime = float64(time.Now().UnixNano()) / 1e9
 	s.registerRealtimeSTTStream(stream)
 	go stream.readLoop()
 	if vadStream != nil {
@@ -799,25 +800,57 @@ func openAITimedStrings(words []struct {
 }
 
 type openAIRealtimeSTTStream struct {
-	conn          *websocket.Conn
-	ctx           context.Context
-	cancel        context.CancelFunc
-	events        chan *stt.SpeechEvent
-	eventStream   *openAIRealtimeQueuedStream[*stt.SpeechEvent]
-	errCh         chan error
-	pendingErr    error
-	mu            sync.Mutex
-	closed        bool
-	inputEnded    bool
-	vadInputEnded bool
-	committed     bool
-	hasAudio      bool
-	pushedSR      uint32
-	audio         *audio.AudioByteStream
-	normalizer    openAIRealtimeInputAudioNormalizer
-	state         *openAIRealtimeSTTMessageState
-	owner         *OpenAISTT
-	vadStream     vad.VADStream
+	conn            *websocket.Conn
+	ctx             context.Context
+	cancel          context.CancelFunc
+	events          chan *stt.SpeechEvent
+	eventStream     *openAIRealtimeQueuedStream[*stt.SpeechEvent]
+	errCh           chan error
+	pendingErr      error
+	mu              sync.Mutex
+	closed          bool
+	inputEnded      bool
+	vadInputEnded   bool
+	committed       bool
+	hasAudio        bool
+	pushedSR        uint32
+	audio           *audio.AudioByteStream
+	normalizer      openAIRealtimeInputAudioNormalizer
+	state           *openAIRealtimeSTTMessageState
+	owner           *OpenAISTT
+	vadStream       vad.VADStream
+	startTimeOffset float64
+	startTime       float64
+}
+
+func (s *openAIRealtimeSTTStream) StartTimeOffset() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTimeOffset
+}
+
+func (s *openAIRealtimeSTTStream) SetStartTimeOffset(offset float64) {
+	if offset < 0 {
+		panic("start_time_offset must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTimeOffset = offset
+}
+
+func (s *openAIRealtimeSTTStream) StartTime() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startTime
+}
+
+func (s *openAIRealtimeSTTStream) SetStartTime(startTime float64) {
+	if startTime < 0 {
+		panic("start_time must be non-negative")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.startTime = startTime
 }
 
 func (s *openAIRealtimeSTTStream) PushFrame(frame *model.AudioFrame) error {

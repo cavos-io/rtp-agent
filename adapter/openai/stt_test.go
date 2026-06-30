@@ -1817,6 +1817,57 @@ func TestOpenAISTTStreamReconnectsAfterUnexpectedNormalClose(t *testing.T) {
 	}
 }
 
+func TestOpenAIRealtimeSTTStreamExposesReferenceTimingAnchors(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	release := make(chan struct{})
+	defer close(release)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			<-release
+		})
+		return dialer(endpoint, headers)
+	}
+
+	before := time.Now().Add(-time.Second)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	timing, ok := stream.(stt.StreamTiming)
+	if !ok {
+		t.Fatalf("stream does not implement reference timing anchors")
+	}
+	if got := timing.StartTimeOffset(); got != 0 {
+		t.Fatalf("StartTimeOffset = %v, want reference zero default", got)
+	}
+	if got := timing.StartTime(); got < float64(before.UnixNano())/1e9 {
+		t.Fatalf("StartTime = %v, want stream creation wall-clock anchor", got)
+	}
+	timing.SetStartTimeOffset(2.5)
+	timing.SetStartTime(123.5)
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing = offset %v start %v, want reference values", timing.StartTimeOffset(), timing.StartTime())
+	}
+	assertOpenAISTTPanicsWithMessage(t, "start_time_offset must be non-negative", func() {
+		timing.SetStartTimeOffset(-0.01)
+	})
+	assertOpenAISTTPanicsWithMessage(t, "start_time must be non-negative", func() {
+		timing.SetStartTime(-0.01)
+	})
+	if timing.StartTimeOffset() != 2.5 || timing.StartTime() != 123.5 {
+		t.Fatalf("timing changed after rejected update: offset %v start %v", timing.StartTimeOffset(), timing.StartTime())
+	}
+}
+
 func TestOpenAISTTStreamRecyclesAfterMaxSessionDuration(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
@@ -4704,4 +4755,18 @@ func (f *fakeOpenAISTTVADStream) Next() (*vad.VADEvent, error) {
 		}
 		return ev, nil
 	}
+}
+
+func assertOpenAISTTPanicsWithMessage(t *testing.T, want string, fn func()) {
+	t.Helper()
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Fatalf("expected panic %q", want)
+		}
+		if fmt.Sprint(got) != want {
+			t.Fatalf("panic = %q, want %q", got, want)
+		}
+	}()
+	fn()
 }
