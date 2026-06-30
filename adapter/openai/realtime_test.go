@@ -202,6 +202,52 @@ func TestRealtimeSessionUpdateToolsRetainsOnlyEmittedTools(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionGenerateReplyUsesToolFormatter(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+		WithOpenAIRealtimeBaseURL("ws://openai.test/v1/realtime"),
+		WithOpenAIRealtimeToolFormatter(func(tools []llm.Tool) []map[string]any {
+			return []map[string]any{{
+				"type":        "function",
+				"name":        "formatted_lookup",
+				"description": "formatted lookup",
+				"parameters":  llm.ToolParameters(tools[0]),
+			}}
+		}),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	<-messages
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Tools: []llm.Tool{requestTestTool{}}}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	reply := <-messages
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(reply), &payload); err != nil {
+		t.Fatalf("decode response.create: %v", err)
+	}
+	response := payload["response"].(map[string]any)
+	tools := response["tools"].([]any)
+	tool := tools[0].(map[string]any)
+	if tool["name"] != "formatted_lookup" {
+		t.Fatalf("tools = %#v, want per-response tools from formatter", tools)
+	}
+}
+
 func TestRealtimeSessionUpdateToolsSerializesConcurrentUpdates(t *testing.T) {
 	releaseServer := make(chan struct{})
 	defer close(releaseServer)

@@ -1975,7 +1975,11 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	s.mu.Lock()
 	instructions := s.instructions
 	s.mu.Unlock()
-	msg := openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)
+	toolFormatter := openAIRealtimeTools
+	if s.model != nil {
+		toolFormatter = s.model.realtimeTools
+	}
+	msg := openAIRealtimeGenerateReplyMessageWithToolFormatter(options, instructions, toolFormatter)
 	eventID, _ := msg["event_id"].(string)
 	s.addPendingRealtimeResponse(eventID)
 	if err := s.sendMsg(msg); err != nil {
@@ -2051,6 +2055,13 @@ func (s *realtimeSession) Say(text string) error {
 }
 
 func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.RealtimeGenerateReplyOptions, sessionInstructions string) map[string]any {
+	return openAIRealtimeGenerateReplyMessageWithToolFormatter(options, sessionInstructions, openAIRealtimeTools)
+}
+
+func openAIRealtimeGenerateReplyMessageWithToolFormatter(options llm.RealtimeGenerateReplyOptions, sessionInstructions string, toolFormatter func([]llm.Tool) []map[string]any) map[string]any {
+	if toolFormatter == nil {
+		toolFormatter = openAIRealtimeTools
+	}
 	response := make(map[string]any)
 	eventID := cavosmath.ShortUUID("response_create_")
 	response["metadata"] = map[string]any{"client_event_id": eventID}
@@ -2064,7 +2075,7 @@ func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.Realt
 		response["tool_choice"] = toolChoice
 	}
 	if options.Tools != nil {
-		response["tools"] = openAIRealtimeTools(options.Tools)
+		response["tools"] = toolFormatter(options.Tools)
 	}
 
 	return map[string]any{
