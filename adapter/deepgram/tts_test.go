@@ -112,6 +112,44 @@ func TestDeepgramTTSPrewarmDialsAndReusesReferenceConnection(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSProviderCloseCancelsReferencePrewarm(t *testing.T) {
+	dialStarted := make(chan struct{})
+	dialCanceled := make(chan error, 1)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			close(dialStarted)
+			<-ctx.Done()
+			dialCanceled <- ctx.Err()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	tts.Prewarm(provider)
+	select {
+	case <-dialStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Prewarm did not start reference websocket dial")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-dialCanceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("prewarm dial canceled with %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider Close did not cancel in-flight reference prewarm dial")
+	}
+}
+
 func TestDeepgramTTSPooledCloseSendsReferenceFlushCloseBeforeAck(t *testing.T) {
 	dials := make(chan net.Conn, 1)
 	serverErr := make(chan error, 1)

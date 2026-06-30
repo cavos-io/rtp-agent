@@ -48,6 +48,7 @@ type DeepgramTTS struct {
 	prewarmConn           *websocket.Conn
 	prewarmConnectedAt    time.Time
 	prewarming            bool
+	prewarmCancel         context.CancelFunc
 }
 
 type DeepgramTTSOption func(*DeepgramTTS)
@@ -147,17 +148,21 @@ func (t *DeepgramTTS) Prewarm() {
 		t.mu.Unlock()
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	t.prewarming = true
+	t.prewarmCancel = cancel
 	t.mu.Unlock()
 
 	go func() {
+		defer cancel()
 		header := make(http.Header)
 		header.Set("Authorization", "Token "+apiKey)
-		conn, _, err := websocket.DefaultDialer.DialContext(context.Background(), streamURL, header)
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.prewarming = false
+		t.prewarmCancel = nil
 		if err != nil || t.closed || t.prewarmConn != nil {
 			if conn != nil {
 				closeDeepgramTTSPrewarmedConn(conn)
@@ -180,8 +185,13 @@ func (t *DeepgramTTS) Close() error {
 	prewarmConn := t.prewarmConn
 	t.prewarmConn = nil
 	t.prewarmConnectedAt = time.Time{}
+	prewarmCancel := t.prewarmCancel
+	t.prewarmCancel = nil
 	t.mu.Unlock()
 
+	if prewarmCancel != nil {
+		prewarmCancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
