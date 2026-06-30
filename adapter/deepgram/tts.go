@@ -28,6 +28,7 @@ const defaultDeepgramTTSBaseURL = "https://api.deepgram.com/v1/speak"
 const defaultDeepgramTTSStreamResponseTimeout = 10 * time.Second
 const deepgramTTSCloseAckTimeout = time.Second
 const deepgramTTSRequestTimeout = 30 * time.Second
+const deepgramTTSPoolMaxSessionDuration = time.Hour
 const deepgramTTSFlushMessage = `{"type": "Flush"}`
 const deepgramTTSCloseMessage = `{"type": "Close"}`
 
@@ -45,7 +46,9 @@ type DeepgramTTS struct {
 	streams               map[*deepgramTTSStream]struct{}
 	closed                bool
 	prewarmConn           *websocket.Conn
+	prewarmConnectedAt    time.Time
 	prewarming            bool
+	prewarmCancel         context.CancelFunc
 }
 
 type DeepgramTTSOption func(*DeepgramTTS)
@@ -145,17 +148,21 @@ func (t *DeepgramTTS) Prewarm() {
 		t.mu.Unlock()
 		return
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	t.prewarming = true
+	t.prewarmCancel = cancel
 	t.mu.Unlock()
 
 	go func() {
+		defer cancel()
 		header := make(http.Header)
 		header.Set("Authorization", "Token "+apiKey)
-		conn, _, err := websocket.DefaultDialer.DialContext(context.Background(), streamURL, header)
+		conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
 
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		t.prewarming = false
+		t.prewarmCancel = nil
 		if err != nil || t.closed || t.prewarmConn != nil {
 			if conn != nil {
 				closeDeepgramTTSPrewarmedConn(conn)
@@ -163,6 +170,7 @@ func (t *DeepgramTTS) Prewarm() {
 			return
 		}
 		t.prewarmConn = conn
+		t.prewarmConnectedAt = time.Now()
 	}()
 }
 
@@ -176,8 +184,14 @@ func (t *DeepgramTTS) Close() error {
 	t.streams = make(map[*deepgramTTSStream]struct{})
 	prewarmConn := t.prewarmConn
 	t.prewarmConn = nil
+	t.prewarmConnectedAt = time.Time{}
+	prewarmCancel := t.prewarmCancel
+	t.prewarmCancel = nil
 	t.mu.Unlock()
 
+	if prewarmCancel != nil {
+		prewarmCancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
@@ -240,9 +254,11 @@ func (t *DeepgramTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		return nil, err
 	}
 
+	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &deepgramTTSStream{
 		provider:   t,
-		ctx:        ctx,
+		ctx:        streamCtx,
+		cancel:     cancel,
 		apiKey:     t.apiKey,
 		streamURL:  buildDeepgramTTSStreamURL(t),
 		audio:      make(chan *tts.SynthesizedAudio, 10),
@@ -293,7 +309,13 @@ func (t *DeepgramTTS) takePrewarmedConn() *websocket.Conn {
 	if conn == nil {
 		return nil
 	}
+	connectedAt := t.prewarmConnectedAt
 	t.prewarmConn = nil
+	t.prewarmConnectedAt = time.Time{}
+	if !connectedAt.IsZero() && time.Since(connectedAt) > deepgramTTSPoolMaxSessionDuration {
+		closeDeepgramTTSPrewarmedConn(conn)
+		return nil
+	}
 	return conn
 }
 
@@ -307,15 +329,16 @@ func (t *DeepgramTTS) storePrewarmedConn(conn *websocket.Conn) bool {
 		return false
 	}
 	t.prewarmConn = conn
+	t.prewarmConnectedAt = time.Now()
 	return true
 }
 
 func closeDeepgramTTSPrewarmedConn(conn *websocket.Conn) {
 	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSFlushMessage))
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSCloseMessage))
 	_ = conn.SetReadDeadline(time.Now().Add(deepgramTTSCloseAckTimeout))
 	_, _, _ = conn.ReadMessage()
 	_ = conn.SetReadDeadline(time.Time{})
-	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSCloseMessage))
 	_ = conn.Close()
 }
 
@@ -558,6 +581,7 @@ func (s *deepgramTTSChunkedStream) cancelRequestLocked() {
 type deepgramTTSStream struct {
 	provider    *DeepgramTTS
 	ctx         context.Context
+	cancel      context.CancelFunc
 	apiKey      string
 	streamURL   string
 	conn        *websocket.Conn
@@ -1017,6 +1041,9 @@ func (s *deepgramTTSStream) consumePendingToken(token string) {
 }
 
 func (s *deepgramTTSStream) Close() error {
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.mu.Lock()
 	if s.closed || s.closing {
 		s.mu.Unlock()

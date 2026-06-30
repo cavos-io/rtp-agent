@@ -27,22 +27,27 @@ const deepgramSTTv2CloseMessage = `{"type": "CloseStream"}`
 var deepgramSTTv2HeartbeatInterval = 30 * time.Second
 
 type DeepgramSTTv2 struct {
-	apiKey     string
-	model      string
-	sampleRate int
-	baseURL    string
-	mipOptOut  bool
-	language   string
-	eagerEOT   float64
-	eot        float64
-	eotSet     bool
-	eotTimeout int
-	keyterms   []string
-	tags       []string
-	langHints  []string
-	mu         sync.Mutex
-	streams    map[*deepgramV2Stream]struct{}
-	closed     bool
+	apiKey             string
+	model              string
+	sampleRate         int
+	baseURL            string
+	mipOptOut          bool
+	language           string
+	eagerEOT           float64
+	eot                float64
+	eotSet             bool
+	eotTimeout         int
+	keyterms           []string
+	tags               []string
+	langHints          []string
+	mu                 sync.Mutex
+	streams            map[*deepgramV2Stream]struct{}
+	pendingStreamDials map[*deepgramSTTv2PendingDial]struct{}
+	closed             bool
+}
+
+type deepgramSTTv2PendingDial struct {
+	cancel context.CancelFunc
 }
 
 type DeepgramSTTv2Option func(*DeepgramSTTv2)
@@ -213,7 +218,15 @@ func (s *DeepgramSTTv2) Stream(ctx context.Context, _ string) (stt.RecognizeStre
 	header := make(http.Header)
 	header.Set("Authorization", "Token "+s.apiKey)
 	streamURL := buildDeepgramSTTv2StreamURL(s)
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, streamURL, header)
+	dialCtx, cancelDial := context.WithCancel(ctx)
+	pendingDial := &deepgramSTTv2PendingDial{cancel: cancelDial}
+	if !s.registerPendingStreamDial(pendingDial) {
+		cancelDial()
+		return nil, io.ErrClosedPipe
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, streamURL, header)
+	cancelDial()
+	s.unregisterPendingStreamDial(pendingDial)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
@@ -250,9 +263,17 @@ func (s *DeepgramSTTv2) Close() error {
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
+	pendingDials := make([]*deepgramSTTv2PendingDial, 0, len(s.pendingStreamDials))
+	for pending := range s.pendingStreamDials {
+		pendingDials = append(pendingDials, pending)
+	}
 	s.streams = make(map[*deepgramV2Stream]struct{})
+	s.pendingStreamDials = make(map[*deepgramSTTv2PendingDial]struct{})
 	s.mu.Unlock()
 
+	for _, pending := range pendingDials {
+		pending.cancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
@@ -279,6 +300,25 @@ func (s *DeepgramSTTv2) registerStream(stream *deepgramV2Stream) bool {
 	}
 	s.streams[stream] = struct{}{}
 	return true
+}
+
+func (s *DeepgramSTTv2) registerPendingStreamDial(pending *deepgramSTTv2PendingDial) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.pendingStreamDials == nil {
+		s.pendingStreamDials = make(map[*deepgramSTTv2PendingDial]struct{})
+	}
+	s.pendingStreamDials[pending] = struct{}{}
+	return true
+}
+
+func (s *DeepgramSTTv2) unregisterPendingStreamDial(pending *deepgramSTTv2PendingDial) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pendingStreamDials, pending)
 }
 
 func (s *DeepgramSTTv2) unregisterStream(stream *deepgramV2Stream) {
