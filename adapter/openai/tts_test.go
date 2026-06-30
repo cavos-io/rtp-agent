@@ -903,7 +903,7 @@ func TestOpenAITTSSynthesizeSnapshotsReferenceOptions(t *testing.T) {
 	}
 }
 
-func TestOpenAITTSSynthesizeUsesUnknownRequestIDFallback(t *testing.T) {
+func TestOpenAITTSSynthesizeUsesEmptyRequestIDFallback(t *testing.T) {
 	client := openAITestHTTPDoer(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -931,15 +931,24 @@ func TestOpenAITTSSynthesizeUsesUnknownRequestIDFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next error = %v", err)
 	}
-	if audio.RequestID != "unknown" {
-		t.Fatalf("audio request id = %q, want reference unknown fallback", audio.RequestID)
+	if audio.RequestID != "" {
+		t.Fatalf("audio request id = %q, want reference empty fallback", audio.RequestID)
 	}
 	final, err := stream.Next()
 	if err != nil {
 		t.Fatalf("final Next error = %v", err)
 	}
-	if final == nil || !final.IsFinal || final.RequestID != "unknown" {
-		t.Fatalf("final = %#v, want final marker with reference unknown request id", final)
+	if final == nil || !final.IsFinal || final.RequestID != "" {
+		t.Fatalf("final = %#v, want final marker with reference empty request id", final)
+	}
+}
+
+func TestOpenAITTSRequestIDMissingHeadersMatchReferenceEmpty(t *testing.T) {
+	if got := openAITTSRequestID(nil); got != "" {
+		t.Fatalf("nil header request id = %q, want reference empty fallback", got)
+	}
+	if got := openAITTSRequestID(http.Header{}); got != "" {
+		t.Fatalf("empty header request id = %q, want reference empty fallback", got)
 	}
 }
 
