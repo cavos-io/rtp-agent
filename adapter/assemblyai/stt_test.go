@@ -80,6 +80,48 @@ func TestAssemblyAISTTStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 	}
 }
 
+func TestAssemblyAISTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	originalDialer := websocket.DefaultDialer
+	t.Cleanup(func() { websocket.DefaultDialer = originalDialer })
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial failed")
+		},
+	}
+
+	provider := NewAssemblyAISTT("test-key")
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream returned stream %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestAssemblyAISTTStreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	originalDialer := websocket.DefaultDialer
+	t.Cleanup(func() { websocket.DefaultDialer = originalDialer })
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, context.Canceled
+		},
+	}
+
+	provider := NewAssemblyAISTT("test-key")
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream returned stream %#v, want nil", stream)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream error = %T %v, want context.Canceled", err, err)
+	}
+}
+
 func TestAssemblyAISTTStreamRejectsU3OnlyOptionsForDefaultModel(t *testing.T) {
 	cases := []struct {
 		name    string
