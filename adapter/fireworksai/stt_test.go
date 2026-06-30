@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -204,6 +205,13 @@ func TestFireworksSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	if got := readFireworksTestChan(t, audioCh, errCh); len(got) != 800 {
 		t.Fatalf("flush audio chunk len = %d, want 800", len(got))
 	}
+	fireworksStream, ok := stream.(*fireworksStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *fireworksStream", stream)
+	}
+	if got := fireworksStream.pendingAudioDuration; math.Abs(got-0.075) > 1e-9 {
+		t.Fatalf("pending audio duration = %v, want 0.075", got)
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -395,6 +403,51 @@ func TestFireworksSTTUpdateOptionsEndsSpeechBeforeReconnect(t *testing.T) {
 	}
 	if stream.state.speaking {
 		t.Fatal("stream speaking = true, want reset before reconnect")
+	}
+}
+
+func TestFireworksSTTUpdateOptionsEmitsReferenceUsageAfterSpeechEnd(t *testing.T) {
+	errCh := make(chan error, 1)
+	stream := &fireworksStream{
+		events:               make(chan *stt.SpeechEvent, 2),
+		errCh:                make(chan error, 1),
+		ctx:                  context.Background(),
+		cancel:               func() {},
+		pendingAudioDuration: 0.075,
+		state: &fireworksStreamState{
+			speaking: true,
+		},
+	}
+	dialer := func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		return dialFireworksTestWebsocket(t, errCh, func(conn *websocket.Conn, r *http.Request) {
+			defer conn.Close()
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					return
+				}
+			}
+		})
+	}
+
+	stream.updateOptions("ws://fireworks.test/v1", nil, dialer, "en")
+	defer stream.Close()
+
+	event := readFireworksTestChan(t, stream.events, errCh)
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("first update event type = %v, want end of speech", event.Type)
+	}
+	usage := readFireworksTestChan(t, stream.events, errCh)
+	if usage.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("second update event type = %v, want recognition usage", usage.Type)
+	}
+	if usage.RecognitionUsage == nil {
+		t.Fatal("recognition usage = nil")
+	}
+	if math.Abs(usage.RecognitionUsage.AudioDuration-0.075) > 1e-9 {
+		t.Fatalf("audio duration = %v, want 0.075", usage.RecognitionUsage.AudioDuration)
+	}
+	if stream.pendingAudioDuration != 0 {
+		t.Fatalf("pending audio duration after flush = %v, want 0", stream.pendingAudioDuration)
 	}
 }
 
