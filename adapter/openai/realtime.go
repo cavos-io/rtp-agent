@@ -3055,7 +3055,7 @@ func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
 		s.model.remoteItemAddedHook(s.remote, ev.RemoteItem)
 	}
 	var previousItemID *string
-	if ev.RemoteItem.PreviousItemID != "" {
+	if ev.RemoteItem.PreviousItemIDSet {
 		previousItemID = &ev.RemoteItem.PreviousItemID
 	} else if items := s.remote.ToChatCtx().Items; len(items) > 0 {
 		itemID := items[len(items)-1].GetID()
@@ -3243,12 +3243,13 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		if err != nil {
 			return llm.RealtimeEvent{}, false
 		}
-		previousItemID, _ := ev["previous_item_id"].(string)
+		previousItemID, previousItemIDSet := ev["previous_item_id"].(string)
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeRemoteItemAdded,
 			RemoteItem: &llm.RemoteItemAddedEvent{
-				PreviousItemID: previousItemID,
-				Item:           chatItem,
+				PreviousItemID:    previousItemID,
+				PreviousItemIDSet: previousItemIDSet,
+				Item:              chatItem,
 			},
 		}, true
 	case "response.done":

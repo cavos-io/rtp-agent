@@ -6177,6 +6177,31 @@ func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventPreservesExplicitEmptyPreviousItemID(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":             "conversation.item.added",
+		"previous_item_id": "",
+		"item": map[string]any{
+			"id":      "msg_123",
+			"type":    "message",
+			"role":    "user",
+			"content": []any{map[string]any{"type": "input_text", "text": "hello"}},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+	}
+	if ev.RemoteItem == nil {
+		t.Fatal("RemoteItem = nil, want remote item payload")
+	}
+	if !ev.RemoteItem.PreviousItemIDSet {
+		t.Fatal("PreviousItemIDSet = false, want explicit empty previous_item_id preserved")
+	}
+	if ev.RemoteItem.PreviousItemID != "" {
+		t.Fatalf("PreviousItemID = %q, want explicit empty string", ev.RemoteItem.PreviousItemID)
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedEmptyUserText(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",
@@ -6671,6 +6696,38 @@ func TestRealtimeSessionNilPreviousItemIDAppendsToRemoteTail(t *testing.T) {
 	case err := <-handlerErr:
 		t.Fatal(err)
 	default:
+	}
+}
+
+func TestRealtimeSessionExplicitEmptyPreviousItemIDDoesNotAppendToRemoteTail(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "root",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "root"}},
+	}); err != nil {
+		t.Fatalf("insert root item: %v", err)
+	}
+
+	session.trackRealtimeRemoteItemAdded(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			PreviousItemID:    "",
+			PreviousItemIDSet: true,
+			Item: &llm.ChatMessage{
+				ID:      "dropped",
+				Role:    llm.ChatRoleUser,
+				Content: []llm.ChatContent{{Text: "must not append"}},
+			},
+		},
+	})
+
+	items := session.remote.ToChatCtx().Items
+	if len(items) != 1 || items[0].GetID() != "root" {
+		t.Fatalf("remote items = %#v, want only existing root item after explicit empty previous_item_id", items)
+	}
+	if item := session.remote.Get("dropped"); item != nil {
+		t.Fatalf("remote item %q inserted = %#v, want dropped like reference missing previous_item_id", "dropped", item)
 	}
 }
 
