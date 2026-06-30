@@ -80,9 +80,7 @@ func WithDeepgramSTTv2BaseURL(baseURL string) DeepgramSTTv2Option {
 
 func WithDeepgramSTTv2Model(model string) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if model != "" {
-			s.model = model
-		}
+		s.model = model
 	}
 }
 

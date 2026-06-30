@@ -1139,6 +1139,15 @@ func TestDeepgramSTTv2UpdateOptionsMatchesReferenceFutureStreams(t *testing.T) {
 	assertDeepgramQueryValues(t, query, "keyterm", []string{"LiveKit"})
 	assertDeepgramQueryValues(t, query, "tag", []string{"agent"})
 	assertDeepgramQueryValues(t, query, "language_hint", []string{"en", "es"})
+
+	if err := provider.UpdateOptions(WithDeepgramSTTv2Model("")); err != nil {
+		t.Fatalf("UpdateOptions(empty model) error = %v", err)
+	}
+	parsed, err = url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL after empty model update: %v", err)
+	}
+	assertDeepgramQuery(t, parsed.Query(), "model", "")
 }
 
 func TestDeepgramSTTv2UpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
