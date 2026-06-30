@@ -377,6 +377,19 @@ func deepgramTTSBaseURL(t *DeepgramTTS, websocketURL bool) url.URL {
 	return *parsed
 }
 
+func deepgramTTSStatusMessage(resp *http.Response) string {
+	if resp == nil {
+		return "Deepgram TTS request failed"
+	}
+	if message := http.StatusText(resp.StatusCode); message != "" {
+		return message
+	}
+	if resp.Status != "" {
+		return resp.Status
+	}
+	return "Deepgram TTS request failed"
+}
+
 type deepgramTTSChunkedStream struct {
 	ctx          context.Context
 	requestURL   string
@@ -533,14 +546,7 @@ func (s *deepgramTTSChunkedStream) startRequestLocked() error {
 		resp.Body.Close()
 		s.cancelRequestLocked()
 		s.finalSent = true
-		message := resp.Status
-		if message == "" {
-			message = http.StatusText(resp.StatusCode)
-		}
-		if message == "" {
-			message = "Deepgram TTS request failed"
-		}
-		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
+		return llm.NewAPIStatusError(deepgramTTSStatusMessage(resp), resp.StatusCode, "", nil)
 	}
 	s.resp = resp
 	return nil
@@ -1119,12 +1125,10 @@ func (s *deepgramTTSStream) ensureConnectedLocked() error {
 			return llm.NewAPITimeoutError(err.Error())
 		}
 		if resp != nil && resp.StatusCode != 0 {
-			var respBody []byte
 			if resp.Body != nil {
-				respBody, _ = io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 			}
-			return llm.NewAPIStatusError("Deepgram TTS request failed", resp.StatusCode, "", string(respBody))
+			return llm.NewAPIStatusError(deepgramTTSStatusMessage(resp), resp.StatusCode, "", nil)
 		}
 		return llm.NewAPIConnectionError(err.Error())
 	}

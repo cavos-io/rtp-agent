@@ -1534,8 +1534,11 @@ func TestDeepgramTTSStreamReturnsAPIStatusErrorOnHandshakeStatus(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
 	}
-	if statusErr.Body == nil || !strings.Contains(fmt.Sprint(statusErr.Body), "rate limited") {
-		t.Fatalf("status body = %v, want provider body", statusErr.Body)
+	if statusErr.Message != http.StatusText(http.StatusTooManyRequests) {
+		t.Fatalf("message = %q, want reference response reason", statusErr.Message)
+	}
+	if statusErr.Body != nil {
+		t.Fatalf("status body = %v, want nil like reference ClientResponseError mapping", statusErr.Body)
 	}
 	if err := <-serverErr; err != nil {
 		t.Fatalf("server error = %v", err)
