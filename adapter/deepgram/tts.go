@@ -72,9 +72,7 @@ func WithDeepgramTTSAudioFormat(encoding string, sampleRate int) DeepgramTTSOpti
 		if encoding != "" {
 			t.encoding = deepgramTTSNormalizeEncoding(encoding)
 		}
-		if sampleRate > 0 {
-			t.sampleRate = sampleRate
-		}
+		t.sampleRate = sampleRate
 	}
 }
 
