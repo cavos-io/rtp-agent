@@ -912,6 +912,28 @@ func TestCartesiaTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("dial failed")
+		},
+		Proxy: nil,
+	}
+	defer func() { websocket.DefaultDialer = oldDialer }()
+
+	provider := NewCartesiaTTS("test-key", "", "")
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		defer stream.Close()
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestCartesiaTTSUnexpectedNormalCloseReturnsAPIConnectionError(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})

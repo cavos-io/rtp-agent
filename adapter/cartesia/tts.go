@@ -397,7 +397,10 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaStreamURL(t), buildCartesiaStreamHeaders(t))
 	if err != nil {
-		return nil, err
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 	if t.isClosed() {
 		conn.Close()
