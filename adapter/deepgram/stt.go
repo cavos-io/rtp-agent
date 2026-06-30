@@ -103,9 +103,7 @@ func WithDeepgramSTTDetectLanguage(detectLanguage bool) DeepgramSTTOption {
 
 func WithDeepgramSTTLanguage(languageStr string) DeepgramSTTOption {
 	return func(s *DeepgramSTT) {
-		if languageStr != "" {
-			s.language = language.NormalizeLanguage(languageStr)
-		}
+		s.language = language.NormalizeLanguage(languageStr)
 	}
 }
 

@@ -1597,6 +1597,25 @@ func TestDeepgramSTTUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	}
 	assertDeepgramQuery(t, streamURL.Query(), "sample_rate", "0")
 
+	if err := provider.UpdateOptions(WithDeepgramSTTLanguage("id")); err != nil {
+		t.Fatalf("UpdateOptions(language) error = %v", err)
+	}
+	streamURL, err = url.Parse(buildDeepgramStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream url after language update: %v", err)
+	}
+	assertDeepgramQuery(t, streamURL.Query(), "language", "id")
+	if err := provider.UpdateOptions(WithDeepgramSTTLanguage("")); err != nil {
+		t.Fatalf("UpdateOptions(empty language) error = %v", err)
+	}
+	streamURL, err = url.Parse(buildDeepgramStreamURL(provider, ""))
+	if err != nil {
+		t.Fatalf("parse stream url after empty language update: %v", err)
+	}
+	if got := streamURL.Query().Get("language"); got != "" {
+		t.Fatalf("stream language after empty update = %q, want absent", got)
+	}
+
 	if err := provider.UpdateOptions(WithDeepgramSTTBaseURL("")); err != nil {
 		t.Fatalf("UpdateOptions(empty base URL) error = %v", err)
 	}
