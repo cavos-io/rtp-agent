@@ -2790,12 +2790,12 @@ func (s *realtimeSession) persistRealtimeAudioTranscripts() {
 
 func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent, bool) {
 	status, _ := response["status"].(string)
-	if status != "failed" && status != "incomplete" {
+	if status != "failed" {
 		return llm.RealtimeEvent{}, false
 	}
 	rawDetails, detailsPresent := response["status_details"]
 	statusDetails, hasDetails := rawDetails.(map[string]any)
-	if status == "incomplete" && detailsPresent && !hasDetails {
+	if detailsPresent && !hasDetails {
 		return llm.RealtimeEvent{}, false
 	}
 	errorBody, hasError := statusDetails["error"].(map[string]any)

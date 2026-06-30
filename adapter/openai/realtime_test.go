@@ -8128,7 +8128,7 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	}
 }
 
-func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
+func TestRealtimeResponseDoneIncompleteClosesGenerationWithoutError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -8151,21 +8151,8 @@ func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if !ok {
-		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
-	}
-	if errorEvent.Type != llm.RealtimeEventTypeError {
-		t.Fatalf("event type = %q, want error", errorEvent.Type)
-	}
-	var apiErr *llm.APIError
-	if !errors.As(errorEvent.Error, &apiErr) {
-		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
-	}
-	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
-		t.Fatalf("APIError message = %q", apiErr.Message)
-	}
-	if !apiErr.Retryable {
-		t.Fatal("APIError Retryable = false, want true")
+	if ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want incomplete response to be log-only", errorEvent)
 	}
 	if session.generation != nil {
 		t.Fatal("generation still active, want incomplete response to close streams")
@@ -8188,7 +8175,7 @@ func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 	}
 }
 
-func TestRealtimeResponseDoneIncompleteWithoutDetailsReportsRecoverableError(t *testing.T) {
+func TestRealtimeResponseDoneIncompleteWithoutDetailsClosesGenerationWithoutError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -8208,21 +8195,8 @@ func TestRealtimeResponseDoneIncompleteWithoutDetailsReportsRecoverableError(t *
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if !ok {
-		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
-	}
-	if errorEvent.Type != llm.RealtimeEventTypeError {
-		t.Fatalf("event type = %q, want error", errorEvent.Type)
-	}
-	var apiErr *llm.APIError
-	if !errors.As(errorEvent.Error, &apiErr) {
-		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
-	}
-	if apiErr.Message != "OpenAI Realtime API response incomplete with unknown error" {
-		t.Fatalf("APIError message = %q", apiErr.Message)
-	}
-	if !apiErr.Retryable {
-		t.Fatal("APIError Retryable = false, want true")
+	if ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want incomplete response without details to be log-only", errorEvent)
 	}
 	if session.generation != nil {
 		t.Fatal("generation still active, want incomplete response to close streams")
@@ -8242,6 +8216,59 @@ func TestRealtimeResponseDoneIncompleteWithoutDetailsReportsRecoverableError(t *
 		}
 	default:
 		t.Fatal("function stream not closed")
+	}
+}
+
+func TestRealtimeResponseDoneIncompleteLiveSessionEmitsMetricsWithoutError(t *testing.T) {
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type":     "response.created",
+			"response": map[string]any{"id": "resp_incomplete"},
+		}); err != nil {
+			t.Errorf("Write response.created error = %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.done",
+			"response": map[string]any{
+				"id":     "resp_incomplete",
+				"status": "incomplete",
+				"status_details": map[string]any{
+					"reason": "max_output_tokens",
+				},
+				"usage": map[string]any{"total_tokens": 3.0},
+			},
+		}); err != nil {
+			t.Errorf("Write response.done error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer close(releaseServer)
+	defer session.Close()
+
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type == llm.RealtimeEventTypeError {
+			t.Fatalf("unexpected error event for incomplete response: %v", ev.Error)
+		}
+		t.Fatalf("unexpected realtime event after incomplete response: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
