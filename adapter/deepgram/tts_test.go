@@ -45,6 +45,73 @@ func TestDeepgramTTSDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSPrewarmDialsAndReusesReferenceConnection(t *testing.T) {
+	dials := make(chan net.Conn, 2)
+	writes := make(chan string, 4)
+	serverErr := make(chan error, 1)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			dials <- serverConn
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	tts.Prewarm(provider)
+
+	var serverConn net.Conn
+	select {
+	case serverConn = <-dials:
+	case <-time.After(time.Second):
+		t.Fatal("Prewarm did not dial reference websocket connection")
+	}
+	go runDeepgramTTSPrewarmedWebsocketServer(serverConn, writes, serverErr)
+	waitDeepgramTTSPrewarmReady(t, provider)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	gotWrites := []string{
+		receiveDeepgramTTSWrite(t, writes, "Speak on prewarmed websocket"),
+		receiveDeepgramTTSWrite(t, writes, "Flush on prewarmed websocket"),
+	}
+	wantWrites := []string{`{"type": "Speak", "text": "hello "}`, deepgramTTSFlushMessage}
+	if !reflect.DeepEqual(gotWrites, wantWrites) {
+		t.Fatalf("prewarmed websocket writes = %#v, want %#v", gotWrites, wantWrites)
+	}
+	select {
+	case extra := <-dials:
+		_ = extra.Close()
+		t.Fatal("Stream opened a second websocket instead of reusing prewarmed connection")
+	default:
+	}
+	if audio, err := stream.Next(); err != nil || audio == nil || !audio.IsFinal {
+		t.Fatalf("Next() = (%+v, %v), want Flushed final marker", audio, err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("test websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSConstructorOptionsMatchReference(t *testing.T) {
 	t.Setenv("DEEPGRAM_API_KEY", "env-key")
 
@@ -2594,6 +2661,73 @@ func runDeepgramTTSHandshakeStatusServer(conn net.Conn, statusCode int, body str
 		return
 	}
 	errCh <- nil
+}
+
+func runDeepgramTTSPrewarmedWebsocketServer(conn net.Conn, writes chan<- string, errCh chan<- error) {
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		errCh <- err
+		return
+	}
+	if _, err := fmt.Fprintf(conn, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", deepgramTestAcceptKey(req.Header.Get("Sec-WebSocket-Key"))); err != nil {
+		errCh <- err
+		return
+	}
+
+	for {
+		opcode, payload, err := readDeepgramTestClientWebsocketFrame(reader)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		if opcode != websocket.TextMessage {
+			continue
+		}
+		writes <- string(payload)
+		switch deepgramTestWebsocketMessageType(payload) {
+		case "Flush":
+			if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
+				errCh <- err
+				return
+			}
+		case "Close":
+			errCh <- nil
+			return
+		}
+	}
+}
+
+func receiveDeepgramTTSWrite(t *testing.T, writes <-chan string, label string) string {
+	t.Helper()
+	select {
+	case write := <-writes:
+		return write
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", label)
+		return ""
+	}
+}
+
+func waitDeepgramTTSPrewarmReady(t *testing.T, provider *DeepgramTTS) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		provider.mu.Lock()
+		ready := provider.prewarmConn != nil
+		provider.mu.Unlock()
+		if ready {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("Prewarm did not cache reference websocket connection")
+		case <-ticker.C:
+		}
+	}
 }
 
 func runDeepgramTTSReadFlushThenCloseServer(conn net.Conn, closed chan<- struct{}, normalClose bool, errCh chan<- error) {

@@ -42,6 +42,9 @@ type DeepgramTTS struct {
 	mu                    sync.Mutex
 	streams               map[*deepgramTTSStream]struct{}
 	closed                bool
+	prewarmConn           *websocket.Conn
+	prewarmURL            string
+	prewarming            bool
 }
 
 type DeepgramTTSOption func(*DeepgramTTS)
@@ -129,6 +132,40 @@ func (t *DeepgramTTS) UpdateOptions(model string) {
 	}
 }
 
+func (t *DeepgramTTS) Prewarm() {
+	if t == nil || validateDeepgramTTSAPIKey(t.apiKey) != nil {
+		return
+	}
+	streamURL := buildDeepgramTTSStreamURL(t)
+	apiKey := t.apiKey
+
+	t.mu.Lock()
+	if t.closed || t.prewarming || t.prewarmConn != nil {
+		t.mu.Unlock()
+		return
+	}
+	t.prewarming = true
+	t.mu.Unlock()
+
+	go func() {
+		header := make(http.Header)
+		header.Set("Authorization", "Token "+apiKey)
+		conn, _, err := websocket.DefaultDialer.DialContext(context.Background(), streamURL, header)
+
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.prewarming = false
+		if err != nil || t.closed || t.prewarmConn != nil || streamURL != buildDeepgramTTSStreamURL(t) {
+			if conn != nil {
+				closeDeepgramTTSPrewarmedConn(conn)
+			}
+			return
+		}
+		t.prewarmConn = conn
+		t.prewarmURL = streamURL
+	}()
+}
+
 func (t *DeepgramTTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
@@ -137,6 +174,9 @@ func (t *DeepgramTTS) Close() error {
 		streams = append(streams, stream)
 	}
 	t.streams = make(map[*deepgramTTSStream]struct{})
+	prewarmConn := t.prewarmConn
+	t.prewarmConn = nil
+	t.prewarmURL = ""
 	t.mu.Unlock()
 
 	var closeErr error
@@ -144,6 +184,9 @@ func (t *DeepgramTTS) Close() error {
 		if err := stream.Close(); err != nil && closeErr == nil {
 			closeErr = err
 		}
+	}
+	if prewarmConn != nil {
+		closeDeepgramTTSPrewarmedConn(prewarmConn)
 	}
 	return closeErr
 }
@@ -239,6 +282,32 @@ func (t *DeepgramTTS) unregisterStream(stream *deepgramTTSStream) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
+}
+
+func (t *DeepgramTTS) takePrewarmedConn(streamURL string) *websocket.Conn {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	conn := t.prewarmConn
+	if conn == nil {
+		return nil
+	}
+	prewarmURL := t.prewarmURL
+	t.prewarmConn = nil
+	t.prewarmURL = ""
+	if streamURL != prewarmURL && prewarmURL != "" {
+		closeDeepgramTTSPrewarmedConn(conn)
+		return nil
+	}
+	return conn
+}
+
+func closeDeepgramTTSPrewarmedConn(conn *websocket.Conn) {
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSFlushMessage))
+	_ = conn.WriteMessage(websocket.TextMessage, []byte(deepgramTTSCloseMessage))
+	_ = conn.Close()
 }
 
 func validateDeepgramTTSAPIKey(apiKey string) error {
@@ -964,6 +1033,19 @@ func (s *deepgramTTSStream) Close() error {
 func (s *deepgramTTSStream) ensureConnectedLocked() error {
 	if s.hasConnectionLocked() {
 		return nil
+	}
+	if s.provider != nil {
+		if conn := s.provider.takePrewarmedConn(s.streamURL); conn != nil {
+			if s.closed || s.provider.isClosed() {
+				closeDeepgramTTSPrewarmedConn(conn)
+				return io.ErrClosedPipe
+			}
+			s.conn = conn
+			s.writeJSON = s.writeJSONMessage
+			s.closeConn = s.closeWebsocketConn
+			go s.readLoop()
+			return nil
+		}
 	}
 	header := make(map[string][]string)
 	header["Authorization"] = []string{"Token " + s.apiKey}
