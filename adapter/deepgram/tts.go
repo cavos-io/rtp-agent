@@ -396,6 +396,7 @@ type deepgramTTSChunkedStream struct {
 	pendingFinal bool
 	pendingErr   error
 	finalSent    bool
+	pendingPCM   []byte
 	mu           sync.Mutex
 	readMu       sync.Mutex
 }
@@ -443,45 +444,79 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.mu.Unlock()
 		return nil, err
 	}
-	body := s.resp.Body
-	encoding := s.encoding
-	sampleRate := s.sampleRate
-	requestID := s.requestID
-	s.mu.Unlock()
+	for {
+		body := s.resp.Body
+		encoding := s.encoding
+		sampleRate := s.sampleRate
+		requestID := s.requestID
+		s.mu.Unlock()
 
-	buf := make([]byte, 4096)
-	n, err := body.Read(buf)
+		buf := make([]byte, 4096)
+		n, err := body.Read(buf)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.finalSent {
-		return nil, io.EOF
-	}
-	if err != nil {
-		if err == io.EOF {
-			if n == 0 {
-				return s.emitFinal()
-			}
-			s.pendingFinal = true
-		} else if n > 0 {
-			s.pendingErr = deepgramTTSChunkedReadError(err)
-		} else {
-			s.cancelRequestLocked()
-			s.finalSent = true
-			return nil, deepgramTTSChunkedReadError(err)
+		s.mu.Lock()
+		if s.finalSent {
+			s.mu.Unlock()
+			return nil, io.EOF
 		}
-	}
+		if err != nil {
+			if err == io.EOF {
+				if n == 0 {
+					audio, finalErr := s.emitFinal()
+					s.mu.Unlock()
+					return audio, finalErr
+				}
+				s.pendingFinal = true
+			} else if n > 0 {
+				s.pendingErr = deepgramTTSChunkedReadError(err)
+			} else {
+				s.cancelRequestLocked()
+				s.finalSent = true
+				readErr := deepgramTTSChunkedReadError(err)
+				s.mu.Unlock()
+				return nil, readErr
+			}
+		}
 
-	frameData := deepgramTTSTelephonyToPCM(encoding, buf[:n])
-	return &tts.SynthesizedAudio{
-		RequestID: requestID,
-		Frame: &model.AudioFrame{
-			Data:              frameData,
-			SampleRate:        uint32(sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(len(frameData) / 2),
-		},
-	}, nil
+		frameData := s.chunkedFrameDataLocked(encoding, buf[:n])
+		if len(frameData) == 0 && err != io.EOF {
+			continue
+		}
+		if len(frameData) == 0 {
+			audio, finalErr := s.emitFinal()
+			s.mu.Unlock()
+			return audio, finalErr
+		}
+		audio := &tts.SynthesizedAudio{
+			RequestID: requestID,
+			Frame: &model.AudioFrame{
+				Data:              frameData,
+				SampleRate:        uint32(sampleRate),
+				NumChannels:       1,
+				SamplesPerChannel: uint32(len(frameData) / 2),
+			},
+		}
+		s.mu.Unlock()
+		return audio, nil
+	}
+}
+
+func (s *deepgramTTSChunkedStream) chunkedFrameDataLocked(encoding string, data []byte) []byte {
+	if strings.EqualFold(encoding, "mulaw") || strings.EqualFold(encoding, "alaw") {
+		return deepgramTTSTelephonyToPCM(encoding, data)
+	}
+	if len(s.pendingPCM) > 0 {
+		combined := make([]byte, 0, len(s.pendingPCM)+len(data))
+		combined = append(combined, s.pendingPCM...)
+		combined = append(combined, data...)
+		data = combined
+		s.pendingPCM = nil
+	}
+	if len(data)%2 == 1 {
+		s.pendingPCM = append(s.pendingPCM[:0], data[len(data)-1])
+		data = data[:len(data)-1]
+	}
+	return data
 }
 
 func deepgramTTSChunkedReadError(err error) error {

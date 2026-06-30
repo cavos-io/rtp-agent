@@ -1321,6 +1321,43 @@ func TestDeepgramTTSChunkedStreamKeepsFinalReadBytes(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSChunkedStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
+	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	stream := &deepgramTTSChunkedStream{
+		resp: &http.Response{Body: &deepgramTTSChunkedBody{chunks: [][]byte{
+			{0x11, 0x22, 0x33},
+			{0x44, 0x55, 0x66},
+		}}},
+		sampleRate: 24000,
+		encoding:   "linear16",
+	}
+
+	var got []byte
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		if audio.Frame == nil {
+			continue
+		}
+		data := audio.Frame.Data
+		if len(data)%2 != 0 {
+			t.Fatalf("emitted odd PCM frame length %d bytes: %v", len(data), data)
+		}
+		if int(audio.Frame.SamplesPerChannel) != len(data)/2 {
+			t.Fatalf("SamplesPerChannel = %d, want %d", audio.Frame.SamplesPerChannel, len(data)/2)
+		}
+		got = append(got, data...)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("reassembled PCM = %v, want %v", got, want)
+	}
+}
+
 func TestDeepgramTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &deepgramTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -3174,6 +3211,22 @@ func (r *deepgramTTSFinalReadCloser) Read(p []byte) (int, error) {
 func (r *deepgramTTSFinalReadCloser) Close() error {
 	return nil
 }
+
+type deepgramTTSChunkedBody struct {
+	chunks [][]byte
+	index  int
+}
+
+func (b *deepgramTTSChunkedBody) Read(p []byte) (int, error) {
+	if b.index >= len(b.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(p, b.chunks[b.index])
+	b.index++
+	return n, nil
+}
+
+func (b *deepgramTTSChunkedBody) Close() error { return nil }
 
 func runDeepgramTTSHandshakeStatusServer(conn net.Conn, statusCode int, body string, errCh chan<- error) {
 	defer conn.Close()
