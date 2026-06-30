@@ -375,6 +375,7 @@ func (m *RealtimeModel) Close() error {
 func (m *RealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error {
 	m.mu.Lock()
 	openAIRealtimeMergeSessionOptions(&m.options, options)
+	activeOptions := openAIRealtimeModelActiveSessionOptions(options, m.options)
 	sessions := make([]*realtimeSession, 0, len(m.sessions))
 	for session := range m.sessions {
 		sessions = append(sessions, session)
@@ -382,7 +383,7 @@ func (m *RealtimeModel) UpdateOptions(options llm.RealtimeSessionOptions) error 
 	m.mu.Unlock()
 
 	for _, session := range sessions {
-		if err := session.UpdateOptions(options); err != nil {
+		if err := session.UpdateOptions(activeOptions); err != nil {
 			return err
 		}
 	}
@@ -1519,6 +1520,23 @@ func openAIRealtimeMergeSessionOptions(dst *llm.RealtimeSessionOptions, src llm.
 		dst.Speed = src.Speed
 		dst.SpeedSet = true
 	}
+}
+
+func openAIRealtimeModelActiveSessionOptions(update, stored llm.RealtimeSessionOptions) llm.RealtimeSessionOptions {
+	active := update
+	if stored.TurnDetectionSet || stored.TurnDetection != nil {
+		active.TurnDetection = openAIRealtimeCloneOptionValue(stored.TurnDetection)
+		active.TurnDetectionSet = true
+	}
+	if stored.InputAudioTranscriptionSet || stored.InputAudioTranscription != nil {
+		active.InputAudioTranscription = openAIRealtimeCloneOptionValue(stored.InputAudioTranscription)
+		active.InputAudioTranscriptionSet = true
+	}
+	if stored.InputAudioNoiseReductionSet || stored.InputAudioNoiseReduction != nil {
+		active.InputAudioNoiseReduction = openAIRealtimeCloneOptionValue(stored.InputAudioNoiseReduction)
+		active.InputAudioNoiseReductionSet = true
+	}
+	return active
 }
 
 func openAIRealtimeMergeSessionPayload(dst map[string]any, src map[string]any) {

@@ -857,6 +857,69 @@ func TestRealtimeModelUpdateOptionsForwardsToActiveSession(t *testing.T) {
 	}
 }
 
+func TestRealtimeModelUpdateOptionsRefreshesStoredInputOptions(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+			ackOpenAIRealtimeChatContextMessage(t, conn, msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime",
+		WithOpenAIRealtimeTurnDetection(map[string]any{"type": "server_vad"}),
+		WithOpenAIRealtimeInputAudioTranscription(map[string]any{"model": "gpt-4o-transcribe"}),
+		WithOpenAIRealtimeInputAudioNoiseReduction("near_field"),
+	)
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	<-messages
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		TurnDetectionSet:            true,
+		InputAudioTranscriptionSet:  true,
+		InputAudioNoiseReductionSet: true,
+	}); err != nil {
+		t.Fatalf("session UpdateOptions clear input config error = %v", err)
+	}
+	<-messages
+
+	if err := realtimeModel.UpdateOptions(llm.RealtimeSessionOptions{Voice: "alloy"}); err != nil {
+		t.Fatalf("model UpdateOptions voice error = %v", err)
+	}
+	refreshUpdate := receiveRealtimeMessage(t, messages, "model update should refresh stored input options")
+	assertRealtimeMessage(t, refreshUpdate, "session.update", "server_vad")
+	assertRealtimeMessage(t, refreshUpdate, "session.update", "gpt-4o-transcribe")
+	assertRealtimeMessage(t, refreshUpdate, "session.update", "near_field")
+
+	var msg map[string]any
+	if err := json.Unmarshal([]byte(refreshUpdate), &msg); err != nil {
+		t.Fatalf("decode refresh update: %v", err)
+	}
+	sessionPayload := msg["session"].(map[string]any)
+	audio := sessionPayload["audio"].(map[string]any)
+	input := audio["input"].(map[string]any)
+	if got := input["turn_detection"].(map[string]any)["type"]; got != "server_vad" {
+		t.Fatalf("turn_detection type = %#v, want server_vad", got)
+	}
+	if got := input["transcription"].(map[string]any)["model"]; got != "gpt-4o-transcribe" {
+		t.Fatalf("transcription model = %#v, want gpt-4o-transcribe", got)
+	}
+	if got := input["noise_reduction"].(map[string]any)["type"]; got != "near_field" {
+		t.Fatalf("noise_reduction type = %#v, want near_field", got)
+	}
+}
+
 func TestRealtimeModelUpdateOptionsAppliesToNewSession(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
