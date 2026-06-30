@@ -621,7 +621,7 @@ func TestCartesiaSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestCartesiaSTTAutoFlushFlushesBufferedAudio(t *testing.T) {
+func TestCartesiaSTTAutoFlushIgnoresBufferedAudio(t *testing.T) {
 	var writes [][]byte
 	var textMessages []string
 	stream := &cartesiaSTTStream{
@@ -635,6 +635,7 @@ func TestCartesiaSTTAutoFlushFlushesBufferedAudio(t *testing.T) {
 			textMessages = append(textMessages, string(data))
 			return nil
 		},
+		closeConn: func() error { return nil },
 	}
 
 	if err := stream.PushFrame(&audiomodel.AudioFrame{
@@ -651,11 +652,20 @@ func TestCartesiaSTTAutoFlushFlushesBufferedAudio(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	if len(writes) != 1 || len(writes[0]) != 2560 {
-		t.Fatalf("writes after flush = %s, want buffered 80ms chunk", cartesiaWriteSizes(writes))
+	if len(writes) != 0 {
+		t.Fatalf("writes after flush = %s, want none for ignored auto flush", cartesiaWriteSizes(writes))
 	}
 	if len(textMessages) != 0 {
 		t.Fatalf("text messages = %#v, want none for auto flush", textMessages)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 2560 {
+		t.Fatalf("writes after close = %s, want retained buffered 80ms chunk", cartesiaWriteSizes(writes))
+	}
+	if len(textMessages) != 1 || textMessages[0] != `{"type":"close"}` {
+		t.Fatalf("text messages after close = %#v, want close control", textMessages)
 	}
 }
 
