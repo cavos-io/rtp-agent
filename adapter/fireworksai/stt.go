@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -202,7 +203,10 @@ func (s *FireworksSTT) Stream(ctx context.Context, language string) (stt.Recogni
 
 	conn, _, err := dialer(ctx, endpoint, headers)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial fireworks stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial fireworks stt websocket: %v", err))
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
