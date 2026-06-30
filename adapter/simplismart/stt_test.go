@@ -265,6 +265,62 @@ func TestSimplismartSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSimplismartSTTRecognizeReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: simplismartSTTRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+
+	provider := NewSimplismartSTT("test-key")
+
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APIConnectionError", event)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestSimplismartSTTRecognizeReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: simplismartSTTRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+
+	provider := NewSimplismartSTT("test-key")
+
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APITimeoutError", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestSimplismartSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: simplismartSTTRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.Canceled
+	})}
+
+	provider := NewSimplismartSTT("test-key")
+
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want context.Canceled", event)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Recognize error = %v, want context.Canceled", err)
+	}
+}
+
 func TestSimplismartSTTRecognizeResponseMapsReferenceShape(t *testing.T) {
 	event := simplismartSTTSpeechEvent("fr", simplismartSTTResponse{
 		RequestID:     "req-1",
