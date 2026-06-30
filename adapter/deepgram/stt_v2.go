@@ -96,9 +96,7 @@ func WithDeepgramSTTv2MipOptOut(mipOptOut bool) DeepgramSTTv2Option {
 
 func WithDeepgramSTTv2EagerEOTThreshold(threshold float64) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if threshold > 0 {
-			s.eagerEOT = threshold
-		}
+		s.eagerEOT = threshold
 	}
 }
 

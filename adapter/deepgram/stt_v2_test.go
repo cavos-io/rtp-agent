@@ -1103,6 +1103,25 @@ func TestDeepgramSTTv2UpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTv2UpdateOptionsClearsReferenceEagerEOT(t *testing.T) {
+	provider := NewDeepgramSTTv2("test-key",
+		WithDeepgramSTTv2EagerEOTThreshold(0.6),
+		WithDeepgramSTTv2EOTThreshold(0.8),
+	)
+
+	if err := provider.UpdateOptions(WithDeepgramSTTv2EagerEOTThreshold(0)); err != nil {
+		t.Fatalf("UpdateOptions() error = %v", err)
+	}
+
+	parsed, err := url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL: %v", err)
+	}
+	if got := parsed.Query().Get("eager_eot_threshold"); got != "" {
+		t.Fatalf("eager_eot_threshold = %q, want cleared", got)
+	}
+}
+
 func TestDeepgramSTTv2UpdateOptionsReconnectsActiveStream(t *testing.T) {
 	requests := make(chan *url.URL, 2)
 	audioMessages := make(chan []byte, 1)
