@@ -102,17 +102,13 @@ func WithDeepgramSTTv2EagerEOTThreshold(threshold float64) DeepgramSTTv2Option {
 
 func WithDeepgramSTTv2EOTThreshold(threshold float64) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if threshold > 0 {
-			s.eot = threshold
-		}
+		s.eot = threshold
 	}
 }
 
 func WithDeepgramSTTv2EOTTimeout(timeoutMS int) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if timeoutMS > 0 {
-			s.eotTimeout = timeoutMS
-		}
+		s.eotTimeout = timeoutMS
 	}
 }
 
