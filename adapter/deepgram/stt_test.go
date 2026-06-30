@@ -1611,16 +1611,24 @@ func TestDeepgramSTTUpdateOptionsKeepsReferenceActiveStreamMetadata(t *testing.T
 
 	secondURL := receiveDeepgramTestRequestURL(t, requests, "metadata-only update websocket request")
 	assertDeepgramQueryValues(t, secondURL.Query(), "tag", []string{"initial"})
-	if got := secondURL.Query().Get("diarize"); got != "true" {
-		t.Fatalf("metadata-only active stream diarize query = %q, want updated reference diarize=true", got)
+	if got := secondURL.Query().Get("diarize"); got != "" {
+		t.Fatalf("metadata-only active stream diarize query = %q, want absent like reference active stream metadata", got)
+	}
+	futureURL, err := url.Parse(buildDeepgramStreamURL(provider, "en-US"))
+	if err != nil {
+		t.Fatalf("parse future stream URL: %v", err)
+	}
+	assertDeepgramQueryValues(t, futureURL.Query(), "tag", []string{"updated"})
+	if got := futureURL.Query().Get("diarize"); got != "true" {
+		t.Fatalf("future stream diarize query = %q, want provider update diarize=true", got)
 	}
 
 	provider.UpdateOptions(WithDeepgramSTTModel("nova-3"))
 	thirdURL := receiveDeepgramTestRequestURL(t, requests, "model update websocket request")
 	assertDeepgramQuery(t, thirdURL.Query(), "model", "nova-3")
 	assertDeepgramQueryValues(t, thirdURL.Query(), "tag", []string{"initial"})
-	if got := thirdURL.Query().Get("diarize"); got != "true" {
-		t.Fatalf("updated active stream diarize query = %q, want preserved reference diarize=true", got)
+	if got := thirdURL.Query().Get("diarize"); got != "" {
+		t.Fatalf("updated active stream diarize query = %q, want absent like reference active stream metadata", got)
 	}
 }
 
