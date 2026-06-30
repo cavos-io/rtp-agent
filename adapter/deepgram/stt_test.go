@@ -777,6 +777,9 @@ func TestDeepgramSTTRecognizeUploadsReferenceWAV(t *testing.T) {
 		if got := r.Header.Get("Content-Type"); got != "audio/wav" {
 			t.Fatalf("content-type = %q, want audio/wav", got)
 		}
+		if got := r.Header.Get("Accept"); got != "application/json" {
+			t.Fatalf("accept = %q, want application/json", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"metadata":{"request_id":"req-wav"},"results":{"channels":[{"alternatives":[{"transcript":"ok","confidence":1,"words":[]}]}]}}`))
 	}))
