@@ -260,6 +260,44 @@ func TestRimeTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("rime transport failed")
+	})}
+
+	provider := NewRimeTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestRimeTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: rimeErrorReader{}},
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APIConnectionError")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestRimeTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -808,6 +846,35 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestRimeTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{
+			name:    "malformed json",
+			payload: []byte(`{`),
+		},
+		{
+			name:    "malformed audio",
+			payload: []byte(`{"type":"chunk","data":"not-base64"}`),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, err := rimeTTSAudioFromWebsocketMessage(tc.payload, 22050)
+			if err == nil {
+				t.Fatal("error = nil, want APIConnectionError")
+			}
+			var connErr *llm.APIConnectionError
+			if !errors.As(err, &connErr) {
+				t.Fatalf("error = %T %v, want APIConnectionError", err, err)
+			}
+		})
+	}
+}
+
 func queryMap(values map[string][]string) map[string]any {
 	out := make(map[string]any, len(values))
 	for key, value := range values {
@@ -858,3 +925,11 @@ func (r *rimeFinalEOFReader) Read(p []byte) (int, error) {
 }
 
 func (r *rimeFinalEOFReader) Close() error { return nil }
+
+type rimeErrorReader struct{}
+
+func (rimeErrorReader) Read([]byte) (int, error) {
+	return 0, errors.New("rime read failed")
+}
+
+func (rimeErrorReader) Close() error { return nil }

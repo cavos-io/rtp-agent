@@ -176,7 +176,7 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, rimeTTSConnectionError("Rime TTS request failed", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -418,7 +418,7 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			return nil, io.EOF
 		}
-		return nil, err
+		return nil, rimeTTSConnectionError("Rime TTS stream read failed", err)
 	}
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
@@ -689,7 +689,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		} `json:"word_timestamps"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, "", err
+		return nil, false, "", rimeTTSConnectionError("Rime websocket payload decode failed", err)
 	}
 	switch message.Type {
 	case "chunk":
@@ -698,7 +698,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		}
 		audio, err := base64.StdEncoding.DecodeString(message.Data)
 		if err != nil {
-			return nil, false, "", err
+			return nil, false, "", rimeTTSConnectionError("Rime websocket audio decode failed", err)
 		}
 		if len(audio) == 0 {
 			return nil, false, "", nil
@@ -723,6 +723,13 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 	default:
 		return nil, false, "", nil
 	}
+}
+
+func rimeTTSConnectionError(message string, err error) *llm.APIConnectionError {
+	if err == nil {
+		return llm.NewAPIConnectionError(message)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
