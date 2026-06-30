@@ -26,31 +26,36 @@ import (
 )
 
 type DeepgramSTT struct {
-	apiKey            string
-	model             string
-	language          string
-	detectLanguage    bool
-	punctuate         bool
-	smartFormat       bool
-	noDelay           bool
-	endpointingMS     int
-	enableDiarization bool
-	fillerWords       bool
-	sampleRate        int
-	numChannels       int
-	interimResults    bool
-	vadEvents         bool
-	profanityFilter   bool
-	numerals          bool
-	mipOptOut         bool
-	keywords          []DeepgramKeyword
-	keyterms          []string
-	redact            []string
-	tags              []string
-	baseURL           string
-	mu                sync.Mutex
-	streams           map[*deepgramStream]struct{}
-	closed            bool
+	apiKey             string
+	model              string
+	language           string
+	detectLanguage     bool
+	punctuate          bool
+	smartFormat        bool
+	noDelay            bool
+	endpointingMS      int
+	enableDiarization  bool
+	fillerWords        bool
+	sampleRate         int
+	numChannels        int
+	interimResults     bool
+	vadEvents          bool
+	profanityFilter    bool
+	numerals           bool
+	mipOptOut          bool
+	keywords           []DeepgramKeyword
+	keyterms           []string
+	redact             []string
+	tags               []string
+	baseURL            string
+	mu                 sync.Mutex
+	streams            map[*deepgramStream]struct{}
+	pendingStreamDials map[*deepgramSTTPendingDial]struct{}
+	closed             bool
+}
+
+type deepgramSTTPendingDial struct {
+	cancel context.CancelFunc
 }
 
 type DeepgramKeyword struct {
@@ -256,9 +261,17 @@ func (s *DeepgramSTT) Close() error {
 	for stream := range s.streams {
 		streams = append(streams, stream)
 	}
+	pendingDials := make([]*deepgramSTTPendingDial, 0, len(s.pendingStreamDials))
+	for pending := range s.pendingStreamDials {
+		pendingDials = append(pendingDials, pending)
+	}
 	s.streams = make(map[*deepgramStream]struct{})
+	s.pendingStreamDials = make(map[*deepgramSTTPendingDial]struct{})
 	s.mu.Unlock()
 
+	for _, pending := range pendingDials {
+		pending.cancel()
+	}
 	var closeErr error
 	for _, stream := range streams {
 		if err := stream.Close(); err != nil && closeErr == nil {
@@ -356,7 +369,15 @@ func (s *DeepgramSTT) Stream(ctx context.Context, languageStr string) (stt.Recog
 	header.Set("Authorization", "Token "+s.apiKey)
 
 	streamURL := buildDeepgramStreamURL(s, languageStr)
-	conn, err := openDeepgramStreamConnection(ctx, s, streamURL, header)
+	dialCtx, cancelDial := context.WithCancel(ctx)
+	pendingDial := &deepgramSTTPendingDial{cancel: cancelDial}
+	if !s.registerPendingStreamDial(pendingDial) {
+		cancelDial()
+		return nil, io.ErrClosedPipe
+	}
+	conn, err := openDeepgramStreamConnection(dialCtx, s, streamURL, header)
+	cancelDial()
+	s.unregisterPendingStreamDial(pendingDial)
 	if err != nil {
 		return nil, err
 	}
@@ -424,6 +445,25 @@ func (s *DeepgramSTT) registerStream(stream *deepgramStream) bool {
 	}
 	s.streams[stream] = struct{}{}
 	return true
+}
+
+func (s *DeepgramSTT) registerPendingStreamDial(pending *deepgramSTTPendingDial) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	if s.pendingStreamDials == nil {
+		s.pendingStreamDials = make(map[*deepgramSTTPendingDial]struct{})
+	}
+	s.pendingStreamDials[pending] = struct{}{}
+	return true
+}
+
+func (s *DeepgramSTT) unregisterPendingStreamDial(pending *deepgramSTTPendingDial) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pendingStreamDials, pending)
 }
 
 func (s *DeepgramSTT) unregisterStream(stream *deepgramStream) {

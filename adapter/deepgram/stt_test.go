@@ -1759,6 +1759,59 @@ func TestDeepgramSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestDeepgramSTTProviderCloseCancelsReferenceStreamDial(t *testing.T) {
+	dialStarted := make(chan struct{})
+	dialCanceled := make(chan error, 1)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, network string, addr string) (net.Conn, error) {
+			close(dialStarted)
+			<-ctx.Done()
+			dialCanceled <- ctx.Err()
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
+	streamDone := make(chan error, 1)
+	go func() {
+		stream, err := provider.Stream(context.Background(), "en-US")
+		if stream != nil {
+			_ = stream.Close()
+		}
+		streamDone <- err
+	}()
+	select {
+	case <-dialStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Stream did not start reference websocket dial")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-dialCanceled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("stream dial canceled with %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("provider Close did not cancel in-flight reference stream dial")
+	}
+	select {
+	case err := <-streamDone:
+		if !errors.Is(err, context.Canceled) && !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("Stream() error after provider Close = %v, want cancellation or closed pipe", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Stream() did not return after provider Close canceled dial")
+	}
+}
+
 func TestDeepgramSTTStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewDeepgramSTT("test-key", "", WithDeepgramSTTBaseURL("ws://deepgram.test/v1/listen"))
 	if err := provider.Close(); err != nil {
