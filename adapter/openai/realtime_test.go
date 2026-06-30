@@ -3680,6 +3680,9 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
 		t.Fatalf("GenerateReply after Close error = %v, want nil like reference closed send_event", err)
 	}
+	if len(rtSession.pendingResponses) != 0 {
+		t.Fatalf("pending responses after closed GenerateReply = %d, want no local reply mutation", len(rtSession.pendingResponses))
+	}
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt after Close error = %v, want nil like reference closed send_event", err)
 	}

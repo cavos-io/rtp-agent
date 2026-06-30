@@ -1972,6 +1972,9 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 }
 
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if s.clientEventsClosed() {
+		return nil
+	}
 	s.mu.Lock()
 	instructions := s.instructions
 	s.mu.Unlock()
