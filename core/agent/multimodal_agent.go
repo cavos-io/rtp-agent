@@ -679,7 +679,7 @@ func (ma *MultimodalAgent) handleRealtimeEvent(ev llm.RealtimeEvent) {
 		if len(ma.chatCtx.Items) > 0 {
 			lastItemID = ma.chatCtx.Items[len(ma.chatCtx.Items)-1].GetID()
 		}
-		if ev.RemoteItem.PreviousItemID == "" || ev.RemoteItem.PreviousItemID == lastItemID {
+		if !ev.RemoteItem.PreviousItemIDSet || ev.RemoteItem.PreviousItemID == lastItemID {
 			ma.chatCtx.Items = append(ma.chatCtx.Items, item)
 		}
 

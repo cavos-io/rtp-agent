@@ -599,6 +599,49 @@ func TestNewAzureOpenAIRealtimeUsesConstructorBaseURL(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAIRealtimeUsesReferenceEntraTokenOnly(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	connected := make(chan *http.Request, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		connected <- r
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"",
+		"entra-token",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := <-connected
+	if req.Header.Get("Authorization") != "Bearer entra-token" {
+		t.Fatalf("Authorization = %q, want Entra bearer token", req.Header.Get("Authorization"))
+	}
+	if req.Header.Get("api-key") != "" {
+		t.Fatalf("api-key header = %q, want omitted for Entra-only auth", req.Header.Get("api-key"))
+	}
+}
+
 func TestNewAzureOpenAIRealtimeRejectsBaseURLAndEndpoint(t *testing.T) {
 	_, err := NewAzureOpenAIRealtimeModel(
 		"",
@@ -6134,6 +6177,31 @@ func TestRealtimeEventMapsConversationItemAddedMessage(t *testing.T) {
 	}
 }
 
+func TestRealtimeEventPreservesExplicitEmptyPreviousItemID(t *testing.T) {
+	ev, ok := openAIRealtimeEvent(map[string]any{
+		"type":             "conversation.item.added",
+		"previous_item_id": "",
+		"item": map[string]any{
+			"id":      "msg_123",
+			"type":    "message",
+			"role":    "user",
+			"content": []any{map[string]any{"type": "input_text", "text": "hello"}},
+		},
+	})
+	if !ok {
+		t.Fatal("openAIRealtimeEvent returned ok=false, want remote item event")
+	}
+	if ev.RemoteItem == nil {
+		t.Fatal("RemoteItem = nil, want remote item payload")
+	}
+	if !ev.RemoteItem.PreviousItemIDSet {
+		t.Fatal("PreviousItemIDSet = false, want explicit empty previous_item_id preserved")
+	}
+	if ev.RemoteItem.PreviousItemID != "" {
+		t.Fatalf("PreviousItemID = %q, want explicit empty string", ev.RemoteItem.PreviousItemID)
+	}
+}
+
 func TestRealtimeEventMapsConversationItemAddedEmptyUserText(t *testing.T) {
 	ev, ok := openAIRealtimeEvent(map[string]any{
 		"type": "conversation.item.added",
@@ -6628,6 +6696,38 @@ func TestRealtimeSessionNilPreviousItemIDAppendsToRemoteTail(t *testing.T) {
 	case err := <-handlerErr:
 		t.Fatal(err)
 	default:
+	}
+}
+
+func TestRealtimeSessionExplicitEmptyPreviousItemIDDoesNotAppendToRemoteTail(t *testing.T) {
+	session := &realtimeSession{remote: llm.NewRemoteChatContext()}
+	if err := session.remote.Insert(nil, &llm.ChatMessage{
+		ID:      "root",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "root"}},
+	}); err != nil {
+		t.Fatalf("insert root item: %v", err)
+	}
+
+	session.trackRealtimeRemoteItemAdded(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeRemoteItemAdded,
+		RemoteItem: &llm.RemoteItemAddedEvent{
+			PreviousItemID:    "",
+			PreviousItemIDSet: true,
+			Item: &llm.ChatMessage{
+				ID:      "dropped",
+				Role:    llm.ChatRoleUser,
+				Content: []llm.ChatContent{{Text: "must not append"}},
+			},
+		},
+	})
+
+	items := session.remote.ToChatCtx().Items
+	if len(items) != 1 || items[0].GetID() != "root" {
+		t.Fatalf("remote items = %#v, want only existing root item after explicit empty previous_item_id", items)
+	}
+	if item := session.remote.Get("dropped"); item != nil {
+		t.Fatalf("remote item %q inserted = %#v, want dropped like reference missing previous_item_id", "dropped", item)
 	}
 }
 
@@ -8080,8 +8180,12 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	if !errors.As(errorEvent.Error, &apiErr) {
 		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
 	}
-	if apiErr.Message != "OpenAI Realtime API response failed: [invalid_request_error] inference_rate_limit_exceeded" {
+	if apiErr.Message != "OpenAI Realtime API response failed with error type: invalid_request_error" {
 		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	body, ok := apiErr.Body.(map[string]any)
+	if !ok || body["code"] != "inference_rate_limit_exceeded" {
+		t.Fatalf("APIError body = %#v, want provider error body with code", apiErr.Body)
 	}
 	if !apiErr.Retryable {
 		t.Fatal("APIError Retryable = false, want true")
@@ -8128,7 +8232,83 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	}
 }
 
-func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
+func TestRealtimeResponseDoneFailedStringStatusDetailsReportsUnknownError(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":             "resp_failed",
+			"status":         "failed",
+			"status_details": "rate_limit",
+		},
+	}
+
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  messageCh,
+			functionCh: functionCh,
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want failed response error event")
+	}
+	if errorEvent.Type != llm.RealtimeEventTypeError {
+		t.Fatalf("event type = %q, want error", errorEvent.Type)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response failed with unknown error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
+	}
+}
+
+func TestRealtimeResponseDoneFailedReasonReportsUnknownError(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":     "resp_failed",
+			"status": "failed",
+			"status_details": map[string]any{
+				"type":   "server_error",
+				"reason": "rate_limited",
+			},
+		},
+	}
+
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  messageCh,
+			functionCh: functionCh,
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want failed response error event")
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response failed with unknown error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if apiErr.Body != nil {
+		t.Fatalf("APIError body = %#v, want nil without status_details.error", apiErr.Body)
+	}
+}
+
+func TestRealtimeResponseDoneIncompleteClosesGenerationWithoutError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -8151,21 +8331,8 @@ func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if !ok {
-		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
-	}
-	if errorEvent.Type != llm.RealtimeEventTypeError {
-		t.Fatalf("event type = %q, want error", errorEvent.Type)
-	}
-	var apiErr *llm.APIError
-	if !errors.As(errorEvent.Error, &apiErr) {
-		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
-	}
-	if apiErr.Message != "OpenAI Realtime API response incomplete: max_output_tokens" {
-		t.Fatalf("APIError message = %q", apiErr.Message)
-	}
-	if !apiErr.Retryable {
-		t.Fatal("APIError Retryable = false, want true")
+	if ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want incomplete response to be log-only", errorEvent)
 	}
 	if session.generation != nil {
 		t.Fatal("generation still active, want incomplete response to close streams")
@@ -8188,7 +8355,7 @@ func TestRealtimeResponseDoneIncompleteReportsRecoverableError(t *testing.T) {
 	}
 }
 
-func TestRealtimeResponseDoneIncompleteWithoutDetailsReportsRecoverableError(t *testing.T) {
+func TestRealtimeResponseDoneIncompleteWithoutDetailsClosesGenerationWithoutError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",
 		"response": map[string]any{
@@ -8208,21 +8375,8 @@ func TestRealtimeResponseDoneIncompleteWithoutDetailsReportsRecoverableError(t *
 		},
 	}
 	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
-	if !ok {
-		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want incomplete response error event")
-	}
-	if errorEvent.Type != llm.RealtimeEventTypeError {
-		t.Fatalf("event type = %q, want error", errorEvent.Type)
-	}
-	var apiErr *llm.APIError
-	if !errors.As(errorEvent.Error, &apiErr) {
-		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
-	}
-	if apiErr.Message != "OpenAI Realtime API response incomplete with unknown error" {
-		t.Fatalf("APIError message = %q", apiErr.Message)
-	}
-	if !apiErr.Retryable {
-		t.Fatal("APIError Retryable = false, want true")
+	if ok {
+		t.Fatalf("trackOpenAIRealtimeEvent = %#v, true; want incomplete response without details to be log-only", errorEvent)
 	}
 	if session.generation != nil {
 		t.Fatal("generation still active, want incomplete response to close streams")
@@ -8242,6 +8396,59 @@ func TestRealtimeResponseDoneIncompleteWithoutDetailsReportsRecoverableError(t *
 		}
 	default:
 		t.Fatal("function stream not closed")
+	}
+}
+
+func TestRealtimeResponseDoneIncompleteLiveSessionEmitsMetricsWithoutError(t *testing.T) {
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type":     "response.created",
+			"response": map[string]any{"id": "resp_incomplete"},
+		}); err != nil {
+			t.Errorf("Write response.created error = %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.done",
+			"response": map[string]any{
+				"id":     "resp_incomplete",
+				"status": "incomplete",
+				"status_details": map[string]any{
+					"reason": "max_output_tokens",
+				},
+				"usage": map[string]any{"total_tokens": 3.0},
+			},
+		}); err != nil {
+			t.Errorf("Write response.done error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer close(releaseServer)
+	defer session.Close()
+
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	assertRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	select {
+	case ev := <-session.EventCh():
+		if ev.Type == llm.RealtimeEventTypeError {
+			t.Fatalf("unexpected error event for incomplete response: %v", ev.Error)
+		}
+		t.Fatalf("unexpected realtime event after incomplete response: %#v", ev)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

@@ -1544,7 +1544,7 @@ func (a *AgentActivity) OnRemoteItemAdded(ev llm.RemoteItemAddedEvent) {
 	if len(a.Agent.ChatCtx.Items) > 0 {
 		lastItemID = a.Agent.ChatCtx.Items[len(a.Agent.ChatCtx.Items)-1].GetID()
 	}
-	if ev.PreviousItemID == "" || ev.PreviousItemID == lastItemID {
+	if !ev.PreviousItemIDSet || ev.PreviousItemID == lastItemID {
 		a.Agent.ChatCtx.Items = append(a.Agent.ChatCtx.Items, item)
 	}
 }

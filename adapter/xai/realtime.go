@@ -171,7 +171,7 @@ func xaiRealtimeDeduplicateFinalInputTranscription(msg *llm.ChatMessage, transcr
 }
 
 func xaiRealtimeAppendNilPreviousItemID(remote *llm.RemoteChatContext, event *llm.RemoteItemAddedEvent) {
-	if remote == nil || event == nil || event.PreviousItemID != "" {
+	if remote == nil || event == nil || event.PreviousItemIDSet {
 		return
 	}
 	items := remote.ToChatCtx().Items
@@ -179,6 +179,7 @@ func xaiRealtimeAppendNilPreviousItemID(remote *llm.RemoteChatContext, event *ll
 		return
 	}
 	event.PreviousItemID = items[len(items)-1].GetID()
+	event.PreviousItemIDSet = true
 }
 
 func xaiRealtimeKnownFunctionTool(tools []llm.Tool, name string) bool {

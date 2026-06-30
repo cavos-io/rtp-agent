@@ -1591,8 +1591,9 @@ type RealtimeTimedText struct {
 }
 
 type RemoteItemAddedEvent struct {
-	PreviousItemID string
-	Item           ChatItem
+	PreviousItemID    string
+	PreviousItemIDSet bool
+	Item              ChatItem
 }
 
 type RealtimeSessionReconnectedEvent struct{}

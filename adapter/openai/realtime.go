@@ -2790,14 +2790,11 @@ func (s *realtimeSession) persistRealtimeAudioTranscripts() {
 
 func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent, bool) {
 	status, _ := response["status"].(string)
-	if status != "failed" && status != "incomplete" {
+	if status != "failed" {
 		return llm.RealtimeEvent{}, false
 	}
-	rawDetails, detailsPresent := response["status_details"]
-	statusDetails, hasDetails := rawDetails.(map[string]any)
-	if status == "incomplete" && detailsPresent && !hasDetails {
-		return llm.RealtimeEvent{}, false
-	}
+	rawDetails := response["status_details"]
+	statusDetails, _ := rawDetails.(map[string]any)
 	errorBody, hasError := statusDetails["error"].(map[string]any)
 	message := fmt.Sprintf("OpenAI Realtime API response %s with unknown error", status)
 	var body any
@@ -2806,14 +2803,8 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 		if errorType == "" {
 			errorType = "unknown"
 		}
-		if errorCode := openAIRealtimeString(errorBody["code"]); errorCode != "" {
-			message = fmt.Sprintf("OpenAI Realtime API response %s: [%s] %s", status, errorType, errorCode)
-		} else {
-			message = fmt.Sprintf("OpenAI Realtime API response %s with error type: %s", status, errorType)
-		}
+		message = fmt.Sprintf("OpenAI Realtime API response %s with error type: %s", status, errorType)
 		body = errorBody
-	} else if reason := openAIRealtimeString(statusDetails["reason"]); reason != "" {
-		message = fmt.Sprintf("OpenAI Realtime API response %s: %s", status, reason)
 	}
 	return llm.RealtimeEvent{
 		Type:  llm.RealtimeEventTypeError,
@@ -3064,7 +3055,7 @@ func (s *realtimeSession) trackRealtimeRemoteItemAdded(ev llm.RealtimeEvent) {
 		s.model.remoteItemAddedHook(s.remote, ev.RemoteItem)
 	}
 	var previousItemID *string
-	if ev.RemoteItem.PreviousItemID != "" {
+	if ev.RemoteItem.PreviousItemIDSet {
 		previousItemID = &ev.RemoteItem.PreviousItemID
 	} else if items := s.remote.ToChatCtx().Items; len(items) > 0 {
 		itemID := items[len(items)-1].GetID()
@@ -3252,12 +3243,13 @@ func openAIRealtimeEvent(ev map[string]any) (llm.RealtimeEvent, bool) {
 		if err != nil {
 			return llm.RealtimeEvent{}, false
 		}
-		previousItemID, _ := ev["previous_item_id"].(string)
+		previousItemID, previousItemIDSet := ev["previous_item_id"].(string)
 		return llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeRemoteItemAdded,
 			RemoteItem: &llm.RemoteItemAddedEvent{
-				PreviousItemID: previousItemID,
-				Item:           chatItem,
+				PreviousItemID:    previousItemID,
+				PreviousItemIDSet: previousItemIDSet,
+				Item:              chatItem,
 			},
 		}, true
 	case "response.done":

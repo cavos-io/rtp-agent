@@ -3578,14 +3578,20 @@ func TestOpenAIRealtimeSTTSessionUpdateMatchesReference(t *testing.T) {
 func openAIRealtimeSTTTranscriptionFromSessionUpdate(t *testing.T, payload []byte) map[string]any {
 	t.Helper()
 
+	input := openAIRealtimeSTTInputFromSessionUpdate(t, payload)
+	return input["transcription"].(map[string]any)
+}
+
+func openAIRealtimeSTTInputFromSessionUpdate(t *testing.T, payload []byte) map[string]any {
+	t.Helper()
+
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
 		t.Fatalf("decode session update: %v", err)
 	}
 	session := message["session"].(map[string]any)
 	audio := session["audio"].(map[string]any)
-	input := audio["input"].(map[string]any)
-	return input["transcription"].(map[string]any)
+	return audio["input"].(map[string]any)
 }
 
 func TestOpenAIRealtimeSTTStreamLanguageOverrideUpdatesSessionLanguage(t *testing.T) {
@@ -3743,6 +3749,27 @@ func TestOpenAIRealtimeWhisperVersionOmitsTurnDetection(t *testing.T) {
 	input := audio["input"].(map[string]any)
 	if _, ok := input["turn_detection"]; ok {
 		t.Fatalf("turn_detection = %+v, want omitted for realtime whisper model", input["turn_detection"])
+	}
+}
+
+func TestOpenAIRealtimeWhisperIgnoresConfiguredTurnDetection(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-realtime-whisper",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTTurnDetection(map[string]interface{}{
+			"type":                "server_vad",
+			"threshold":           0.7,
+			"prefix_padding_ms":   250,
+			"silence_duration_ms": 900,
+		}),
+	)
+
+	payload, err := buildOpenAIRealtimeSTTSessionUpdate(provider)
+	if err != nil {
+		t.Fatalf("build session update: %v", err)
+	}
+	input := openAIRealtimeSTTInputFromSessionUpdate(t, payload)
+	if _, ok := input["turn_detection"]; ok {
+		t.Fatalf("turn_detection = %+v, want configured value omitted for realtime whisper model", input["turn_detection"])
 	}
 }
 
@@ -4304,8 +4331,8 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech stopped without start: %v", err)
 	}
-	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "missing-start" {
-		t.Fatalf("events = %+v, want boundary-only end-of-speech without timing", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want speech_stopped to update timing only", events)
 	}
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"missing-start","transcript":"","usage":{}}`), state)
 	if err != nil {
@@ -4320,15 +4347,15 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech started before missing stop id: %v", err)
 	}
-	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech || events[0].RequestID != "item-without-stop-id" {
-		t.Fatalf("events = %+v, want start-of-speech boundary", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want speech_started to update timing only", events)
 	}
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","audio_end_ms":900}`), missingStopIDState)
 	if err != nil {
 		t.Fatalf("speech stopped missing id: %v", err)
 	}
-	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "" {
-		t.Fatalf("events = %+v, want missing-id end-of-speech boundary", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want missing-id speech_stopped to update timing only", events)
 	}
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-without-stop-id","transcript":"","usage":{}}`), missingStopIDState)
 	if err != nil {
@@ -4342,8 +4369,8 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech started: %v", err)
 	}
-	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech || events[0].RequestID != "item-1" {
-		t.Fatalf("events = %+v, want start-of-speech boundary", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want speech_started to update timing only", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.delta","item_id":"item-1","delta":"hel"}`), state)
@@ -4376,8 +4403,8 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech stopped: %v", err)
 	}
-	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "item-1" {
-		t.Fatalf("events = %+v, want end-of-speech boundary", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want speech_stopped to update timing only", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"item-1","transcript":"hello","usage":{"input_tokens":3,"output_tokens":0}}`), state)
@@ -4395,32 +4422,40 @@ func TestOpenAIRealtimeSTTEventsFromMessages(t *testing.T) {
 	}
 }
 
-func TestOpenAIRealtimeSTTServerVADEmitsSpeechBoundaryEvents(t *testing.T) {
+func TestOpenAIRealtimeSTTServerVADTracksTimingWithoutSpeechBoundaryEvents(t *testing.T) {
 	state := &openAIRealtimeSTTMessageState{}
 
 	events, err := openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_started","item_id":"turn-1","audio_start_ms":1200}`), state)
 	if err != nil {
 		t.Fatalf("speech started: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("events = %+v, want start-of-speech event", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want speech_started to update timing only", events)
 	}
-	if events[0].Type != stt.SpeechEventStartOfSpeech || events[0].RequestID != "turn-1" || events[0].SpeechStartTime == nil || *events[0].SpeechStartTime != 1.2 {
-		t.Fatalf("start event = %+v, want request id and speech start time", events[0])
+	if got := state.timing["turn-1"].startMS; got != 1200 {
+		t.Fatalf("start timing = %d, want provider audio_start_ms", got)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"turn-1","audio_end_ms":1950}`), state)
 	if err != nil {
 		t.Fatalf("speech stopped: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("events = %+v, want end-of-speech event", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want speech_stopped to update timing only", events)
 	}
-	if events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "turn-1" {
-		t.Fatalf("end event = %+v, want request id", events[0])
+	if got := state.timing["turn-1"].endMS; got != 1950 {
+		t.Fatalf("end timing = %d, want provider audio_end_ms", got)
 	}
-	if len(events[0].Alternatives) != 1 || events[0].Alternatives[0].EndTime != 1.95 {
-		t.Fatalf("end alternatives = %+v, want end_time from provider audio_end_ms", events[0].Alternatives)
+
+	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"turn-1","transcript":"","usage":{}}`), state)
+	if err != nil {
+		t.Fatalf("completed: %v", err)
+	}
+	if len(events) != 1 || events[0].RecognitionUsage == nil || events[0].RecognitionUsage.AudioDuration != 0.75 {
+		t.Fatalf("events = %+v, want recognition usage duration from stored timing", events)
+	}
+	if _, ok := state.timing["turn-1"]; ok {
+		t.Fatal("timing for turn-1 still present, want completed event cleanup")
 	}
 }
 
@@ -4431,16 +4466,16 @@ func TestOpenAIRealtimeSTTCompletedEmptyTranscriptEmitsUsageOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("speech started: %v", err)
 	}
-	if len(events) != 1 || events[0].Type != stt.SpeechEventStartOfSpeech || events[0].RequestID != "silent" {
-		t.Fatalf("events = %+v, want start-of-speech boundary", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want speech_started to update timing only", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"input_audio_buffer.speech_stopped","item_id":"silent","audio_end_ms":900}`), state)
 	if err != nil {
 		t.Fatalf("speech stopped: %v", err)
 	}
-	if len(events) != 1 || events[0].Type != stt.SpeechEventEndOfSpeech || events[0].RequestID != "silent" {
-		t.Fatalf("events = %+v, want end-of-speech boundary", events)
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want speech_stopped to update timing only", events)
 	}
 
 	events, err = openAIRealtimeSTTEventsFromMessage([]byte(`{"type":"conversation.item.input_audio_transcription.completed","item_id":"silent","transcript":"","usage":{"input_tokens":2,"output_tokens":0}}`), state)
