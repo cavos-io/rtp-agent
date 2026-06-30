@@ -590,7 +590,7 @@ func asyncAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.S
 	}
 	audio, err := base64.StdEncoding.DecodeString(message.Audio)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil
 	}
 	if len(audio) == 0 {
 		return nil, false, nil
