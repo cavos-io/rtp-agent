@@ -182,6 +182,36 @@ func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Synthesize error = nil, want APIStatusError")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("StatusCode = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
+	}
+	if statusErr.Body != `{"error":"rate limited"}` {
+		t.Fatalf("Body = %#v, want provider body", statusErr.Body)
+	}
+}
+
 func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewUpliftAITTS("test-key", "")
 	if err := provider.Close(); err != nil {
