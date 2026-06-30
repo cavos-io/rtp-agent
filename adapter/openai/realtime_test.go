@@ -1463,6 +1463,24 @@ func TestRealtimeUpdateOptionsKeepsStateAfterSendFailure(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateInstructionsKeepsStateAfterSendFailure(t *testing.T) {
+	session := &realtimeSession{ctx: context.Background()}
+
+	err := session.UpdateInstructions("answer briefly")
+	if err == nil {
+		t.Fatal("UpdateInstructions error = nil, want disconnected send error")
+	}
+
+	session.mu.Lock()
+	instructions := session.instructions
+	instructionsSet := session.instructionsSet
+	session.mu.Unlock()
+
+	if !instructionsSet || instructions != "answer briefly" {
+		t.Fatalf("stored instructions = %q (set=%v), want answer briefly", instructions, instructionsSet)
+	}
+}
+
 func TestRealtimeUpdateOptionsSnapshotsMutableReasoning(t *testing.T) {
 	messages := make(chan string, 4)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {

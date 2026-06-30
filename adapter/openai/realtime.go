@@ -931,13 +931,13 @@ func (s *realtimeSession) UpdateInstructions(instructions string) error {
 			"instructions": instructions,
 		},
 	}
-	if err := s.sendMsg(msg); err != nil {
-		return err
-	}
 	s.mu.Lock()
 	s.instructions = instructions
 	s.instructionsSet = true
 	s.mu.Unlock()
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
 	return nil
 }
 
