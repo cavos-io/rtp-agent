@@ -2162,15 +2162,13 @@ func openAIRealtimeCommitAudioMessage() map[string]any {
 }
 
 func (s *realtimeSession) ClearAudio() error {
-	if err := s.sendMsg(openAIRealtimeClearAudioMessage()); err != nil {
-		return err
-	}
+	err := s.sendMsg(openAIRealtimeClearAudioMessage())
 	if s.audioBStream != nil {
 		s.audioBStream.Clear()
 	}
 	s.audioNormalizer.reset()
 	s.pushedDuration = 0
-	return nil
+	return err
 }
 
 func openAIRealtimeClearAudioMessage() map[string]any {

@@ -2129,6 +2129,63 @@ func TestRealtimeSessionClearAudioDropsBufferedTail(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "clear should drop stale 20ms tail before new 80ms audio")
 }
 
+func TestRealtimeSessionClearAudioSendFailureDropsBufferedTail(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "initial session update"), "session.update", "gpt-realtime")
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushAudio 20ms tail error = %v", err)
+	}
+	assertNoRealtimeMessage(t, messages, "20ms tail should wait in local buffer before clear")
+
+	rtSession := session.(*realtimeSession)
+	rtSession.mu.Lock()
+	_ = rtSession.conn.Close()
+	rtSession.mu.Unlock()
+	if err := session.ClearAudio(); err == nil {
+		t.Fatal("ClearAudio error = nil, want websocket write failure")
+	}
+
+	rtSession.mu.Lock()
+	pushedDuration := rtSession.pushedDuration
+	var bufferedChunks []*audiomodel.AudioFrame
+	if rtSession.audioBStream != nil {
+		bufferedChunks = rtSession.audioBStream.Flush()
+	}
+	rtSession.mu.Unlock()
+	if pushedDuration != 0 {
+		t.Fatalf("pushedDuration = %v, want reset after failed clear", pushedDuration)
+	}
+	if len(bufferedChunks) != 0 {
+		t.Fatalf("buffered chunks after failed clear = %d, want stale audio dropped", len(bufferedChunks))
+	}
+}
+
 func TestRealtimeSessionClearAudioDropsResamplerTail(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
