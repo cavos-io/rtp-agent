@@ -218,6 +218,7 @@ func (t *DeepgramTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 		ctx:        ctx,
 		requestURL: u,
 		body:       jsonBody,
+		inputText:  text,
 		apiKey:     t.apiKey,
 		sampleRate: t.sampleRate,
 		encoding:   t.encoding,
@@ -387,6 +388,7 @@ type deepgramTTSChunkedStream struct {
 	ctx          context.Context
 	requestURL   string
 	body         []byte
+	inputText    string
 	apiKey       string
 	resp         *http.Response
 	sampleRate   int
@@ -398,6 +400,7 @@ type deepgramTTSChunkedStream struct {
 	pendingErr   error
 	finalSent    bool
 	pendingPCM   []byte
+	audioSent    bool
 	mu           sync.Mutex
 	readMu       sync.Mutex
 }
@@ -502,6 +505,7 @@ func (s *deepgramTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			s.mu.Unlock()
 			return audio, finalErr
 		}
+		s.audioSent = true
 		audio := &tts.SynthesizedAudio{
 			RequestID: requestID,
 			Frame: &model.AudioFrame{
@@ -591,6 +595,9 @@ func (s *deepgramTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 		_ = body.Close()
 	}
 	s.cancelRequestLocked()
+	if !s.audioSent && strings.TrimSpace(s.inputText) != "" {
+		return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
+	}
 	return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 }
 
