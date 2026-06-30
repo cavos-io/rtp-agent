@@ -542,7 +542,8 @@ func (s *cartesiaTTSStream) readLoop() {
 
 		var resp cartesiaWSResponse
 		if err := json.Unmarshal(message, &resp); err != nil {
-			continue
+			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to parse Cartesia message: %v", err))
+			return
 		}
 
 		if resp.Type == "error" {
