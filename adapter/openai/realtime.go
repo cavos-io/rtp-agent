@@ -1746,16 +1746,23 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	}
 
 	for _, chunk := range s.audioBStream.Write(frame.Data) {
-		msg := map[string]any{
-			"type":  "input_audio_buffer.append",
-			"audio": base64.StdEncoding.EncodeToString(chunk.Data),
-		}
-		if err := s.sendMsg(msg); err != nil {
+		if err := s.appendAudioChunk(chunk); err != nil {
 			return err
 		}
-		if chunk.SampleRate > 0 {
-			s.pushedDuration += float64(chunk.SamplesPerChannel) / float64(chunk.SampleRate)
-		}
+	}
+	return nil
+}
+
+func (s *realtimeSession) appendAudioChunk(chunk *model.AudioFrame) error {
+	msg := map[string]any{
+		"type":  "input_audio_buffer.append",
+		"audio": base64.StdEncoding.EncodeToString(chunk.Data),
+	}
+	if err := s.sendMsg(msg); err != nil {
+		return err
+	}
+	if chunk.SampleRate > 0 {
+		s.pushedDuration += float64(chunk.SamplesPerChannel) / float64(chunk.SampleRate)
 	}
 	return nil
 }
@@ -2086,6 +2093,13 @@ func openAIRealtimeTruncatedTranscriptChatContext(oldCtx *llm.ChatContext, optio
 }
 
 func (s *realtimeSession) CommitAudio() error {
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.appendAudioChunk(chunk); err != nil {
+				return err
+			}
+		}
+	}
 	if s.pushedDuration <= 0.1 {
 		return nil
 	}

@@ -1634,7 +1634,9 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.CommitAudio(); err != nil {
 		t.Fatalf("CommitAudio partial error = %v", err)
 	}
-	assertNoRealtimeMessage(t, messages, "commit should wait for more than 100ms of pushed audio")
+	partialAppend := receiveRealtimeMessage(t, messages, "partial audio flush")
+	assertRealtimeMessage(t, partialAppend, "input_audio_buffer.append", base64.StdEncoding.EncodeToString([]byte{5, 6}))
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "audio buffer commit after partial flush"), "input_audio_buffer.commit", "")
 	if err := session.PushAudio(&audiomodel.AudioFrame{Data: audioChunk, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 2400}); err != nil {
 		t.Fatalf("PushAudio second chunk error = %v", err)
 	}
@@ -1685,7 +1687,7 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.CommitAudio(); err != nil {
 		t.Fatalf("CommitAudio error = %v", err)
 	}
-	assertRealtimeMessage(t, <-messages, "input_audio_buffer.commit", "")
+	assertNoRealtimeMessage(t, messages, "commit should wait for more than 100ms of audio after previous commit reset")
 
 	if err := session.ClearAudio(); err != nil {
 		t.Fatalf("ClearAudio error = %v", err)
@@ -1716,6 +1718,73 @@ func TestRealtimeSessionSendsProtocolMessages(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
+}
+
+func TestRealtimeSessionCommitAudioFlushesBufferedTailBeforeCommit(t *testing.T) {
+	messages := make(chan string, 8)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+			ackOpenAIRealtimeChatContextMessage(t, conn, msg)
+		}
+	})
+
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "initial session update"), "session.update", "gpt-realtime")
+
+	audioData := make([]byte, 2880*2)
+	for i := range audioData {
+		audioData[i] = byte(i)
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              audioData,
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 2880,
+	}); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	first := receiveRealtimeMessage(t, messages, "first 100ms audio append")
+	assertRealtimeMessage(t, first, "input_audio_buffer.append", "")
+	firstPayload := realtimeMessagePayload(t, first, "audio")
+	firstAudio, err := base64.StdEncoding.DecodeString(firstPayload)
+	if err != nil {
+		t.Fatalf("decode first audio payload: %v", err)
+	}
+	if len(firstAudio) != 2400*2 {
+		t.Fatalf("first appended audio bytes = %d, want 100ms chunk", len(firstAudio))
+	}
+	assertNoRealtimeMessage(t, messages, "20ms tail audio should wait for commit flush")
+
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v", err)
+	}
+
+	tail := receiveRealtimeMessage(t, messages, "tail audio append after commit")
+	assertRealtimeMessage(t, tail, "input_audio_buffer.append", "")
+	tailPayload := realtimeMessagePayload(t, tail, "audio")
+	tailAudio, err := base64.StdEncoding.DecodeString(tailPayload)
+	if err != nil {
+		t.Fatalf("decode tail audio payload: %v", err)
+	}
+	if len(tailAudio) != 480*2 {
+		t.Fatalf("tail appended audio bytes = %d, want 20ms flush", len(tailAudio))
+	}
+	assertRealtimeMessage(t, receiveRealtimeMessage(t, messages, "audio buffer commit"), "input_audio_buffer.commit", "")
 }
 
 func TestRealtimeSessionResamplesInputAudioWithReferenceStreamTiming(t *testing.T) {
@@ -2586,6 +2655,17 @@ func assertNoRealtimeMessage(t *testing.T, messages <-chan string, reason string
 		t.Fatalf("unexpected realtime message for %s: %s", reason, msg)
 	case <-time.After(25 * time.Millisecond):
 	}
+}
+
+func receiveRealtimeMessage(t *testing.T, messages <-chan string, reason string) string {
+	t.Helper()
+	select {
+	case msg := <-messages:
+		return msg
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for realtime message: %s", reason)
+	}
+	return ""
 }
 
 func TestRealtimeUpdateOptionsMessageMapsNamedToolChoice(t *testing.T) {
