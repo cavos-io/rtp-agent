@@ -405,13 +405,16 @@ func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.format == "wav" {
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, err
+			return nil, fishAudioTTSConnectionError("Fish Audio TTS stream read failed", err)
 		}
 		if len(data) == 0 {
 			return s.emitFinal()
 		}
 		audio, err := fishAudioDecodeTTSFrame(data, s.sampleRate, s.format)
-		return audio, err
+		if err != nil {
+			return nil, fishAudioTTSConnectionError("Fish Audio TTS audio decode failed", err)
+		}
+		return audio, nil
 	}
 
 	buf := make([]byte, 4096)
@@ -420,15 +423,23 @@ func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			s.pendingFinal = true
 		}
-		return fishAudioDecodeTTSFrame(buf[:n], s.sampleRate, s.format)
+		audio, decodeErr := fishAudioDecodeTTSFrame(buf[:n], s.sampleRate, s.format)
+		if decodeErr != nil {
+			return nil, fishAudioTTSConnectionError("Fish Audio TTS audio decode failed", decodeErr)
+		}
+		return audio, nil
 	}
 	if err != nil {
 		if err == io.EOF {
 			return s.emitFinal()
 		}
-		return nil, err
+		return nil, fishAudioTTSConnectionError("Fish Audio TTS stream read failed", err)
 	}
-	return fishAudioDecodeTTSFrame(buf[:n], s.sampleRate, s.format)
+	audio, err := fishAudioDecodeTTSFrame(buf[:n], s.sampleRate, s.format)
+	if err != nil {
+		return nil, fishAudioTTSConnectionError("Fish Audio TTS audio decode failed", err)
+	}
+	return audio, nil
 }
 
 func (s *fishaudioTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
@@ -716,7 +727,7 @@ func fishAudioTTSReadError(err error) error {
 func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format string) (*tts.SynthesizedAudio, bool, error) {
 	var message map[string]interface{}
 	if err := msgpack.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, fishAudioTTSConnectionError("Fish Audio websocket payload decode failed", err)
 	}
 	event, _ := message["event"].(string)
 	switch event {
@@ -727,7 +738,7 @@ func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format s
 		}
 		decoded, err := fishAudioDecodeTTSFrame(audio, sampleRate, format)
 		if err != nil {
-			return nil, false, err
+			return nil, false, fishAudioTTSConnectionError("Fish Audio websocket audio decode failed", err)
 		}
 		return decoded, false, nil
 	case "finish":
@@ -738,6 +749,13 @@ func fishAudioTTSAudioFromStreamMessage(payload []byte, sampleRate int, format s
 	default:
 		return nil, false, nil
 	}
+}
+
+func fishAudioTTSConnectionError(message string, err error) *llm.APIConnectionError {
+	if err == nil {
+		return llm.NewAPIConnectionError(message)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
 }
 
 func fishAudioBytes(value interface{}) ([]byte, bool) {
