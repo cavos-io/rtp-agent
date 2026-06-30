@@ -254,6 +254,19 @@ func TestNewOpenAILLMUsesEnvironmentAPIKeyAndReferenceDefaultModel(t *testing.T)
 	}
 }
 
+func TestNewOpenAILLMUsesEnvironmentBaseURL(t *testing.T) {
+	t.Setenv(openAIBaseURLEnv, "https://env.openai.test/v1")
+
+	model, err := NewOpenAILLM("test-key", "")
+	if err != nil {
+		t.Fatalf("NewOpenAILLM error = %v", err)
+	}
+
+	if got := model.Provider(); got != "env.openai.test" {
+		t.Fatalf("Provider() = %q, want OPENAI_BASE_URL host", got)
+	}
+}
+
 func TestNewOpenAILLMRequiresAPIKey(t *testing.T) {
 	t.Setenv(openAIAPIKeyEnv, "")
 
