@@ -72,9 +72,7 @@ func NewDeepgramSTTv2(apiKey string, opts ...DeepgramSTTv2Option) *DeepgramSTTv2
 
 func WithDeepgramSTTv2BaseURL(baseURL string) DeepgramSTTv2Option {
 	return func(s *DeepgramSTTv2) {
-		if baseURL != "" {
-			s.baseURL = baseURL
-		}
+		s.baseURL = baseURL
 	}
 }
 

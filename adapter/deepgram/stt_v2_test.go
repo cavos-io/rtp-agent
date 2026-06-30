@@ -1157,6 +1157,17 @@ func TestDeepgramSTTv2UpdateOptionsMatchesReferenceFutureStreams(t *testing.T) {
 		t.Fatalf("parse STTv2 URL after zero sample-rate update: %v", err)
 	}
 	assertDeepgramQuery(t, parsed.Query(), "sample_rate", "0")
+
+	if err := provider.UpdateOptions(WithDeepgramSTTv2BaseURL("")); err != nil {
+		t.Fatalf("UpdateOptions(empty base URL) error = %v", err)
+	}
+	parsed, err = url.Parse(buildDeepgramSTTv2StreamURL(provider))
+	if err != nil {
+		t.Fatalf("parse STTv2 URL after empty base URL update: %v", err)
+	}
+	if parsed.Scheme != "" || parsed.Host != "" {
+		t.Fatalf("stream URL after empty base URL update = %q, want empty reference endpoint", parsed.String())
+	}
 }
 
 func TestDeepgramSTTv2UpdateOptionsRejectsInvalidWithoutMutation(t *testing.T) {
