@@ -2935,6 +2935,23 @@ func TestRealtimeUpdateOptionsMessageMapsVoice(t *testing.T) {
 	}
 }
 
+func TestRealtimeUpdateOptionsMessageMapsExplicitEmptyVoice(t *testing.T) {
+	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
+		Voice:    "",
+		VoiceSet: true,
+	})
+
+	if msg["type"] != "session.update" {
+		t.Fatalf("message type = %#v, want session.update", msg["type"])
+	}
+	session := msg["session"].(map[string]any)
+	audio := session["audio"].(map[string]any)
+	output := audio["output"].(map[string]any)
+	if output["voice"] != "" {
+		t.Fatalf("voice = %#v, want explicit empty string", output["voice"])
+	}
+}
+
 func TestRealtimeUpdateOptionsMessageMapsSpeed(t *testing.T) {
 	msg := openAIRealtimeUpdateOptionsMessage(llm.RealtimeSessionOptions{
 		Speed: 1.25,

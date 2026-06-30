@@ -1414,7 +1414,7 @@ func openAIRealtimeUpdateOptionsMessageWithEventID(options llm.RealtimeSessionOp
 		input["noise_reduction"] = openAIRealtimeNoiseReduction(options.InputAudioNoiseReduction)
 	}
 	output := make(map[string]any)
-	if options.Voice != "" {
+	if options.VoiceSet || options.Voice != "" {
 		output["voice"] = options.Voice
 	}
 	if options.SpeedSet || options.Speed > 0 {
@@ -1498,8 +1498,9 @@ func openAIRealtimeMergeSessionOptions(dst *llm.RealtimeSessionOptions, src llm.
 		dst.InputAudioNoiseReduction = src.InputAudioNoiseReduction
 		dst.InputAudioNoiseReductionSet = true
 	}
-	if src.Voice != "" {
+	if src.VoiceSet || src.Voice != "" {
 		dst.Voice = src.Voice
+		dst.VoiceSet = true
 	}
 	if src.SpeedSet || src.Speed > 0 {
 		dst.Speed = src.Speed
