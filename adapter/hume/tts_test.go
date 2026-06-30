@@ -302,6 +302,16 @@ func TestHumeTTSChunkedStreamDecodesReferenceJSONLines(t *testing.T) {
 	}
 }
 
+func TestHumeTTSChunkedStreamIgnoresPunctuationOnlyBase64LikeReference(t *testing.T) {
+	audio, err := humeAudioFromJSONLine(`{"audio":"!!!"}`)
+	if err != nil {
+		t.Fatalf("punctuation-only audio error = %v, want ignored empty bytes", err)
+	}
+	if len(audio) != 0 {
+		t.Fatalf("punctuation-only audio = %#v, want empty bytes", audio)
+	}
+}
+
 func TestHumeTTSChunkedStreamProviderErrorReturnsAPIConnectionError(t *testing.T) {
 	stream := &humeTTSChunkedStream{
 		resp:        &http.Response{Body: io.NopCloser(strings.NewReader(`{"type":"error","message":"voice unavailable"}` + "\n"))},

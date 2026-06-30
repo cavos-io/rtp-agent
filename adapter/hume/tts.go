@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
@@ -505,5 +506,21 @@ func humeAudioFromJSONLine(line string) ([]byte, error) {
 	if data.Audio == "" {
 		return nil, nil
 	}
-	return base64.StdEncoding.DecodeString(data.Audio)
+	return decodeHumeBase64Audio(data.Audio)
+}
+
+func decodeHumeBase64Audio(value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	filtered := make([]rune, 0, len(value))
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '+' || r == '/' || r == '=' {
+			filtered = append(filtered, r)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
