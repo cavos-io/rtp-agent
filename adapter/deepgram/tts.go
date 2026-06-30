@@ -28,6 +28,7 @@ const defaultDeepgramTTSBaseURL = "https://api.deepgram.com/v1/speak"
 const defaultDeepgramTTSStreamResponseTimeout = 10 * time.Second
 const deepgramTTSCloseAckTimeout = time.Second
 const deepgramTTSRequestTimeout = 30 * time.Second
+const deepgramTTSPoolMaxSessionDuration = time.Hour
 const deepgramTTSFlushMessage = `{"type": "Flush"}`
 const deepgramTTSCloseMessage = `{"type": "Close"}`
 
@@ -45,6 +46,7 @@ type DeepgramTTS struct {
 	streams               map[*deepgramTTSStream]struct{}
 	closed                bool
 	prewarmConn           *websocket.Conn
+	prewarmConnectedAt    time.Time
 	prewarming            bool
 }
 
@@ -163,6 +165,7 @@ func (t *DeepgramTTS) Prewarm() {
 			return
 		}
 		t.prewarmConn = conn
+		t.prewarmConnectedAt = time.Now()
 	}()
 }
 
@@ -176,6 +179,7 @@ func (t *DeepgramTTS) Close() error {
 	t.streams = make(map[*deepgramTTSStream]struct{})
 	prewarmConn := t.prewarmConn
 	t.prewarmConn = nil
+	t.prewarmConnectedAt = time.Time{}
 	t.mu.Unlock()
 
 	var closeErr error
@@ -293,7 +297,13 @@ func (t *DeepgramTTS) takePrewarmedConn() *websocket.Conn {
 	if conn == nil {
 		return nil
 	}
+	connectedAt := t.prewarmConnectedAt
 	t.prewarmConn = nil
+	t.prewarmConnectedAt = time.Time{}
+	if !connectedAt.IsZero() && time.Since(connectedAt) > deepgramTTSPoolMaxSessionDuration {
+		closeDeepgramTTSPrewarmedConn(conn)
+		return nil
+	}
 	return conn
 }
 
@@ -307,6 +317,7 @@ func (t *DeepgramTTS) storePrewarmedConn(conn *websocket.Conn) bool {
 		return false
 	}
 	t.prewarmConn = conn
+	t.prewarmConnectedAt = time.Now()
 	return true
 }
 

@@ -153,6 +153,75 @@ func TestDeepgramTTSPooledCloseSendsReferenceFlushCloseBeforeAck(t *testing.T) {
 	}
 }
 
+func TestDeepgramTTSExpiresReferencePooledConnection(t *testing.T) {
+	dials := make(chan net.Conn, 3)
+	writes := make(chan string, 4)
+	expiredErr := make(chan error, 1)
+	streamErr := make(chan error, 1)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			clientConn, serverConn := net.Pipe()
+			dials <- serverConn
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewDeepgramTTS("test-key", "", WithDeepgramTTSBaseURL("ws://deepgram.test/v1/speak"))
+	tts.Prewarm(provider)
+	expiredConn := receiveDeepgramTTSDial(t, dials, "expired prewarm TTS websocket")
+	go runDeepgramTTSPooledCloseOrderWebsocketServer(expiredConn, expiredErr)
+	waitDeepgramTTSPrewarmReady(t, provider)
+
+	provider.mu.Lock()
+	provider.prewarmConnectedAt = time.Now().Add(-deepgramTTSPoolMaxSessionDuration - time.Second)
+	provider.mu.Unlock()
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("fresh"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- stream.Flush()
+	}()
+	freshConn := receiveDeepgramTTSDial(t, dials, "fresh TTS websocket after pool expiry")
+	go runDeepgramTTSPrewarmedWebsocketServer(freshConn, writes, streamErr)
+	if err := <-flushDone; err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	if err := <-expiredErr; err != nil {
+		t.Fatalf("expired websocket close error: %v", err)
+	}
+	gotWrites := []string{
+		receiveDeepgramTTSWrite(t, writes, "fresh Speak"),
+		receiveDeepgramTTSWrite(t, writes, "fresh Flush"),
+	}
+	wantWrites := []string{`{"type": "Speak", "text": "fresh "}`, deepgramTTSFlushMessage}
+	if !reflect.DeepEqual(gotWrites, wantWrites) {
+		t.Fatalf("fresh websocket writes = %#v, want %#v", gotWrites, wantWrites)
+	}
+	if audio, err := stream.Next(); err != nil || audio == nil || !audio.IsFinal {
+		t.Fatalf("Next() = (%+v, %v), want final marker from fresh websocket", audio, err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close() error = %v", err)
+	}
+	if err := <-streamErr; err != nil {
+		t.Fatalf("fresh websocket server error: %v", err)
+	}
+}
+
 func TestDeepgramTTSStreamsReuseReferencePooledConnection(t *testing.T) {
 	dials := make(chan net.Conn, 2)
 	writes := make(chan string, 8)
