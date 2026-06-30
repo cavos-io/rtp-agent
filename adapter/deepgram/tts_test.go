@@ -101,8 +101,11 @@ func TestDeepgramTTSPrewarmDialsAndReusesReferenceConnection(t *testing.T) {
 		t.Fatal("Stream opened a second websocket instead of reusing prewarmed connection")
 	default:
 	}
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("Next() = (%+v, %v), want provider audio before final marker", audio, err)
+	}
 	if audio, err := stream.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("Next() = (%+v, %v), want Flushed final marker", audio, err)
+		t.Fatalf("Next() final = (%+v, %v), want Flushed final marker", audio, err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -311,8 +314,11 @@ func TestDeepgramTTSExpiresReferencePooledConnection(t *testing.T) {
 	if !reflect.DeepEqual(gotWrites, wantWrites) {
 		t.Fatalf("fresh websocket writes = %#v, want %#v", gotWrites, wantWrites)
 	}
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("Next() = (%+v, %v), want provider audio before fresh final marker", audio, err)
+	}
 	if audio, err := stream.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("Next() = (%+v, %v), want final marker from fresh websocket", audio, err)
+		t.Fatalf("Next() final = (%+v, %v), want final marker from fresh websocket", audio, err)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close() error = %v", err)
@@ -358,8 +364,11 @@ func TestDeepgramTTSStreamsReuseReferencePooledConnection(t *testing.T) {
 	if err := <-firstEnd; err != nil {
 		t.Fatalf("first EndInput() error = %v", err)
 	}
+	if audio, err := first.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("first Next() = (%+v, %v), want provider audio", audio, err)
+	}
 	if audio, err := first.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("first Next() = (%+v, %v), want final marker", audio, err)
+		t.Fatalf("first Next() final = (%+v, %v), want final marker", audio, err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("first Close() error = %v", err)
@@ -404,8 +413,11 @@ func TestDeepgramTTSStreamsReuseReferencePooledConnection(t *testing.T) {
 	if !reflect.DeepEqual(gotWrites, wantWrites) {
 		t.Fatalf("pooled websocket writes = %#v, want %#v", gotWrites, wantWrites)
 	}
+	if audio, err := second.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("second Next() = (%+v, %v), want provider audio", audio, err)
+	}
 	if audio, err := second.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("second Next() = (%+v, %v), want final marker", audio, err)
+		t.Fatalf("second Next() final = (%+v, %v), want final marker", audio, err)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close() error = %v", err)
@@ -450,8 +462,11 @@ func TestDeepgramTTSUpdateOptionsKeepsReferencePooledConnection(t *testing.T) {
 	if err := <-firstEnd; err != nil {
 		t.Fatalf("first EndInput() error = %v", err)
 	}
+	if audio, err := first.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("first Next() = (%+v, %v), want provider audio", audio, err)
+	}
 	if audio, err := first.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("first Next() = (%+v, %v), want final marker", audio, err)
+		t.Fatalf("first Next() final = (%+v, %v), want final marker", audio, err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("first Close() error = %v", err)
@@ -497,8 +512,11 @@ func TestDeepgramTTSUpdateOptionsKeepsReferencePooledConnection(t *testing.T) {
 	if !reflect.DeepEqual(gotWrites, wantWrites) {
 		t.Fatalf("pooled websocket writes after update_options = %#v, want %#v", gotWrites, wantWrites)
 	}
+	if audio, err := second.Next(); err != nil || audio == nil || audio.IsFinal || len(audio.Frame.Data) == 0 {
+		t.Fatalf("second Next() = (%+v, %v), want provider audio", audio, err)
+	}
 	if audio, err := second.Next(); err != nil || audio == nil || !audio.IsFinal {
-		t.Fatalf("second Next() = (%+v, %v), want final marker", audio, err)
+		t.Fatalf("second Next() final = (%+v, %v), want final marker", audio, err)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close() error = %v", err)
@@ -2205,6 +2223,7 @@ func TestDeepgramTTSStreamCloseWaitsForReferenceFlushedAck(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush() error = %v", err)
 	}
+	stream.(*deepgramTTSStream).segmentHadAudio.Store(true)
 	closeDone := make(chan error, 1)
 	go func() {
 		closeDone <- stream.Close()
@@ -2231,10 +2250,10 @@ func TestDeepgramTTSStreamCloseWaitsForReferenceFlushedAck(t *testing.T) {
 	select {
 	case result := <-nextDone:
 		if result.err != nil {
-			t.Fatalf("Next() error = %v, want Flushed final marker", result.err)
+			t.Fatalf("Next() final error = %v, want Flushed final marker", result.err)
 		}
 		if result.audio == nil || !result.audio.IsFinal {
-			t.Fatalf("Next() = %+v, want final marker from Flushed ack", result.audio)
+			t.Fatalf("Next() final = %+v, want final marker from Flushed ack", result.audio)
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("Next() did not receive Flushed final marker promptly")
@@ -2502,6 +2521,7 @@ func TestDeepgramTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	if err := stream.EndInput(); err != nil {
 		t.Fatalf("second EndInput error = %v, want nil like reference closed input", err)
 	}
+	stream.segmentHadAudio.Store(true)
 	if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
 		t.Fatalf("handleTextMessage Flushed error = %v", err)
 	}
@@ -2538,6 +2558,7 @@ func TestDeepgramTTSStreamEndInputClosesIdleReferenceStream(t *testing.T) {
 				if err := stream.Flush(); err != nil {
 					t.Fatalf("Flush() error = %v", err)
 				}
+				stream.segmentHadAudio.Store(true)
 				if err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`)); err != nil {
 					t.Fatalf("handleTextMessage Flushed error = %v", err)
 				}
@@ -2713,6 +2734,41 @@ func TestDeepgramTTSStreamMarksFinalAudioOnReferenceFlushed(t *testing.T) {
 		}
 	default:
 		t.Fatal("Flushed did not emit final audio marker")
+	}
+}
+
+func TestDeepgramTTSStreamErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
+	stream := &deepgramTTSStream{
+		audio:     make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
+		requestID: "req-silent",
+		segmentID: "seg-silent",
+		writeJSON: func(any) error {
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText() error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+	err := stream.handleTextMessage([]byte(`{"type":"Flushed"}`))
+	if err == nil {
+		t.Fatal("handleTextMessage Flushed error = nil, want no-audio APIError")
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %T %v, want APIError", err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("error = %v, want reference no-audio message", err)
+	}
+	select {
+	case audio := <-stream.audio:
+		t.Fatalf("silent Flushed audio = %+v, want none", audio)
+	default:
 	}
 }
 
@@ -3352,6 +3408,10 @@ func runDeepgramTTSPrewarmedWebsocketServer(conn net.Conn, writes chan<- string,
 		writes <- string(payload)
 		switch deepgramTestWebsocketMessageType(payload) {
 		case "Flush":
+			if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{1, 0}); err != nil {
+				errCh <- err
+				return
+			}
 			if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
 				errCh <- err
 				return
@@ -3455,6 +3515,10 @@ func runDeepgramTTSReusableWebsocketServer(conn net.Conn, writes chan<- string, 
 					return
 				}
 				errCh <- nil
+				return
+			}
+			if err := writeDeepgramTestWebsocketFrame(conn, websocket.BinaryMessage, []byte{1, 0}); err != nil {
+				errCh <- err
 				return
 			}
 			if err := writeDeepgramTestWebsocketFrame(conn, websocket.TextMessage, []byte(`{"type":"Flushed"}`)); err != nil {
