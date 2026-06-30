@@ -599,6 +599,49 @@ func TestNewAzureOpenAIRealtimeUsesConstructorBaseURL(t *testing.T) {
 	}
 }
 
+func TestNewAzureOpenAIRealtimeUsesReferenceEntraTokenOnly(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+
+	connected := make(chan *http.Request, 1)
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		connected <- r
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		<-releaseServer
+	})
+
+	realtimeModel, err := NewAzureOpenAIRealtimeModel(
+		"",
+		"http://azure.openai.test",
+		"voice-deployment",
+		"2024-10-01-preview",
+		"",
+		"entra-token",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+	)
+	if err != nil {
+		t.Fatalf("NewAzureOpenAIRealtimeModel error = %v", err)
+	}
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	req := <-connected
+	if req.Header.Get("Authorization") != "Bearer entra-token" {
+		t.Fatalf("Authorization = %q, want Entra bearer token", req.Header.Get("Authorization"))
+	}
+	if req.Header.Get("api-key") != "" {
+		t.Fatalf("api-key header = %q, want omitted for Entra-only auth", req.Header.Get("api-key"))
+	}
+}
+
 func TestNewAzureOpenAIRealtimeRejectsBaseURLAndEndpoint(t *testing.T) {
 	_, err := NewAzureOpenAIRealtimeModel(
 		"",
