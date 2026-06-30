@@ -1772,6 +1772,9 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	if s.clientEventsClosed() {
+		return nil
+	}
 	frame, err := s.audioNormalizer.normalize(frame)
 	if err != nil {
 		return err
@@ -1786,6 +1789,15 @@ func (s *realtimeSession) PushAudio(frame *model.AudioFrame) error {
 		}
 	}
 	return nil
+}
+
+func (s *realtimeSession) clientEventsClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ctx != nil && s.ctx.Err() != nil
 }
 
 func (s *realtimeSession) appendAudioChunk(chunk *model.AudioFrame) error {
@@ -1803,11 +1815,13 @@ func (s *realtimeSession) appendAudioChunk(chunk *model.AudioFrame) error {
 }
 
 type openAIRealtimeInputAudioNormalizer struct {
-	sampleRate  uint32
-	numChannels uint32
-	remainder   uint64
-	lastSample  int16
-	hasTail     bool
+	sampleRate    uint32
+	numChannels   uint32
+	inputSamples  uint64
+	outputSamples uint64
+	remainder     uint64
+	lastSample    int16
+	hasTail       bool
 }
 
 func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) (*model.AudioFrame, error) {
@@ -1835,6 +1849,8 @@ func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) 
 	if n.sampleRate != frame.SampleRate || n.numChannels != frame.NumChannels {
 		n.sampleRate = frame.SampleRate
 		n.numChannels = frame.NumChannels
+		n.inputSamples = 0
+		n.outputSamples = 0
 		n.remainder = 0
 	}
 	if samplesPerChannel == 0 {
@@ -1845,35 +1861,28 @@ func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) 
 		}, nil
 	}
 
-	scaledSamples := uint64(samplesPerChannel)*uint64(openAIRealtimeInputSampleRate) + n.remainder
-	outSamples := uint32(scaledSamples / uint64(frame.SampleRate))
-	n.remainder = scaledSamples % uint64(frame.SampleRate)
+	prevInputSamples := n.inputSamples
+	nextInputSamples := prevInputSamples + uint64(samplesPerChannel)
+	prevOutputSamples := n.outputSamples
+	nextOutputSamples := nextInputSamples * uint64(openAIRealtimeInputSampleRate) / uint64(frame.SampleRate)
+	outSamples := uint32(nextOutputSamples - prevOutputSamples)
 	out := make([]byte, int(outSamples*openAIRealtimeInputNumChannels*2))
 	channelCount := int(frame.NumChannels)
+	previousSample := n.lastSample
+	hasPrevious := n.hasTail
 	n.hasTail = false
 	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
-		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(openAIRealtimeInputSampleRate))
-		if srcIdx >= samplesPerChannel {
-			srcIdx = samplesPerChannel - 1
-		}
-		var sum int32
-		for ch := 0; ch < channelCount; ch++ {
-			offset := (int(srcIdx)*channelCount + ch) * 2
-			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
-		}
-		sample := sum / int32(channelCount)
-		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(int16(sample)))
+		srcPos := (prevOutputSamples + uint64(outIdx)) * uint64(frame.SampleRate)
+		srcGlobalIdx := srcPos / uint64(openAIRealtimeInputSampleRate)
+		frac := srcPos % uint64(openAIRealtimeInputSampleRate)
+		sample := openAIRealtimeInterpolatedInputSample(frame, srcGlobalIdx, frac, uint64(openAIRealtimeInputSampleRate), prevInputSamples, samplesPerChannel, channelCount, previousSample, hasPrevious)
+		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(sample))
 	}
-	if n.remainder > 0 {
-		srcIdx := samplesPerChannel - 1
-		var sum int32
-		for ch := 0; ch < channelCount; ch++ {
-			offset := (int(srcIdx)*channelCount + ch) * 2
-			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
-		}
-		n.lastSample = int16(sum / int32(channelCount))
-		n.hasTail = true
-	}
+	n.inputSamples = nextInputSamples
+	n.outputSamples = nextOutputSamples
+	n.remainder = nextInputSamples * uint64(openAIRealtimeInputSampleRate) % uint64(frame.SampleRate)
+	n.lastSample = openAIRealtimeInputSample(frame, uint64(samplesPerChannel-1), samplesPerChannel, channelCount)
+	n.hasTail = n.remainder > 0
 
 	return &model.AudioFrame{
 		Data:              out,
@@ -1881,6 +1890,38 @@ func (n *openAIRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) 
 		NumChannels:       openAIRealtimeInputNumChannels,
 		SamplesPerChannel: outSamples,
 	}, nil
+}
+
+func openAIRealtimeInputSample(frame *model.AudioFrame, sampleIndex uint64, samplesPerChannel uint32, channelCount int) int16 {
+	if sampleIndex >= uint64(samplesPerChannel) {
+		sampleIndex = uint64(samplesPerChannel - 1)
+	}
+	var sum int32
+	for ch := 0; ch < channelCount; ch++ {
+		offset := (int(sampleIndex)*channelCount + ch) * 2
+		sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+	}
+	return int16(sum / int32(channelCount))
+}
+
+func openAIRealtimeInterpolatedInputSample(frame *model.AudioFrame, sampleIndex uint64, frac uint64, denom uint64, frameStart uint64, samplesPerChannel uint32, channelCount int, previousSample int16, hasPrevious bool) int16 {
+	current := openAIRealtimeInputSampleAt(frame, sampleIndex, frameStart, samplesPerChannel, channelCount, previousSample, hasPrevious)
+	if frac == 0 || denom == 0 {
+		return current
+	}
+	next := openAIRealtimeInputSampleAt(frame, sampleIndex+1, frameStart, samplesPerChannel, channelCount, current, true)
+	return int16(int64(current) + (int64(next)-int64(current))*int64(frac)/int64(denom))
+}
+
+func openAIRealtimeInputSampleAt(frame *model.AudioFrame, sampleIndex uint64, frameStart uint64, samplesPerChannel uint32, channelCount int, previousSample int16, hasPrevious bool) int16 {
+	if sampleIndex < frameStart {
+		if hasPrevious {
+			return previousSample
+		}
+		return openAIRealtimeInputSample(frame, 0, samplesPerChannel, channelCount)
+	}
+	localIndex := sampleIndex - frameStart
+	return openAIRealtimeInputSample(frame, localIndex, samplesPerChannel, channelCount)
 }
 
 func (n *openAIRealtimeInputAudioNormalizer) flush() *model.AudioFrame {
@@ -1891,6 +1932,9 @@ func (n *openAIRealtimeInputAudioNormalizer) flush() *model.AudioFrame {
 	binary.LittleEndian.PutUint16(out, uint16(n.lastSample))
 	n.remainder = 0
 	n.hasTail = false
+	n.inputSamples = 0
+	n.outputSamples = 0
+	n.lastSample = 0
 	return &model.AudioFrame{
 		Data:              out,
 		SampleRate:        openAIRealtimeInputSampleRate,
@@ -1902,6 +1946,8 @@ func (n *openAIRealtimeInputAudioNormalizer) flush() *model.AudioFrame {
 func (n *openAIRealtimeInputAudioNormalizer) reset() {
 	n.sampleRate = 0
 	n.numChannels = 0
+	n.inputSamples = 0
+	n.outputSamples = 0
 	n.remainder = 0
 	n.lastSample = 0
 	n.hasTail = false
@@ -1960,10 +2006,17 @@ func openAIRealtimeVideoMessage(image *llm.ImageContent) (map[string]any, error)
 }
 
 func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if s.clientEventsClosed() {
+		return nil
+	}
 	s.mu.Lock()
 	instructions := s.instructions
 	s.mu.Unlock()
-	msg := openAIRealtimeGenerateReplyMessageWithSessionInstructions(options, instructions)
+	toolFormatter := openAIRealtimeTools
+	if s.model != nil {
+		toolFormatter = s.model.realtimeTools
+	}
+	msg := openAIRealtimeGenerateReplyMessageWithToolFormatter(options, instructions, toolFormatter)
 	eventID, _ := msg["event_id"].(string)
 	s.addPendingRealtimeResponse(eventID)
 	if err := s.sendMsg(msg); err != nil {
@@ -1999,6 +2052,14 @@ func (s *realtimeSession) clearPendingRealtimeResponse(eventID string) {
 	for pendingID := range s.pendingResponses {
 		delete(s.pendingResponses, pendingID)
 		return
+	}
+}
+
+func (s *realtimeSession) clearPendingRealtimeResponses() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for pendingID := range s.pendingResponses {
+		delete(s.pendingResponses, pendingID)
 	}
 }
 
@@ -2039,6 +2100,13 @@ func (s *realtimeSession) Say(text string) error {
 }
 
 func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.RealtimeGenerateReplyOptions, sessionInstructions string) map[string]any {
+	return openAIRealtimeGenerateReplyMessageWithToolFormatter(options, sessionInstructions, openAIRealtimeTools)
+}
+
+func openAIRealtimeGenerateReplyMessageWithToolFormatter(options llm.RealtimeGenerateReplyOptions, sessionInstructions string, toolFormatter func([]llm.Tool) []map[string]any) map[string]any {
+	if toolFormatter == nil {
+		toolFormatter = openAIRealtimeTools
+	}
 	response := make(map[string]any)
 	eventID := cavosmath.ShortUUID("response_create_")
 	response["metadata"] = map[string]any{"client_event_id": eventID}
@@ -2052,7 +2120,7 @@ func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.Realt
 		response["tool_choice"] = toolChoice
 	}
 	if options.Tools != nil {
-		response["tools"] = openAIRealtimeTools(options.Tools)
+		response["tools"] = toolFormatter(options.Tools)
 	}
 
 	return map[string]any{
@@ -2063,6 +2131,9 @@ func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.Realt
 }
 
 func (s *realtimeSession) Truncate(options llm.RealtimeTruncateOptions) error {
+	if s.clientEventsClosed() {
+		return nil
+	}
 	if realtimeModalitiesInclude(options.Modalities, "audio") {
 		return s.sendMsg(openAIRealtimeTruncateMessage(options))
 	}
@@ -2184,6 +2255,7 @@ func (s *realtimeSession) Close() error {
 		}
 		s.emitSessionCloseMetrics()
 		s.closeRealtimeGeneration()
+		s.clearPendingRealtimeResponses()
 		s.cancel()
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -2215,12 +2287,18 @@ func (s *realtimeSession) sendMsg(msg any) error {
 	s.mu.Unlock()
 	b, err := json.Marshal(msg)
 	if err != nil {
+		s.untrackPendingRealtimeDelete(msg)
 		return err
 	}
 	if conn == nil {
+		s.untrackPendingRealtimeDelete(msg)
 		return fmt.Errorf("OpenAI realtime websocket is not connected")
 	}
-	return conn.WriteMessage(websocket.TextMessage, b)
+	if err := conn.WriteMessage(websocket.TextMessage, b); err != nil {
+		s.untrackPendingRealtimeDelete(msg)
+		return err
+	}
+	return nil
 }
 
 func (s *realtimeSession) trackPendingRealtimeDelete(msg any) {
@@ -2233,6 +2311,25 @@ func (s *realtimeSession) trackPendingRealtimeDelete(msg any) {
 		return
 	}
 	s.pendingDeleteItemIDs = append(s.pendingDeleteItemIDs, itemID)
+}
+
+func (s *realtimeSession) untrackPendingRealtimeDelete(msg any) {
+	payload, ok := msg.(map[string]any)
+	if !ok || payload["type"] != "conversation.item.delete" {
+		return
+	}
+	itemID, ok := payload["item_id"].(string)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.pendingDeleteItemIDs) - 1; i >= 0; i-- {
+		if s.pendingDeleteItemIDs[i] == itemID {
+			s.pendingDeleteItemIDs = append(s.pendingDeleteItemIDs[:i], s.pendingDeleteItemIDs[i+1:]...)
+			return
+		}
+	}
 }
 
 func (s *realtimeSession) prepareClientMessage(msg any) any {

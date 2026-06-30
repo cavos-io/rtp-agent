@@ -298,10 +298,15 @@ func WithOpenAILLMMetadata(metadata map[string]string) OpenAILLMOption {
 
 func WithOpenAILLMVerbosity(verbosity string) OpenAILLMOption {
 	return func(l *OpenAILLM) {
-		if l.extraParams == nil {
-			l.extraParams = map[string]any{}
+		if l.extraBody == nil {
+			l.extraBody = map[string]any{}
 		}
-		l.extraParams["verbosity"] = verbosity
+		text := map[string]any{}
+		if existing, ok := l.extraBody["text"].(map[string]any); ok {
+			text = cloneOpenAIAnyMap(existing)
+		}
+		text["verbosity"] = verbosity
+		l.extraBody["text"] = text
 	}
 }
 
@@ -376,7 +381,7 @@ func WithOpenAILLMExtraQuery(query map[string]string) OpenAILLMOption {
 
 func WithOpenAILLMExtraBody(body map[string]any) OpenAILLMOption {
 	return func(l *OpenAILLM) {
-		l.extraBody = cloneOpenAIAnyMap(body)
+		l.extraBody = mergeOpenAIAnyMap(cloneOpenAIAnyMapDeep(body), l.extraBody)
 	}
 }
 
@@ -1540,6 +1545,25 @@ func cloneOpenAIAnyMapDeep(src map[string]any) map[string]any {
 		dst[key] = cloneOpenAIAnyValue(value)
 	}
 	return dst
+}
+
+func mergeOpenAIAnyMap(base map[string]any, override map[string]any) map[string]any {
+	if len(base) == 0 {
+		return cloneOpenAIAnyMapDeep(override)
+	}
+	if len(override) == 0 {
+		return base
+	}
+	for key, value := range override {
+		if baseMap, ok := base[key].(map[string]any); ok {
+			if overrideMap, ok := value.(map[string]any); ok {
+				base[key] = mergeOpenAIAnyMap(baseMap, overrideMap)
+				continue
+			}
+		}
+		base[key] = cloneOpenAIAnyValue(value)
+	}
+	return base
 }
 
 func cloneOpenAIAnyMapSlice(src []map[string]any) []map[string]any {

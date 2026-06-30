@@ -1852,8 +1852,47 @@ func TestOpenAIChatAppliesProviderVerbosity(t *testing.T) {
 
 	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
-	if !strings.Contains(capture.requestBody, `"verbosity":"low"`) {
-		t.Fatalf("request body = %s, want provider verbosity", capture.requestBody)
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.requestBody), &body); err != nil {
+		t.Fatalf("request body JSON error = %v; body = %s", err, capture.requestBody)
+	}
+	if _, ok := body["verbosity"]; ok {
+		t.Fatalf("request body = %s, want no top-level verbosity", capture.requestBody)
+	}
+	text, ok := body["text"].(map[string]any)
+	if !ok || text["verbosity"] != "low" {
+		t.Fatalf("request body = %s, want reference text.verbosity", capture.requestBody)
+	}
+}
+
+func TestOpenAIChatPreservesProviderVerbosityWithExtraBody(t *testing.T) {
+	capture := &captureDeadlineHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request","type":"invalid_request_error","code":"bad_request"}}`,
+	}
+	model := NewOpenAILLMWithBaseURLAndHTTPClient(
+		"test-key",
+		"gpt-5",
+		"https://openai.test/v1",
+		capture,
+		WithOpenAILLMVerbosity("low"),
+		WithOpenAILLMExtraBody(map[string]any{
+			"text": map[string]any{"format": "plain"},
+		}),
+	)
+
+	_, _ = startOpenAIChat(t, model, context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+
+	var body map[string]any
+	if err := json.Unmarshal([]byte(capture.requestBody), &body); err != nil {
+		t.Fatalf("request body JSON error = %v; body = %s", err, capture.requestBody)
+	}
+	text, ok := body["text"].(map[string]any)
+	if !ok {
+		t.Fatalf("request body = %s, want text config", capture.requestBody)
+	}
+	if text["format"] != "plain" || text["verbosity"] != "low" {
+		t.Fatalf("text = %#v, want extra body format plus reference verbosity", text)
 	}
 }
 

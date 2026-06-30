@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -19,6 +20,7 @@ import (
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/gorilla/websocket"
 )
 
@@ -199,6 +201,52 @@ func TestRealtimeSessionUpdateToolsRetainsOnlyEmittedTools(t *testing.T) {
 	}
 	if !liveSession.acceptRealtimeFunctionCall("web_search") {
 		t.Fatal("web_search provider tool rejected, want provider tool retained like reference")
+	}
+}
+
+func TestRealtimeSessionGenerateReplyUsesToolFormatter(t *testing.T) {
+	messages := make(chan string, 4)
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			messages <- string(msg)
+		}
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime",
+		WithOpenAIRealtimeWebsocketDialer(dialer),
+		WithOpenAIRealtimeBaseURL("ws://openai.test/v1/realtime"),
+		WithOpenAIRealtimeToolFormatter(func(tools []llm.Tool) []map[string]any {
+			return []map[string]any{{
+				"type":        "function",
+				"name":        "formatted_lookup",
+				"description": "formatted lookup",
+				"parameters":  llm.ToolParameters(tools[0]),
+			}}
+		}),
+	)
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	<-messages
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Tools: []llm.Tool{requestTestTool{}}}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	reply := <-messages
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(reply), &payload); err != nil {
+		t.Fatalf("decode response.create: %v", err)
+	}
+	response := payload["response"].(map[string]any)
+	tools := response["tools"].([]any)
+	tool := tools[0].(map[string]any)
+	if tool["name"] != "formatted_lookup" {
+		t.Fatalf("tools = %#v, want per-response tools from formatter", tools)
 	}
 }
 
@@ -2079,6 +2127,126 @@ func TestRealtimeSessionCommitAudioFlushesResamplerTail(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "single resampler tail below commit threshold should not commit audio buffer")
 }
 
+func TestRealtimeInputAudioNormalizerInterpolatesFractionalSamples(t *testing.T) {
+	var normalizer openAIRealtimeInputAudioNormalizer
+	data := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(int16(i*100)))
+	}
+
+	frame, err := normalizer.normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("normalize error = %v", err)
+	}
+	if frame.SampleRate != 24000 {
+		t.Fatalf("SampleRate = %d, want 24000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want 1", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 54 {
+		t.Fatalf("SamplesPerChannel = %d, want 54", frame.SamplesPerChannel)
+	}
+	if got := int16(binary.LittleEndian.Uint16(frame.Data[0:2])); got != 0 {
+		t.Fatalf("first sample = %d, want 0", got)
+	}
+	if got := int16(binary.LittleEndian.Uint16(frame.Data[2:4])); got != 183 {
+		t.Fatalf("second sample = %d, want fractional interpolation sample 183", got)
+	}
+}
+
+func TestRealtimeInputAudioNormalizerKeepsPhaseAcrossFrames(t *testing.T) {
+	data := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(int16(i*100)))
+	}
+
+	var wholeNormalizer openAIRealtimeInputAudioNormalizer
+	whole, err := wholeNormalizer.normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("whole normalize error = %v", err)
+	}
+
+	var splitNormalizer openAIRealtimeInputAudioNormalizer
+	first, err := splitNormalizer.normalize(&audiomodel.AudioFrame{
+		Data:              data[:50*2],
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 50,
+	})
+	if err != nil {
+		t.Fatalf("first split normalize error = %v", err)
+	}
+	second, err := splitNormalizer.normalize(&audiomodel.AudioFrame{
+		Data:              data[50*2:],
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 50,
+	})
+	if err != nil {
+		t.Fatalf("second split normalize error = %v", err)
+	}
+	splitData := append(append([]byte(nil), first.Data...), second.Data...)
+	if !bytes.Equal(splitData, whole.Data) {
+		t.Fatalf("split resampled audio differs from whole-frame resampled audio")
+	}
+}
+
+func TestRealtimeInputAudioNormalizerFlushStartsFreshSegment(t *testing.T) {
+	priming := make([]byte, 2)
+	binary.LittleEndian.PutUint16(priming, 7)
+	data := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(int16(i*100)))
+	}
+
+	var fresh openAIRealtimeInputAudioNormalizer
+	want, err := fresh.normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("fresh normalize error = %v", err)
+	}
+
+	var flushed openAIRealtimeInputAudioNormalizer
+	if _, err := flushed.normalize(&audiomodel.AudioFrame{
+		Data:              priming,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("priming normalize error = %v", err)
+	}
+	if tail := flushed.flush(); tail == nil {
+		t.Fatal("flush tail = nil, want pending sample")
+	}
+	got, err := flushed.normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("post-flush normalize error = %v", err)
+	}
+	if !bytes.Equal(got.Data, want.Data) {
+		t.Fatalf("post-flush segment differs from fresh segment")
+	}
+}
+
 func TestRealtimeSessionClearAudioDropsBufferedTail(t *testing.T) {
 	messages := make(chan string, 8)
 	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
@@ -3585,6 +3753,19 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session error = %v", err)
 	}
+	rtSession, ok := session.(*realtimeSession)
+	if !ok {
+		t.Fatalf("session = %T, want *realtimeSession", session)
+	}
+	rtSession.remote = llm.NewRemoteChatContext()
+	remoteMessage := &llm.ChatMessage{
+		ID:      "msg_123",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "original transcript"}},
+	}
+	if err := rtSession.remote.Insert(nil, remoteMessage); err != nil {
+		t.Fatalf("insert remote message: %v", err)
+	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -3594,18 +3775,43 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 		t.Fatalf("ClearAudio after Close error = %v, want nil like reference closed send_event", err)
 	}
 	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              make([]byte, 480*2),
+		SampleRate:        24000,
+		NumChannels:       1,
+		SamplesPerChannel: 480,
+	}); err != nil {
+		t.Fatalf("PushAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if buffered := rtSession.audioBStream.Flush(); len(buffered) != 0 {
+		t.Fatalf("PushAudio after Close buffered %d chunks, want no local audio mutation", len(buffered))
+	}
+	if err := session.PushAudio(&audiomodel.AudioFrame{
 		Data:              make([]byte, 2400*2),
 		SampleRate:        24000,
 		NumChannels:       1,
 		SamplesPerChannel: 2400,
 	}); err != nil {
-		t.Fatalf("PushAudio after Close error = %v, want nil like reference closed send_event", err)
+		t.Fatalf("full PushAudio after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if rtSession.pushedDuration != 0 {
+		t.Fatalf("pushedDuration after Close = %v, want no local audio mutation", rtSession.pushedDuration)
+	}
+	if err := session.PushVideo(&images.VideoFrame{
+		Data:   []byte{255, 0, 0},
+		Width:  1,
+		Height: 1,
+		Format: "rgb24",
+	}); err != nil {
+		t.Fatalf("PushVideo after Close error = %v, want nil like reference closed send_event", err)
 	}
 	if err := session.CommitAudio(); err != nil {
 		t.Fatalf("CommitAudio after Close error = %v, want nil like reference closed send_event", err)
 	}
 	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
 		t.Fatalf("GenerateReply after Close error = %v, want nil like reference closed send_event", err)
+	}
+	if len(rtSession.pendingResponses) != 0 {
+		t.Fatalf("pending responses after closed GenerateReply = %d, want no local reply mutation", len(rtSession.pendingResponses))
 	}
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt after Close error = %v, want nil like reference closed send_event", err)
@@ -3618,6 +3824,65 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 		AudioTranscript: &transcript,
 	}); err != nil {
 		t.Fatalf("Truncate after Close error = %v, want nil like reference closed send_event", err)
+	}
+	playedTranscript := "played transcript"
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:       "msg_123",
+		Modalities:      []string{"text"},
+		AudioTranscript: &playedTranscript,
+	}); err != nil {
+		t.Fatalf("text Truncate after Close error = %v, want nil like reference closed send_event", err)
+	}
+	item, ok := rtSession.remote.Get("msg_123").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote item after closed Truncate = %T, want *llm.ChatMessage", rtSession.remote.Get("msg_123"))
+	}
+	if item.TextContent() != "original transcript" {
+		t.Fatalf("remote transcript after closed Truncate = %q, want original transcript", item.TextContent())
+	}
+}
+
+func TestRealtimeSessionCloseClearsPendingResponse(t *testing.T) {
+	messages := make(chan string, 2)
+	releaseServer := make(chan struct{})
+	dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("Read initial session update error = %v", err)
+			return
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		messages <- string(msg)
+		<-releaseServer
+	})
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.baseURL = "ws://openai.test/v1/realtime"
+	realtimeModel.dialWebsocket = dialer
+
+	session, err := realtimeModel.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	rtSession, ok := session.(*realtimeSession)
+	if !ok {
+		t.Fatalf("session = %T, want *realtimeSession", session)
+	}
+	defer close(releaseServer)
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "pending"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	assertRealtimeMessage(t, <-messages, "response.create", "pending")
+	if got := len(rtSession.pendingResponses); got != 1 {
+		t.Fatalf("pending responses before Close = %d, want 1", got)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if got := len(rtSession.pendingResponses); got != 0 {
+		t.Fatalf("pending responses after Close = %d, want 0", got)
 	}
 }
 
@@ -6644,6 +6909,18 @@ func TestRealtimeSessionUsesPendingDeleteForEmptyDeletedItemID(t *testing.T) {
 	}
 	if len(session.pendingDeleteItemIDs) != 0 {
 		t.Fatalf("pendingDeleteItemIDs = %#v, want empty", session.pendingDeleteItemIDs)
+	}
+}
+
+func TestRealtimeSessionDeleteSendFailureClearsPendingDeleteFallback(t *testing.T) {
+	session := &realtimeSession{}
+
+	err := session.sendMsg(openAIRealtimeDeleteChatItemMessage("removed"))
+	if err == nil {
+		t.Fatal("sendMsg error = nil, want disconnected websocket error")
+	}
+	if len(session.pendingDeleteItemIDs) != 0 {
+		t.Fatalf("pendingDeleteItemIDs = %#v, want no fallback for unsent delete", session.pendingDeleteItemIDs)
 	}
 }
 
