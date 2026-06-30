@@ -1218,6 +1218,7 @@ func (s *openAIRealtimeSTTStream) readLoop() {
 				s.errCh <- reconnectErr
 				return
 			}
+			connectedAt = time.Now()
 			continue
 		}
 		if msgType != websocket.TextMessage {

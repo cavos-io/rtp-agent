@@ -1873,6 +1873,75 @@ func TestOpenAISTTStreamRecyclesAfterMaxSessionDuration(t *testing.T) {
 	}
 }
 
+func TestOpenAISTTStreamUnexpectedCloseResetsMaxSessionTimer(t *testing.T) {
+	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
+		WithOpenAISTTRealtime(true),
+		WithOpenAISTTBaseURL("http://openai.test/v1"),
+	)
+	provider.maxSession = 80 * time.Millisecond
+	var dialCount atomic.Int32
+	secondConnected := make(chan struct{})
+	thirdConnected := make(chan struct{})
+	var thirdConnectedOnce sync.Once
+	releaseSecond := make(chan struct{})
+	defer close(releaseSecond)
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, headers http.Header) (*websocket.Conn, *http.Response, error) {
+		attempt := dialCount.Add(1)
+		dialer := newOpenAIRealtimeTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				t.Errorf("session update read error = %v", err)
+				return
+			}
+			switch attempt {
+			case 1:
+				time.Sleep(70 * time.Millisecond)
+				return
+			case 2:
+				close(secondConnected)
+				time.Sleep(20 * time.Millisecond)
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{
+					"type":"conversation.item.input_audio_transcription.completed",
+					"item_id":"item-1",
+					"transcript":"after reconnect"
+				}`)); err != nil {
+					t.Errorf("write final transcript: %v", err)
+				}
+				<-releaseSecond
+			default:
+				thirdConnectedOnce.Do(func() { close(thirdConnected) })
+			}
+		})
+		return dialer(endpoint, headers)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case <-secondConnected:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not reconnect after unexpected close")
+	}
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error after reconnect = %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || event.Alternatives[0].Text != "after reconnect" {
+		t.Fatalf("event = %+v, want final transcript after reconnect", event)
+	}
+	select {
+	case <-thirdConnected:
+		t.Fatal("stream recycled immediately after reconnect final, want max-session timer reset per websocket")
+	case <-time.After(40 * time.Millisecond):
+	}
+	if got := dialCount.Load(); got != 2 {
+		t.Fatalf("dial count = %d, want no immediate recycle after reconnect", got)
+	}
+}
+
 func TestOpenAIRealtimeSTTStreamBuffersAndFlushesReferenceAudioChunks(t *testing.T) {
 	provider := mustNewOpenAISTT(t, "test-key", "gpt-4o-mini-transcribe",
 		WithOpenAISTTRealtime(true),
