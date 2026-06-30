@@ -2609,6 +2609,40 @@ func TestRealtimeGenerateReplyTimeoutClearsPendingResponse(t *testing.T) {
 	assertNoRealtimeMessage(t, messages, "timed-out response.create should not leave stale pending response")
 }
 
+func TestRealtimeGenerateReplySendFailureKeepsPendingUntilTimeout(t *testing.T) {
+	session := &realtimeSession{
+		ctx:                   context.Background(),
+		pendingResponses:      make(map[string]struct{}),
+		responseCreateTimeout: 10 * time.Millisecond,
+	}
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "fail send"}); err == nil {
+		t.Fatal("GenerateReply error = nil, want send failure")
+	}
+
+	session.mu.Lock()
+	pendingAfterFailure := len(session.pendingResponses)
+	session.mu.Unlock()
+	if pendingAfterFailure != 1 {
+		t.Fatalf("pending responses after send failure = %d, want 1 like reference future", pendingAfterFailure)
+	}
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		session.mu.Lock()
+		pending := len(session.pendingResponses)
+		session.mu.Unlock()
+		if pending == 0 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("pending responses = %d, want timeout cleanup after send failure", pending)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func TestRealtimeGenerateReplyTimeoutKeepsLaterPendingResponse(t *testing.T) {
 	messages := make(chan string, 8)
 	var responseCreateCount atomic.Int32

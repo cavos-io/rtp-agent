@@ -1967,7 +1967,7 @@ func (s *realtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions
 	eventID, _ := msg["event_id"].(string)
 	s.addPendingRealtimeResponse(eventID)
 	if err := s.sendMsg(msg); err != nil {
-		s.clearPendingRealtimeResponse(eventID)
+		s.startResponseCreateTimeout(eventID)
 		return err
 	}
 	s.startResponseCreateTimeout(eventID)
