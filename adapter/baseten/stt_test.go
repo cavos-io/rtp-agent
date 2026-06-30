@@ -197,6 +197,28 @@ func TestBasetenSTTTranscriptEventsMapReferenceMessages(t *testing.T) {
 	}
 }
 
+func TestBasetenSTTMalformedMessageDoesNotAbortReferenceStream(t *testing.T) {
+	state := &basetenSTTStreamState{language: "en"}
+
+	events, err := processBasetenSTTMessage(state, []byte(`{"type":"transcription"`))
+	if err != nil {
+		t.Fatalf("malformed message error = %v, want nil like reference log-and-continue", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("malformed message events = %#v, want none", events)
+	}
+
+	events, err = processBasetenSTTMessage(state, []byte(`{
+		"type":"transcription",
+		"is_final":true,
+		"transcript":"after malformed"
+	}`))
+	if err != nil {
+		t.Fatalf("valid message after malformed error = %v", err)
+	}
+	assertBasetenSTTEvent(t, events, 0, stt.SpeechEventFinalTranscript, "after malformed")
+}
+
 func TestBasetenSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	stream := &basetenSTTStream{state: &basetenSTTStreamState{language: "en"}}
 	timing, ok := interface{}(stream).(stt.StreamTiming)

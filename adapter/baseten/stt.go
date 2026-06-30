@@ -659,7 +659,7 @@ func (s *basetenSTTStream) SetStartTime(startTime float64) {
 func processBasetenSTTMessage(state *basetenSTTStreamState, payload []byte) ([]*stt.SpeechEvent, error) {
 	var data map[string]interface{}
 	if err := json.Unmarshal(payload, &data); err != nil {
-		return nil, err
+		return nil, nil
 	}
 	if msgType, _ := data["type"].(string); msgType != "" && msgType != "transcription" {
 		return nil, nil
