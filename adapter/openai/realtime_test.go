@@ -8128,6 +8128,44 @@ func TestRealtimeResponseDoneFailedReportsRecoverableError(t *testing.T) {
 	}
 }
 
+func TestRealtimeResponseDoneFailedStringStatusDetailsReportsUnknownError(t *testing.T) {
+	responseDone := map[string]any{
+		"type": "response.done",
+		"response": map[string]any{
+			"id":             "resp_failed",
+			"status":         "failed",
+			"status_details": "rate_limit",
+		},
+	}
+
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	session := &realtimeSession{
+		generation: &realtimeGeneration{
+			messages:   map[string]*realtimeMessageGeneration{},
+			messageCh:  messageCh,
+			functionCh: functionCh,
+		},
+	}
+	errorEvent, ok := session.trackOpenAIRealtimeEvent(responseDone)
+	if !ok {
+		t.Fatal("trackOpenAIRealtimeEvent returned ok=false, want failed response error event")
+	}
+	if errorEvent.Type != llm.RealtimeEventTypeError {
+		t.Fatalf("event type = %q, want error", errorEvent.Type)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(errorEvent.Error, &apiErr) {
+		t.Fatalf("event error = %T %v, want APIError", errorEvent.Error, errorEvent.Error)
+	}
+	if apiErr.Message != "OpenAI Realtime API response failed with unknown error" {
+		t.Fatalf("APIError message = %q", apiErr.Message)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError Retryable = false, want true")
+	}
+}
+
 func TestRealtimeResponseDoneIncompleteClosesGenerationWithoutError(t *testing.T) {
 	responseDone := map[string]any{
 		"type": "response.done",

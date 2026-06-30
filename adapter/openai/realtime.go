@@ -2793,11 +2793,8 @@ func openAIRealtimeResponseDoneError(response map[string]any) (llm.RealtimeEvent
 	if status != "failed" {
 		return llm.RealtimeEvent{}, false
 	}
-	rawDetails, detailsPresent := response["status_details"]
-	statusDetails, hasDetails := rawDetails.(map[string]any)
-	if detailsPresent && !hasDetails {
-		return llm.RealtimeEvent{}, false
-	}
+	rawDetails := response["status_details"]
+	statusDetails, _ := rawDetails.(map[string]any)
 	errorBody, hasError := statusDetails["error"].(map[string]any)
 	message := fmt.Sprintf("OpenAI Realtime API response %s with unknown error", status)
 	var body any
