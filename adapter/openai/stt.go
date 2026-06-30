@@ -1450,16 +1450,30 @@ func openAIRealtimeSTTEventsFromMessage(payload []byte, state *openAIRealtimeSTT
 		itemID := openAIString(message["item_id"])
 		state.currentItemID = itemID
 		state.timing[itemID] = openAIRealtimeSTTTiming{startMS: openAIInt(message["audio_start_ms"])}
-		return nil, nil
+		startTime := float64(openAIInt(message["audio_start_ms"])) / 1000
+		return []*stt.SpeechEvent{{
+			Type:            stt.SpeechEventStartOfSpeech,
+			RequestID:       itemID,
+			SpeechStartTime: &startTime,
+		}}, nil
 	case "input_audio_buffer.speech_stopped":
 		itemID := openAIString(message["item_id"])
 		timing, ok := state.timing[itemID]
 		if !ok {
-			return nil, nil
+			return []*stt.SpeechEvent{{
+				Type:      stt.SpeechEventEndOfSpeech,
+				RequestID: itemID,
+			}}, nil
 		}
 		timing.endMS = openAIInt(message["audio_end_ms"])
 		state.timing[itemID] = timing
-		return nil, nil
+		return []*stt.SpeechEvent{{
+			Type:      stt.SpeechEventEndOfSpeech,
+			RequestID: itemID,
+			Alternatives: []stt.SpeechData{{
+				EndTime: float64(timing.endMS) / 1000,
+			}},
+		}}, nil
 	case "conversation.item.input_audio_transcription.delta":
 		itemID := openAIString(message["item_id"])
 		if itemID == "" {
