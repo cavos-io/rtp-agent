@@ -1626,6 +1626,7 @@ func (s *deepgramStream) updateOptions(languageChanged bool) {
 	if languageChanged {
 		s.language = s.provider.language
 	}
+	s.enableDiarization = s.provider.enableDiarization
 	nextURL := buildDeepgramStreamURL(s.activeConfigLocked(), s.language)
 	s.streamURL = nextURL
 	s.reconnectNext = true
