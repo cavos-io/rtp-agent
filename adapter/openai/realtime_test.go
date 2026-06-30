@@ -3589,6 +3589,15 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	if !ok {
 		t.Fatalf("session = %T, want *realtimeSession", session)
 	}
+	rtSession.remote = llm.NewRemoteChatContext()
+	remoteMessage := &llm.ChatMessage{
+		ID:      "msg_123",
+		Role:    llm.ChatRoleAssistant,
+		Content: []llm.ChatContent{{Text: "original transcript"}},
+	}
+	if err := rtSession.remote.Insert(nil, remoteMessage); err != nil {
+		t.Fatalf("insert remote message: %v", err)
+	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -3636,6 +3645,21 @@ func TestRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 		AudioTranscript: &transcript,
 	}); err != nil {
 		t.Fatalf("Truncate after Close error = %v, want nil like reference closed send_event", err)
+	}
+	playedTranscript := "played transcript"
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:       "msg_123",
+		Modalities:      []string{"text"},
+		AudioTranscript: &playedTranscript,
+	}); err != nil {
+		t.Fatalf("text Truncate after Close error = %v, want nil like reference closed send_event", err)
+	}
+	item, ok := rtSession.remote.Get("msg_123").(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("remote item after closed Truncate = %T, want *llm.ChatMessage", rtSession.remote.Get("msg_123"))
+	}
+	if item.TextContent() != "original transcript" {
+		t.Fatalf("remote transcript after closed Truncate = %q, want original transcript", item.TextContent())
 	}
 }
 

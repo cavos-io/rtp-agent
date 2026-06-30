@@ -2075,6 +2075,9 @@ func openAIRealtimeGenerateReplyMessageWithSessionInstructions(options llm.Realt
 }
 
 func (s *realtimeSession) Truncate(options llm.RealtimeTruncateOptions) error {
+	if s.clientEventsClosed() {
+		return nil
+	}
 	if realtimeModalitiesInclude(options.Modalities, "audio") {
 		return s.sendMsg(openAIRealtimeTruncateMessage(options))
 	}
