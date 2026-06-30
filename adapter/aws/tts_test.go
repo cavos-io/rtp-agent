@@ -5,11 +5,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	awssdk "github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/polly"
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -229,6 +233,31 @@ func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
 	}
 }
 
+func TestAWSTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("polly dial failed")
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil on provider failure", stream)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAWSTTSStreamReportsUnsupported(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 
@@ -331,4 +360,10 @@ func (c erroringAWSReadCloser) Read([]byte) (int, error) {
 
 func (c erroringAWSReadCloser) Close() error {
 	return nil
+}
+
+type awsHTTPClientFunc func(*http.Request) (*http.Response, error)
+
+func (f awsHTTPClientFunc) Do(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
