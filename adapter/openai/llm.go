@@ -2165,9 +2165,6 @@ func openAIReasoningEffortToolIncompatible(modelName string) bool {
 
 func defaultOpenAIReasoningEffort(model string, hasTools bool) string {
 	modelName := model
-	if slash := strings.LastIndex(modelName, "/"); slash >= 0 {
-		modelName = modelName[slash+1:]
-	}
 	if hasTools && openAIReasoningEffortToolIncompatible(modelName) {
 		return ""
 	}

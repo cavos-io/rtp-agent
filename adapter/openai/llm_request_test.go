@@ -3891,6 +3891,14 @@ func TestBuildOpenAIChatCompletionRequestDefaultsReasoningEffort(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIChatCompletionRequestDoesNotDefaultProviderPrefixedReasoning(t *testing.T) {
+	req := buildOpenAIChatCompletionRequest("openai/gpt-5.4-mini", llm.NewChatContext(), &llm.ChatOptions{})
+
+	if req.ReasoningEffort != "" {
+		t.Fatalf("ReasoningEffort = %q, want omitted for reference exact model support check", req.ReasoningEffort)
+	}
+}
+
 func TestBuildOpenAIChatCompletionRequestDropsReasoningEffortWithIncompatibleTools(t *testing.T) {
 	req := buildOpenAIChatCompletionRequest("gpt-5.2", llm.NewChatContext(), &llm.ChatOptions{
 		Tools: []llm.Tool{requestTestTool{}},
