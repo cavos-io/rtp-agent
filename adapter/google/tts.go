@@ -41,6 +41,8 @@ type GoogleTTSOption func(*googleTTSConfig)
 type googleTTSConfig struct {
 	language     string
 	languageSet  bool
+	gender       texttospeechpb.SsmlVoiceGender
+	genderSet    bool
 	voice        string
 	voiceSet     bool
 	model        string
@@ -67,6 +69,13 @@ func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 			cfg.language = language
 			cfg.languageSet = true
 		}
+	}
+}
+
+func WithGoogleTTSGender(gender string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.gender = googleTTSSSMLGender(gender)
+		cfg.genderSet = true
 	}
 }
 
@@ -161,6 +170,7 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *GoogleTTS {
 	cfg := googleTTSConfig{
 		language:     "en-US",
+		gender:       texttospeechpb.SsmlVoiceGender_NEUTRAL,
 		voice:        "Charon",
 		model:        "gemini-2.5-flash-tts",
 		speakingRate: 1.0,
@@ -258,6 +268,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	cfg := googleTTSConfig{
 		language:     t.voice.GetLanguageCode(),
 		voice:        t.voice.GetName(),
+		gender:       t.voice.GetSsmlGender(),
 		model:        t.Model(),
 		prompt:       t.prompt,
 		speakingRate: t.audio.GetSpeakingRate(),
@@ -270,7 +281,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.languageSet || cfg.voiceSet || cfg.modelSet {
+	if cfg.languageSet || cfg.genderSet || cfg.voiceSet || cfg.modelSet {
 		t.voice = googleTTSVoiceParams(cfg)
 	}
 	if cfg.modelSet {
@@ -729,9 +740,21 @@ func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionPar
 	voice := &texttospeechpb.VoiceSelectionParams{
 		LanguageCode: cfg.language,
 		Name:         cfg.voice,
+		SsmlGender:   cfg.gender,
 	}
 	if cfg.model != "chirp_3" {
 		voice.ModelName = cfg.model
 	}
 	return voice
+}
+
+func googleTTSSSMLGender(gender string) texttospeechpb.SsmlVoiceGender {
+	switch gender {
+	case "male":
+		return texttospeechpb.SsmlVoiceGender_MALE
+	case "female":
+		return texttospeechpb.SsmlVoiceGender_FEMALE
+	default:
+		return texttospeechpb.SsmlVoiceGender_NEUTRAL
+	}
 }

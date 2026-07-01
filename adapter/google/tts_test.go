@@ -524,6 +524,23 @@ func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSGenderOptionMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSGender("female"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if got := client.request.GetVoice().GetSsmlGender(); got != texttospeech.SsmlVoiceGender_FEMALE {
+		t.Fatalf("voice gender = %v, want FEMALE", got)
+	}
+}
+
 func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
