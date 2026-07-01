@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -451,6 +452,36 @@ func TestGoogleLLMStreamSkipsEmptyProviderDeltas(t *testing.T) {
 	}
 	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "hello" {
 		t.Fatalf("chunk = %#v, want first non-empty delta", chunk)
+	}
+}
+
+func TestGoogleLLMStreamReturnsAPIStatusErrorWhenNoResponseGenerated(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "no response generated" {
+		t.Fatalf("APIStatusError message = %q, want no response generated", statusErr.Message)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = false, want true before any response output")
 	}
 }
 

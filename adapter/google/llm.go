@@ -300,9 +300,10 @@ func googleToolNames(tools []llm.Tool) []string {
 }
 
 type googleLLMStream struct {
-	next   func() (*genai.GenerateContentResponse, error, bool)
-	stop   func()
-	closed bool
+	next              func() (*genai.GenerateContentResponse, error, bool)
+	stop              func()
+	closed            bool
+	responseGenerated bool
 }
 
 func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
@@ -546,6 +547,9 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 	for {
 		resp, err, ok := s.next()
 		if !ok {
+			if !s.responseGenerated {
+				return nil, llm.NewAPIStatusError("no response generated", -1, "", nil)
+			}
 			return nil, io.EOF
 		}
 		if err != nil {
@@ -567,6 +571,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 				for _, part := range cand.Content.Parts {
 					if part.Text != "" {
 						chunk.Delta.Content += part.Text
+						s.responseGenerated = true
 					} else if part.FunctionCall != nil && !googleFunctionCallWillContinue(part.FunctionCall) {
 						args, _ := json.Marshal(part.FunctionCall.Args)
 						chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
@@ -575,6 +580,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 							Type:      "function",
 							CallID:    googleFunctionCallID(part.FunctionCall),
 						})
+						s.responseGenerated = true
 					}
 				}
 			}
