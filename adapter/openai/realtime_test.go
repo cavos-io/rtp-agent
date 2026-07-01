@@ -5878,6 +5878,24 @@ func TestRealtimeSessionReconnectRetriesDialFailure(t *testing.T) {
 	}
 }
 
+func TestRealtimeSessionReconnectDialFailureReturnsAPIConnectionError(t *testing.T) {
+	realtimeModel := NewRealtimeModel("test-key", "gpt-realtime")
+	realtimeModel.dialWebsocket = func(string, http.Header) (*websocket.Conn, *http.Response, error) {
+		return nil, nil, errors.New("realtime redial failed")
+	}
+	session := &realtimeSession{
+		model: realtimeModel,
+		ctx:   context.Background(),
+	}
+
+	err := session.reconnectAfterDisconnect()
+
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("reconnectAfterDisconnect error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestRealtimeSessionReconnectClearsPendingResponse(t *testing.T) {
 	var dialCount atomic.Int32
 	secondMessages := make(chan string, 10)
