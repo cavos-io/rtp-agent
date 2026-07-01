@@ -533,6 +533,35 @@ func TestGoogleTTSStreamClosesAfterInputSendFailure(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamFlushReturnsAPIStatusErrorForInputSendFailure(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{sendErrAfterConfig: status.Error(codes.Unavailable, "unavailable")}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	err = stream.Flush()
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Flush error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for unavailable")
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after send failure")
+	}
+}
+
 func TestGoogleTTSStreamNextReturnsAPITimeoutError(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{recvErr: context.DeadlineExceeded}
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})

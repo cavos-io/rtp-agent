@@ -513,16 +513,19 @@ func (s *googleTTSSynthesizeStream) sendTextLocked(text string) error {
 	}
 	stream, err := s.ensureActiveStreamLocked()
 	if err != nil {
-		return err
+		return googleTTSSynthesisError(err)
 	}
-	return stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
+	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
 		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
 			Input: &texttospeechpb.StreamingSynthesisInput{
 				InputSource: &texttospeechpb.StreamingSynthesisInput_Text{Text: text},
 				Prompt:      s.nextPromptLocked(),
 			},
 		},
-	})
+	}); err != nil {
+		return googleTTSSynthesisError(err)
+	}
+	return nil
 }
 
 func (s *googleTTSSynthesizeStream) nextPromptLocked() *string {
