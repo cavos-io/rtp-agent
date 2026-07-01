@@ -566,6 +566,9 @@ func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingReco
 		}
 		alt := result.GetAlternatives()[0]
 		words := alt.GetWords()
+		if alt.GetTranscript() == "" && len(words) == 0 {
+			continue
+		}
 		data := stt.SpeechData{
 			Language:   googleStreamingResultLanguage(result, language),
 			Text:       alt.GetTranscript(),
