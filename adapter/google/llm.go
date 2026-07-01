@@ -244,6 +244,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleSpeechConfigParam(params["speech_config"]); ok {
 		config.SpeechConfig = value
 	}
+	if value, ok := googleBoolParam(params["audio_timestamp"]); ok {
+		config.AudioTimestamp = value
+	}
 	if value, ok := googleServiceTierParam(params["service_tier"]); ok {
 		config.ServiceTier = value
 	}

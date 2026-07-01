@@ -578,6 +578,20 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceSpeechConfigExtra(t *te
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceAudioTimestampExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"audio_timestamp": true,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !config.AudioTimestamp {
+		t.Fatal("AudioTimestamp = false, want true")
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false
