@@ -148,9 +148,7 @@ func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 
 func WithGoogleSTTMinConfidenceThreshold(threshold float64) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if threshold >= 0 {
-			s.minConfidence = threshold
-		}
+		s.minConfidence = threshold
 	}
 }
 

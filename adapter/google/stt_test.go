@@ -1218,6 +1218,61 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{
+		recvBlock: secondRelease,
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "noise",
+					Confidence: 0,
+				}},
+			}},
+		}},
+	}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(-1))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after negative min confidence update")
+	}
+	close(firstRelease)
+	close(secondRelease)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event = %#v, want interim transcript after negative min confidence", event)
+	}
+	if got := event.Alternatives[0].Text; got != "noise" {
+		t.Fatalf("transcript = %q, want noise", got)
+	}
+}
+
 func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
