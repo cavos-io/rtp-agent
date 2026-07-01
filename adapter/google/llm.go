@@ -559,18 +559,18 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		resp, err, ok := s.next()
 		if !ok {
 			if !s.responseGenerated {
-				return nil, llm.NewAPIStatusError("no response generated", -1, "", nil)
+				return nil, llm.NewAPIStatusError("no response generated", -1, requestID, nil)
 			}
 			return nil, io.EOF
 		}
 		if err != nil {
 			if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
 				if !s.responseGenerated {
-					return nil, llm.NewAPIStatusError("no response generated", -1, "", nil)
+					return nil, llm.NewAPIStatusError("no response generated", -1, requestID, nil)
 				}
 				return nil, io.EOF
 			}
-			return nil, googleLLMStreamError(err, !s.responseGenerated)
+			return nil, googleLLMStreamError(err, !s.responseGenerated, requestID)
 		}
 
 		if resp.PromptFeedback != nil {
@@ -578,7 +578,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			if marshalErr != nil {
 				return nil, marshalErr
 			}
-			return nil, llm.NewAPIStatusErrorWithRetryable(string(message), -1, "", nil, false)
+			return nil, llm.NewAPIStatusErrorWithRetryable(string(message), -1, requestID, nil, false)
 		}
 
 		if resp.UsageMetadata != nil {
@@ -596,7 +596,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
 			if googleBlockedFinishReason(cand.FinishReason) {
-				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, "", nil, false)
+				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, requestID, nil, false)
 			}
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
@@ -626,7 +626,7 @@ func (s *googleLLMStream) id() string {
 	return s.requestID
 }
 
-func googleLLMStreamError(err error, retryable bool) error {
+func googleLLMStreamError(err error, retryable bool, requestID string) error {
 	if err == nil {
 		return nil
 	}
@@ -639,7 +639,7 @@ func googleLLMStreamError(err error, retryable bool) error {
 		} else if apiErr.Code >= 500 && apiErr.Code < 600 {
 			message = "gemini llm: server error"
 		}
-		return llm.NewAPIStatusErrorWithRetryable(message, apiErr.Code, "", strings.TrimSpace(apiErr.Message+" "+apiErr.Status), retryable)
+		return llm.NewAPIStatusErrorWithRetryable(message, apiErr.Code, requestID, strings.TrimSpace(apiErr.Message+" "+apiErr.Status), retryable)
 	}
 	return llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("gemini llm: error generating content %s", err), retryable)
 }

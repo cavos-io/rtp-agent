@@ -593,6 +593,9 @@ func TestGoogleLLMStreamReturnsAPIStatusErrorWhenNoResponseGenerated(t *testing.
 	if !statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = false, want true before any response output")
 	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
+	}
 }
 
 func TestGoogleLLMStreamReturnsAPIStatusErrorWhenPageDoneWithoutOutput(t *testing.T) {
@@ -613,6 +616,9 @@ func TestGoogleLLMStreamReturnsAPIStatusErrorWhenPageDoneWithoutOutput(t *testin
 	}
 	if statusErr.Message != "no response generated" {
 		t.Fatalf("APIStatusError message = %q, want no response generated", statusErr.Message)
+	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
 	}
 }
 
@@ -647,6 +653,9 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testi
 	}
 	if statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = true, want false for blocked generation")
+	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
 	}
 }
 
@@ -683,6 +692,9 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForPromptFeedback(t *testing.T)
 	if statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = true, want false for prompt feedback")
 	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
+	}
 }
 
 func TestGoogleLLMStreamMapsProviderAPIError(t *testing.T) {
@@ -712,6 +724,9 @@ func TestGoogleLLMStreamMapsProviderAPIError(t *testing.T) {
 	}
 	if !statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = false, want true for 429 client error")
+	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
 	}
 }
 
