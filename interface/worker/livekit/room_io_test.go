@@ -1042,6 +1042,47 @@ func TestRoomIOPublishAudioDownmixesStereoToMonoOutput(t *testing.T) {
 	}
 }
 
+func TestRoomIOPublishAudioBoundedLeadPacing(t *testing.T) {
+	frame := func() *model.AudioFrame {
+		return &model.AudioFrame{
+			Data:              make([]byte, 960*2),
+			SampleRate:        48000,
+			NumChannels:       1,
+			SamplesPerChannel: 960,
+		}
+	}
+	newRio := func() *RoomIO {
+		return &RoomIO{
+			audioTrack: newRoomIOTestAudioTrack(t),
+			encoder:    &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}},
+		}
+	}
+	leadFrames := int(roomIOOutputMaxLead / (20 * time.Millisecond))
+
+	rioA := newRio()
+	startA := time.Now()
+	for i := 0; i < leadFrames; i++ {
+		if err := rioA.PublishAudio(context.Background(), frame()); err != nil {
+			t.Fatalf("PublishAudio(a,%d) error = %v", i, err)
+		}
+	}
+	if within := time.Since(startA); within > roomIOOutputMaxLead/2 {
+		t.Fatalf("writing %d buffered frames took %v, want fast fill within the lead budget", leadFrames, within)
+	}
+
+	rioB := newRio()
+	const frames = 25
+	startB := time.Now()
+	for i := 0; i < frames; i++ {
+		if err := rioB.PublishAudio(context.Background(), frame()); err != nil {
+			t.Fatalf("PublishAudio(b,%d) error = %v", i, err)
+		}
+	}
+	if elapsed := time.Since(startB); elapsed < roomIOOutputMaxLead {
+		t.Fatalf("publishing %dms of audio took %v, want real-time pacing beyond the lead budget", frames*20, elapsed)
+	}
+}
+
 func TestRoomIOPublishAudioEncodeValidationFailureDoesNotStartPlayback(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio := &RoomIO{
