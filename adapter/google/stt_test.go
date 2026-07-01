@@ -11,9 +11,12 @@ import (
 
 	"cloud.google.com/go/speech/apiv1/speechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -828,6 +831,52 @@ func TestGoogleSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamNextReturnsAPITimeoutError(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: context.DeadlineExceeded}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGoogleSTTStreamNextReturnsAPIStatusError(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.Unavailable, "unavailable")}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for unavailable")
+	}
+}
+
 func TestGoogleSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	stream := &googleSTTStream{
 		stream: &fakeGoogleStreamingRecognizeClient{},
@@ -970,6 +1019,7 @@ type fakeGoogleStreamingRecognizeClient struct {
 	sent               []*speechpb.StreamingRecognizeRequest
 	responses          []*speechpb.StreamingRecognizeResponse
 	recvIndex          int
+	recvErr            error
 	closed             bool
 	sendErrAfterConfig error
 }
@@ -984,6 +1034,9 @@ func (c *fakeGoogleStreamingRecognizeClient) Send(req *speechpb.StreamingRecogni
 
 func (c *fakeGoogleStreamingRecognizeClient) Recv() (*speechpb.StreamingRecognizeResponse, error) {
 	if c.recvIndex >= len(c.responses) {
+		if c.recvErr != nil {
+			return nil, c.recvErr
+		}
 		return nil, io.EOF
 	}
 	resp := c.responses[c.recvIndex]

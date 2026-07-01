@@ -3,6 +3,7 @@ package google
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strconv"
 	"sync"
@@ -11,8 +12,11 @@ import (
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -423,7 +427,7 @@ func (s *googleSTTStream) readLoop() {
 		resp, err := s.stream.Recv()
 		if err != nil {
 			if err != io.EOF {
-				s.errCh <- err
+				s.errCh <- googleSTTStreamError(err)
 			}
 			return
 		}
@@ -454,6 +458,28 @@ func (s *googleSTTStream) readLoop() {
 			}
 			lastUsageEventTime += audioDuration
 		}
+	}
+}
+
+func googleSTTStreamError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	if st, ok := status.FromError(err); ok {
+		return llm.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleSTTStatusRetryable(st.Code()))
+	}
+	return err
+}
+
+func googleSTTStatusRetryable(code codes.Code) bool {
+	switch code {
+	case codes.InvalidArgument, codes.NotFound, codes.AlreadyExists, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.OutOfRange:
+		return false
+	default:
+		return true
 	}
 }
 
