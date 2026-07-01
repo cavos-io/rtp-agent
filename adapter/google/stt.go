@@ -6,12 +6,14 @@ import (
 	"io"
 	"strconv"
 	"sync"
+	"time"
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -29,6 +31,8 @@ type GoogleSTT struct {
 	minConfidence        float64
 	enableWordTimeOffset bool
 	enableWordConfidence bool
+	speechStartTimeout   time.Duration
+	speechEndTimeout     time.Duration
 }
 
 type googleSpeechClient interface {
@@ -67,6 +71,22 @@ func WithGoogleSTTProfanityFilter(profanityFilter bool) GoogleSTTOption {
 func WithGoogleSTTVoiceActivityEvents(enabled bool) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		s.voiceActivityEvents = enabled
+	}
+}
+
+func WithGoogleSTTSpeechStartTimeout(timeout time.Duration) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if timeout > 0 {
+			s.speechStartTimeout = timeout
+		}
+	}
+}
+
+func WithGoogleSTTSpeechEndTimeout(timeout time.Duration) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if timeout > 0 {
+			s.speechEndTimeout = timeout
+		}
 	}
 }
 
@@ -209,7 +229,8 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
 				Config:                    googleRecognitionConfig(s, language),
 				InterimResults:            true,
-				EnableVoiceActivityEvents: s.voiceActivityEvents,
+				EnableVoiceActivityEvents: s.voiceActivityEvents || s.speechStartTimeout > 0 || s.speechEndTimeout > 0,
+				VoiceActivityTimeout:      googleVoiceActivityTimeout(s),
 			},
 		},
 	})
@@ -289,6 +310,20 @@ func googleEnableWordTimeOffsets(s *GoogleSTT) bool {
 		return false
 	}
 	return s.enableWordTimeOffset
+}
+
+func googleVoiceActivityTimeout(s *GoogleSTT) *speechpb.StreamingRecognitionConfig_VoiceActivityTimeout {
+	if s.speechStartTimeout <= 0 && s.speechEndTimeout <= 0 {
+		return nil
+	}
+	timeout := &speechpb.StreamingRecognitionConfig_VoiceActivityTimeout{}
+	if s.speechStartTimeout > 0 {
+		timeout.SpeechStartTimeout = durationpb.New(s.speechStartTimeout)
+	}
+	if s.speechEndTimeout > 0 {
+		timeout.SpeechEndTimeout = durationpb.New(s.speechEndTimeout)
+	}
+	return timeout
 }
 
 func googleSpeechDataFromAlternative(alt *speechpb.SpeechRecognitionAlternative) stt.SpeechData {

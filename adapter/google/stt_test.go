@@ -617,6 +617,39 @@ func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamConfigUsesReferenceSpeechTimeouts(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTSpeechStartTimeout(1500*time.Millisecond),
+		WithGoogleSTTSpeechEndTimeout(750*time.Millisecond),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	config := streamClient.sent[0].GetStreamingConfig()
+	if config == nil {
+		t.Fatal("streaming config = nil")
+	}
+	if !config.GetEnableVoiceActivityEvents() {
+		t.Fatal("enable voice activity events = false, want true when speech timeout configured")
+	}
+	timeout := config.GetVoiceActivityTimeout()
+	if timeout == nil {
+		t.Fatal("voice activity timeout = nil")
+	}
+	if got := timeout.GetSpeechStartTimeout().AsDuration(); got != 1500*time.Millisecond {
+		t.Fatalf("speech start timeout = %v, want 1.5s", got)
+	}
+	if got := timeout.GetSpeechEndTimeout().AsDuration(); got != 750*time.Millisecond {
+		t.Fatalf("speech end timeout = %v, want 750ms", got)
+	}
+}
+
 func TestGoogleSTTStreamIgnoresTranscriptOnVoiceActivityEvent(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
