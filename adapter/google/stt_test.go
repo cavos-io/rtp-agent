@@ -893,9 +893,11 @@ func TestGoogleSTTConfiguredMinConfidenceThresholdFiltersInterimTranscript(t *te
 }
 
 func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
-	release := make(chan struct{})
-	streamClient := &fakeGoogleStreamingRecognizeClient{
-		recvBlock: release,
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{
+		recvBlock: secondRelease,
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{{
 				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
@@ -905,15 +907,33 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
 			}},
 		}},
 	}
-	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
 	stream, err := provider.Stream(context.Background(), "en-US")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
 	defer stream.Close()
+	<-client.streamCallCh
 
 	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
-	close(release)
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after min confidence update")
+	}
+	close(firstRelease)
+	close(secondRelease)
 
 	event, err := stream.Next()
 	if err != nil {

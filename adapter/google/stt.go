@@ -262,13 +262,10 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 
 func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 	s.mu.Lock()
-	oldSpeechStartTimeout := s.speechStartTimeout
-	oldSpeechEndTimeout := s.speechEndTimeout
 	for _, opt := range opts {
 		opt(s)
 	}
 	minConfidence := s.minConfidence
-	reconnectStreams := oldSpeechStartTimeout != s.speechStartTimeout || oldSpeechEndTimeout != s.speechEndTimeout
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -277,9 +274,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 
 	for _, stream := range streams {
 		stream.updateMinConfidence(minConfidence)
-		if reconnectStreams {
-			stream.reconnectForUpdatedConfig()
-		}
+		stream.reconnectForUpdatedConfig()
 	}
 }
 
