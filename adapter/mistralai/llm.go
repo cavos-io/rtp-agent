@@ -143,7 +143,7 @@ func (l *MistralLLM) rebuildInner() {
 		l.apiKey,
 		l.model,
 		l.baseURL,
-		mistralLLMRequestRewriter{next: httpClient},
+		mistralLLMRequestRewriter{next: httpClient, toolChoice: l.toolChoice},
 		opts...,
 	)
 }
@@ -167,7 +167,8 @@ func cloneMistralLLMAnyMap(values map[string]any) map[string]any {
 }
 
 type mistralLLMRequestRewriter struct {
-	next goopenai.HTTPDoer
+	next       goopenai.HTTPDoer
+	toolChoice llm.ToolChoice
 }
 
 func (r mistralLLMRequestRewriter) Do(req *http.Request) (*http.Response, error) {
@@ -179,7 +180,7 @@ func (r mistralLLMRequestRewriter) Do(req *http.Request) (*http.Response, error)
 		return nil, err
 	}
 	req.Body.Close()
-	body = rewriteMistralLLMRequestBody(body)
+	body = rewriteMistralLLMRequestBody(body, r.toolChoice)
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	req.ContentLength = int64(len(body))
 	req.GetBody = func() (io.ReadCloser, error) {
@@ -188,12 +189,18 @@ func (r mistralLLMRequestRewriter) Do(req *http.Request) (*http.Response, error)
 	return r.next.Do(req)
 }
 
-func rewriteMistralLLMRequestBody(body []byte) []byte {
+func rewriteMistralLLMRequestBody(body []byte, toolChoice llm.ToolChoice) []byte {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return body
 	}
 	changed := false
+	if toolChoice != nil {
+		if _, exists := payload["tool_choice"]; !exists {
+			payload["tool_choice"] = toolChoice
+			changed = true
+		}
+	}
 	if seed, ok := payload["seed"]; ok {
 		if _, exists := payload["random_seed"]; !exists {
 			payload["random_seed"] = seed

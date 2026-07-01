@@ -306,6 +306,49 @@ func TestMistralAITTSStreamDecodesReferenceMP3Response(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	requests := 0
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: mistralAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(`data: {"event":"speech.audio.delta","data":{"audio_data":"` +
+				base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}) + `"}}` + "\n")),
+			Header:  make(http.Header),
+			Request: r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider, err := NewMistralAITTS("test-key", "",
+		WithMistralAITTSBaseURL("https://mistral.example/v1"),
+		WithMistralAITTSResponseFormat("pcm"),
+	)
+	if err != nil {
+		t.Fatalf("new tts: %v", err)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want 0 until stream is consumed", requests)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next() audio = %#v, want provider audio", audio)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+}
+
 func TestMistralAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: mistralAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -323,13 +366,18 @@ func TestMistralAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 		t.Fatalf("new tts: %v", err)
 	}
 
-	_, err = provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Synthesize error = nil, want APIStatusError")
+		t.Fatal("Next error = nil, want APIStatusError")
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -354,13 +402,18 @@ func TestMistralAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 		t.Fatalf("new tts: %v", err)
 	}
 
-	_, err = provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Synthesize error = nil, want APIConnectionError")
+		t.Fatal("Next error = nil, want APIConnectionError")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 	if connectionErr.Message != `Post "https://mistral.example/v1/audio/speech": dial refused` {
 		t.Fatalf("connection message = %q, want transport error", connectionErr.Message)
@@ -382,13 +435,18 @@ func TestMistralAITTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 		t.Fatalf("new tts: %v", err)
 	}
 
-	_, err = provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Synthesize error = nil, want APITimeoutError")
+		t.Fatal("Next error = nil, want APITimeoutError")
 	}
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 	if !timeoutErr.Retryable {
 		t.Fatal("retryable = false, want true")

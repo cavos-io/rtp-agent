@@ -126,6 +126,38 @@ func TestNeuphonicTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := 0
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: neuphonicRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	provider := NewNeuphonicTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want 0 before Next", requests)
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+}
+
 func TestNeuphonicTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -141,13 +173,14 @@ func TestNeuphonicTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewNeuphonicTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -167,15 +200,14 @@ func TestNeuphonicTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	provider := NewNeuphonicTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if stream != nil {
-		defer stream.Close()
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
-	if err == nil {
-		t.Fatal("Synthesize returned nil error, want APIConnectionError")
-	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 

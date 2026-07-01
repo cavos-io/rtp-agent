@@ -166,24 +166,15 @@ func (t *ResembleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	if err := validateResembleAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	req, err := buildResembleTTSRequest(ctx, t, text)
-	if err != nil {
+	if _, err := buildResembleTTSRequest(ctx, t, text); err != nil {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, resembleTTSConnectionError("Resemble TTS request failed", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Resemble TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
+	opts := *t
 	return &resembleTTSChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		text:       text,
+		opts:       opts,
 		sampleRate: t.sampleRate,
 	}, nil
 }
@@ -283,7 +274,11 @@ func buildResembleTTSWebsocketMessage(t *ResembleTTS, text string, requestID int
 
 type resembleTTSChunkedStream struct {
 	resp       *http.Response
+	ctx        context.Context
+	text       string
+	opts       ResembleTTS
 	sampleRate int
+	requested  bool
 	closed     bool
 	done       bool
 	finalSent  bool
@@ -299,6 +294,9 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
 	}
 	s.done = true
 
@@ -331,8 +329,36 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *resembleTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildResembleTTSRequest(s.ctx, &s.opts, s.text)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return resembleTTSConnectionError("Resemble TTS request failed", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Resemble TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+
+	s.resp = resp
+	return nil
+}
+
 func (s *resembleTTSChunkedStream) Close() error {
 	s.closed = true
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
 	return s.resp.Body.Close()
 }
 

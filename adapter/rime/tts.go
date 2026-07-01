@@ -169,29 +169,15 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	if err := validateRimeAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	req, err := buildRimeTTSRequest(ctx, t, text)
-	if err != nil {
+	if _, err := buildRimeTTSRequest(ctx, t, text); err != nil {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, rimeTTSConnectionError("Rime TTS request failed", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Rime TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("rime tts returned non-audio data: %s", string(respBody))
-	}
-
+	opts := *t
 	return &rimeTTSChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		text:       text,
+		opts:       opts,
 		sampleRate: t.sampleRate,
 	}, nil
 }
@@ -384,13 +370,23 @@ func buildRimeTTSFlushMessage(contextID string) ([]byte, error) {
 
 type rimeTTSChunkedStream struct {
 	resp         *http.Response
+	ctx          context.Context
+	text         string
+	opts         RimeTTS
 	sampleRate   int
+	requested    bool
 	pendingFinal bool
 	finalSent    bool
 }
 
 func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.resp == nil || s.resp.Body == nil || s.finalSent {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
@@ -433,11 +429,41 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *rimeTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildRimeTTSRequest(s.ctx, &s.opts, s.text)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return rimeTTSConnectionError("Rime TTS request failed", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Rime TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return fmt.Errorf("rime tts returned non-audio data: %s", string(respBody))
+	}
+
+	s.resp = resp
+	return nil
+}
+
 func (s *rimeTTSChunkedStream) Close() error {
+	s.finalSent = true
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}
-	s.finalSent = true
 	body := s.resp.Body
 	s.resp = nil
 	return body.Close()

@@ -103,47 +103,56 @@ func (t *SpitchTTS) Model() string    { return "unknown" }
 func (t *SpitchTTS) Provider() string { return "Spitch" }
 
 func (t *SpitchTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	req, err := buildSpitchTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Spitch TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &spitchTTSChunkedStream{
-		resp:         resp,
+		ctx:          ctx,
+		text:         text,
+		apiKey:       t.apiKey,
+		baseURL:      t.baseURL,
+		voice:        t.voice,
+		language:     t.language,
 		outputFormat: t.outputFormat,
 		sampleRate:   t.sampleRate,
 	}, nil
 }
 
 func buildSpitchTTSRequest(ctx context.Context, t *SpitchTTS, text string) (*http.Request, error) {
+	return buildSpitchTTSRequestFromOptions(ctx, spitchTTSRequestOptions{
+		text:         text,
+		apiKey:       t.apiKey,
+		baseURL:      t.baseURL,
+		voice:        t.voice,
+		language:     t.language,
+		outputFormat: t.outputFormat,
+	})
+}
+
+type spitchTTSRequestOptions struct {
+	text         string
+	apiKey       string
+	baseURL      string
+	voice        string
+	language     string
+	outputFormat string
+}
+
+func buildSpitchTTSRequestFromOptions(ctx context.Context, opts spitchTTSRequestOptions) (*http.Request, error) {
 	reqBody := map[string]interface{}{
-		"text":     text,
-		"language": t.language,
-		"voice":    t.voice,
-		"format":   t.outputFormat,
+		"text":     opts.text,
+		"language": opts.language,
+		"voice":    opts.voice,
+		"format":   opts.outputFormat,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.baseURL, "/")+"/tts/v1/synthesize", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(opts.baseURL, "/")+"/tts/v1/synthesize", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	req.Header.Set("Authorization", "Bearer "+opts.apiKey)
 	return req, nil
 }
 
@@ -153,8 +162,15 @@ func (t *SpitchTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 type spitchTTSChunkedStream struct {
 	resp         *http.Response
+	ctx          context.Context
+	text         string
+	apiKey       string
+	baseURL      string
+	voice        string
+	language     string
 	outputFormat string
 	sampleRate   int
+	requested    bool
 	emitted      bool
 	decoder      codecs.AudioStreamDecoder
 	started      bool
@@ -165,6 +181,12 @@ type spitchTTSChunkedStream struct {
 
 func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.outputFormat == "mp3" {
@@ -195,6 +217,35 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: frame,
 	}, nil
+}
+
+func (s *spitchTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildSpitchTTSRequestFromOptions(s.ctx, spitchTTSRequestOptions{
+		text:         s.text,
+		apiKey:       s.apiKey,
+		baseURL:      s.baseURL,
+		voice:        s.voice,
+		language:     s.language,
+		outputFormat: s.outputFormat,
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Spitch TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
 }
 
 func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {

@@ -195,48 +195,63 @@ func (t *NeuphonicTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	if err := validateNeuphonicAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	req, err := buildNeuphonicTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, neuphonicTTSConnectionError("Neuphonic TTS request failed", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Neuphonic TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &neuphonicTTSChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		text:       text,
+		apiKey:     t.apiKey,
+		baseURL:    t.baseURL,
+		voice:      t.voice,
+		langCode:   t.langCode,
+		encoding:   t.encoding,
 		sampleRate: t.sampleRate,
+		speed:      cloneFloat64Ptr(t.speed),
 	}, nil
 }
 
 func buildNeuphonicTTSRequest(ctx context.Context, t *NeuphonicTTS, text string) (*http.Request, error) {
+	return buildNeuphonicTTSRequestFromOptions(ctx, neuphonicTTSRequestOptions{
+		text:       text,
+		apiKey:     t.apiKey,
+		baseURL:    t.baseURL,
+		voice:      t.voice,
+		langCode:   t.langCode,
+		encoding:   t.encoding,
+		sampleRate: t.sampleRate,
+		speed:      cloneFloat64Ptr(t.speed),
+	})
+}
+
+type neuphonicTTSRequestOptions struct {
+	text       string
+	apiKey     string
+	baseURL    string
+	voice      string
+	langCode   string
+	encoding   string
+	sampleRate int
+	speed      *float64
+}
+
+func buildNeuphonicTTSRequestFromOptions(ctx context.Context, opts neuphonicTTSRequestOptions) (*http.Request, error) {
 	reqBody := map[string]interface{}{
-		"text":          text,
-		"voice_id":      t.voice,
-		"lang_code":     t.langCode,
-		"encoding":      t.encoding,
-		"sampling_rate": t.sampleRate,
-		"speed":         optionalFloat(t.speed),
+		"text":          opts.text,
+		"voice_id":      opts.voice,
+		"lang_code":     opts.langCode,
+		"encoding":      opts.encoding,
+		"sampling_rate": opts.sampleRate,
+		"speed":         optionalFloat(opts.speed),
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.baseURL, "/")+"/sse/speak/"+t.langCode, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(opts.baseURL, "/")+"/sse/speak/"+opts.langCode, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", t.apiKey)
+	req.Header.Set("x-api-key", opts.apiKey)
 	return req, nil
 }
 
@@ -321,12 +336,24 @@ func buildNeuphonicTTSTextMessage(text string, contextID string) ([]byte, error)
 
 type neuphonicTTSChunkedStream struct {
 	resp       *http.Response
+	ctx        context.Context
+	text       string
+	apiKey     string
+	baseURL    string
+	voice      string
+	langCode   string
+	encoding   string
 	sampleRate int
+	speed      *float64
+	requested  bool
 	scanner    *bufio.Scanner
 	finalSent  bool
 }
 
 func (s *neuphonicTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
@@ -362,6 +389,37 @@ func (s *neuphonicTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	s.finalSent = true
 	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
+func (s *neuphonicTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildNeuphonicTTSRequestFromOptions(s.ctx, neuphonicTTSRequestOptions{
+		text:       s.text,
+		apiKey:     s.apiKey,
+		baseURL:    s.baseURL,
+		voice:      s.voice,
+		langCode:   s.langCode,
+		encoding:   s.encoding,
+		sampleRate: s.sampleRate,
+		speed:      cloneFloat64Ptr(s.speed),
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return neuphonicTTSConnectionError("Neuphonic TTS request failed", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Neuphonic TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
 }
 
 func (s *neuphonicTTSChunkedStream) Close() error {
@@ -406,6 +464,14 @@ func optionalFloat(value *float64) interface{} {
 		return nil
 	}
 	return *value
+}
+
+func cloneFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 type neuphonicTTSSynthesizeStream struct {

@@ -403,6 +403,41 @@ func TestHumeTTSChunkedStreamDecodesReferenceMP3JSONLines(t *testing.T) {
 	}
 }
 
+func TestHumeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	requests := 0
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: humeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"audio":"AQI="}` + "\n")),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewHumeTTS("test-key", "", WithHumeTTSBaseURL("https://hume.example"), WithHumeTTSAudioFormat("pcm"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want 0 until stream is consumed", requests)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next() audio = %#v, want provider audio", audio)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+}
+
 func TestHumeTTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -559,10 +594,15 @@ func TestHumeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	})}
 
 	provider := NewHumeTTS("test-key", "", WithHumeTTSBaseURL("https://hume.example"))
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -580,10 +620,15 @@ func TestHumeTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	})}
 
 	provider := NewHumeTTS("test-key", "", WithHumeTTSBaseURL("https://hume.example"))
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
