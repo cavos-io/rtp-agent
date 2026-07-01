@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -111,6 +112,28 @@ func TestSonioxSTTStreamRejectsReferenceEndpointDelayRangeBeforeDial(t *testing.
 	}
 	if strings.Contains(err.Error(), "dial") {
 		t.Fatalf("Stream error = %v, want validation before websocket dial", err)
+	}
+}
+
+func TestSonioxSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("soniox stt dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSonioxSTT("test-key")
+	stream, err := provider.Stream(context.Background(), "")
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
