@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -371,6 +372,25 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceToolConfigExtra(t *test
 
 	if config.ToolConfig != toolConfig {
 		t.Fatalf("ToolConfig = %#v, want %#v", config.ToolConfig, toolConfig)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceHTTPOptionsExtra(t *testing.T) {
+	timeout := 2 * time.Second
+	httpOptions := &genai.HTTPOptions{
+		Headers: http.Header{"x-test": []string{"yes"}},
+		Timeout: &timeout,
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"http_options": httpOptions,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.HTTPOptions != httpOptions {
+		t.Fatalf("HTTPOptions = %#v, want %#v", config.HTTPOptions, httpOptions)
 	}
 }
 

@@ -254,6 +254,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["cached_content"].(string); ok {
 		config.CachedContent = value
 	}
+	if value, ok := googleHTTPOptionsParam(params["http_options"]); ok {
+		config.HTTPOptions = value
+	}
 	if value, ok := googleFloat32Param(params["temperature"]); ok {
 		config.Temperature = &value
 	}
@@ -331,6 +334,17 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 			config.ToolConfig = &genai.ToolConfig{}
 		}
 		config.ToolConfig.RetrievalConfig = value
+	}
+}
+
+func googleHTTPOptionsParam(value any) (*genai.HTTPOptions, bool) {
+	switch typed := value.(type) {
+	case *genai.HTTPOptions:
+		return typed, typed != nil
+	case genai.HTTPOptions:
+		return &typed, true
+	default:
+		return nil, false
 	}
 }
 
