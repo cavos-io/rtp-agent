@@ -13403,6 +13403,7 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "speak warmly")
 	t.Setenv("RTP_AGENT_TTS_SPEAKING_RATE", "1.25")
 	t.Setenv("RTP_AGENT_TTS_PITCH", "3")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "16000")
 	t.Setenv("RTP_AGENT_TTS_STREAMING", "false")
 	t.Setenv("RTP_AGENT_TTS_ENABLE_SSML_PARSING", "true")
 	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "effects_profile_id=telephony-class-application,volume_gain_db=-2.5")
@@ -13428,6 +13429,9 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 	if googleCfg.pitch != 3 {
 		t.Fatalf("pitch = %v, want 3", googleCfg.pitch)
+	}
+	if googleCfg.sampleRate == nil || *googleCfg.sampleRate != 16000 {
+		t.Fatalf("sample rate = %v, want 16000", googleCfg.sampleRate)
 	}
 	if googleCfg.streaming == nil || *googleCfg.streaming {
 		t.Fatalf("streaming = %v, want explicit false", googleCfg.streaming)

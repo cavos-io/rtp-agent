@@ -119,6 +119,7 @@ type appGoogleTTSConfig struct {
 	prompt           string
 	speakingRate     float64
 	pitch            float64
+	sampleRate       *int
 	effectsProfileID string
 	volumeGainDB     float64
 	streaming        *bool
@@ -189,6 +190,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	}
 	if cfg.pitch != 0 {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSPitch(cfg.pitch))
+	}
+	if cfg.sampleRate != nil {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSSampleRate(int32(*cfg.sampleRate)))
 	}
 	if cfg.effectsProfileID != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSEffectsProfileID(cfg.effectsProfileID))
@@ -3981,12 +3985,13 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
-		language:  cfg.TTSLanguage,
-		voice:     cfg.TTSVoice,
-		model:     cfg.TTSModel,
-		prompt:    cfg.TTSInstructions,
-		streaming: cfg.TTSStreaming,
-		ssml:      cfg.TTSEnableSSMLParsing,
+		language:   cfg.TTSLanguage,
+		voice:      cfg.TTSVoice,
+		model:      cfg.TTSModel,
+		prompt:     cfg.TTSInstructions,
+		sampleRate: cfg.TTSSampleRate,
+		streaming:  cfg.TTSStreaming,
+		ssml:       cfg.TTSEnableSSMLParsing,
 	}
 	if strings.EqualFold(cfg.TTSTextType, "markup") {
 		markup := true
