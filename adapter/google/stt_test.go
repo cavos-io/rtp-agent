@@ -111,6 +111,19 @@ func TestGoogleClientOptionsFromCredentialsFile(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
+
+	if got := googleSTTEndpoint(provider); got != "europe-west1-speech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want europe-west1-speech.googleapis.com", got)
+	}
+
+	globalProvider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("global"))
+	if got := googleSTTEndpoint(globalProvider); got != "" {
+		t.Fatalf("global endpoint = %q, want empty default endpoint", got)
+	}
+}
+
 func TestGoogleSpeechDataFromAlternativeToleratesMissingWordTimes(t *testing.T) {
 	alt := &speechpb.SpeechRecognitionAlternative{
 		Transcript: "hello",

@@ -132,6 +132,7 @@ type appGoogleTTSConfig struct {
 
 type appGoogleSTTConfig struct {
 	model                string
+	location             string
 	sampleRate           *int
 	punctuate            *bool
 	spokenPunctuation    *bool
@@ -150,6 +151,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	sttOpts := []adaptergoogle.GoogleSTTOption{}
 	if cfg.model != "" {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTModel(cfg.model))
+	}
+	if cfg.location != "" {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTLocation(cfg.location))
 	}
 	if cfg.sampleRate != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSampleRate(int32(*cfg.sampleRate)))
@@ -4008,6 +4012,7 @@ func cavosTTSFromConfig(cfg AppConfig) coretts.TTS {
 func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	googleCfg := appGoogleSTTConfig{
 		model:                cfg.STTModel,
+		location:             cfg.STTRegion,
 		sampleRate:           cfg.STTSampleRate,
 		punctuate:            cfg.STTPunctuate,
 		spokenPunctuation:    cfg.STTSpokenPunctuation,

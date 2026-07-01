@@ -15,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -40,6 +41,7 @@ type GoogleSTT struct {
 	enableWordConfidence bool
 	speechStartTimeout   time.Duration
 	speechEndTimeout     time.Duration
+	location             string
 	keywords             []GoogleSTTKeyword
 	adaptation           *speechpb.SpeechAdaptation
 	alternativeLanguages []string
@@ -181,21 +183,34 @@ func WithGoogleSTTAlternativeLanguages(languages ...string) GoogleSTTOption {
 	}
 }
 
+func WithGoogleSTTLocation(location string) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if location != "" {
+			s.location = location
+		}
+	}
+}
+
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*GoogleSTT, error) {
 	ctx := context.Background()
+	provider := newGoogleSTTWithClient(nil, providerOpts...)
 	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
 	if err != nil {
 		return nil, err
+	}
+	if endpoint := googleSTTEndpoint(provider); endpoint != "" {
+		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
 	}
 
 	client, err := speech.NewClient(ctx, clientOpts...)
 	if err != nil {
 		return nil, err
 	}
+	provider.client = client
 
-	return newGoogleSTTWithClient(client, providerOpts...), nil
+	return provider, nil
 }
 
 func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) *GoogleSTT {
@@ -210,11 +225,19 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		sampleRate:           16000,
 		minConfidence:        0.65,
 		enableWordTimeOffset: true,
+		location:             "global",
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
 	return provider
+}
+
+func googleSTTEndpoint(s *GoogleSTT) string {
+	if s.location == "" || s.location == "global" {
+		return ""
+	}
+	return s.location + "-speech.googleapis.com"
 }
 
 func (s *GoogleSTT) Label() string           { return "google.STT" }

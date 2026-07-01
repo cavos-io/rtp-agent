@@ -13499,6 +13499,7 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "google")
 	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_STT_REGION", "europe-west1")
 	t.Setenv("RTP_AGENT_STT_MODEL", "latest_short")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE_OPTIONS", "es-ES,fr-FR")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE_DETECTION", "false")
@@ -13521,6 +13522,9 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	}
 	if googleCfg.model != "latest_short" {
 		t.Fatalf("model = %q, want latest_short", googleCfg.model)
+	}
+	if googleCfg.location != "europe-west1" {
+		t.Fatalf("location = %q, want europe-west1", googleCfg.location)
 	}
 	if googleCfg.detectLanguage == nil || *googleCfg.detectLanguage {
 		t.Fatalf("detectLanguage = %#v, want explicit false", googleCfg.detectLanguage)
