@@ -305,8 +305,8 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleImageConfigParam(params["image_config"]); ok {
 		config.ImageConfig = value
 	}
-	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
-		config.ResponseModalities = value
+	if value, ok := params["response_modalities"]; ok {
+		config.ResponseModalities = googleStringList(value)
 	}
 	if value, ok := googleSpeechConfigParam(params["speech_config"]); ok {
 		config.SpeechConfig = value

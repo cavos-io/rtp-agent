@@ -749,6 +749,23 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigPreservesEmptyResponseModalities(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_modalities": []any{},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ResponseModalities == nil {
+		t.Fatal("ResponseModalities = nil, want explicit empty list")
+	}
+	if len(config.ResponseModalities) != 0 {
+		t.Fatalf("ResponseModalities = %#v, want empty list", config.ResponseModalities)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceSpeechConfigExtra(t *testing.T) {
 	speech := &genai.SpeechConfig{
 		LanguageCode: "en-US",
