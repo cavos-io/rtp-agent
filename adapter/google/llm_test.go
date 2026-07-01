@@ -558,6 +558,26 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceSpeechConfigExtra(t *testing.T) {
+	speech := &genai.SpeechConfig{
+		LanguageCode: "en-US",
+		VoiceConfig: &genai.VoiceConfig{
+			PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "Puck"},
+		},
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"speech_config": speech,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.SpeechConfig != speech {
+		t.Fatalf("SpeechConfig = %#v, want %#v", config.SpeechConfig, speech)
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false
