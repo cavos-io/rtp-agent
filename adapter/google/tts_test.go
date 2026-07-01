@@ -739,6 +739,38 @@ func TestGoogleTTSStreamNextReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamTreatsReference409AsRetryable(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.AlreadyExists) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.AlreadyExists)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for reference 409 path")
+	}
+}
+
 func TestGoogleTTSStreamNextErrorTerminatesStream(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{recvErr: status.Error(codes.Unavailable, "unavailable")}
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})

@@ -324,7 +324,7 @@ func googleTTSSynthesisError(err error) error {
 
 func googleTTSStatusRetryable(code codes.Code) bool {
 	switch code {
-	case codes.InvalidArgument, codes.NotFound, codes.AlreadyExists, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.OutOfRange:
+	case codes.InvalidArgument, codes.NotFound, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.OutOfRange:
 		return false
 	default:
 		return true
