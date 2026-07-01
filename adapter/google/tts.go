@@ -493,7 +493,7 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 	}
 	if err := s.active.CloseSend(); err != nil {
 		s.markClosedLocked()
-		return err
+		return googleTTSSynthesisError(err)
 	}
 	s.active = nil
 	return nil
