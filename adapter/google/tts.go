@@ -425,20 +425,22 @@ func (s *googleTTSChunkedStream) Close() error {
 }
 
 type googleTTSSynthesizeStream struct {
-	mu         sync.Mutex
-	cond       *sync.Cond
-	owner      *GoogleTTS
-	ctx        context.Context
-	client     googleTTSClient
-	streams    []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	active     texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	voice      *texttospeechpb.VoiceSelectionParams
-	prompt     *string
-	audio      *texttospeechpb.AudioConfig
-	buffer     strings.Builder
-	closed     bool
-	inputEnded bool
-	sentInput  bool
+	mu           sync.Mutex
+	cond         *sync.Cond
+	owner        *GoogleTTS
+	ctx          context.Context
+	client       googleTTSClient
+	streams      []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	active       texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	voice        *texttospeechpb.VoiceSelectionParams
+	prompt       *string
+	audio        *texttospeechpb.AudioConfig
+	buffer       strings.Builder
+	pushedText   strings.Builder
+	closed       bool
+	inputEnded   bool
+	sentInput    bool
+	emittedAudio bool
 }
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
@@ -451,6 +453,9 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 		return io.ErrClosedPipe
 	}
 	if _, err := s.buffer.WriteString(text); err != nil {
+		return err
+	}
+	if _, err := s.pushedText.WriteString(text); err != nil {
 		return err
 	}
 	for {
@@ -624,6 +629,11 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			if len(s.streams) > 0 && s.streams[0] == stream {
 				s.streams = s.streams[1:]
 			}
+			if strings.TrimSpace(s.pushedText.String()) != "" && !s.emittedAudio {
+				s.markClosedLocked()
+				s.mu.Unlock()
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.pushedText.String()), nil, true)
+			}
 			s.mu.Unlock()
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
@@ -641,6 +651,9 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		if len(data) == 0 {
 			continue
 		}
+		s.mu.Lock()
+		s.emittedAudio = true
+		s.mu.Unlock()
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
 				Data:              data,

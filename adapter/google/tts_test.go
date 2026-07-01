@@ -274,6 +274,41 @@ func TestGoogleTTSStreamSkipsEmptyAudioResponses(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil no-audio error", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError retryable = false, want true")
+	}
+	if !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("APIError = %q, want reference no-audio message", apiErr.Error())
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio = (%+v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
