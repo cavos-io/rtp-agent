@@ -135,25 +135,26 @@ type appGoogleTTSConfig struct {
 }
 
 type appGoogleSTTConfig struct {
-	model                string
-	location             string
-	language             string
-	streaming            *bool
-	sampleRate           *int
-	punctuate            *bool
-	spokenPunctuation    *bool
-	profanityFilter      *bool
-	detectLanguage       *bool
-	interimResults       *bool
-	wordTimeOffsets      *bool
-	wordConfidence       *bool
-	speechStartTimeout   time.Duration
-	speechEndTimeout     time.Duration
-	minConfidence        *float64
-	voiceActivityEvents  *bool
-	alternativeLanguages []string
-	keywords             []adaptergoogle.GoogleSTTKeyword
-	denoiserConfig       *speechv2pb.DenoiserConfig
+	model                  string
+	location               string
+	language               string
+	streaming              *bool
+	sampleRate             *int
+	punctuate              *bool
+	spokenPunctuation      *bool
+	profanityFilter        *bool
+	detectLanguage         *bool
+	interimResults         *bool
+	wordTimeOffsets        *bool
+	wordConfidence         *bool
+	speechStartTimeout     time.Duration
+	speechEndTimeout       time.Duration
+	minConfidence          *float64
+	voiceActivityEvents    *bool
+	alternativeLanguages   []string
+	keywords               []adaptergoogle.GoogleSTTKeyword
+	denoiserConfig         *speechv2pb.DenoiserConfig
+	endpointingSensitivity string
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
@@ -214,6 +215,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if cfg.denoiserConfig != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTDenoiserConfig(cfg.denoiserConfig))
+	}
+	if cfg.endpointingSensitivity != "" {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTEndpointingSensitivity(cfg.endpointingSensitivity))
 	}
 	return adaptergoogle.NewGoogleSTT(credentialsFile, sttOpts...)
 }
@@ -4045,23 +4049,24 @@ func cavosTTSFromConfig(cfg AppConfig) coretts.TTS {
 
 func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	googleCfg := appGoogleSTTConfig{
-		model:                cfg.STTModel,
-		location:             cfg.STTRegion,
-		language:             cfg.STTLanguage,
-		streaming:            cfg.STTStreaming,
-		sampleRate:           cfg.STTSampleRate,
-		punctuate:            cfg.STTPunctuate,
-		spokenPunctuation:    cfg.STTSpokenPunctuation,
-		profanityFilter:      cfg.STTProfanityFilter,
-		detectLanguage:       cfg.STTLanguageDetection,
-		interimResults:       cfg.STTInterimResults,
-		wordTimeOffsets:      cfg.STTWordTimestamps,
-		wordConfidence:       cfg.STTWordConfidence,
-		minConfidence:        cfg.STTMinConfidenceThreshold,
-		voiceActivityEvents:  cfg.STTVoiceActivityEvents,
-		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
-		keywords:             googleSTTKeywordsFromConfig(cfg.STTKeywords),
-		denoiserConfig:       googleSTTDenoiserConfigFromOptions(cfg.STTModelOptions),
+		model:                  cfg.STTModel,
+		location:               cfg.STTRegion,
+		language:               cfg.STTLanguage,
+		streaming:              cfg.STTStreaming,
+		sampleRate:             cfg.STTSampleRate,
+		punctuate:              cfg.STTPunctuate,
+		spokenPunctuation:      cfg.STTSpokenPunctuation,
+		profanityFilter:        cfg.STTProfanityFilter,
+		detectLanguage:         cfg.STTLanguageDetection,
+		interimResults:         cfg.STTInterimResults,
+		wordTimeOffsets:        cfg.STTWordTimestamps,
+		wordConfidence:         cfg.STTWordConfidence,
+		minConfidence:          cfg.STTMinConfidenceThreshold,
+		voiceActivityEvents:    cfg.STTVoiceActivityEvents,
+		alternativeLanguages:   splitStringList(cfg.STTLanguageOptions),
+		keywords:               googleSTTKeywordsFromConfig(cfg.STTKeywords),
+		denoiserConfig:         googleSTTDenoiserConfigFromOptions(cfg.STTModelOptions),
+		endpointingSensitivity: modelOptionString(cfg.STTModelOptions, "endpointing_sensitivity"),
 	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond

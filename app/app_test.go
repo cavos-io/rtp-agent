@@ -13711,6 +13711,18 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceEndpointingSensitivity(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"endpointing_sensitivity": "ENDPOINTING_SENSITIVITY_SHORT",
+		},
+	})
+
+	if googleCfg.endpointingSensitivity != "ENDPOINTING_SENSITIVITY_SHORT" {
+		t.Fatalf("endpointingSensitivity = %q, want reference Google STT v2 sensitivity", googleCfg.endpointingSensitivity)
+	}
+}
+
 func TestGroqSTTFallbackPassesReferenceOptions(t *testing.T) {
 	provider, err := fallbackSTTFromProvider(AppConfig{
 		GroqAPIKey:        "test-groq-key",
