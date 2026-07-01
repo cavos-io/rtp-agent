@@ -700,6 +700,30 @@ func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeStripsHeaderOnlyWAV(t *testing.T) {
+	payload := make([]byte, 44)
+	copy(payload[0:4], "RIFF")
+	copy(payload[8:12], "WAVE")
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: payload},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker without header audio", final)
+	}
+}
+
 func TestGoogleTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &googleTTSChunkedStream{
 		data: []byte{1, 2},

@@ -322,7 +322,7 @@ type googleTTSChunkedStream struct {
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if !s.headerStripped && len(s.data) > 44 {
+	if !s.headerStripped && len(s.data) >= 44 {
 		// Google TTS LINEAR16 usually returns a WAV with a 44-byte header.
 		// Verify RIFF and WAVE tags.
 		if string(s.data[0:4]) == "RIFF" && string(s.data[8:12]) == "WAVE" {
