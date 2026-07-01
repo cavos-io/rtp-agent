@@ -11,6 +11,7 @@ import (
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -905,6 +906,11 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return errors.New("the sample rate of the input frames must be consistent")
 		}
 		s.pushedSampleRate = frame.SampleRate
+		var err error
+		frame, err = coreaudio.ResampleAudioFrame(frame, uint32(s.owner.sampleRate))
+		if err != nil {
+			return err
+		}
 	}
 	if err := s.stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{

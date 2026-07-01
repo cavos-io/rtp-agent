@@ -1,6 +1,7 @@
 package google
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -569,6 +570,34 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 	if !streamClient.closed {
 		t.Fatal("Close did not close streaming client")
+	}
+}
+
+func TestGoogleSTTStreamResamplesPushedAudioLikeReference(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	frame := &model.AudioFrame{
+		Data:              []byte{1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0},
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 6,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent requests = %d, want config plus resampled audio", len(streamClient.sent))
+	}
+	if got, want := streamClient.sent[1].GetAudioContent(), []byte{1, 0, 4, 0}; !bytes.Equal(got, want) {
+		t.Fatalf("audio content = %#v, want 48k->16k reference resampled PCM %#v", got, want)
 	}
 }
 
