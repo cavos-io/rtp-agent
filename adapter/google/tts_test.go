@@ -152,6 +152,48 @@ func TestGoogleTTSStreamClonesReferenceAudioFrames(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{
+				{AudioContent: []byte{1}},
+				{AudioContent: []byte{2, 3, 4}},
+			},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio data = %v, want odd byte buffered into next PCM sample", got)
+	}
+	if got := audio.Frame.SamplesPerChannel; got != 2 {
+		t.Fatalf("samples per channel = %d, want 2 complete PCM16 samples", got)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+}
+
 func TestGoogleTTSStreamMarkupInputMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client, WithGoogleTTSMarkup(true))
@@ -2048,6 +2090,37 @@ func TestGoogleTTSSynthesizeClonesReferenceAudioFrames(t *testing.T) {
 	providerAudio[0] = 9
 	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
 		t.Fatalf("audio data after provider mutation = %v, want cloned frame data", got)
+	}
+}
+
+func TestGoogleTTSSynthesizeDropsReferenceTrailingPartialPCMSample(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3}},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2}) {
+		t.Fatalf("audio data = %v, want only complete PCM16 samples", got)
+	}
+	if got := audio.Frame.SamplesPerChannel; got != 1 {
+		t.Fatalf("samples per channel = %d, want 1 complete PCM16 sample", got)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
 	}
 }
 

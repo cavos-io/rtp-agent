@@ -559,6 +559,16 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	chunk := s.data[s.offset:end]
 	s.offset = end
+	if len(chunk)%2 == 1 {
+		chunk = chunk[:len(chunk)-1]
+	}
+	if len(chunk) == 0 {
+		if strings.TrimSpace(s.inputText) != "" && !s.emittedAudio && !s.finalSent {
+			s.finalSent = true
+			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
+		}
+		return s.emitFinal()
+	}
 	s.emittedAudio = true
 	sampleRate := s.sampleRate
 	if sampleRate == 0 {
@@ -711,6 +721,7 @@ type googleTTSSegmentState struct {
 	text         strings.Builder
 	emittedAudio bool
 	opusBuffer   []byte
+	pcmBuffer    []byte
 }
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
@@ -986,7 +997,23 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *googleTTSSynthesizeStream) googleTTSStreamingAudioFrame(stream texttospeechpb.TextToSpeech_StreamingSynthesizeClient, data []byte) (*model.AudioFrame, bool, error) {
 	encoding := s.audio.GetAudioEncoding()
 	if encoding != texttospeechpb.AudioEncoding_OGG_OPUS {
-		frame, err := googleTTSStreamingAudioFrame(data, encoding, s.audio.GetSampleRateHertz())
+		s.mu.Lock()
+		segment := s.segments[stream]
+		if segment == nil {
+			segment = &googleTTSSegmentState{}
+			s.segments[stream] = segment
+		}
+		segment.pcmBuffer = append(segment.pcmBuffer, data...)
+		completeLen := len(segment.pcmBuffer) - len(segment.pcmBuffer)%2
+		if completeLen == 0 {
+			s.mu.Unlock()
+			return nil, true, nil
+		}
+		frameData := bytes.Clone(segment.pcmBuffer[:completeLen])
+		segment.pcmBuffer = bytes.Clone(segment.pcmBuffer[completeLen:])
+		s.mu.Unlock()
+
+		frame, err := googleTTSStreamingAudioFrame(frameData, encoding, s.audio.GetSampleRateHertz())
 		return frame, false, err
 	}
 
