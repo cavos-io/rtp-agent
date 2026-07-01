@@ -110,6 +110,8 @@ type googleRealtimeConnector interface {
 
 type googleRealtimeLiveSession interface {
 	SendRealtimeInput(genai.LiveRealtimeInput) error
+	SendClientContent(genai.LiveClientContentInput) error
+	Receive() (*genai.LiveServerMessage, error)
 	Close() error
 }
 
@@ -457,13 +459,15 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		cancel()
 		return nil, err
 	}
-	return &googleRealtimeSession{
+	session := &googleRealtimeSession{
 		ctx:         ctx,
 		cancel:      cancel,
 		liveSession: liveSession,
 		eventCh:     make(chan llm.RealtimeEvent),
 		audioStream: audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
-	}, nil
+	}
+	go session.receiveLoop()
+	return session, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
@@ -549,8 +553,12 @@ type googleRealtimeSession struct {
 	liveSession googleRealtimeLiveSession
 	eventCh     chan llm.RealtimeEvent
 	audioStream *audio.AudioByteStream
+	inputID     string
+	inputSeq    int
+	inputText   string
 	closeOnce   sync.Once
 	closeErr    error
+	closed      bool
 	mu          sync.Mutex
 }
 
@@ -566,23 +574,139 @@ func (s *googleRealtimeSession) UpdateTools([]llm.Tool) error {
 func (s *googleRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return errors.New("google realtime session option update is not implemented")
 }
-func (s *googleRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error {
-	return errors.New("google realtime session reply generation is not implemented")
+func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if s == nil || s.liveSession == nil || s.isClosed() {
+		return nil
+	}
+	turns := make([]*genai.Content, 0, 2)
+	if options.Instructions != "" {
+		turns = append(turns, &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: options.Instructions}},
+		})
+	}
+	turns = append(turns, &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: "."}},
+	})
+	turnComplete := true
+	return s.liveSession.SendClientContent(genai.LiveClientContentInput{
+		Turns:        turns,
+		TurnComplete: &turnComplete,
+	})
 }
-func (s *googleRealtimeSession) Say(string) error {
-	return errors.New("google realtime session text input is not implemented")
+func (s *googleRealtimeSession) Say(text string) error {
+	if s == nil || s.liveSession == nil || text == "" || s.isClosed() {
+		return nil
+	}
+	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{Text: text})
 }
 func (s *googleRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *googleRealtimeSession) Interrupt() error {
-	return errors.New("google realtime session interrupt is not implemented")
+	if s == nil || s.liveSession == nil || s.isClosed() {
+		return nil
+	}
+	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+		ActivityStart: &genai.ActivityStart{},
+	})
 }
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
+
+func (s *googleRealtimeSession) receiveLoop() {
+	for {
+		if s == nil || s.liveSession == nil || s.isClosed() {
+			return
+		}
+		message, err := s.liveSession.Receive()
+		if err != nil {
+			return
+		}
+		s.handleServerMessage(message)
+	}
+}
+
+func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) {
+	if message == nil || message.ServerContent == nil {
+		return
+	}
+	if message.ServerContent.ModelTurn != nil {
+		for _, part := range message.ServerContent.ModelTurn.Parts {
+			if part == nil || part.Thought {
+				continue
+			}
+			if part.Text != "" {
+				s.emitEvent(llm.RealtimeEvent{
+					Type: llm.RealtimeEventTypeText,
+					Text: part.Text,
+				})
+			}
+			if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+				s.emitEvent(llm.RealtimeEvent{
+					Type: llm.RealtimeEventTypeAudio,
+					Data: part.InlineData.Data,
+				})
+			}
+		}
+	}
+	if message.ServerContent.OutputTranscription != nil && message.ServerContent.OutputTranscription.Text != "" {
+		s.emitEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeText,
+			Text: message.ServerContent.OutputTranscription.Text,
+		})
+	}
+	if message.ServerContent.InputTranscription != nil && message.ServerContent.InputTranscription.Text != "" {
+		text := message.ServerContent.InputTranscription.Text
+		if s.inputText == "" {
+			text = strings.TrimLeft(text, " \t\r\n")
+		}
+		s.inputText += text
+		s.emitInputTranscription(false)
+	}
+	if message.ServerContent.TurnComplete && s.inputText != "" {
+		s.emitInputTranscription(true)
+		s.inputID = ""
+		s.inputText = ""
+	}
+}
+
+func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
+	if s == nil || s.isClosed() {
+		return
+	}
+	select {
+	case s.eventCh <- event:
+	case <-s.ctx.Done():
+	}
+}
+
+func (s *googleRealtimeSession) emitInputTranscription(final bool) {
+	itemID := s.currentInputID()
+	s.emitEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     itemID,
+			Transcript: s.inputText,
+			IsFinal:    final,
+		},
+	})
+}
+
+func (s *googleRealtimeSession) currentInputID() string {
+	if s.inputID == "" {
+		s.inputSeq++
+		s.inputID = fmt.Sprintf("GI_%d", s.inputSeq)
+	}
+	return s.inputID
+}
 
 func (s *googleRealtimeSession) Close() error {
 	if s == nil {
 		return nil
 	}
 	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -594,8 +718,14 @@ func (s *googleRealtimeSession) Close() error {
 	return s.closeErr
 }
 
+func (s *googleRealtimeSession) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
-	if s == nil || s.liveSession == nil || frame == nil || len(frame.Data) == 0 {
+	if s == nil || s.liveSession == nil || frame == nil || len(frame.Data) == 0 || s.isClosed() {
 		return nil
 	}
 	resampled, err := audio.ResampleAudioFrame(frame, googleRealtimeInputSampleRate)
@@ -621,12 +751,7 @@ func (s *googleRealtimeSession) PushVideo(*images.VideoFrame) error {
 	return errors.New("google realtime session video input is not implemented")
 }
 func (s *googleRealtimeSession) CommitAudio() error { return nil }
-func (s *googleRealtimeSession) ClearAudio() error {
-	if s != nil && s.audioStream != nil {
-		s.audioStream.Clear()
-	}
-	return nil
-}
+func (s *googleRealtimeSession) ClearAudio() error  { return nil }
 
 var _ llm.RealtimeModel = (*RealtimeModel)(nil)
 var _ llm.RealtimeSession = (*googleRealtimeSession)(nil)
