@@ -395,17 +395,8 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	if cfg.rateSet {
 		t.audio.SpeakingRate = cfg.speakingRate
 	}
-	if cfg.pitchSet {
-		t.audio.Pitch = cfg.pitch
-	}
-	if cfg.effectsSet {
-		t.audio.EffectsProfileId = append([]string(nil), cfg.effects...)
-	}
 	if cfg.volumeSet {
 		t.audio.VolumeGainDb = cfg.volumeGainDB
-	}
-	if cfg.customSet {
-		t.custom = cfg.custom
 	}
 }
 

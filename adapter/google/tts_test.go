@@ -1724,6 +1724,58 @@ func TestGoogleTTSAudioConfigOptionsMatchReferenceRequests(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSUpdateOptionsKeepsReferencePronunciationControls(t *testing.T) {
+	initialEncoding := texttospeech.CustomPronunciationParams_PHONETIC_ENCODING_X_SAMPA
+	initialPhrase := "Cavos"
+	initialPronunciation := "keIvAs"
+	initialCustom := &texttospeech.CustomPronunciations{
+		Pronunciations: []*texttospeech.CustomPronunciationParams{{
+			Phrase:           &initialPhrase,
+			PhoneticEncoding: &initialEncoding,
+			Pronunciation:    &initialPronunciation,
+		}},
+	}
+	updatedPhrase := "LiveKit"
+	updatedPronunciation := "laIvkit"
+	updatedCustom := &texttospeech.CustomPronunciations{
+		Pronunciations: []*texttospeech.CustomPronunciationParams{{
+			Phrase:           &updatedPhrase,
+			PhoneticEncoding: &initialEncoding,
+			Pronunciation:    &updatedPronunciation,
+		}},
+	}
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSPitch(2.5),
+		WithGoogleTTSEffectsProfileID("telephony-class-application"),
+		WithGoogleTTSCustomPronunciations(initialCustom),
+	)
+
+	provider.UpdateOptions(
+		WithGoogleTTSPitch(-3.0),
+		WithGoogleTTSEffectsProfileID("headphone-class-device"),
+		WithGoogleTTSCustomPronunciations(updatedCustom),
+	)
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize after update returned error: %v", err)
+	}
+	defer chunked.Close()
+	audio := client.request.GetAudioConfig()
+	if got := audio.GetPitch(); got != 2.5 {
+		t.Fatalf("pitch after update = %v, want constructor-time 2.5", got)
+	}
+	if got := audio.GetEffectsProfileId(); len(got) != 1 || got[0] != "telephony-class-application" {
+		t.Fatalf("effects profile after update = %v, want constructor-time telephony-class-application", got)
+	}
+	if got := client.request.GetInput().GetCustomPronunciations(); got != initialCustom {
+		t.Fatalf("custom pronunciations after update = %#v, want constructor-time value", got)
+	}
+}
+
 func TestGoogleTTSChirp3OmitsModelName(t *testing.T) {
 	provider := newGoogleTTSWithClient(nil, WithGoogleTTSModel("chirp_3"))
 
