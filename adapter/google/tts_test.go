@@ -10,9 +10,12 @@ import (
 	"time"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestNewGoogleTTSRejectsMissingCredentialsFile(t *testing.T) {
@@ -306,6 +309,94 @@ func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSUsesConfiguredSampleRate(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6, 7, 8}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSampleRate(16000))
+
+	if got := provider.SampleRate(); got != 16000 {
+		t.Fatalf("SampleRate = %d, want 16000", got)
+	}
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetAudioConfig().GetSampleRateHertz(); got != 16000 {
+		t.Fatalf("synthesize sample rate = %d, want 16000", got)
+	}
+	audio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("chunked Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("chunked frame sample rate = %d, want 16000", audio.Frame.SampleRate)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetSampleRateHertz(); got != 16000 {
+		t.Fatalf("stream config sample rate = %d, want 16000", got)
+	}
+	streamAudio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("stream Next returned error: %v", err)
+	}
+	if streamAudio.Frame.SampleRate != 16000 {
+		t.Fatalf("stream frame sample rate = %d, want 16000", streamAudio.Frame.SampleRate)
+	}
+}
+
+func TestGoogleTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	client := &fakeGoogleTTSClient{err: context.DeadlineExceeded}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGoogleTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	client := &fakeGoogleTTSClient{err: status.Error(codes.PermissionDenied, "permission denied")}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.PermissionDenied) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.PermissionDenied)
+	}
+	if statusErr.Retryable {
+		t.Fatal("status retryable = true, want false for permission denied")
+	}
+}
+
 func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
@@ -439,6 +530,64 @@ func TestGoogleTTSStreamClosesAfterInputSendFailure(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close after send failure error = %v", err)
+	}
+}
+
+func TestGoogleTTSStreamNextReturnsAPITimeoutError(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{recvErr: context.DeadlineExceeded}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGoogleTTSStreamNextReturnsAPIStatusError(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{recvErr: status.Error(codes.Unavailable, "unavailable")}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for unavailable")
 	}
 }
 
@@ -700,6 +849,30 @@ func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeStripsHeaderOnlyWAV(t *testing.T) {
+	payload := make([]byte, 44)
+	copy(payload[0:4], "RIFF")
+	copy(payload[8:12], "WAVE")
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: payload},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error = %v, want final marker", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("Next = %+v, want final marker without header audio", final)
+	}
+}
+
 func TestGoogleTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &googleTTSChunkedStream{
 		data: []byte{1, 2},
@@ -752,6 +925,7 @@ type fakeGoogleTTSStream struct {
 	grpc.ClientStream
 	sent               []*texttospeech.StreamingSynthesizeRequest
 	responses          []*texttospeech.StreamingSynthesizeResponse
+	recvErr            error
 	closed             bool
 	sendErrAfterConfig error
 }
@@ -766,6 +940,9 @@ func (s *fakeGoogleTTSStream) Send(req *texttospeech.StreamingSynthesizeRequest)
 
 func (s *fakeGoogleTTSStream) Recv() (*texttospeech.StreamingSynthesizeResponse, error) {
 	if len(s.responses) == 0 {
+		if s.recvErr != nil {
+			return nil, s.recvErr
+		}
 		return nil, io.EOF
 	}
 	resp := s.responses[0]

@@ -2,6 +2,7 @@ package google
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -9,9 +10,12 @@ import (
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type GoogleTTS struct {
@@ -49,6 +53,8 @@ type googleTTSConfig struct {
 	effectsSet   bool
 	volumeGainDB float64
 	volumeSet    bool
+	sampleRate   int32
+	sampleSet    bool
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
@@ -115,6 +121,15 @@ func WithGoogleTTSVolumeGainDB(volumeGainDB float64) GoogleTTSOption {
 	}
 }
 
+func WithGoogleTTSSampleRate(sampleRate int32) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if sampleRate > 0 {
+			cfg.sampleRate = sampleRate
+			cfg.sampleSet = true
+		}
+	}
+}
+
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
@@ -138,6 +153,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		voice:        "Charon",
 		model:        "gemini-2.5-flash-tts",
 		speakingRate: 1.0,
+		sampleRate:   24000,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -151,7 +167,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		prompt:  cfg.prompt,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
-			SampleRateHertz:  24000,
+			SampleRateHertz:  cfg.sampleRate,
 			SpeakingRate:     cfg.speakingRate,
 			Pitch:            cfg.pitch,
 			EffectsProfileId: append([]string(nil), cfg.effects...),
@@ -164,7 +180,7 @@ func (t *GoogleTTS) Label() string { return "google.TTS" }
 func (t *GoogleTTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *GoogleTTS) SampleRate() int  { return 24000 }
+func (t *GoogleTTS) SampleRate() int  { return int(t.audio.GetSampleRateHertz()) }
 func (t *GoogleTTS) NumChannels() int { return 1 }
 func (t *GoogleTTS) Model() string {
 	if t.model != "" {
@@ -236,6 +252,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		pitch:        t.audio.GetPitch(),
 		effects:      append([]string(nil), t.audio.GetEffectsProfileId()...),
 		volumeGainDB: t.audio.GetVolumeGainDb(),
+		sampleRate:   t.audio.GetSampleRateHertz(),
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -261,6 +278,9 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	if cfg.volumeSet {
 		t.audio.VolumeGainDb = cfg.volumeGainDB
 	}
+	if cfg.sampleSet {
+		t.audio.SampleRateHertz = cfg.sampleRate
+	}
 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -278,12 +298,35 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	resp, err := t.client.SynthesizeSpeech(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, googleTTSSynthesisError(err)
 	}
 
 	return &googleTTSChunkedStream{
-		data: resp.AudioContent,
+		data:       resp.AudioContent,
+		sampleRate: t.audio.GetSampleRateHertz(),
 	}, nil
+}
+
+func googleTTSSynthesisError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	if st, ok := status.FromError(err); ok {
+		return llm.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleTTSStatusRetryable(st.Code()))
+	}
+	return err
+}
+
+func googleTTSStatusRetryable(code codes.Code) bool {
+	switch code {
+	case codes.InvalidArgument, codes.NotFound, codes.AlreadyExists, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.OutOfRange:
+		return false
+	default:
+		return true
+	}
 }
 
 func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -319,10 +362,11 @@ type googleTTSChunkedStream struct {
 	offset         int
 	headerStripped bool
 	finalSent      bool
+	sampleRate     int32
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if !s.headerStripped && len(s.data) > 44 {
+	if !s.headerStripped && len(s.data) >= 44 {
 		// Google TTS LINEAR16 usually returns a WAV with a 44-byte header.
 		// Verify RIFF and WAVE tags.
 		if string(s.data[0:4]) == "RIFF" && string(s.data[8:12]) == "WAVE" {
@@ -343,11 +387,15 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	chunk := s.data[s.offset:end]
 	s.offset = end
+	sampleRate := s.sampleRate
+	if sampleRate == 0 {
+		sampleRate = 24000
+	}
 
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              chunk,
-			SampleRate:        24000,
+			SampleRate:        uint32(sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(len(chunk) / 2),
 		},
@@ -571,7 +619,7 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, googleTTSSynthesisError(err)
 		}
 		data := resp.GetAudioContent()
 		if len(data) == 0 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
 	"os"
@@ -300,9 +301,10 @@ func googleToolNames(tools []llm.Tool) []string {
 }
 
 type googleLLMStream struct {
-	next   func() (*genai.GenerateContentResponse, error, bool)
-	stop   func()
-	closed bool
+	next              func() (*genai.GenerateContentResponse, error, bool)
+	stop              func()
+	closed            bool
+	responseGenerated bool
 }
 
 func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
@@ -493,16 +495,31 @@ func (g *googleChatItemGroup) removeInvalidToolItems() {
 		return
 	}
 
-	outputsByCallID := make(map[string]*llm.FunctionCallOutput)
+	callIDs := make(map[string]struct{}, len(g.toolCalls))
+	outputIDs := make(map[string]struct{}, len(g.toolOutputs))
+	for _, toolCall := range g.toolCalls {
+		callIDs[toolCall.CallID] = struct{}{}
+	}
 	for _, toolOutput := range g.toolOutputs {
-		outputsByCallID[toolOutput.CallID] = toolOutput
+		outputIDs[toolOutput.CallID] = struct{}{}
+	}
+
+	validCallIDs := make(map[string]struct{})
+	for callID := range callIDs {
+		if _, ok := outputIDs[callID]; ok {
+			validCallIDs[callID] = struct{}{}
+		}
 	}
 
 	validCalls := make([]*llm.FunctionCall, 0, len(g.toolCalls))
 	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
 	for _, toolCall := range g.toolCalls {
-		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+		if _, ok := validCallIDs[toolCall.CallID]; ok {
 			validCalls = append(validCalls, toolCall)
+		}
+	}
+	for _, toolOutput := range g.toolOutputs {
+		if _, ok := validCallIDs[toolOutput.CallID]; ok {
 			validOutputs = append(validOutputs, toolOutput)
 		}
 	}
@@ -531,6 +548,9 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 	for {
 		resp, err, ok := s.next()
 		if !ok {
+			if !s.responseGenerated {
+				return nil, llm.NewAPIStatusError("no response generated", -1, "", nil)
+			}
 			return nil, io.EOF
 		}
 		if err != nil {
@@ -546,13 +566,25 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			},
 		}
 
+		if resp.PromptFeedback != nil {
+			message, marshalErr := json.Marshal(resp.PromptFeedback)
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			return nil, llm.NewAPIStatusErrorWithRetryable(string(message), -1, "", nil, false)
+		}
+
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
+			if googleBlockedFinishReason(cand.FinishReason) {
+				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, "", nil, false)
+			}
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
 					if part.Text != "" {
 						chunk.Delta.Content += part.Text
-					} else if part.FunctionCall != nil {
+						s.responseGenerated = true
+					} else if part.FunctionCall != nil && !googleFunctionCallWillContinue(part.FunctionCall) {
 						args, _ := json.Marshal(part.FunctionCall.Args)
 						chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
 							Name:      part.FunctionCall.Name,
@@ -560,6 +592,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 							Type:      "function",
 							CallID:    googleFunctionCallID(part.FunctionCall),
 						})
+						s.responseGenerated = true
 					}
 				}
 			}
@@ -567,15 +600,30 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 
 		if resp.UsageMetadata != nil {
 			chunk.Usage = &llm.CompletionUsage{
-				PromptTokens:     int(resp.UsageMetadata.PromptTokenCount),
-				CompletionTokens: int(resp.UsageMetadata.CandidatesTokenCount),
-				TotalTokens:      int(resp.UsageMetadata.TotalTokenCount),
+				PromptTokens:       int(resp.UsageMetadata.PromptTokenCount),
+				PromptCachedTokens: int(resp.UsageMetadata.CachedContentTokenCount),
+				CompletionTokens:   int(resp.UsageMetadata.CandidatesTokenCount),
+				TotalTokens:        int(resp.UsageMetadata.TotalTokenCount),
 			}
 		}
 
 		if googleChatChunkHasOutput(chunk) {
 			return chunk, nil
 		}
+	}
+}
+
+func googleBlockedFinishReason(reason genai.FinishReason) bool {
+	switch reason {
+	case genai.FinishReasonSafety,
+		genai.FinishReasonSPII,
+		genai.FinishReasonProhibitedContent,
+		genai.FinishReasonBlocklist,
+		genai.FinishReasonLanguage,
+		genai.FinishReasonRecitation:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -587,6 +635,10 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 		return call.ID
 	}
 	return "call_" + call.Name
+}
+
+func googleFunctionCallWillContinue(call *genai.FunctionCall) bool {
+	return call != nil && call.WillContinue != nil && *call.WillContinue
 }
 
 func googleChatChunkHasOutput(chunk *llm.ChatChunk) bool {

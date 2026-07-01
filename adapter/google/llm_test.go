@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -117,6 +118,30 @@ func TestBuildGoogleContentsGroupsToolCallsWithResponses(t *testing.T) {
 	}
 	assertGoogleFunctionResponsePart(t, contents[1].Parts, 0, "call_lookup", "lookup", "Paris")
 	assertGoogleFunctionResponsePart(t, contents[1].Parts, 1, "call_weather", "weather", "sunny")
+}
+
+func TestBuildGoogleContentsPreservesMultipleMatchedToolOutputs(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-turn", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output-1", CallID: "call_lookup", Name: "lookup", Output: "first"},
+		&llm.FunctionCallOutput{ID: "lookup-output-2", CallID: "call_lookup", Name: "lookup", Output: "second"},
+	}
+
+	contents, _ := buildGoogleContents(ctx)
+
+	if len(contents) != 2 {
+		t.Fatalf("len(contents) = %d, want 2: %#v", len(contents), contents)
+	}
+	if contents[1].Role != genai.RoleUser {
+		t.Fatalf("tool output role = %q, want user", contents[1].Role)
+	}
+	if len(contents[1].Parts) != 2 {
+		t.Fatalf("tool output parts = %d, want all matched outputs: %#v", len(contents[1].Parts), contents[1].Parts)
+	}
+	assertGoogleFunctionResponsePart(t, contents[1].Parts, 0, "call_lookup", "lookup", "first")
+	assertGoogleFunctionResponsePart(t, contents[1].Parts, 1, "call_lookup", "lookup", "second")
 }
 
 func TestBuildGoogleContentsFiltersUnmatchedToolItems(t *testing.T) {
@@ -427,6 +452,195 @@ func TestGoogleLLMStreamSkipsEmptyProviderDeltas(t *testing.T) {
 	}
 	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "hello" {
 		t.Fatalf("chunk = %#v, want first non-empty delta", chunk)
+	}
+}
+
+func TestGoogleLLMStreamReturnsAPIStatusErrorWhenNoResponseGenerated(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "no response generated" {
+		t.Fatalf("APIStatusError message = %q, want no response generated", statusErr.Message)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = false, want true before any response output")
+	}
+}
+
+func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		Candidates: []*genai.Candidate{{
+			FinishReason: genai.FinishReasonSafety,
+		}},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "generation blocked by gemini: SAFETY" {
+		t.Fatalf("APIStatusError message = %q, want blocked finish reason", statusErr.Message)
+	}
+	if statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = true, want false for blocked generation")
+	}
+}
+
+func TestGoogleLLMStreamReturnsNonRetryableStatusForPromptFeedback(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		PromptFeedback: &genai.GenerateContentResponsePromptFeedback{
+			BlockReason:        genai.BlockedReasonSafety,
+			BlockReasonMessage: "blocked",
+		},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != `{"blockReason":"SAFETY","blockReasonMessage":"blocked"}` {
+		t.Fatalf("APIStatusError message = %q, want prompt feedback JSON", statusErr.Message)
+	}
+	if statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = true, want false for prompt feedback")
+	}
+}
+
+func TestGoogleLLMStreamReportsCachedPromptTokens(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        8,
+			CachedContentTokenCount: 3,
+			CandidatesTokenCount:    5,
+			TotalTokenCount:         13,
+		},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Usage == nil {
+		t.Fatalf("chunk = %#v, want usage", chunk)
+	}
+	if chunk.Usage.PromptTokens != 8 || chunk.Usage.PromptCachedTokens != 3 || chunk.Usage.CompletionTokens != 5 || chunk.Usage.TotalTokens != 13 {
+		t.Fatalf("usage = %#v, want cached prompt tokens preserved", chunk.Usage)
+	}
+}
+
+func TestGoogleLLMStreamDelaysContinuingFunctionCall(t *testing.T) {
+	continuing := true
+	responses := []*genai.GenerateContentResponse{
+		{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							ID:           "call_lookup",
+							Name:         "lookup",
+							Args:         map[string]any{"query": "wea"},
+							WillContinue: &continuing,
+						},
+					}},
+				},
+			}},
+		},
+		{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							ID:   "call_lookup",
+							Name: "lookup",
+							Args: map[string]any{"query": "weather"},
+						},
+					}},
+				},
+			}},
+		},
+	}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want final tool call chunk", chunk)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("Arguments = %q, want final arguments", call.Arguments)
+	}
+	if len(responses) != 0 {
+		t.Fatalf("remaining responses = %d, want continuing function call skipped", len(responses))
 	}
 }
 
