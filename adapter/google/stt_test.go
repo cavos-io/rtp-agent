@@ -2162,6 +2162,61 @@ func TestGoogleSTTStreamRestartsAfterReferenceMaxSessionFinal(t *testing.T) {
 	close(restartedRecv)
 }
 
+func TestGoogleSTTStreamReportsReferenceMaxSessionReconnectError(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{responses: []*speechpb.StreamingRecognizeResponse{
+		{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+		{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal:      true,
+				LanguageCode: "en-US",
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "done",
+					Confidence: 0.91,
+				}},
+			}},
+		},
+	}}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
+		streamErrs:   []error{nil, status.Error(codes.Unavailable, "restart failed")},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	googleStream := stream.(*googleSTTStream)
+	googleStream.mu.Lock()
+	googleStream.sessionConnectedAt = time.Now().Add(-googleSTTMaxSessionDuration - time.Second)
+	googleStream.mu.Unlock()
+	<-client.streamCallCh
+
+	if event, err := stream.Next(); err != nil || event == nil || event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = (%#v, %v), want start of speech", event, err)
+	}
+	if event, err := stream.Next(); err != nil || event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event = (%#v, %v), want final transcript", event, err)
+	}
+	if event, err := stream.Next(); err != nil || event == nil || event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event = (%#v, %v), want end of speech before reconnect error", event, err)
+	}
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("fourth event = %#v, want nil reconnect error", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("fourth Next error = %T %v, want reconnect APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+}
+
 func TestGoogleSTTStreamNextErrorTerminatesStream(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.Unavailable, "unavailable")}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
@@ -2343,6 +2398,7 @@ type fakeGoogleSpeechClient struct {
 	streams           []speechpb.Speech_StreamingRecognizeClient
 	stream            speechpb.Speech_StreamingRecognizeClient
 	streamErr         error
+	streamErrs        []error
 	streamCallCh      chan int
 	streamCalls       int
 	recognizeRequest  *speechpb.RecognizeRequest
@@ -2356,12 +2412,17 @@ func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ..
 	if c.streamCallCh != nil {
 		c.streamCallCh <- c.streamCalls
 	}
+	err := c.streamErr
+	if len(c.streamErrs) > 0 {
+		err = c.streamErrs[0]
+		c.streamErrs = c.streamErrs[1:]
+	}
 	if len(c.streams) > 0 {
 		stream := c.streams[0]
 		c.streams = c.streams[1:]
-		return stream, c.streamErr
+		return stream, err
 	}
-	return c.stream, c.streamErr
+	return c.stream, err
 }
 
 func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.RecognizeRequest, opts ...gax.CallOption) (*speechpb.RecognizeResponse, error) {

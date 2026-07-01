@@ -769,9 +769,15 @@ func (s *googleSTTStream) readLoop() {
 						s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
 						speechStarted = false
 					}
-					if s.restartStream(stream) {
+					restarted, restartErr := s.restartStreamWithError(stream)
+					if restarted {
 						lastUsageEventTime = 0
 						continue
+					}
+					if restartErr != nil {
+						s.errCh <- googleSTTStreamError(restartErr)
+						s.terminate()
+						return
 					}
 				}
 			}
@@ -812,22 +818,27 @@ func (s *googleSTTStream) shouldRestartAfterMaxSession(stream speechpb.Speech_St
 }
 
 func (s *googleSTTStream) restartStream(old speechpb.Speech_StreamingRecognizeClient) bool {
+	restarted, _ := s.restartStreamWithError(old)
+	return restarted
+}
+
+func (s *googleSTTStream) restartStreamWithError(old speechpb.Speech_StreamingRecognizeClient) (bool, error) {
 	_ = old.CloseSend()
 	stream, err := s.owner.newStreamingRecognizeStream(s.ctx, s.language, s.includeAlternativeLanguages)
 	if err != nil {
-		return false
+		return false, err
 	}
 	s.mu.Lock()
 	if s.closed || s.inputClosed || s.stream != old {
 		s.mu.Unlock()
 		_ = stream.CloseSend()
-		return false
+		return false, nil
 	}
 	s.stream = stream
 	s.sessionConnectedAt = time.Now()
 	s.audioPushed = false
 	s.mu.Unlock()
-	return true
+	return true, nil
 }
 
 func (s *googleSTTStream) reconnectForUpdatedConfig() bool {
