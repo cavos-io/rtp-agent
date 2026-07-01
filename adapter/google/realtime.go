@@ -588,8 +588,11 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		TurnComplete: &turnComplete,
 	})
 }
-func (s *googleRealtimeSession) Say(string) error {
-	return errors.New("google realtime session text input is not implemented")
+func (s *googleRealtimeSession) Say(text string) error {
+	if s == nil || s.liveSession == nil || text == "" {
+		return nil
+	}
+	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{Text: text})
 }
 func (s *googleRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *googleRealtimeSession) Interrupt() error {

@@ -404,6 +404,29 @@ func TestGoogleRealtimeSessionInterruptSendsReferenceActivityStart(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionSaySendsReferenceRealtimeText(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Say("hello live model"); err != nil {
+		t.Fatalf("Say error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs = %d, want one text input", len(liveSession.inputs))
+	}
+	if liveSession.inputs[0].Text != "hello live model" {
+		t.Fatalf("text input = %q, want reference realtime text", liveSession.inputs[0].Text)
+	}
+}
+
 type fakeGoogleRealtimeConnector struct {
 	model   string
 	config  *genai.LiveConnectConfig
