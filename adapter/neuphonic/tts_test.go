@@ -755,6 +755,28 @@ func TestNeuphonicTTSStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("neuphonic tts dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewNeuphonicTTS("test-key", "")
+
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil on dial failure", stream)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestNeuphonicTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	conn := newNeuphonicProviderCloseWebsocketConn(t, websocket.CloseUnsupportedData)
 

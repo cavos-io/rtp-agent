@@ -249,7 +249,10 @@ func (t *NeuphonicTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildNeuphonicTTSWebsocketURL(t).String(), buildNeuphonicTTSWebsocketHeaders(t))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial neuphonic tts websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial neuphonic tts websocket: %v", err))
 	}
 	if t.isClosed() {
 		conn.Close()
