@@ -137,6 +137,7 @@ type appGoogleSTTConfig struct {
 	detectLanguage       *bool
 	interimResults       *bool
 	wordTimeOffsets      *bool
+	speechEndTimeout     time.Duration
 	alternativeLanguages []string
 }
 
@@ -165,6 +166,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if cfg.wordTimeOffsets != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTWordTimeOffsets(*cfg.wordTimeOffsets))
+	}
+	if cfg.speechEndTimeout > 0 {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpeechEndTimeout(cfg.speechEndTimeout))
 	}
 	if len(cfg.alternativeLanguages) > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAlternativeLanguages(cfg.alternativeLanguages...))
@@ -3974,7 +3978,7 @@ func cavosTTSFromConfig(cfg AppConfig) coretts.TTS {
 }
 
 func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
-	return appGoogleSTTConfig{
+	googleCfg := appGoogleSTTConfig{
 		model:                cfg.STTModel,
 		sampleRate:           cfg.STTSampleRate,
 		punctuate:            cfg.STTPunctuate,
@@ -3985,6 +3989,10 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		wordTimeOffsets:      cfg.STTWordTimestamps,
 		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
 	}
+	if cfg.STTEndpointingMS != nil {
+		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
+	}
+	return googleCfg
 }
 
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
