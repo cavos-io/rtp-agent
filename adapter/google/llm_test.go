@@ -351,6 +351,29 @@ func TestBuildGoogleToolConfigMapsNoneToolChoice(t *testing.T) {
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceToolConfigExtra(t *testing.T) {
+	includeServerTools := true
+	streamArgs := true
+	toolConfig := &genai.ToolConfig{
+		FunctionCallingConfig: &genai.FunctionCallingConfig{
+			Mode:                        genai.FunctionCallingConfigModeAuto,
+			StreamFunctionCallArguments: &streamArgs,
+		},
+		IncludeServerSideToolInvocations: &includeServerTools,
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"tool_config": toolConfig,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ToolConfig != toolConfig {
+		t.Fatalf("ToolConfig = %#v, want %#v", config.ToolConfig, toolConfig)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigDropsToolsWithCachedContentLikeReference(t *testing.T) {
 	options := &llm.ChatOptions{
 		Tools:      []llm.Tool{googleRequestTestTool{}},
