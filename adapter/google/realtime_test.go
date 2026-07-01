@@ -621,6 +621,28 @@ func TestGoogleRealtimeSessionAccumulatesReferenceInputTranscription(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionInterruptedEmitsReferenceSpeechStarted(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{Interrupted: true},
+	}
+
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("interrupted event = %#v, want speech_started", event)
+	}
+}
+
 func nextGoogleRealtimeTestEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent) llm.RealtimeEvent {
 	t.Helper()
 	select {
