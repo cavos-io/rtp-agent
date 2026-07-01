@@ -119,6 +119,30 @@ func TestBuildGoogleContentsGroupsToolCallsWithResponses(t *testing.T) {
 	assertGoogleFunctionResponsePart(t, contents[1].Parts, 1, "call_weather", "weather", "sunny")
 }
 
+func TestBuildGoogleContentsPreservesMultipleMatchedToolOutputs(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-turn", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output-1", CallID: "call_lookup", Name: "lookup", Output: "first"},
+		&llm.FunctionCallOutput{ID: "lookup-output-2", CallID: "call_lookup", Name: "lookup", Output: "second"},
+	}
+
+	contents, _ := buildGoogleContents(ctx)
+
+	if len(contents) != 2 {
+		t.Fatalf("len(contents) = %d, want 2: %#v", len(contents), contents)
+	}
+	if contents[1].Role != genai.RoleUser {
+		t.Fatalf("tool output role = %q, want user", contents[1].Role)
+	}
+	if len(contents[1].Parts) != 2 {
+		t.Fatalf("tool output parts = %d, want all matched outputs: %#v", len(contents[1].Parts), contents[1].Parts)
+	}
+	assertGoogleFunctionResponsePart(t, contents[1].Parts, 0, "call_lookup", "lookup", "first")
+	assertGoogleFunctionResponsePart(t, contents[1].Parts, 1, "call_lookup", "lookup", "second")
+}
+
 func TestBuildGoogleContentsFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
