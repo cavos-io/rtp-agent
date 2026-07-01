@@ -4059,6 +4059,8 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
+	} else if cfg.STTEndpointingSeconds != nil {
+		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingSeconds * float64(time.Second))
 	}
 	if cfg.STTSpeechStartTimeoutMS != nil {
 		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond

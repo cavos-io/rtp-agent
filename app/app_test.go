@@ -13667,6 +13667,18 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndSeconds(t *testing.T) {
+	endpointing := 0.75
+
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTEndpointingSeconds: &endpointing,
+	})
+
+	if googleCfg.speechEndTimeout != 750*time.Millisecond {
+		t.Fatalf("speechEndTimeout = %v, want 750ms", googleCfg.speechEndTimeout)
+	}
+}
+
 func TestGroqSTTFallbackPassesReferenceOptions(t *testing.T) {
 	provider, err := fallbackSTTFromProvider(AppConfig{
 		GroqAPIKey:        "test-groq-key",
