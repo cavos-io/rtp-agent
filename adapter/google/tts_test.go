@@ -605,6 +605,14 @@ func TestGoogleTTSGenderOptionMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSLocationOptionMatchesReferenceEndpoint(t *testing.T) {
+	cfg := googleTTSConfigFromOptions(WithGoogleTTSLocation("europe-west1"))
+
+	if got := googleTTSEndpoint(cfg); got != "europe-west1-texttospeech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want europe-west1-texttospeech.googleapis.com", got)
+	}
+}
+
 func TestGoogleTTSVoiceCloneKeyMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

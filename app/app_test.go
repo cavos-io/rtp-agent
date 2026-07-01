@@ -13397,6 +13397,7 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "google")
 	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_TTS_REGION", "europe-west1")
 	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "id-ID-Standard-A")
 	t.Setenv("RTP_AGENT_TTS_GENDER", "female")
@@ -13422,6 +13423,9 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 	if googleCfg.language != "id-ID" || googleCfg.voice != "id-ID-Standard-A" || googleCfg.model != "gemini-custom" {
 		t.Fatalf("google cfg voice = %+v, want configured language, voice, and model", googleCfg)
+	}
+	if googleCfg.location != "europe-west1" {
+		t.Fatalf("location = %q, want europe-west1", googleCfg.location)
 	}
 	if googleCfg.gender != "female" {
 		t.Fatalf("gender = %q, want female", googleCfg.gender)

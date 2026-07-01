@@ -15,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -44,6 +45,8 @@ type GoogleTTSOption func(*googleTTSConfig)
 type googleTTSConfig struct {
 	language     string
 	languageSet  bool
+	location     string
+	locationSet  bool
 	gender       texttospeechpb.SsmlVoiceGender
 	genderSet    bool
 	voice        string
@@ -76,6 +79,15 @@ func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 		if language != "" {
 			cfg.language = language
 			cfg.languageSet = true
+		}
+	}
+}
+
+func WithGoogleTTSLocation(location string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if location != "" {
+			cfg.location = location
+			cfg.locationSet = true
 		}
 	}
 }
@@ -198,6 +210,9 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 	if err != nil {
 		return nil, err
 	}
+	if endpoint := googleTTSEndpoint(cfg); endpoint != "" {
+		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
+	}
 
 	client, err := texttospeech.NewClient(ctx, clientOpts...)
 	if err != nil {
@@ -214,6 +229,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 func googleTTSConfigFromOptions(opts ...GoogleTTSOption) googleTTSConfig {
 	cfg := googleTTSConfig{
 		language:     "en-US",
+		location:     "global",
 		gender:       texttospeechpb.SsmlVoiceGender_NEUTRAL,
 		voice:        "Charon",
 		model:        "gemini-2.5-flash-tts",
@@ -240,6 +256,13 @@ func validateGoogleTTSConfig(cfg googleTTSConfig) error {
 		}
 	}
 	return nil
+}
+
+func googleTTSEndpoint(cfg googleTTSConfig) string {
+	if cfg.location == "" || cfg.location == "global" {
+		return ""
+	}
+	return cfg.location + "-texttospeech.googleapis.com"
 }
 
 func newGoogleTTSWithConfig(client googleTTSClient, cfg googleTTSConfig) *GoogleTTS {

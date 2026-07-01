@@ -114,6 +114,7 @@ var appNewAgoraDataPublisher = workeragora.NewSDKDataPublisher
 
 type appGoogleTTSConfig struct {
 	language         string
+	location         string
 	voice            string
 	gender           string
 	cloneKey         string
@@ -193,6 +194,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	ttsOpts := []adaptergoogle.GoogleTTSOption{}
 	if cfg.language != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.language))
+	}
+	if cfg.location != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLocation(cfg.location))
 	}
 	if cfg.voice != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.voice))
@@ -4025,6 +4029,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
 		language:   cfg.TTSLanguage,
+		location:   cfg.TTSRegion,
 		voice:      cfg.TTSVoice,
 		gender:     cfg.TTSGender,
 		cloneKey:   cfg.TTSVoiceID,
