@@ -2417,6 +2417,91 @@ func TestGoogleSTTStreamEmitsReferenceV2RecognitionUsage(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamResetsReferenceV2UsageAfterMaxSessionReconnect(t *testing.T) {
+	firstStream := &fakeGoogleV2StreamingRecognizeClient{responses: []*speechv2pb.StreamingRecognizeResponse{
+		{
+			Metadata: &speechv2pb.RecognitionResponseMetadata{
+				RequestId:           "first-usage",
+				TotalBilledDuration: durationpb.New(time.Second),
+			},
+		},
+		{
+			Results: []*speechv2pb.StreamingRecognitionResult{{
+				IsFinal:      true,
+				LanguageCode: "en-US",
+				Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{
+					Transcript: "done",
+					Confidence: 0.91,
+					Words: []*speechv2pb.WordInfo{{
+						Word:        "done",
+						StartOffset: durationpb.New(100 * time.Millisecond),
+						EndOffset:   durationpb.New(300 * time.Millisecond),
+						Confidence:  0.91,
+					}},
+				}},
+			}},
+		},
+	}}
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{responses: []*speechv2pb.StreamingRecognizeResponse{{
+		Metadata: &speechv2pb.RecognitionResponseMetadata{
+			RequestId:           "second-usage",
+			TotalBilledDuration: durationpb.New(500 * time.Millisecond),
+		},
+	}}}
+	client := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithV2Client(
+		client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	googleStream := stream.(*googleSTTStream)
+	googleStream.mu.Lock()
+	googleStream.sessionConnectedAt = time.Now().Add(-googleSTTMaxSessionDuration - time.Second)
+	googleStream.mu.Unlock()
+	<-client.streamCallCh
+
+	first, err := stream.Next()
+	if err != nil || first == nil || first.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("first event = (%#v, %v), want v2 recognition usage", first, err)
+	}
+	if first.RequestID != "first-usage" || first.RecognitionUsage == nil || first.RecognitionUsage.AudioDuration != 1 {
+		t.Fatalf("first usage = %#v, want 1s from first stream", first)
+	}
+	final, err := stream.Next()
+	if err != nil || final == nil || final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event = (%#v, %v), want final transcript", final, err)
+	}
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want v2 max-session restart", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for v2 max-session restart")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after v2 max-session restart")
+	}
+
+	second, err := stream.Next()
+	if err != nil || second == nil || second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("third event = (%#v, %v), want fresh usage from restarted stream", second, err)
+	}
+	if second.RequestID != "second-usage" || second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.5 {
+		t.Fatalf("second usage = %#v, want fresh 0.5s after v2 reconnect", second)
+	}
+}
+
 func TestGoogleSTTStreamIgnoresTranscriptOnVoiceActivityEvent(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{

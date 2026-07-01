@@ -1353,6 +1353,7 @@ func (s *googleSTTStream) readLoopV2() {
 					}
 					restarted, restartErr := s.restartStreamV2WithError(stream)
 					if restarted {
+						lastUsageEventTime = 0
 						continue
 					}
 					if restartErr != nil {
