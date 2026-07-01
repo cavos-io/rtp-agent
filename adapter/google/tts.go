@@ -722,6 +722,8 @@ type googleTTSSegmentState struct {
 	emittedAudio bool
 	opusBuffer   []byte
 	pcmBuffer    []byte
+	pcmFrames    [][]byte
+	pcmFrameSize int
 }
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
@@ -936,12 +938,20 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		stream := s.streams[0]
 		s.mu.Unlock()
 
+		if frame := s.dequeueStreamingPCMFrame(stream); frame != nil {
+			return &tts.SynthesizedAudio{Frame: frame}, nil
+		}
+
 		resp, err := stream.Recv()
 		if err != nil && s.isClosed() {
 			return nil, io.EOF
 		}
 		if err == io.EOF {
 			s.mu.Lock()
+			if frame := s.flushStreamingPCMFrameLocked(stream); frame != nil {
+				s.mu.Unlock()
+				return &tts.SynthesizedAudio{Frame: frame}, nil
+			}
 			if len(s.streams) > 0 && s.streams[0] == stream {
 				s.streams = s.streams[1:]
 			}
@@ -1003,14 +1013,12 @@ func (s *googleTTSSynthesizeStream) googleTTSStreamingAudioFrame(stream texttosp
 			segment = &googleTTSSegmentState{}
 			s.segments[stream] = segment
 		}
-		segment.pcmBuffer = append(segment.pcmBuffer, data...)
-		completeLen := len(segment.pcmBuffer) - len(segment.pcmBuffer)%2
-		if completeLen == 0 {
+		s.queueStreamingPCMFramesLocked(segment, data)
+		frameData := s.popStreamingPCMFrameLocked(segment)
+		if frameData == nil {
 			s.mu.Unlock()
 			return nil, true, nil
 		}
-		frameData := bytes.Clone(segment.pcmBuffer[:completeLen])
-		segment.pcmBuffer = bytes.Clone(segment.pcmBuffer[completeLen:])
 		s.mu.Unlock()
 
 		frame, err := googleTTSStreamingAudioFrame(frameData, encoding, s.audio.GetSampleRateHertz())
@@ -1043,6 +1051,75 @@ func (s *googleTTSSynthesizeStream) googleTTSStreamingAudioFrame(stream texttosp
 	return frame, false, nil
 }
 
+func (s *googleTTSSynthesizeStream) queueStreamingPCMFramesLocked(segment *googleTTSSegmentState, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	if segment.pcmFrameSize == 0 {
+		segment.pcmFrameSize = googleTTSPCMFrameBytes(s.audio.GetSampleRateHertz(), 20)
+	}
+	maxFrameSize := googleTTSPCMFrameBytes(s.audio.GetSampleRateHertz(), 200)
+	segment.pcmBuffer = append(segment.pcmBuffer, data...)
+	for len(segment.pcmBuffer) >= segment.pcmFrameSize {
+		segment.pcmFrames = append(segment.pcmFrames, bytes.Clone(segment.pcmBuffer[:segment.pcmFrameSize]))
+		segment.pcmBuffer = segment.pcmBuffer[segment.pcmFrameSize:]
+		if segment.pcmFrameSize < maxFrameSize {
+			segment.pcmFrameSize *= 2
+			if segment.pcmFrameSize > maxFrameSize {
+				segment.pcmFrameSize = maxFrameSize
+			}
+		}
+	}
+}
+
+func (s *googleTTSSynthesizeStream) popStreamingPCMFrameLocked(segment *googleTTSSegmentState) []byte {
+	if segment == nil || len(segment.pcmFrames) == 0 {
+		return nil
+	}
+	frame := segment.pcmFrames[0]
+	segment.pcmFrames = segment.pcmFrames[1:]
+	segment.emittedAudio = true
+	return frame
+}
+
+func (s *googleTTSSynthesizeStream) dequeueStreamingPCMFrame(stream texttospeechpb.TextToSpeech_StreamingSynthesizeClient) *model.AudioFrame {
+	s.mu.Lock()
+	segment := s.segments[stream]
+	frameData := s.popStreamingPCMFrameLocked(segment)
+	s.mu.Unlock()
+	if frameData == nil {
+		return nil
+	}
+	return googleTTSRawPCMFrame(frameData, s.audio.GetSampleRateHertz())
+}
+
+func (s *googleTTSSynthesizeStream) flushStreamingPCMFrameLocked(stream texttospeechpb.TextToSpeech_StreamingSynthesizeClient) *model.AudioFrame {
+	segment := s.segments[stream]
+	if segment == nil || len(segment.pcmBuffer) == 0 {
+		return nil
+	}
+	completeLen := len(segment.pcmBuffer) - len(segment.pcmBuffer)%2
+	if completeLen == 0 {
+		segment.pcmBuffer = nil
+		return nil
+	}
+	frameData := bytes.Clone(segment.pcmBuffer[:completeLen])
+	segment.pcmBuffer = nil
+	segment.emittedAudio = true
+	return googleTTSRawPCMFrame(frameData, s.audio.GetSampleRateHertz())
+}
+
+func googleTTSPCMFrameBytes(sampleRate int32, frameMS int) int {
+	if sampleRate <= 0 {
+		sampleRate = 24000
+	}
+	samples := int(sampleRate) * frameMS / 1000
+	if samples < 1 {
+		samples = 1
+	}
+	return samples * 2
+}
+
 func (s *googleTTSSynthesizeStream) markClosedLocked() {
 	s.closed = true
 	s.cond.Broadcast()
@@ -1070,12 +1147,16 @@ func googleTTSStreamingAudioFrame(data []byte, encoding texttospeechpb.AudioEnco
 		}
 		return codecs.DecodeOpusAudio(data, int(sampleRate), 1)
 	}
+	return googleTTSRawPCMFrame(data, sampleRate), nil
+}
+
+func googleTTSRawPCMFrame(data []byte, sampleRate int32) *model.AudioFrame {
 	return &model.AudioFrame{
 		Data:              bytes.Clone(data),
 		SampleRate:        uint32(sampleRate),
 		NumChannels:       1,
 		SamplesPerChannel: uint32(len(data) / 2),
-	}, nil
+	}
 }
 
 func googleTTSOpusDecodeNeedsMore(err error, buffered int) bool {

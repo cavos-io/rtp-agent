@@ -194,6 +194,51 @@ func TestGoogleTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamBuffersReferenceProgressivePCMFrame(t *testing.T) {
+	first := bytes.Repeat([]byte{1, 2}, 200)
+	second := bytes.Repeat([]byte{3, 4}, 280)
+	want := append(append([]byte(nil), first...), second...)
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{
+				{AudioContent: first},
+				{AudioContent: second},
+			},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, want) {
+		t.Fatalf("audio data length = %d, want buffered 20ms frame length %d", len(got), len(want))
+	}
+	if got := audio.Frame.SamplesPerChannel; got != 480 {
+		t.Fatalf("samples per channel = %d, want reference 20ms frame", got)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+}
+
 func TestGoogleTTSStreamMarkupInputMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client, WithGoogleTTSMarkup(true))
