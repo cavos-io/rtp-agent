@@ -70,9 +70,7 @@ func WithGoogleSTTModel(model string) GoogleSTTOption {
 
 func WithGoogleSTTLanguage(language string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if language != "" {
-			s.language = language
-		}
+		s.language = language
 	}
 }
 
@@ -1003,7 +1001,7 @@ func (s *googleSTTStream) updateConfig(minConfidence float64, language string, l
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.minConfidence = minConfidence
-	if languageChanged && language != "" {
+	if languageChanged {
 		s.language = language
 		s.includeAlternativeLanguages = true
 	}
