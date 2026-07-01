@@ -238,6 +238,24 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["response_json_schema"]; ok {
 		config.ResponseJsonSchema = value
 	}
+	if value, ok := googleRoutingConfigParam(params["routing_config"]); ok {
+		config.RoutingConfig = value
+	}
+	if value, ok := googleModelSelectionConfigParam(params["model_selection_config"]); ok {
+		config.ModelSelectionConfig = value
+	}
+	if value, ok := googleLabelsParam(params["labels"]); ok {
+		config.Labels = value
+	}
+	if value, ok := googleModelArmorConfigParam(params["model_armor_config"]); ok {
+		config.ModelArmorConfig = value
+	}
+	if value, ok := googleBoolParam(params["enable_enhanced_civic_answers"]); ok {
+		config.EnableEnhancedCivicAnswers = &value
+	}
+	if value, ok := googleImageConfigParam(params["image_config"]); ok {
+		config.ImageConfig = value
+	}
 	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
 		config.ResponseModalities = value
 	}
@@ -258,6 +276,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	}
 	if value, ok := googleMediaResolutionParam(params["media_resolution"]); ok {
 		config.MediaResolution = value
+	}
+	if value, ok := googleToolConfigParam(params["tool_config"]); ok && config.ToolConfig == nil {
+		config.ToolConfig = value
 	}
 	if value, ok := googleRetrievalConfigParam(params["retrieval_config"]); ok {
 		if config.ToolConfig == nil {
@@ -341,6 +362,34 @@ func googleResponseFormatSchema(format map[string]any) (*genai.Schema, bool) {
 
 func googleSpeechConfigParam(value any) (*genai.SpeechConfig, bool) {
 	config, ok := value.(*genai.SpeechConfig)
+	return config, ok && config != nil
+}
+
+func googleRoutingConfigParam(value any) (*genai.GenerationConfigRoutingConfig, bool) {
+	config, ok := value.(*genai.GenerationConfigRoutingConfig)
+	return config, ok && config != nil
+}
+
+func googleModelSelectionConfigParam(value any) (*genai.ModelSelectionConfig, bool) {
+	config, ok := value.(*genai.ModelSelectionConfig)
+	return config, ok && config != nil
+}
+
+func googleLabelsParam(value any) (map[string]string, bool) {
+	labels, ok := value.(map[string]string)
+	if !ok || len(labels) == 0 {
+		return nil, false
+	}
+	return labels, true
+}
+
+func googleModelArmorConfigParam(value any) (*genai.ModelArmorConfig, bool) {
+	config, ok := value.(*genai.ModelArmorConfig)
+	return config, ok && config != nil
+}
+
+func googleImageConfigParam(value any) (*genai.ImageConfig, bool) {
+	config, ok := value.(*genai.ImageConfig)
 	return config, ok && config != nil
 }
 
@@ -439,6 +488,17 @@ func googleRetrievalConfigParam(value any) (*genai.RetrievalConfig, bool) {
 	case *genai.RetrievalConfig:
 		return config, config != nil
 	case genai.RetrievalConfig:
+		return &config, true
+	default:
+		return nil, false
+	}
+}
+
+func googleToolConfigParam(value any) (*genai.ToolConfig, bool) {
+	switch config := value.(type) {
+	case *genai.ToolConfig:
+		return config, config != nil
+	case genai.ToolConfig:
 		return &config, true
 	default:
 		return nil, false

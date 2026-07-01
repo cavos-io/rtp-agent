@@ -13399,10 +13399,14 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
 	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "id-ID-Standard-A")
+	t.Setenv("RTP_AGENT_TTS_VOICE_ID", "clone-key-test")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "gemini-custom")
 	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "speak warmly")
 	t.Setenv("RTP_AGENT_TTS_SPEAKING_RATE", "1.25")
 	t.Setenv("RTP_AGENT_TTS_PITCH", "3")
+	t.Setenv("RTP_AGENT_TTS_SAMPLE_RATE", "16000")
+	t.Setenv("RTP_AGENT_TTS_STREAMING", "false")
+	t.Setenv("RTP_AGENT_TTS_ENABLE_SSML_PARSING", "true")
 	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "effects_profile_id=telephony-class-application,volume_gain_db=-2.5")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -13418,6 +13422,9 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	if googleCfg.language != "id-ID" || googleCfg.voice != "id-ID-Standard-A" || googleCfg.model != "gemini-custom" {
 		t.Fatalf("google cfg voice = %+v, want configured language, voice, and model", googleCfg)
 	}
+	if googleCfg.cloneKey != "clone-key-test" {
+		t.Fatalf("clone key = %q, want clone-key-test", googleCfg.cloneKey)
+	}
 	if googleCfg.prompt != "speak warmly" {
 		t.Fatalf("prompt = %q, want speak warmly", googleCfg.prompt)
 	}
@@ -13427,11 +13434,109 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	if googleCfg.pitch != 3 {
 		t.Fatalf("pitch = %v, want 3", googleCfg.pitch)
 	}
+	if googleCfg.sampleRate == nil || *googleCfg.sampleRate != 16000 {
+		t.Fatalf("sample rate = %v, want 16000", googleCfg.sampleRate)
+	}
+	if googleCfg.streaming == nil || *googleCfg.streaming {
+		t.Fatalf("streaming = %v, want explicit false", googleCfg.streaming)
+	}
+	if googleCfg.ssml == nil || !*googleCfg.ssml {
+		t.Fatalf("ssml = %v, want explicit true", googleCfg.ssml)
+	}
 	if googleCfg.effectsProfileID != "telephony-class-application" {
 		t.Fatalf("effects profile = %q, want telephony-class-application", googleCfg.effectsProfileID)
 	}
 	if googleCfg.volumeGainDB != -2.5 {
 		t.Fatalf("volume gain = %v, want -2.5", googleCfg.volumeGainDB)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleTTSMarkup(t *testing.T) {
+	original := appNewGoogleTTS
+	defer func() { appNewGoogleTTS = original }()
+
+	var googleCfg appGoogleTTSConfig
+	appNewGoogleTTS = func(_ string, cfg appGoogleTTSConfig) (tts.TTS, error) {
+		googleCfg = cfg
+		return &fakeAppTTS{}, nil
+	}
+
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_TTS_TEXT_TYPE", "markup")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if googleCfg.markup == nil || !*googleCfg.markup {
+		t.Fatalf("markup = %v, want explicit true", googleCfg.markup)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
+	original := appNewGoogleSTT
+	defer func() { appNewGoogleSTT = original }()
+
+	var credentialsFile string
+	var googleCfg appGoogleSTTConfig
+	appNewGoogleSTT = func(credentials string, cfg appGoogleSTTConfig) (stt.STT, error) {
+		credentialsFile = credentials
+		googleCfg = cfg
+		return &fakeAppSTT{}, nil
+	}
+
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_STT_MODEL", "latest_short")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE_OPTIONS", "es-ES,fr-FR")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE_DETECTION", "false")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
+	t.Setenv("RTP_AGENT_STT_WORD_TIMESTAMPS", "false")
+	t.Setenv("RTP_AGENT_STT_WORD_CONFIDENCE", "true")
+	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "250")
+	t.Setenv("RTP_AGENT_STT_MIN_CONFIDENCE_THRESHOLD", "0.72")
+	t.Setenv("RTP_AGENT_STT_VOICE_ACTIVITY_EVENTS", "true")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if credentialsFile != "/tmp/google-credentials.json" {
+		t.Fatalf("credentials file = %q, want /tmp/google-credentials.json", credentialsFile)
+	}
+	if googleCfg.model != "latest_short" {
+		t.Fatalf("model = %q, want latest_short", googleCfg.model)
+	}
+	if googleCfg.detectLanguage == nil || *googleCfg.detectLanguage {
+		t.Fatalf("detectLanguage = %#v, want explicit false", googleCfg.detectLanguage)
+	}
+	if googleCfg.interimResults == nil || *googleCfg.interimResults {
+		t.Fatalf("interimResults = %#v, want explicit false", googleCfg.interimResults)
+	}
+	if googleCfg.wordTimeOffsets == nil || *googleCfg.wordTimeOffsets {
+		t.Fatalf("wordTimeOffsets = %#v, want explicit false", googleCfg.wordTimeOffsets)
+	}
+	if googleCfg.wordConfidence == nil || !*googleCfg.wordConfidence {
+		t.Fatalf("wordConfidence = %#v, want explicit true", googleCfg.wordConfidence)
+	}
+	if googleCfg.speechEndTimeout != 250*time.Millisecond {
+		t.Fatalf("speechEndTimeout = %v, want 250ms", googleCfg.speechEndTimeout)
+	}
+	if googleCfg.minConfidence == nil || *googleCfg.minConfidence != 0.72 {
+		t.Fatalf("minConfidence = %#v, want 0.72", googleCfg.minConfidence)
+	}
+	if googleCfg.voiceActivityEvents == nil || !*googleCfg.voiceActivityEvents {
+		t.Fatalf("voiceActivityEvents = %#v, want explicit true", googleCfg.voiceActivityEvents)
+	}
+	if !reflect.DeepEqual(googleCfg.alternativeLanguages, []string{"es-ES", "fr-FR"}) {
+		t.Fatalf("alternativeLanguages = %#v, want [es-ES fr-FR]", googleCfg.alternativeLanguages)
 	}
 }
 

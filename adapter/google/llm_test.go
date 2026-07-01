@@ -351,6 +351,29 @@ func TestBuildGoogleToolConfigMapsNoneToolChoice(t *testing.T) {
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceToolConfigExtra(t *testing.T) {
+	includeServerTools := true
+	streamArgs := true
+	toolConfig := &genai.ToolConfig{
+		FunctionCallingConfig: &genai.FunctionCallingConfig{
+			Mode:                        genai.FunctionCallingConfigModeAuto,
+			StreamFunctionCallArguments: &streamArgs,
+		},
+		IncludeServerSideToolInvocations: &includeServerTools,
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"tool_config": toolConfig,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ToolConfig != toolConfig {
+		t.Fatalf("ToolConfig = %#v, want %#v", config.ToolConfig, toolConfig)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigDropsToolsWithCachedContentLikeReference(t *testing.T) {
 	options := &llm.ChatOptions{
 		Tools:      []llm.Tool{googleRequestTestTool{}},
@@ -540,6 +563,110 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceRetrievalConfigExtra(t 
 
 	if config.ToolConfig == nil || config.ToolConfig.RetrievalConfig != retrieval {
 		t.Fatalf("tool config = %#v, want retrieval config", config.ToolConfig)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceRoutingConfigExtra(t *testing.T) {
+	routing := &genai.GenerationConfigRoutingConfig{
+		ManualMode: &genai.GenerationConfigRoutingConfigManualRoutingMode{
+			ModelName: "gemini-2.5-flash",
+		},
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"routing_config": routing,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.RoutingConfig != routing {
+		t.Fatalf("RoutingConfig = %#v, want %#v", config.RoutingConfig, routing)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceModelSelectionConfigExtra(t *testing.T) {
+	selection := &genai.ModelSelectionConfig{
+		FeatureSelectionPreference: genai.FeatureSelectionPreferencePrioritizeQuality,
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"model_selection_config": selection,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ModelSelectionConfig != selection {
+		t.Fatalf("ModelSelectionConfig = %#v, want %#v", config.ModelSelectionConfig, selection)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceLabelsExtra(t *testing.T) {
+	labels := map[string]string{
+		"agent": "voice",
+		"turn":  "live",
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"labels": labels,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !reflect.DeepEqual(config.Labels, labels) {
+		t.Fatalf("Labels = %#v, want %#v", config.Labels, labels)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceModelArmorConfigExtra(t *testing.T) {
+	armor := &genai.ModelArmorConfig{
+		PromptTemplateName:   "projects/p/locations/us/templates/prompt",
+		ResponseTemplateName: "projects/p/locations/us/templates/response",
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"model_armor_config": armor,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ModelArmorConfig != armor {
+		t.Fatalf("ModelArmorConfig = %#v, want %#v", config.ModelArmorConfig, armor)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceEnhancedCivicAnswersExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"enable_enhanced_civic_answers": true,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.EnableEnhancedCivicAnswers == nil || !*config.EnableEnhancedCivicAnswers {
+		t.Fatalf("EnableEnhancedCivicAnswers = %#v, want true", config.EnableEnhancedCivicAnswers)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceImageConfigExtra(t *testing.T) {
+	imageConfig := &genai.ImageConfig{
+		AspectRatio: "16:9",
+		ImageSize:   "2K",
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"image_config": imageConfig,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ImageConfig != imageConfig {
+		t.Fatalf("ImageConfig = %#v, want %#v", config.ImageConfig, imageConfig)
 	}
 }
 

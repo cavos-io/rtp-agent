@@ -30,6 +30,9 @@ func TestGoogleRecognitionConfigRequestsWordDetails(t *testing.T) {
 	if config.Model != "latest_long" {
 		t.Fatalf("model = %q, want latest_long", config.Model)
 	}
+	if config.AudioChannelCount != 1 {
+		t.Fatalf("audio channel count = %d, want reference mono channel", config.AudioChannelCount)
+	}
 	if !config.EnableAutomaticPunctuation {
 		t.Fatal("expected automatic punctuation to be enabled")
 	}
@@ -270,6 +273,22 @@ func TestGoogleRecognitionConfigUsesReferenceAlternativeLanguages(t *testing.T) 
 	}
 }
 
+func TestGoogleRecognitionConfigOmitsAlternativeLanguagesWhenDetectionDisabled(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTDetectLanguage(false),
+		WithGoogleSTTAlternativeLanguages("es-ES", "fr-FR"),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.LanguageCode != "en-US" {
+		t.Fatalf("language code = %q, want en-US", config.LanguageCode)
+	}
+	if len(config.AlternativeLanguageCodes) != 0 {
+		t.Fatalf("alternative languages = %#v, want none when detect_language is false", config.AlternativeLanguageCodes)
+	}
+}
+
 func TestNewGoogleSTTRejectsMissingCredentialsFile(t *testing.T) {
 	_, err := NewGoogleSTT("/definitely/missing/google-credentials.json")
 	if err == nil {
@@ -497,6 +516,31 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 	if !streamClient.closed {
 		t.Fatal("Close did not close streaming client")
+	}
+}
+
+func TestGoogleSTTStreamExplicitLanguageOverridesReferenceAlternatives(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTAlternativeLanguages("es-ES", "fr-FR"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if len(streamClient.sent) != 1 {
+		t.Fatalf("initial sends = %d, want 1", len(streamClient.sent))
+	}
+	config := streamClient.sent[0].GetStreamingConfig().GetConfig()
+	if config.GetLanguageCode() != "id-ID" {
+		t.Fatalf("language code = %q, want id-ID", config.GetLanguageCode())
+	}
+	if len(config.GetAlternativeLanguageCodes()) != 0 {
+		t.Fatalf("alternative languages = %#v, want none for explicit stream language", config.GetAlternativeLanguageCodes())
 	}
 }
 

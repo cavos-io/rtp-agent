@@ -29,6 +29,7 @@ type GoogleTTS struct {
 	prompt  *string
 	audio   *texttospeechpb.AudioConfig
 	custom  *texttospeechpb.CustomPronunciations
+	stream  bool
 	ssml    bool
 	markup  bool
 }
@@ -65,6 +66,7 @@ type googleTTSConfig struct {
 	sampleSet    bool
 	custom       *texttospeechpb.CustomPronunciations
 	customSet    bool
+	streaming    bool
 	enableSSML   bool
 	useMarkup    bool
 }
@@ -165,6 +167,12 @@ func WithGoogleTTSCustomPronunciations(custom *texttospeechpb.CustomPronunciatio
 	}
 }
 
+func WithGoogleTTSStreaming(enabled bool) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.streaming = enabled
+	}
+}
+
 func WithGoogleTTSSSML(enabled bool) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.enableSSML = enabled
@@ -180,6 +188,11 @@ func WithGoogleTTSMarkup(enabled bool) GoogleTTSOption {
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
+	cfg := googleTTSConfigFromOptions(ttsOpts...)
+	if err := validateGoogleTTSConfig(cfg); err != nil {
+		return nil, err
+	}
+
 	ctx := context.Background()
 	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
 	if err != nil {
@@ -191,10 +204,14 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 		return nil, err
 	}
 
-	return newGoogleTTSWithClient(client, ttsOpts...), nil
+	return newGoogleTTSWithConfig(client, cfg), nil
 }
 
 func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *GoogleTTS {
+	return newGoogleTTSWithConfig(client, googleTTSConfigFromOptions(opts...))
+}
+
+func googleTTSConfigFromOptions(opts ...GoogleTTSOption) googleTTSConfig {
 	cfg := googleTTSConfig{
 		language:     "en-US",
 		gender:       texttospeechpb.SsmlVoiceGender_NEUTRAL,
@@ -202,6 +219,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		model:        "gemini-2.5-flash-tts",
 		speakingRate: 1.0,
 		sampleRate:   24000,
+		streaming:    true,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -209,7 +227,22 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 	if cfg.cloneKeySet && !cfg.modelSet && !cfg.promptSet {
 		cfg.model = "chirp_3"
 	}
+	return cfg
+}
 
+func validateGoogleTTSConfig(cfg googleTTSConfig) error {
+	if cfg.enableSSML {
+		if cfg.streaming {
+			return errors.New("SSML support is not available for streaming synthesis")
+		}
+		if cfg.useMarkup {
+			return errors.New("SSML support is not available for markup input")
+		}
+	}
+	return nil
+}
+
+func newGoogleTTSWithConfig(client googleTTSClient, cfg googleTTSConfig) *GoogleTTS {
 	return &GoogleTTS{
 		streams: make(map[*googleTTSSynthesizeStream]struct{}),
 		client:  client,
@@ -217,6 +250,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		model:   cfg.model,
 		prompt:  cfg.prompt,
 		custom:  cfg.custom,
+		stream:  cfg.streaming,
 		ssml:    cfg.enableSSML,
 		markup:  cfg.useMarkup,
 		audio: &texttospeechpb.AudioConfig{
@@ -232,7 +266,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 
 func (t *GoogleTTS) Label() string { return "google.TTS" }
 func (t *GoogleTTS) Capabilities() tts.TTSCapabilities {
-	if t != nil && t.ssml {
+	if t != nil && (t.ssml || !t.stream) {
 		return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
 	}
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
