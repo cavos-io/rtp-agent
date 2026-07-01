@@ -424,6 +424,63 @@ func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamEmitsPartsAsOrderedDeltas(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{
+							{Text: "checking"},
+							{
+								FunctionCall: &genai.FunctionCall{
+									ID:   "call_lookup",
+									Name: "lookup",
+									Args: map[string]any{"query": "weather"},
+								},
+							},
+						},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	textChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if textChunk == nil || textChunk.Delta == nil {
+		t.Fatalf("first chunk = %#v, want text delta", textChunk)
+	}
+	if textChunk.Delta.Content != "checking" {
+		t.Fatalf("first content = %q, want checking", textChunk.Delta.Content)
+	}
+	if len(textChunk.Delta.ToolCalls) != 0 {
+		t.Fatalf("first tool calls = %#v, want none", textChunk.Delta.ToolCalls)
+	}
+
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if toolChunk == nil || toolChunk.Delta == nil || len(toolChunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("second chunk = %#v, want one tool-call delta", toolChunk)
+	}
+	if toolChunk.Delta.Content != "" {
+		t.Fatalf("second content = %q, want empty", toolChunk.Delta.Content)
+	}
+	call := toolChunk.Delta.ToolCalls[0]
+	if call.CallID != "call_lookup" || call.Name != "lookup" || call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("tool call = %#v, want lookup weather", call)
+	}
+}
+
 func TestGoogleLLMStreamSkipsEmptyProviderDeltas(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{
 		{},
@@ -482,6 +539,27 @@ func TestGoogleLLMStreamReturnsAPIStatusErrorWhenNoResponseGenerated(t *testing.
 	}
 	if !statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = false, want true before any response output")
+	}
+}
+
+func TestGoogleLLMStreamReturnsAPIStatusErrorWhenPageDoneWithoutOutput(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, genai.ErrPageDone, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "no response generated" {
+		t.Fatalf("APIStatusError message = %q, want no response generated", statusErr.Message)
 	}
 }
 
@@ -551,6 +629,60 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForPromptFeedback(t *testing.T)
 	}
 	if statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = true, want false for prompt feedback")
+	}
+}
+
+func TestGoogleLLMStreamMapsProviderAPIError(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, genai.APIError{Code: 429, Message: "rate limited", Status: "RESOURCE_EXHAUSTED"}, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "gemini llm: client error" {
+		t.Fatalf("APIStatusError message = %q, want client error", statusErr.Message)
+	}
+	if statusErr.StatusCode != 429 {
+		t.Fatalf("APIStatusError status = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != "rate limited RESOURCE_EXHAUSTED" {
+		t.Fatalf("APIStatusError body = %#v, want provider message and status", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = false, want true for 429 client error")
+	}
+}
+
+func TestGoogleLLMStreamMapsUnexpectedProviderError(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, errors.New("dial failed"), true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "gemini llm: error generating content dial failed" {
+		t.Fatalf("APIConnectionError message = %q, want provider wrapper", connectionErr.Message)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("APIConnectionError retryable = false, want true before response output")
 	}
 }
 

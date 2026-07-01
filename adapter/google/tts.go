@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -303,6 +304,7 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	return &googleTTSChunkedStream{
 		data:       resp.AudioContent,
+		inputText:  text,
 		sampleRate: t.audio.GetSampleRateHertz(),
 	}, nil
 }
@@ -362,6 +364,8 @@ type googleTTSChunkedStream struct {
 	offset         int
 	headerStripped bool
 	finalSent      bool
+	emittedAudio   bool
+	inputText      string
 	sampleRate     int32
 }
 
@@ -376,6 +380,10 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 
 	if s.offset >= len(s.data) {
+		if strings.TrimSpace(s.inputText) != "" && !s.emittedAudio && !s.finalSent {
+			s.finalSent = true
+			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
+		}
 		return s.emitFinal()
 	}
 
@@ -387,6 +395,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	chunk := s.data[s.offset:end]
 	s.offset = end
+	s.emittedAudio = true
 	sampleRate := s.sampleRate
 	if sampleRate == 0 {
 		sampleRate = 24000
@@ -416,20 +425,22 @@ func (s *googleTTSChunkedStream) Close() error {
 }
 
 type googleTTSSynthesizeStream struct {
-	mu         sync.Mutex
-	cond       *sync.Cond
-	owner      *GoogleTTS
-	ctx        context.Context
-	client     googleTTSClient
-	streams    []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	active     texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	voice      *texttospeechpb.VoiceSelectionParams
-	prompt     *string
-	audio      *texttospeechpb.AudioConfig
-	buffer     strings.Builder
-	closed     bool
-	inputEnded bool
-	sentInput  bool
+	mu           sync.Mutex
+	cond         *sync.Cond
+	owner        *GoogleTTS
+	ctx          context.Context
+	client       googleTTSClient
+	streams      []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	active       texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	voice        *texttospeechpb.VoiceSelectionParams
+	prompt       *string
+	audio        *texttospeechpb.AudioConfig
+	buffer       strings.Builder
+	pushedText   strings.Builder
+	closed       bool
+	inputEnded   bool
+	sentInput    bool
+	emittedAudio bool
 }
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
@@ -442,6 +453,9 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 		return io.ErrClosedPipe
 	}
 	if _, err := s.buffer.WriteString(text); err != nil {
+		return err
+	}
+	if _, err := s.pushedText.WriteString(text); err != nil {
 		return err
 	}
 	for {
@@ -493,7 +507,7 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 	}
 	if err := s.active.CloseSend(); err != nil {
 		s.markClosedLocked()
-		return err
+		return googleTTSSynthesisError(err)
 	}
 	s.active = nil
 	return nil
@@ -513,16 +527,19 @@ func (s *googleTTSSynthesizeStream) sendTextLocked(text string) error {
 	}
 	stream, err := s.ensureActiveStreamLocked()
 	if err != nil {
-		return err
+		return googleTTSSynthesisError(err)
 	}
-	return stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
+	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
 		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
 			Input: &texttospeechpb.StreamingSynthesisInput{
 				InputSource: &texttospeechpb.StreamingSynthesisInput_Text{Text: text},
 				Prompt:      s.nextPromptLocked(),
 			},
 		},
-	})
+	}); err != nil {
+		return googleTTSSynthesisError(err)
+	}
+	return nil
 }
 
 func (s *googleTTSSynthesizeStream) nextPromptLocked() *string {
@@ -583,13 +600,10 @@ func (s *googleTTSSynthesizeStream) Close() error {
 	s.cond.Broadcast()
 	s.mu.Unlock()
 	s.unregister()
-	var closeErr error
 	for _, stream := range streams {
-		if err := stream.CloseSend(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		_ = stream.CloseSend()
 	}
-	return closeErr
+	return nil
 }
 
 func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
@@ -615,16 +629,31 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			if len(s.streams) > 0 && s.streams[0] == stream {
 				s.streams = s.streams[1:]
 			}
+			if strings.TrimSpace(s.pushedText.String()) != "" && !s.emittedAudio {
+				s.markClosedLocked()
+				s.mu.Unlock()
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.pushedText.String()), nil, true)
+			}
 			s.mu.Unlock()
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if err != nil {
+			_ = stream.CloseSend()
+			s.mu.Lock()
+			if len(s.streams) > 0 && s.streams[0] == stream {
+				s.streams = s.streams[1:]
+			}
+			s.markClosedLocked()
+			s.mu.Unlock()
 			return nil, googleTTSSynthesisError(err)
 		}
 		data := resp.GetAudioContent()
 		if len(data) == 0 {
 			continue
 		}
+		s.mu.Lock()
+		s.emittedAudio = true
+		s.mu.Unlock()
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
 				Data:              data,
