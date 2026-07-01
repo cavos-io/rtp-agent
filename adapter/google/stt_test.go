@@ -347,6 +347,7 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{
 				{
+					LanguageCode: "en-AU",
 					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
 						Transcript: "hello ",
 						Confidence: 0.8,
@@ -394,6 +395,9 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	if math.Abs(got.Confidence-0.7) > 0.000001 {
 		t.Fatalf("confidence = %v, want averaged confidence 0.7", got.Confidence)
 	}
+	if got.Language != "en-AU" {
+		t.Fatalf("language = %q, want first provider result language", got.Language)
+	}
 	if len(got.Words) != 2 || got.Words[0].Text != "hello" || got.Words[1].Text != "world" {
 		t.Fatalf("words = %#v, want all interim result words in order", got.Words)
 	}
@@ -411,7 +415,8 @@ func TestGoogleSTTStreamUsesFirstReferenceFinalResult(t *testing.T) {
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{
 				{
-					IsFinal: true,
+					IsFinal:      true,
+					LanguageCode: "en-GB",
 					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
 						Transcript: "good ",
 						Confidence: 0.9,
@@ -457,8 +462,8 @@ func TestGoogleSTTStreamUsesFirstReferenceFinalResult(t *testing.T) {
 	if got.Text != "good " {
 		t.Fatalf("text = %q, want first final transcript only", got.Text)
 	}
-	if got.Language != "en-US" {
-		t.Fatalf("language = %q, want stream language", got.Language)
+	if got.Language != "en-GB" {
+		t.Fatalf("language = %q, want first final provider language", got.Language)
 	}
 	if math.Abs(got.Confidence-0.9) > 0.000001 {
 		t.Fatalf("confidence = %v, want first final confidence", got.Confidence)
