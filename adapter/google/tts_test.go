@@ -26,6 +26,13 @@ func TestNewGoogleTTSRejectsMissingCredentialsFile(t *testing.T) {
 	}
 }
 
+func TestNewGoogleTTSRejectsSSMLStreamingLikeReference(t *testing.T) {
+	_, err := NewGoogleTTS("", WithGoogleTTSSSML(true))
+	if err == nil || !strings.Contains(err.Error(), "SSML support is not available for streaming synthesis") {
+		t.Fatalf("NewGoogleTTS error = %v, want reference SSML streaming error", err)
+	}
+}
+
 func TestGoogleTTSMetadata(t *testing.T) {
 	provider := newGoogleTTSWithClient(nil)
 
