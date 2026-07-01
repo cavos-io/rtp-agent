@@ -406,7 +406,7 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	}
 }
 
-func TestGoogleSTTStreamCombinesReferenceFinalResultSegments(t *testing.T) {
+func TestGoogleSTTStreamUsesFirstReferenceFinalResult(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{
@@ -454,14 +454,20 @@ func TestGoogleSTTStreamCombinesReferenceFinalResultSegments(t *testing.T) {
 		t.Fatalf("event = %#v, want one final transcript", event)
 	}
 	got := event.Alternatives[0]
-	if got.Text != "good morning" {
-		t.Fatalf("text = %q, want good morning", got.Text)
+	if got.Text != "good " {
+		t.Fatalf("text = %q, want first final transcript only", got.Text)
 	}
-	if len(got.Words) != 2 || got.Words[0].Text != "good" || got.Words[1].Text != "morning" {
-		t.Fatalf("words = %#v, want all final result words in order", got.Words)
+	if got.Language != "en-US" {
+		t.Fatalf("language = %q, want stream language", got.Language)
 	}
-	if math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.9) > 0.000001 {
-		t.Fatalf("timing = %v-%v, want full final result span", got.StartTime, got.EndTime)
+	if math.Abs(got.Confidence-0.9) > 0.000001 {
+		t.Fatalf("confidence = %v, want first final confidence", got.Confidence)
+	}
+	if len(got.Words) != 1 || got.Words[0].Text != "good" {
+		t.Fatalf("words = %#v, want first final result words only", got.Words)
+	}
+	if math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.3) > 0.000001 {
+		t.Fatalf("timing = %v-%v, want first final result span", got.StartTime, got.EndTime)
 	}
 }
 

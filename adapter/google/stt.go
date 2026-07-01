@@ -509,31 +509,22 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 }
 
 func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, startTimeOffset float64, language string) (stt.SpeechData, bool) {
-	var text string
-	var confidence float64
-	var count int
-	var words []*speechpb.WordInfo
 	for _, result := range results {
 		if !result.GetIsFinal() || len(result.GetAlternatives()) == 0 {
 			continue
 		}
 		alt := result.GetAlternatives()[0]
-		text += alt.GetTranscript()
-		confidence += float64(alt.GetConfidence())
-		words = append(words, alt.GetWords()...)
-		count++
+		words := alt.GetWords()
+		data := stt.SpeechData{
+			Language:   language,
+			Text:       alt.GetTranscript(),
+			Confidence: float64(alt.GetConfidence()),
+			Words:      googleTimedStringsOffset(words, startTimeOffset),
+		}
+		googleApplySpeechDataTiming(&data, words, startTimeOffset)
+		return data, true
 	}
-	if count == 0 {
-		return stt.SpeechData{}, false
-	}
-	data := stt.SpeechData{
-		Language:   language,
-		Text:       text,
-		Confidence: confidence / float64(count),
-		Words:      googleTimedStringsOffset(words, startTimeOffset),
-	}
-	googleApplySpeechDataTiming(&data, words, startTimeOffset)
-	return data, true
+	return stt.SpeechData{}, false
 }
 
 func googleApplySpeechDataTiming(data *stt.SpeechData, words []*speechpb.WordInfo, startTimeOffset float64) {
