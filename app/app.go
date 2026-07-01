@@ -134,6 +134,7 @@ type appGoogleSTTConfig struct {
 	model                string
 	location             string
 	language             string
+	streaming            *bool
 	sampleRate           *int
 	punctuate            *bool
 	spokenPunctuation    *bool
@@ -159,6 +160,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if cfg.language != "" {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTLanguage(cfg.language))
+	}
+	if cfg.streaming != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTStreaming(*cfg.streaming))
 	}
 	if cfg.sampleRate != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSampleRate(int32(*cfg.sampleRate)))
@@ -497,6 +501,7 @@ type AppConfig struct {
 	STTBaseURL                              string
 	STTModelEndpoints                       []string
 	STTStreamingURL                         string
+	STTStreaming                            *bool
 	STTSampleRate                           *int
 	STTBufferSizeSeconds                    *float64
 	STTAudioChunkDurationMS                 *int
@@ -890,6 +895,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTBaseURL:                              os.Getenv("RTP_AGENT_STT_BASE_URL"),
 		STTModelEndpoints:                       splitEnvList("RTP_AGENT_STT_MODEL_ENDPOINTS"),
 		STTStreamingURL:                         os.Getenv("RTP_AGENT_STT_STREAMING_URL"),
+		STTStreaming:                            getenvOptionalBool("RTP_AGENT_STT_STREAMING"),
 		STTSampleRate:                           getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
 		STTSpeechStartTimeoutMS:                 getenvOptionalInt("RTP_AGENT_STT_SPEECH_START_TIMEOUT_MS"),
 		STTBufferSizeSeconds:                    getenvOptionalFloat("RTP_AGENT_STT_BUFFER_SIZE_SECONDS"),
@@ -4024,6 +4030,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		model:                cfg.STTModel,
 		location:             cfg.STTRegion,
 		language:             cfg.STTLanguage,
+		streaming:            cfg.STTStreaming,
 		sampleRate:           cfg.STTSampleRate,
 		punctuate:            cfg.STTPunctuate,
 		spokenPunctuation:    cfg.STTSpokenPunctuation,

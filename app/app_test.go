@@ -13507,6 +13507,7 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
 	t.Setenv("RTP_AGENT_STT_WORD_TIMESTAMPS", "false")
 	t.Setenv("RTP_AGENT_STT_WORD_CONFIDENCE", "true")
+	t.Setenv("RTP_AGENT_STT_STREAMING", "false")
 	t.Setenv("RTP_AGENT_STT_SPEECH_START_TIMEOUT_MS", "1200")
 	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "250")
 	t.Setenv("RTP_AGENT_STT_MIN_CONFIDENCE_THRESHOLD", "0.72")
@@ -13542,6 +13543,9 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	}
 	if googleCfg.wordConfidence == nil || !*googleCfg.wordConfidence {
 		t.Fatalf("wordConfidence = %#v, want explicit true", googleCfg.wordConfidence)
+	}
+	if googleCfg.streaming == nil || *googleCfg.streaming {
+		t.Fatalf("streaming = %#v, want explicit false", googleCfg.streaming)
 	}
 	if googleCfg.speechStartTimeout != 1200*time.Millisecond {
 		t.Fatalf("speechStartTimeout = %v, want 1200ms", googleCfg.speechStartTimeout)
