@@ -389,7 +389,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		opt(&cfg)
 	}
 	if cfg.languageSet || cfg.genderSet || cfg.voiceSet || cfg.cloneKeySet || cfg.modelSet {
-		t.voice = googleTTSVoiceParams(cfg)
+		t.voice = googleTTSUpdatedVoiceParams(cfg)
 	}
 	if cfg.modelSet {
 		t.model = cfg.model
@@ -1013,6 +1013,27 @@ func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionPar
 		voice.VoiceClone = &texttospeechpb.VoiceCloneParams{VoiceCloningKey: cfg.cloneKey}
 	}
 	if cfg.model != "chirp_3" {
+		voice.ModelName = cfg.model
+	}
+	return voice
+}
+
+func googleTTSUpdatedVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionParams {
+	voice := &texttospeechpb.VoiceSelectionParams{}
+	if cfg.languageSet {
+		voice.LanguageCode = cfg.language
+	}
+	if cfg.voiceSet {
+		voice.Name = cfg.voice
+	}
+	if cfg.genderSet {
+		voice.SsmlGender = cfg.gender
+	}
+	if cfg.cloneKeySet {
+		voice.Name = ""
+		voice.VoiceClone = &texttospeechpb.VoiceCloneParams{VoiceCloningKey: cfg.cloneKey}
+	}
+	if cfg.modelSet {
 		voice.ModelName = cfg.model
 	}
 	return voice

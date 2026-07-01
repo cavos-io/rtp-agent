@@ -863,9 +863,10 @@ func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
-func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
+func TestGoogleTTSUpdateOptionsReplacesVoiceParamsLikeReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream:   &fakeGoogleTTSStream{},
 	}
 	provider := newGoogleTTSWithClient(client,
 		WithGoogleTTSLanguage("id-ID"),
@@ -874,8 +875,8 @@ func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
 
 	provider.UpdateOptions(WithGoogleTTSVoice("id-ID-Standard-B"))
 
-	if provider.voice.GetLanguageCode() != "id-ID" || provider.voice.GetName() != "id-ID-Standard-B" || provider.voice.GetModelName() != "gemini-custom" {
-		t.Fatalf("voice = %+v, want updated voice with existing language and model", provider.voice)
+	if provider.voice.GetLanguageCode() != "" || provider.voice.GetName() != "id-ID-Standard-B" || provider.voice.GetModelName() != "" {
+		t.Fatalf("voice = %+v, want reference replacement with only new voice name", provider.voice)
 	}
 	if got := provider.Model(); got != "gemini-custom" {
 		t.Fatalf("Model() = %q, want existing reference model metadata", got)
@@ -885,8 +886,23 @@ func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
 		t.Fatalf("Synthesize after voice update error = %v", err)
 	}
 	defer stream.Close()
-	if voice := client.request.GetVoice(); voice.GetLanguageCode() != "id-ID" || voice.GetModelName() != "gemini-custom" {
-		t.Fatalf("request voice = %+v, want complete language and model after voice-only update", voice)
+	if voice := client.request.GetVoice(); voice.GetLanguageCode() != "" || voice.GetName() != "id-ID-Standard-B" || voice.GetModelName() != "" {
+		t.Fatalf("request voice = %+v, want reference replacement with only new voice name", voice)
+	}
+
+	streaming, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream after voice update error = %v", err)
+	}
+	defer streaming.Close()
+	if err := streaming.PushText("halo stream"); err != nil {
+		t.Fatalf("PushText after voice update error = %v", err)
+	}
+	if err := streaming.Flush(); err != nil {
+		t.Fatalf("Flush after voice update error = %v", err)
+	}
+	if voice := client.stream.sent[0].GetStreamingConfig().GetVoice(); voice.GetLanguageCode() != "" || voice.GetName() != "id-ID-Standard-B" || voice.GetModelName() != "" {
+		t.Fatalf("stream voice = %+v, want reference replacement with only new voice name", voice)
 	}
 }
 
