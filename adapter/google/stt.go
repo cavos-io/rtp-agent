@@ -64,6 +64,7 @@ type googleSpeechClient interface {
 
 type googleSpeechV2Client interface {
 	StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechv2pb.Speech_StreamingRecognizeClient, error)
+	Recognize(ctx context.Context, req *speechv2pb.RecognizeRequest, opts ...gax.CallOption) (*speechv2pb.RecognizeResponse, error)
 }
 
 type GoogleSTTOption func(*GoogleSTT)
@@ -523,6 +524,31 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		buf.Write(f.Data)
 	}
 
+	if googleSTTUsesV2(s.model) {
+		clientV2, err := s.ensureClientV2(ctx)
+		if err != nil {
+			return nil, googleSTTStreamError(err)
+		}
+		recognizer := googleSTTRecognizer(s)
+		if recognizer == "" {
+			return nil, googleSTTStreamError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
+		}
+		resp, err := clientV2.Recognize(ctx, &speechv2pb.RecognizeRequest{
+			Recognizer: recognizer,
+			Config:     googleRecognitionConfigV2ForFrames(s, language, !explicitLanguage, frames),
+			AudioSource: &speechv2pb.RecognizeRequest_Content{
+				Content: buf.Bytes(),
+			},
+		})
+		if err != nil {
+			return nil, googleSTTStreamError(err)
+		}
+		return &stt.SpeechEvent{
+			Type:         stt.SpeechEventFinalTranscript,
+			Alternatives: googleSpeechDataFromRecognizeResultsV2(resp.GetResults(), language),
+		}, nil
+	}
+
 	resp, err := s.client.Recognize(ctx, &speechpb.RecognizeRequest{
 		Config: googleRecognitionConfigForFrames(s, language, !explicitLanguage, frames),
 		Audio: &speechpb.RecognitionAudio{
@@ -577,6 +603,49 @@ func googleRecognitionConfigForFrames(s *GoogleSTT, language string, includeAlte
 		}
 		if frame.NumChannels > 0 && !haveChannels {
 			config.AudioChannelCount = int32(frame.NumChannels)
+			haveChannels = true
+		}
+		if haveSampleRate && haveChannels {
+			break
+		}
+	}
+	return config
+}
+
+func googleRecognitionConfigV2ForFrames(s *GoogleSTT, language string, includeAlternativeLanguages bool, frames []*model.AudioFrame) *speechv2pb.RecognitionConfig {
+	config := &speechv2pb.RecognitionConfig{
+		DecodingConfig: &speechv2pb.RecognitionConfig_ExplicitDecodingConfig{
+			ExplicitDecodingConfig: &speechv2pb.ExplicitDecodingConfig{
+				Encoding:          speechv2pb.ExplicitDecodingConfig_LINEAR16,
+				SampleRateHertz:   s.sampleRate,
+				AudioChannelCount: 1,
+			},
+		},
+		LanguageCodes:  googleLanguageCodesV2(s, language, includeAlternativeLanguages),
+		Model:          s.model,
+		Adaptation:     googleSpeechAdaptationV2(s),
+		DenoiserConfig: s.denoiserConfig,
+		Features: &speechv2pb.RecognitionFeatures{
+			EnableAutomaticPunctuation: s.punctuate,
+			EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
+			EnableSpokenPunctuation:    s.spokenPunctuation,
+			EnableWordConfidence:       s.enableWordConfidence,
+			ProfanityFilter:            s.profanityFilter,
+		},
+	}
+	decoding := config.GetExplicitDecodingConfig()
+	haveSampleRate := false
+	haveChannels := false
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && !haveSampleRate {
+			decoding.SampleRateHertz = int32(frame.SampleRate)
+			haveSampleRate = true
+		}
+		if frame.NumChannels > 0 && !haveChannels {
+			decoding.AudioChannelCount = int32(frame.NumChannels)
 			haveChannels = true
 		}
 		if haveSampleRate && haveChannels {
@@ -818,7 +887,49 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	return []stt.SpeechData{data}
 }
 
+func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognitionResult, language string) []stt.SpeechData {
+	if len(results) == 0 {
+		return []stt.SpeechData{}
+	}
+	var text string
+	var confidence float64
+	var count int
+	var firstWords []*speechv2pb.WordInfo
+	var lastWords []*speechv2pb.WordInfo
+	for _, result := range results {
+		if len(result.GetAlternatives()) == 0 {
+			continue
+		}
+		alt := result.GetAlternatives()[0]
+		text += alt.GetTranscript()
+		confidence += float64(alt.GetConfidence())
+		if count == 0 {
+			firstWords = alt.GetWords()
+		}
+		lastWords = alt.GetWords()
+		count++
+	}
+	if count == 0 {
+		return []stt.SpeechData{}
+	}
+	data := stt.SpeechData{
+		Language:   googleRecognizeResultLanguageV2(results, language),
+		Text:       text,
+		Confidence: confidence / float64(count),
+		Words:      googleTimedStringsOffsetV2(firstWords, 0),
+	}
+	googleApplyRecognizeSpeechDataTimingV2(&data, firstWords, lastWords)
+	return []stt.SpeechData{data}
+}
+
 func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult, fallback string) string {
+	if len(results) == 0 || results[0].GetLanguageCode() == "" {
+		return fallback
+	}
+	return results[0].GetLanguageCode()
+}
+
+func googleRecognizeResultLanguageV2(results []*speechv2pb.SpeechRecognitionResult, fallback string) string {
 	if len(results) == 0 || results[0].GetLanguageCode() == "" {
 		return fallback
 	}
@@ -831,6 +942,14 @@ func googleApplyRecognizeSpeechDataTiming(data *stt.SpeechData, firstWords []*sp
 	}
 	data.StartTime = firstWords[0].GetStartTime().AsDuration().Seconds()
 	data.EndTime = lastWords[len(lastWords)-1].GetEndTime().AsDuration().Seconds()
+}
+
+func googleApplyRecognizeSpeechDataTimingV2(data *stt.SpeechData, firstWords []*speechv2pb.WordInfo, lastWords []*speechv2pb.WordInfo) {
+	if data == nil || len(firstWords) == 0 || len(lastWords) == 0 {
+		return
+	}
+	data.StartTime = firstWords[0].GetStartOffset().AsDuration().Seconds()
+	data.EndTime = lastWords[len(lastWords)-1].GetEndOffset().AsDuration().Seconds()
 }
 
 func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {
