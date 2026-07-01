@@ -693,7 +693,10 @@ func (s *smallestAISTTStream) reconnect() error {
 
 	conn, _, err := dialWebsocket(ctx, buildSmallestAISTTStreamURLFromOptions(opts), buildSmallestAISTTHeadersFromAPIKey(opts.apiKey))
 	if err != nil {
-		return fmt.Errorf("failed to reconnect smallestai stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect smallestai stt websocket: %v", err))
 	}
 
 	s.mu.Lock()
