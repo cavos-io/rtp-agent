@@ -626,7 +626,7 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.closed = true
 		_ = s.stream.CloseSend()
 		s.unregister()
-		return err
+		return googleSTTStreamError(err)
 	}
 	return nil
 }
