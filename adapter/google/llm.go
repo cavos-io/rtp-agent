@@ -920,7 +920,7 @@ func (s *googleLLMStream) storeThoughtSignature(part *genai.Part, chunk *llm.Cha
 
 func googleLLMFinishReasonBody(reason genai.FinishReason) any {
 	if reason == "" || reason == genai.FinishReasonUnspecified {
-		return nil
+		return "finish reason: None"
 	}
 	return fmt.Sprintf("finish reason: %s", reason)
 }

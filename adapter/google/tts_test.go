@@ -14,6 +14,7 @@ import (
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -308,6 +309,39 @@ func TestGoogleTTSStreamEmitsReferenceFinalMarkerAfterAudio(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamEndInputIgnoresLaterInputLikeReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{
+				AudioContent: []byte{1, 2, 3, 4},
+			}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	googleStream := stream.(*googleTTSSynthesizeStream)
+	if err := googleStream.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want nil like reference", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want nil like reference", err)
+	}
+	if err := googleStream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want nil like reference", err)
+	}
+}
+
 func TestGoogleTTSStreamSkipsEmptyAudioResponses(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		stream: &fakeGoogleTTSStream{
@@ -585,6 +619,97 @@ func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSDecodesReferenceOggOpusEncoding(t *testing.T) {
+	opusData, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "change-sophie.opus"))
+	if err != nil {
+		t.Fatalf("read opus fixture: %v", err)
+	}
+
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: opusData},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: opusData}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_OGG_OPUS),
+		WithGoogleTTSSampleRate(48000),
+	)
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_OGG_OPUS {
+		t.Fatalf("synthesize audio encoding = %v, want OGG_OPUS", got)
+	}
+	batchAudio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("chunked Next returned error: %v", err)
+	}
+	assertGoogleDecodedOpusFrame(t, batchAudio, opusData)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetAudioEncoding(); got != texttospeech.AudioEncoding_OGG_OPUS {
+		t.Fatalf("stream audio encoding = %v, want OGG_OPUS", got)
+	}
+	streamAudio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("stream Next returned error: %v", err)
+	}
+	assertGoogleDecodedOpusFrame(t, streamAudio, opusData)
+}
+
+func TestGoogleTTSStreamDecodesSplitReferenceOggOpusAudio(t *testing.T) {
+	opusData, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "change-sophie.opus"))
+	if err != nil {
+		t.Fatalf("read opus fixture: %v", err)
+	}
+	splitAt := 8
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{
+				{AudioContent: opusData[:splitAt]},
+				{AudioContent: opusData[splitAt:]},
+			},
+		},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_OGG_OPUS),
+		WithGoogleTTSSampleRate(48000),
+	)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	assertGoogleDecodedOpusFrame(t, audio, opusData)
+}
+
 func TestGoogleTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	client := &fakeGoogleTTSClient{err: context.DeadlineExceeded}
 	provider := newGoogleTTSWithClient(client)
@@ -771,9 +896,10 @@ func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
-func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
+func TestGoogleTTSUpdateOptionsReplacesVoiceParamsLikeReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream:   &fakeGoogleTTSStream{},
 	}
 	provider := newGoogleTTSWithClient(client,
 		WithGoogleTTSLanguage("id-ID"),
@@ -782,8 +908,8 @@ func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
 
 	provider.UpdateOptions(WithGoogleTTSVoice("id-ID-Standard-B"))
 
-	if provider.voice.GetLanguageCode() != "id-ID" || provider.voice.GetName() != "id-ID-Standard-B" || provider.voice.GetModelName() != "gemini-custom" {
-		t.Fatalf("voice = %+v, want updated voice with existing language and model", provider.voice)
+	if provider.voice.GetLanguageCode() != "" || provider.voice.GetName() != "id-ID-Standard-B" || provider.voice.GetModelName() != "" {
+		t.Fatalf("voice = %+v, want reference replacement with only new voice name", provider.voice)
 	}
 	if got := provider.Model(); got != "gemini-custom" {
 		t.Fatalf("Model() = %q, want existing reference model metadata", got)
@@ -793,8 +919,23 @@ func TestGoogleTTSUpdateOptionsPreservesExistingVoiceFields(t *testing.T) {
 		t.Fatalf("Synthesize after voice update error = %v", err)
 	}
 	defer stream.Close()
-	if voice := client.request.GetVoice(); voice.GetLanguageCode() != "id-ID" || voice.GetModelName() != "gemini-custom" {
-		t.Fatalf("request voice = %+v, want complete language and model after voice-only update", voice)
+	if voice := client.request.GetVoice(); voice.GetLanguageCode() != "" || voice.GetName() != "id-ID-Standard-B" || voice.GetModelName() != "" {
+		t.Fatalf("request voice = %+v, want reference replacement with only new voice name", voice)
+	}
+
+	streaming, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream after voice update error = %v", err)
+	}
+	defer streaming.Close()
+	if err := streaming.PushText("halo stream"); err != nil {
+		t.Fatalf("PushText after voice update error = %v", err)
+	}
+	if err := streaming.Flush(); err != nil {
+		t.Fatalf("Flush after voice update error = %v", err)
+	}
+	if voice := client.stream.sent[0].GetStreamingConfig().GetVoice(); voice.GetLanguageCode() != "" || voice.GetName() != "id-ID-Standard-B" || voice.GetModelName() != "" {
+		t.Fatalf("stream voice = %+v, want reference replacement with only new voice name", voice)
 	}
 }
 
@@ -1115,8 +1256,11 @@ func TestGoogleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if !streamClient.closed {
 		t.Fatal("stream client closed = false after provider Close")
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after provider Close error = %v, want nil like reference", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after provider Close error = %v, want nil like reference", err)
 	}
 }
 
@@ -1188,6 +1332,25 @@ func TestGoogleTTSStreamCloseUnblocksPendingNext(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamIgnoresInputAfterCloseLikeReference(t *testing.T) {
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want nil like reference", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want nil like reference", err)
+	}
+}
+
 func TestGoogleTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{}
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
@@ -1210,8 +1373,8 @@ func TestGoogleTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	if !streamClient.closed {
 		t.Fatal("stream client closed = false after rejected registration")
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after rejected registration error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after rejected registration error = %v, want nil like reference", err)
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
@@ -1474,6 +1637,29 @@ func TestGoogleTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func assertGoogleDecodedOpusFrame(t *testing.T, audio *tts.SynthesizedAudio, opusData []byte) {
+	t.Helper()
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %+v, want decoded opus audio frame", audio)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded opus sample rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want decoded opus mono", audio.Frame.NumChannels)
+	}
+	if audio.Frame.SamplesPerChannel == 0 {
+		t.Fatal("decoded opus frame has no samples")
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded opus frame is empty")
+	}
+	prefixLen := min(len(audio.Frame.Data), len(opusData))
+	if bytes.Equal(audio.Frame.Data[:prefixLen], opusData[:prefixLen]) {
+		t.Fatal("frame data still contains compressed opus bytes")
 	}
 }
 

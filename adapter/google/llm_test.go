@@ -1144,6 +1144,9 @@ func TestGoogleLLMStreamReturnsAPIStatusErrorWhenNoResponseGenerated(t *testing.
 	if statusErr.RequestID == "" {
 		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
 	}
+	if statusErr.Body != "finish reason: None" {
+		t.Fatalf("APIStatusError body = %#v, want reference absent finish reason", statusErr.Body)
+	}
 }
 
 func TestGoogleLLMStreamReturnsAPIStatusErrorWhenPageDoneWithoutOutput(t *testing.T) {

@@ -389,7 +389,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		opt(&cfg)
 	}
 	if cfg.languageSet || cfg.genderSet || cfg.voiceSet || cfg.cloneKeySet || cfg.modelSet {
-		t.voice = googleTTSVoiceParams(cfg)
+		t.voice = googleTTSUpdatedVoiceParams(cfg)
 	}
 	if cfg.modelSet {
 		t.model = cfg.model
@@ -535,8 +535,8 @@ type googleTTSChunkedStream struct {
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.encoding == texttospeechpb.AudioEncoding_MP3 {
-		return s.nextMP3Audio()
+	if googleTTSUsesCompressedDecoder(s.encoding) {
+		return s.nextDecodedAudio()
 	}
 
 	if !s.headerStripped && len(s.data) >= 44 {
@@ -580,9 +580,9 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
-func (s *googleTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
+func (s *googleTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, error) {
 	if !s.decoderStarted {
-		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		s.decoder = googleTTSCompressedDecoder(s.encoding, s.sampleRate)
 		s.decoderStarted = true
 		go func() {
 			s.decoder.Push(s.data)
@@ -608,6 +608,20 @@ func (s *googleTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
+func googleTTSUsesCompressedDecoder(encoding texttospeechpb.AudioEncoding) bool {
+	return encoding == texttospeechpb.AudioEncoding_MP3 || encoding == texttospeechpb.AudioEncoding_OGG_OPUS
+}
+
+func googleTTSCompressedDecoder(encoding texttospeechpb.AudioEncoding, sampleRate int32) codecs.AudioStreamDecoder {
+	if encoding == texttospeechpb.AudioEncoding_OGG_OPUS {
+		if sampleRate <= 0 {
+			sampleRate = 24000
+		}
+		return codecs.NewOpusAudioStreamDecoder(int(sampleRate), 1)
+	}
+	return codecs.NewMP3AudioStreamDecoder()
+}
+
 func (s *googleTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -625,40 +639,45 @@ func (s *googleTTSChunkedStream) Close() error {
 }
 
 type googleTTSSynthesizeStream struct {
-	mu         sync.Mutex
-	cond       *sync.Cond
-	cancel     context.CancelFunc
-	owner      *GoogleTTS
-	ctx        context.Context
-	client     googleTTSClient
-	streams    []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	active     texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	segments   map[texttospeechpb.TextToSpeech_StreamingSynthesizeClient]*googleTTSSegmentState
-	voice      *texttospeechpb.VoiceSelectionParams
-	prompt     *string
-	audio      *texttospeechpb.AudioConfig
-	custom     *texttospeechpb.CustomPronunciations
-	markup     bool
-	buffer     strings.Builder
-	closed     bool
-	inputEnded bool
-	sentInput  bool
-	flushed    int
+	mu          sync.Mutex
+	cond        *sync.Cond
+	cancel      context.CancelFunc
+	owner       *GoogleTTS
+	ctx         context.Context
+	client      googleTTSClient
+	streams     []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	active      texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	segments    map[texttospeechpb.TextToSpeech_StreamingSynthesizeClient]*googleTTSSegmentState
+	voice       *texttospeechpb.VoiceSelectionParams
+	prompt      *string
+	audio       *texttospeechpb.AudioConfig
+	custom      *texttospeechpb.CustomPronunciations
+	markup      bool
+	buffer      strings.Builder
+	closed      bool
+	ignoreInput bool
+	inputEnded  bool
+	sentInput   bool
+	flushed     int
 }
 
 type googleTTSSegmentState struct {
 	text         strings.Builder
 	emittedAudio bool
+	opusBuffer   []byte
 }
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		if s.ignoreInput {
+			return nil
+		}
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if _, err := s.buffer.WriteString(text); err != nil {
 		return err
@@ -692,10 +711,13 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		if s.ignoreInput {
+			return nil
+		}
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
-		return io.ErrClosedPipe
+		return nil
 	}
 	text := s.buffer.String()
 	s.buffer.Reset()
@@ -815,6 +837,7 @@ func (s *googleTTSSynthesizeStream) EndInput() error {
 func (s *googleTTSSynthesizeStream) Close() error {
 	s.mu.Lock()
 	s.closed = true
+	s.ignoreInput = true
 	streams := append([]texttospeechpb.TextToSpeech_StreamingSynthesizeClient(nil), s.streams...)
 	s.streams = nil
 	s.active = nil
@@ -887,20 +910,61 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		if len(data) == 0 {
 			continue
 		}
+		frame, needMore, err := s.googleTTSStreamingAudioFrame(stream, data)
+		if needMore {
+			continue
+		}
+		if err != nil {
+			_ = stream.CloseSend()
+			s.mu.Lock()
+			if len(s.streams) > 0 && s.streams[0] == stream {
+				s.streams = s.streams[1:]
+			}
+			delete(s.segments, stream)
+			s.markClosedLocked()
+			s.mu.Unlock()
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("google TTS streaming audio decode: %v", err))
+		}
 		s.mu.Lock()
 		if segment := s.segments[stream]; segment != nil {
 			segment.emittedAudio = true
 		}
 		s.mu.Unlock()
-		return &tts.SynthesizedAudio{
-			Frame: &model.AudioFrame{
-				Data:              data,
-				SampleRate:        uint32(s.audio.GetSampleRateHertz()),
-				NumChannels:       1,
-				SamplesPerChannel: uint32(len(data) / 2),
-			},
-		}, nil
+		return &tts.SynthesizedAudio{Frame: frame}, nil
 	}
+}
+
+func (s *googleTTSSynthesizeStream) googleTTSStreamingAudioFrame(stream texttospeechpb.TextToSpeech_StreamingSynthesizeClient, data []byte) (*model.AudioFrame, bool, error) {
+	encoding := s.audio.GetAudioEncoding()
+	if encoding != texttospeechpb.AudioEncoding_OGG_OPUS {
+		frame, err := googleTTSStreamingAudioFrame(data, encoding, s.audio.GetSampleRateHertz())
+		return frame, false, err
+	}
+
+	s.mu.Lock()
+	segment := s.segments[stream]
+	if segment == nil {
+		segment = &googleTTSSegmentState{}
+		s.segments[stream] = segment
+	}
+	segment.opusBuffer = append(segment.opusBuffer, data...)
+	buffer := append([]byte(nil), segment.opusBuffer...)
+	s.mu.Unlock()
+
+	frame, err := googleTTSStreamingAudioFrame(buffer, encoding, s.audio.GetSampleRateHertz())
+	if err != nil {
+		if googleTTSOpusDecodeNeedsMore(err, len(buffer)) {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+
+	s.mu.Lock()
+	if segment := s.segments[stream]; segment != nil {
+		segment.opusBuffer = nil
+	}
+	s.mu.Unlock()
+	return frame, false, nil
 }
 
 func (s *googleTTSSynthesizeStream) markClosedLocked() {
@@ -923,6 +987,29 @@ func googleTTSStreamingAudioEncoding(encoding texttospeechpb.AudioEncoding) text
 	}
 }
 
+func googleTTSStreamingAudioFrame(data []byte, encoding texttospeechpb.AudioEncoding, sampleRate int32) (*model.AudioFrame, error) {
+	if encoding == texttospeechpb.AudioEncoding_OGG_OPUS {
+		if sampleRate <= 0 {
+			sampleRate = 24000
+		}
+		return codecs.DecodeOpusAudio(data, int(sampleRate), 1)
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(data) / 2),
+	}, nil
+}
+
+func googleTTSOpusDecodeNeedsMore(err error, buffered int) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "EOF") || (buffered < 64 && strings.Contains(message, "OP_ENOTFORMAT"))
+}
+
 func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionParams {
 	voice := &texttospeechpb.VoiceSelectionParams{
 		LanguageCode: cfg.language,
@@ -934,6 +1021,27 @@ func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionPar
 		voice.VoiceClone = &texttospeechpb.VoiceCloneParams{VoiceCloningKey: cfg.cloneKey}
 	}
 	if cfg.model != "chirp_3" {
+		voice.ModelName = cfg.model
+	}
+	return voice
+}
+
+func googleTTSUpdatedVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionParams {
+	voice := &texttospeechpb.VoiceSelectionParams{}
+	if cfg.languageSet {
+		voice.LanguageCode = cfg.language
+	}
+	if cfg.voiceSet {
+		voice.Name = cfg.voice
+	}
+	if cfg.genderSet {
+		voice.SsmlGender = cfg.gender
+	}
+	if cfg.cloneKeySet {
+		voice.Name = ""
+		voice.VoiceClone = &texttospeechpb.VoiceCloneParams{VoiceCloningKey: cfg.cloneKey}
+	}
+	if cfg.modelSet {
 		voice.ModelName = cfg.model
 	}
 	return voice
