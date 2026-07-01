@@ -379,6 +379,16 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 		t.Fatalf("streaming config = %#v, want id-ID interim config", config)
 	}
 
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	if len(streamClient.sent) != 2 || string(streamClient.sent[1].GetAudioContent()) != "pcm" {
+		t.Fatalf("audio sends = %#v, want pcm audio request", streamClient.sent)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
 	event, err := stream.Next()
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
@@ -390,15 +400,6 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 		t.Fatalf("language = %q, want id-ID", event.Alternatives[0].Language)
 	}
 
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("pcm")}); err != nil {
-		t.Fatalf("PushFrame returned error: %v", err)
-	}
-	if len(streamClient.sent) != 2 || string(streamClient.sent[1].GetAudioContent()) != "pcm" {
-		t.Fatalf("audio sends = %#v, want pcm audio request", streamClient.sent)
-	}
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush returned error: %v", err)
-	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
@@ -1099,6 +1100,34 @@ func TestGoogleSTTStreamNextErrorTerminatesStream(t *testing.T) {
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("provider streams = %d, want 0 after receive error", len(provider.streams))
+	}
+}
+
+func TestGoogleSTTStreamEOFTerminatesStream(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF", err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider EOF = %v, want io.ErrClosedPipe", err)
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after provider EOF")
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams = %d, want 0 after provider EOF", len(provider.streams))
 	}
 }
 
