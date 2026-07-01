@@ -335,9 +335,11 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &googleTTSSynthesizeStream{
+		cancel: cancel,
 		owner:  t,
-		ctx:    ctx,
+		ctx:    streamCtx,
 		client: t.client,
 		voice:  t.voice,
 		prompt: t.prompt,
@@ -427,6 +429,7 @@ func (s *googleTTSChunkedStream) Close() error {
 type googleTTSSynthesizeStream struct {
 	mu         sync.Mutex
 	cond       *sync.Cond
+	cancel     context.CancelFunc
 	owner      *GoogleTTS
 	ctx        context.Context
 	client     googleTTSClient
@@ -608,12 +611,21 @@ func (s *googleTTSSynthesizeStream) Close() error {
 	s.streams = nil
 	s.active = nil
 	s.cond.Broadcast()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.mu.Unlock()
 	s.unregister()
 	for _, stream := range streams {
 		_ = stream.CloseSend()
 	}
 	return nil
+}
+
+func (s *googleTTSSynthesizeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
@@ -634,6 +646,9 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		s.mu.Unlock()
 
 		resp, err := stream.Recv()
+		if err != nil && s.isClosed() {
+			return nil, io.EOF
+		}
 		if err == io.EOF {
 			s.mu.Lock()
 			if len(s.streams) > 0 && s.streams[0] == stream {

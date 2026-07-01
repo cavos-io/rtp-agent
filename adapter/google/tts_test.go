@@ -875,6 +875,52 @@ func TestGoogleTTSStreamCloseSuppressesProviderCloseError(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamCloseUnblocksPendingNext(t *testing.T) {
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleTTSStream{recvBlock: recvBlock}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			errCh <- errors.New("Next returned audio after Close")
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Next returned before Close: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want EOF", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next did not unblock after Close")
+	}
+}
+
 func TestGoogleTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{}
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
@@ -1189,15 +1235,21 @@ func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...g
 		stream := c.streams[0]
 		c.streams = c.streams[1:]
 		c.stream = stream
+		stream.ctx = ctx
 		return stream, nil
+	}
+	if c.stream != nil {
+		c.stream.ctx = ctx
 	}
 	return c.stream, nil
 }
 
 type fakeGoogleTTSStream struct {
 	grpc.ClientStream
+	ctx                context.Context
 	sent               []*texttospeech.StreamingSynthesizeRequest
 	responses          []*texttospeech.StreamingSynthesizeResponse
+	recvBlock          chan struct{}
 	recvErr            error
 	closed             bool
 	closeErr           error
@@ -1213,6 +1265,13 @@ func (s *fakeGoogleTTSStream) Send(req *texttospeech.StreamingSynthesizeRequest)
 }
 
 func (s *fakeGoogleTTSStream) Recv() (*texttospeech.StreamingSynthesizeResponse, error) {
+	if s.recvBlock != nil {
+		select {
+		case <-s.recvBlock:
+		case <-s.ctx.Done():
+		}
+		s.recvBlock = nil
+	}
 	if len(s.responses) == 0 {
 		if s.recvErr != nil {
 			return nil, s.recvErr
@@ -1230,6 +1289,11 @@ func (s *fakeGoogleTTSStream) CloseSend() error {
 	s.closed = true
 	return s.closeErr
 }
-func (s *fakeGoogleTTSStream) Context() context.Context { return context.Background() }
-func (s *fakeGoogleTTSStream) SendMsg(m any) error      { return nil }
-func (s *fakeGoogleTTSStream) RecvMsg(m any) error      { return nil }
+func (s *fakeGoogleTTSStream) Context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+func (s *fakeGoogleTTSStream) SendMsg(m any) error { return nil }
+func (s *fakeGoogleTTSStream) RecvMsg(m any) error { return nil }
