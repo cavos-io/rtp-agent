@@ -193,6 +193,15 @@ func applyGoogleConnectOptions(config *genai.GenerateContentConfig, options llm.
 		timeout := options.Timeout
 		config.HTTPOptions.Timeout = &timeout
 	}
+	if config.HTTPOptions.Headers == nil {
+		config.HTTPOptions.Headers = make(map[string][]string)
+	}
+	for key := range config.HTTPOptions.Headers {
+		if strings.EqualFold(key, "x-goog-api-client") {
+			delete(config.HTTPOptions.Headers, key)
+		}
+	}
+	config.HTTPOptions.Headers["x-goog-api-client"] = []string{"livekit-agents/" + PluginVersion}
 }
 
 func normalizeGoogleThinkingConfigForModel(config *genai.GenerateContentConfig, model string) {

@@ -408,6 +408,31 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceHTTPOptionsExtra(t *tes
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceAPIClientHeader(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"http_options": &genai.HTTPOptions{
+				Headers: http.Header{
+					"x-test":            []string{"yes"},
+					"x-goog-api-client": []string{"caller"},
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.HTTPOptions == nil {
+		t.Fatal("HTTPOptions = nil, want reference headers")
+	}
+	if got := config.HTTPOptions.Headers["x-test"]; len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("x-test header = %q, want yes", got)
+	}
+	if got := config.HTTPOptions.Headers["x-goog-api-client"]; len(got) != 1 || !strings.HasPrefix(got[0], "livekit-agents/") {
+		t.Fatalf("x-goog-api-client = %q, want livekit-agents version header", got)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceConnectTimeout(t *testing.T) {
 	timeout := 3 * time.Second
 	httpOptions := &genai.HTTPOptions{
