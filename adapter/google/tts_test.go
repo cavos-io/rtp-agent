@@ -156,6 +156,14 @@ func TestGoogleTTSSSMLCapabilitiesDisableStreaming(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamingCapabilityMatchesReferenceOption(t *testing.T) {
+	provider := newGoogleTTSWithClient(nil, WithGoogleTTSStreaming(false))
+
+	if provider.Capabilities().Streaming {
+		t.Fatal("Capabilities().Streaming = true, want false from reference use_streaming option")
+	}
+}
+
 func TestGoogleTTSStreamSendsCompletedSentenceBeforeFlushLikeReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client)
