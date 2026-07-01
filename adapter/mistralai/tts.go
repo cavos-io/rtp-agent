@@ -142,25 +142,14 @@ func (t *MistralAITTS) UpdateOptions(opts ...MistralAITTSOption) error {
 }
 
 func (t *MistralAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	req, err := buildMistralAITTSRequest(ctx, t, text)
-	if err != nil {
+	if _, err := buildMistralAITTSRequest(ctx, t, text); err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("MistralAI TTS request failed", resp.StatusCode, "", string(respBody))
-	}
+	opts := *t
 	return &mistralAITTSChunkedStream{
-		reader:         resp.Body,
-		closer:         resp.Body,
+		ctx:            ctx,
+		text:           text,
+		opts:           opts,
 		responseFormat: t.responseFormat,
 	}, nil
 }
@@ -203,8 +192,12 @@ func buildMistralAITTSRequest(ctx context.Context, t *MistralAITTS, text string)
 type mistralAITTSChunkedStream struct {
 	reader         io.Reader
 	closer         io.Closer
+	ctx            context.Context
+	text           string
+	opts           MistralAITTS
 	scanner        *bufio.Scanner
 	responseFormat string
+	requested      bool
 	done           bool
 	jsonRead       bool
 	finalSent      bool
@@ -213,6 +206,9 @@ type mistralAITTSChunkedStream struct {
 func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.done {
 		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
 	}
 	if s.scanner == nil {
 		s.scanner = bufio.NewScanner(s.reader)
@@ -260,6 +256,32 @@ func (s *mistralAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
 	return nil, io.EOF
+}
+
+func (s *mistralAITTSChunkedStream) ensureResponse() error {
+	if s.reader != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildMistralAITTSRequest(s.ctx, &s.opts, s.text)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("MistralAI TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.reader = resp.Body
+	s.closer = resp.Body
+	return nil
 }
 
 func (s *mistralAITTSChunkedStream) Close() error {
