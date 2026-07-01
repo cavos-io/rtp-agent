@@ -104,10 +104,8 @@ func WithGoogleTTSGender(gender string) GoogleTTSOption {
 
 func WithGoogleTTSVoice(voice string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if voice != "" {
-			cfg.voice = voice
-			cfg.voiceSet = true
-		}
+		cfg.voice = voice
+		cfg.voiceSet = true
 	}
 }
 
