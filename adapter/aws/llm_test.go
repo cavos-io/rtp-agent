@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -91,6 +92,95 @@ func TestAWSLLMStreamClosedState(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close err = %v, want nil without event stream", err)
+	}
+}
+
+func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStart{
+		Value: awstypes.ContentBlockStartEvent{
+			Start: &awstypes.ContentBlockStartMemberToolUse{
+				Value: awstypes.ToolUseBlockStart{
+					ToolUseId: awsString("call_lookup"),
+					Name:      awsString("lookup"),
+				},
+			},
+		},
+	}
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberToolUse{
+				Value: awstypes.ToolUseBlockDelta{Input: awsString(`{"query"`)},
+			},
+		},
+	}
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberToolUse{
+				Value: awstypes.ToolUseBlockDelta{Input: awsString(`:"weather"}`)},
+			},
+		},
+	}
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStop{}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want aggregated tool call", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("Next chunk = %#v, want one aggregated tool call", chunk)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.CallID != "call_lookup" || call.Name != "lookup" || call.Type != "function" {
+		t.Fatalf("tool call metadata = %+v, want lookup function call", call)
+	}
+	if call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("tool call arguments = %q, want aggregated JSON arguments", call.Arguments)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after tool call err = %v, want EOF", err)
+	}
+}
+
+func TestAWSLLMStreamMapsReferenceCacheReadUsage(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{
+		Value: awstypes.ConverseStreamMetadataEvent{
+			Usage: &awstypes.TokenUsage{
+				InputTokens:          awsInt32(11),
+				OutputTokens:         awsInt32(7),
+				TotalTokens:          awsInt32(18),
+				CacheReadInputTokens: awsInt32(5),
+			},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want usage chunk", err)
+	}
+	if chunk == nil || chunk.Usage == nil {
+		t.Fatalf("Next chunk = %#v, want usage", chunk)
+	}
+	if chunk.Usage.PromptTokens != 11 || chunk.Usage.CompletionTokens != 7 || chunk.Usage.TotalTokens != 18 {
+		t.Fatalf("usage = %+v, want prompt/completion/total token counts", chunk.Usage)
+	}
+	if chunk.Usage.PromptCachedTokens != 5 {
+		t.Fatalf("prompt cached tokens = %d, want cacheReadInputTokens", chunk.Usage.PromptCachedTokens)
 	}
 }
 
@@ -280,4 +370,35 @@ func assertToolResultBlock(t *testing.T, blocks []awstypes.ContentBlock, index i
 	if block.Value.Status != wantStatus {
 		t.Fatalf("tool result status = %q, want %q", block.Value.Status, wantStatus)
 	}
+}
+
+type fakeAWSLLMReader struct {
+	events chan awstypes.ConverseStreamOutput
+	err    error
+	closed bool
+}
+
+func newFakeAWSLLMReader() *fakeAWSLLMReader {
+	return &fakeAWSLLMReader{events: make(chan awstypes.ConverseStreamOutput, 8)}
+}
+
+func (r *fakeAWSLLMReader) Events() <-chan awstypes.ConverseStreamOutput {
+	return r.events
+}
+
+func (r *fakeAWSLLMReader) Close() error {
+	r.closed = true
+	return nil
+}
+
+func (r *fakeAWSLLMReader) Err() error {
+	return r.err
+}
+
+func awsString(value string) *string {
+	return &value
+}
+
+func awsInt32(value int32) *int32 {
+	return &value
 }

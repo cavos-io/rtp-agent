@@ -624,6 +624,9 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	if len(writer.chunks[1]) != 0 {
 		t.Fatalf("flush chunk = %q, want empty AWS Transcribe sentinel", string(writer.chunks[1]))
 	}
+	if writer.chunkWasNil[1] {
+		t.Fatal("flush chunk = nil, want non-nil empty AWS Transcribe sentinel")
+	}
 	providerStream.errCh <- errors.New("stream failed")
 	if _, err := providerStream.Next(); err == nil || !strings.Contains(err.Error(), "stream failed") {
 		t.Fatalf("Next error = %v, want stream failed", err)
@@ -636,6 +639,9 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 	if len(writer.chunks[2]) != 0 {
 		t.Fatalf("close chunk = %q, want empty AWS Transcribe sentinel", string(writer.chunks[2]))
+	}
+	if writer.chunkWasNil[2] {
+		t.Fatal("close chunk = nil, want non-nil empty AWS Transcribe sentinel")
 	}
 	if err := providerStream.Close(); err != nil {
 		t.Fatalf("second Close error = %v, want nil", err)
@@ -721,10 +727,11 @@ func TestAWSSTTClosedStreamNextReturnsEOF(t *testing.T) {
 }
 
 type fakeAWSSTTWriter struct {
-	lastChunk []byte
-	chunks    [][]byte
-	closed    bool
-	err       error
+	lastChunk   []byte
+	chunks      [][]byte
+	chunkWasNil []bool
+	closed      bool
+	err         error
 }
 
 func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) error {
@@ -735,6 +742,7 @@ func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) erro
 	if !ok {
 		return nil
 	}
+	w.chunkWasNil = append(w.chunkWasNil, audioEvent.Value.AudioChunk == nil)
 	w.lastChunk = append([]byte(nil), audioEvent.Value.AudioChunk...)
 	w.chunks = append(w.chunks, append([]byte(nil), audioEvent.Value.AudioChunk...))
 	return nil

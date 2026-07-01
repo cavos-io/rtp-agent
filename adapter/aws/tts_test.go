@@ -129,7 +129,8 @@ func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 	}
 
 	stream := &awsTTSChunkedStream{
-		stream: io.NopCloser(bytes.NewReader(mp3Data)),
+		stream:   io.NopCloser(bytes.NewReader(mp3Data)),
+		provider: newAWSTTSWithClient(nil, ""),
 	}
 	defer stream.Close()
 
@@ -137,11 +138,11 @@ func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded mp3 rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want reference provider rate 16000", audio.Frame.SampleRate)
 	}
-	if audio.Frame.NumChannels != 2 {
-		t.Fatalf("channels = %d, want decoded mp3 stereo", audio.Frame.NumChannels)
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want reference mono output", audio.Frame.NumChannels)
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")

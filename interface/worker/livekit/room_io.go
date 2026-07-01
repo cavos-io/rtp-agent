@@ -139,6 +139,7 @@ const roomIOInputSampleRate uint32 = 24000
 const roomIOInputFrameSizeMS uint32 = 50
 const roomIOAudioSubscriptionTimeout = 10 * time.Second
 const roomIOInputSilenceFlushDuration = 500 * time.Millisecond
+const roomIOOutputMaxLead = 200 * time.Millisecond
 
 func roomIOAudioOutputCodec() webrtc.RTPCodecCapability {
 	return webrtc.RTPCodecCapability{
@@ -247,8 +248,10 @@ type RoomIO struct {
 	playbackStartedHandlers      []func(PlaybackStartedEvent)
 	playbackFinishedHandlers     []func(PlaybackFinishedEvent)
 
-	audioOutputPaused  bool
-	audioOutputWaiters []chan audioOutputWaitResult
+	audioOutputPaused   bool
+	audioOutputWaiters  []chan audioOutputWaitResult
+	audioOutputCarry    []byte
+	audioOutputDeadline time.Time
 
 	audioOutputDiagnostics RoomIOAudioOutputDiagnostics
 
@@ -1590,7 +1593,30 @@ func (rio *RoomIO) removePlaybackWaiter(waiter chan struct{}) {
 }
 
 func (rio *RoomIO) Flush() {
+	ctx := context.Background()
+	rio.flushAudioOutputTail(ctx)
+	rio.waitForAudioOutputDrain(ctx)
 	rio.finishPlayback(false, "")
+}
+
+func (rio *RoomIO) waitForAudioOutputDrain(ctx context.Context) {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	deadline := rio.audioOutputDeadline
+	rio.mu.Unlock()
+	if deadline.IsZero() {
+		return
+	}
+	wait := time.Until(deadline)
+	if wait <= 0 {
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(wait):
+	}
 }
 
 func (rio *RoomIO) ClearBuffer() {
@@ -1682,6 +1708,7 @@ func (rio *RoomIO) startPlayback() (PlaybackStartedEvent, []func(PlaybackStarted
 	}
 	rio.playbackCapturing = true
 	rio.playbackSegmentsCount++
+	rio.audioOutputDeadline = time.Time{}
 	rio.playbackAudioFrames = 0
 	rio.playbackAudioBytes = 0
 	rio.playbackAudioEncoded = 0
@@ -1800,6 +1827,8 @@ func (rio *RoomIO) finishPlayback(interrupted bool, synchronizedTranscript strin
 	}
 	rio.playbackCapturing = false
 	rio.playbackFinishedCount++
+	rio.audioOutputCarry = nil
+	rio.audioOutputDeadline = time.Time{}
 	playbackPosition := rio.playbackPosition
 	fullPlaybackPosition := playbackPosition
 	if interrupted && !rio.playbackStartedAt.IsZero() {
@@ -1897,7 +1926,7 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	var encodeFrames []*model.AudioFrame
 	if encoder != nil {
 		var err error
-		encodeFrames, err = roomIOOpusEncodeFrames(frame)
+		encodeFrames, err = rio.encodeOpusOutputFrames(frame)
 		if err != nil {
 			rio.recordAudioOutputError(err)
 			return err
@@ -1913,7 +1942,7 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 	rio.recordPlaybackInputFrame(frame)
 
 	if encoder != nil {
-		for i, encodeFrame := range encodeFrames {
+		for _, encodeFrame := range encodeFrames {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -1925,6 +1954,9 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 				return err
 			}
 			duration := time.Duration(audio.CalculateFrameDuration(encodeFrame) * float64(time.Second))
+			if err := rio.pacePlaybackWrite(ctx, duration); err != nil {
+				return err
+			}
 			if err := track.WriteSample(media.Sample{
 				Data:     encoded,
 				Duration: duration,
@@ -1934,13 +1966,6 @@ func (rio *RoomIO) PublishAudio(ctx context.Context, frame *model.AudioFrame) er
 			}
 			rio.recordAudioOutputFramePublished(frame, encodeFrame, len(encoded), 1)
 			rio.addPlaybackPosition(duration)
-			if i < len(encodeFrames)-1 {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(duration):
-				}
-			}
 		}
 		return nil
 	}
@@ -2099,7 +2124,7 @@ func (rio *RoomIO) releaseAudioSubscriptionFallback(ch chan struct{}) {
 	})
 }
 
-func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {
+func roomIOResampleMonoForOpus(frame *model.AudioFrame) (*model.AudioFrame, error) {
 	if frame == nil {
 		return nil, nil
 	}
@@ -2134,28 +2159,127 @@ func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error
 	if len(encodeFrame.Data) < expectedBytes {
 		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
 	}
-	data := encodeFrame.Data[:expectedBytes]
-	if samplesPerChannel == 0 {
-		return nil, nil
+	return &model.AudioFrame{
+		Data:              encodeFrame.Data[:expectedBytes],
+		SampleRate:        roomIOOpusClockRate,
+		NumChannels:       1,
+		SamplesPerChannel: samplesPerChannel,
+	}, nil
+}
+
+func roomIOChunkOpusWithCarry(carry, data []byte, flushTail bool) ([]*model.AudioFrame, []byte) {
+	const bytesPerSample = 2
+	buf := data
+	if len(carry) > 0 {
+		buf = make([]byte, 0, len(carry)+len(data))
+		buf = append(buf, carry...)
+		buf = append(buf, data...)
 	}
 
-	frames := make([]*model.AudioFrame, 0, int(samplesPerChannel/roomIOOpusFrameSamples)+1)
-	for sampleOffset := uint32(0); sampleOffset < samplesPerChannel; {
-		chunkSamples := minUint32(roomIOOpusFrameSamples, samplesPerChannel-sampleOffset)
-		paddedSamples := roomIOValidOpusSamples(chunkSamples)
-		start := int(sampleOffset) * bytesPerSample
-		end := int(sampleOffset+chunkSamples) * bytesPerSample
-		chunkData := make([]byte, int(paddedSamples)*bytesPerSample)
-		copy(chunkData, data[start:end])
+	frameBytes := int(roomIOOpusFrameSamples) * bytesPerSample
+	frames := make([]*model.AudioFrame, 0, len(buf)/frameBytes+1)
+	offset := 0
+	for len(buf)-offset >= frameBytes {
+		chunk := make([]byte, frameBytes)
+		copy(chunk, buf[offset:offset+frameBytes])
 		frames = append(frames, &model.AudioFrame{
-			Data:              chunkData,
+			Data:              chunk,
 			SampleRate:        roomIOOpusClockRate,
-			NumChannels:       encodeFrame.NumChannels,
+			NumChannels:       1,
+			SamplesPerChannel: roomIOOpusFrameSamples,
+		})
+		offset += frameBytes
+	}
+
+	leftover := buf[offset:]
+	if len(leftover) == 0 {
+		return frames, nil
+	}
+	if flushTail {
+		paddedSamples := roomIOValidOpusSamples(uint32(len(leftover) / bytesPerSample))
+		chunk := make([]byte, int(paddedSamples)*bytesPerSample)
+		copy(chunk, leftover)
+		frames = append(frames, &model.AudioFrame{
+			Data:              chunk,
+			SampleRate:        roomIOOpusClockRate,
+			NumChannels:       1,
 			SamplesPerChannel: paddedSamples,
 		})
-		sampleOffset += chunkSamples
+		return frames, nil
 	}
+	newCarry := make([]byte, len(leftover))
+	copy(newCarry, leftover)
+	return frames, newCarry
+}
+
+func (rio *RoomIO) encodeOpusOutputFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {
+	mono, err := roomIOResampleMonoForOpus(frame)
+	if err != nil {
+		return nil, err
+	}
+	var data []byte
+	if mono != nil {
+		data = mono.Data
+	}
+	rio.mu.Lock()
+	frames, carry := roomIOChunkOpusWithCarry(rio.audioOutputCarry, data, false)
+	rio.audioOutputCarry = carry
+	rio.mu.Unlock()
 	return frames, nil
+}
+
+func (rio *RoomIO) flushAudioOutputTail(ctx context.Context) {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	carry := rio.audioOutputCarry
+	rio.audioOutputCarry = nil
+	encoder := rio.encoder
+	track := rio.audioTrack
+	rio.mu.Unlock()
+	if len(carry) == 0 || encoder == nil || track == nil {
+		return
+	}
+	frames, _ := roomIOChunkOpusWithCarry(nil, carry, true)
+	for _, encodeFrame := range frames {
+		encoded, err := encoder.Encode(encodeFrame.Data)
+		if err != nil {
+			rio.recordAudioOutputError(err)
+			return
+		}
+		duration := time.Duration(audio.CalculateFrameDuration(encodeFrame) * float64(time.Second))
+		if err := rio.pacePlaybackWrite(ctx, duration); err != nil {
+			return
+		}
+		if err := track.WriteSample(media.Sample{Data: encoded, Duration: duration}, nil); err != nil {
+			rio.recordAudioOutputError(err)
+			return
+		}
+		rio.recordAudioOutputFramePublished(encodeFrame, encodeFrame, len(encoded), 1)
+		rio.addPlaybackPosition(duration)
+	}
+}
+
+func (rio *RoomIO) pacePlaybackWrite(ctx context.Context, duration time.Duration) error {
+	rio.mu.Lock()
+	now := time.Now()
+	if rio.audioOutputDeadline.IsZero() || rio.audioOutputDeadline.Before(now) {
+		rio.audioOutputDeadline = now
+	}
+	lead := rio.audioOutputDeadline.Sub(now)
+	rio.audioOutputDeadline = rio.audioOutputDeadline.Add(duration)
+	rio.mu.Unlock()
+	wait := lead - roomIOOutputMaxLead
+	if wait <= 0 {
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(wait):
+		return nil
+	}
 }
 
 func roomIOMonoAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
@@ -2210,13 +2334,6 @@ func roomIOValidOpusSamples(samples uint32) uint32 {
 		}
 	}
 	return roomIOOpusFrameSamples
-}
-
-func minUint32(a, b uint32) uint32 {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func callPlaybackStartedHandler(handler func(PlaybackStartedEvent), ev PlaybackStartedEvent) {

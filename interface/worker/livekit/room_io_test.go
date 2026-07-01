@@ -1026,6 +1026,7 @@ func TestRoomIOPublishAudioDownmixesStereoToMonoOutput(t *testing.T) {
 	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
+	rio.Flush()
 
 	if got, want := len(encoder.pcm), int(roomIOValidOpusSamples(2))*2; got != want {
 		t.Fatalf("encoder PCM length = %d, want %d bytes for mono Opus frame", got, want)
@@ -1039,6 +1040,162 @@ func TestRoomIOPublishAudioDownmixesStereoToMonoOutput(t *testing.T) {
 	stats := rio.AudioOutputDiagnostics()
 	if stats.LastPublishedChannels != 1 {
 		t.Fatalf("LastPublishedChannels = %d, want mono RoomIO output", stats.LastPublishedChannels)
+	}
+}
+
+func TestRoomIOPublishAudioBoundedLeadPacing(t *testing.T) {
+	frame := func() *model.AudioFrame {
+		return &model.AudioFrame{
+			Data:              make([]byte, 960*2),
+			SampleRate:        48000,
+			NumChannels:       1,
+			SamplesPerChannel: 960,
+		}
+	}
+	newRio := func() *RoomIO {
+		return &RoomIO{
+			audioTrack: newRoomIOTestAudioTrack(t),
+			encoder:    &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}},
+		}
+	}
+	leadFrames := int(roomIOOutputMaxLead / (20 * time.Millisecond))
+
+	rioA := newRio()
+	startA := time.Now()
+	for i := 0; i < leadFrames; i++ {
+		if err := rioA.PublishAudio(context.Background(), frame()); err != nil {
+			t.Fatalf("PublishAudio(a,%d) error = %v", i, err)
+		}
+	}
+	if within := time.Since(startA); within > roomIOOutputMaxLead/2 {
+		t.Fatalf("writing %d buffered frames took %v, want fast fill within the lead budget", leadFrames, within)
+	}
+
+	rioB := newRio()
+	const frames = 25
+	startB := time.Now()
+	for i := 0; i < frames; i++ {
+		if err := rioB.PublishAudio(context.Background(), frame()); err != nil {
+			t.Fatalf("PublishAudio(b,%d) error = %v", i, err)
+		}
+	}
+	if elapsed := time.Since(startB); elapsed < roomIOOutputMaxLead {
+		t.Fatalf("publishing %dms of audio took %v, want real-time pacing beyond the lead budget", frames*20, elapsed)
+	}
+}
+
+func TestRoomIOChunkOpusWithCarryNoMidStreamPadding(t *testing.T) {
+	frameBytes := int(roomIOOpusFrameSamples) * 2
+
+	ramp := func(start int, n int) []byte {
+		b := make([]byte, n)
+		for i := range b {
+			v := byte((start + i) % 255)
+			if v == 0 {
+				v = 1
+			}
+			b[i] = v
+		}
+		return b
+	}
+	a := ramp(1, 2304)
+	b := ramp(1000, 2304)
+	input := append(append([]byte{}, a...), b...)
+
+	var emitted []byte
+	assertFull := func(frames []*model.AudioFrame) {
+		for _, f := range frames {
+			if len(f.Data) != frameBytes || f.SamplesPerChannel != roomIOOpusFrameSamples {
+				t.Fatalf("mid-stream frame = %d bytes / %d samples, want full %d/%d (no padding)",
+					len(f.Data), f.SamplesPerChannel, frameBytes, roomIOOpusFrameSamples)
+			}
+			emitted = append(emitted, f.Data...)
+		}
+	}
+
+	frames, carry := roomIOChunkOpusWithCarry(nil, a, false)
+	assertFull(frames)
+	frames, carry = roomIOChunkOpusWithCarry(carry, b, false)
+	assertFull(frames)
+
+	if len(emitted) == 0 || len(emitted) > len(input) {
+		t.Fatalf("emitted %d bytes, input %d bytes", len(emitted), len(input))
+	}
+	for i := 0; i < len(emitted); i++ {
+		if emitted[i] != input[i] {
+			t.Fatalf("emitted byte %d = %d, want %d (silence injected mid-stream)", i, emitted[i], input[i])
+		}
+	}
+
+	tailFrames, tailCarry := roomIOChunkOpusWithCarry(carry, nil, true)
+	if tailCarry != nil {
+		t.Fatalf("carry after flush = %v, want nil", tailCarry)
+	}
+	var tail []byte
+	for _, f := range tailFrames {
+		tail = append(tail, f.Data...)
+	}
+	remaining := input[len(emitted):]
+	if len(tail) < len(remaining) {
+		t.Fatalf("flushed tail %d bytes < remaining %d bytes", len(tail), len(remaining))
+	}
+	for i := 0; i < len(remaining); i++ {
+		if tail[i] != remaining[i] {
+			t.Fatalf("flushed tail byte %d = %d, want %d", i, tail[i], remaining[i])
+		}
+	}
+	for i := len(remaining); i < len(tail); i++ {
+		if tail[i] != 0 {
+			t.Fatalf("flush padding byte %d = %d, want 0", i, tail[i])
+		}
+	}
+}
+
+func TestRoomIOResampleMonoForOpus(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 4*2*2),
+		SampleRate:        48000,
+		NumChannels:       2,
+		SamplesPerChannel: 4,
+	}
+	mono, err := roomIOResampleMonoForOpus(frame)
+	if err != nil {
+		t.Fatalf("roomIOResampleMonoForOpus error = %v", err)
+	}
+	if mono.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want 1", mono.NumChannels)
+	}
+	if mono.SampleRate != roomIOOpusClockRate {
+		t.Fatalf("SampleRate = %d, want %d", mono.SampleRate, roomIOOpusClockRate)
+	}
+	if mono.SamplesPerChannel != 4 {
+		t.Fatalf("SamplesPerChannel = %d, want 4", mono.SamplesPerChannel)
+	}
+	if len(mono.Data) != int(mono.SamplesPerChannel)*2 {
+		t.Fatalf("Data length = %d, want %d", len(mono.Data), int(mono.SamplesPerChannel)*2)
+	}
+}
+
+func TestRoomIOFlushWaitsForQueuedAudioDrain(t *testing.T) {
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}},
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	for i := 0; i < 15; i++ {
+		if err := rio.PublishAudio(context.Background(), frame); err != nil {
+			t.Fatalf("PublishAudio(%d) error = %v", i, err)
+		}
+	}
+	start := time.Now()
+	rio.Flush()
+	if waited := time.Since(start); waited < 50*time.Millisecond {
+		t.Fatalf("Flush returned after %v, want it to wait for queued audio to drain", waited)
 	}
 }
 
