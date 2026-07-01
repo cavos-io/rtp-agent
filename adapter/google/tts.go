@@ -28,6 +28,9 @@ type GoogleTTS struct {
 	model   string
 	prompt  *string
 	audio   *texttospeechpb.AudioConfig
+	custom  *texttospeechpb.CustomPronunciations
+	ssml    bool
+	markup  bool
 }
 
 type googleTTSClient interface {
@@ -40,8 +43,12 @@ type GoogleTTSOption func(*googleTTSConfig)
 type googleTTSConfig struct {
 	language     string
 	languageSet  bool
+	gender       texttospeechpb.SsmlVoiceGender
+	genderSet    bool
 	voice        string
 	voiceSet     bool
+	cloneKey     string
+	cloneKeySet  bool
 	model        string
 	modelSet     bool
 	prompt       *string
@@ -56,6 +63,10 @@ type googleTTSConfig struct {
 	volumeSet    bool
 	sampleRate   int32
 	sampleSet    bool
+	custom       *texttospeechpb.CustomPronunciations
+	customSet    bool
+	enableSSML   bool
+	useMarkup    bool
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
@@ -67,11 +78,27 @@ func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 	}
 }
 
+func WithGoogleTTSGender(gender string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.gender = googleTTSSSMLGender(gender)
+		cfg.genderSet = true
+	}
+}
+
 func WithGoogleTTSVoice(voice string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		if voice != "" {
 			cfg.voice = voice
 			cfg.voiceSet = true
+		}
+	}
+}
+
+func WithGoogleTTSVoiceCloneKey(key string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if key != "" {
+			cfg.cloneKey = key
+			cfg.cloneKeySet = true
 		}
 	}
 }
@@ -131,6 +158,25 @@ func WithGoogleTTSSampleRate(sampleRate int32) GoogleTTSOption {
 	}
 }
 
+func WithGoogleTTSCustomPronunciations(custom *texttospeechpb.CustomPronunciations) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.custom = custom
+		cfg.customSet = true
+	}
+}
+
+func WithGoogleTTSSSML(enabled bool) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.enableSSML = enabled
+	}
+}
+
+func WithGoogleTTSMarkup(enabled bool) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.useMarkup = enabled
+	}
+}
+
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
@@ -151,6 +197,7 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *GoogleTTS {
 	cfg := googleTTSConfig{
 		language:     "en-US",
+		gender:       texttospeechpb.SsmlVoiceGender_NEUTRAL,
 		voice:        "Charon",
 		model:        "gemini-2.5-flash-tts",
 		speakingRate: 1.0,
@@ -159,6 +206,9 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	if cfg.cloneKeySet && !cfg.modelSet && !cfg.promptSet {
+		cfg.model = "chirp_3"
+	}
 
 	return &GoogleTTS{
 		streams: make(map[*googleTTSSynthesizeStream]struct{}),
@@ -166,6 +216,9 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		voice:   googleTTSVoiceParams(cfg),
 		model:   cfg.model,
 		prompt:  cfg.prompt,
+		custom:  cfg.custom,
+		ssml:    cfg.enableSSML,
+		markup:  cfg.useMarkup,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
 			SampleRateHertz:  cfg.sampleRate,
@@ -179,6 +232,9 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 
 func (t *GoogleTTS) Label() string { return "google.TTS" }
 func (t *GoogleTTS) Capabilities() tts.TTSCapabilities {
+	if t != nil && t.ssml {
+		return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
+	}
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
 func (t *GoogleTTS) SampleRate() int  { return int(t.audio.GetSampleRateHertz()) }
@@ -247,6 +303,8 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	cfg := googleTTSConfig{
 		language:     t.voice.GetLanguageCode(),
 		voice:        t.voice.GetName(),
+		gender:       t.voice.GetSsmlGender(),
+		cloneKey:     t.voice.GetVoiceClone().GetVoiceCloningKey(),
 		model:        t.Model(),
 		prompt:       t.prompt,
 		speakingRate: t.audio.GetSpeakingRate(),
@@ -254,11 +312,12 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		effects:      append([]string(nil), t.audio.GetEffectsProfileId()...),
 		volumeGainDB: t.audio.GetVolumeGainDb(),
 		sampleRate:   t.audio.GetSampleRateHertz(),
+		custom:       t.custom,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.languageSet || cfg.voiceSet || cfg.modelSet {
+	if cfg.languageSet || cfg.genderSet || cfg.voiceSet || cfg.cloneKeySet || cfg.modelSet {
 		t.voice = googleTTSVoiceParams(cfg)
 	}
 	if cfg.modelSet {
@@ -282,17 +341,20 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	if cfg.sampleSet {
 		t.audio.SampleRateHertz = cfg.sampleRate
 	}
+	if cfg.customSet {
+		t.custom = cfg.custom
+	}
 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	if t.ssml && t.markup {
+		return nil, errors.New("SSML support is not available for markup input")
+	}
 	req := &texttospeechpb.SynthesizeSpeechRequest{
-		Input: &texttospeechpb.SynthesisInput{
-			InputSource: &texttospeechpb.SynthesisInput_Text{Text: text},
-			Prompt:      t.prompt,
-		},
+		Input:       googleTTSSynthesisInput(text, t.prompt, t.custom, t.ssml, t.markup),
 		Voice:       t.voice,
 		AudioConfig: t.audio,
 	}
@@ -307,6 +369,21 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		inputText:  text,
 		sampleRate: t.audio.GetSampleRateHertz(),
 	}, nil
+}
+
+func googleTTSSynthesisInput(text string, prompt *string, custom *texttospeechpb.CustomPronunciations, ssml bool, markup bool) *texttospeechpb.SynthesisInput {
+	input := &texttospeechpb.SynthesisInput{
+		Prompt:               prompt,
+		CustomPronunciations: custom,
+	}
+	if markup {
+		input.InputSource = &texttospeechpb.SynthesisInput_Markup{Markup: text}
+	} else if ssml {
+		input.InputSource = &texttospeechpb.SynthesisInput_Ssml{Ssml: "<speak>" + text + "</speak>"}
+	} else {
+		input.InputSource = &texttospeechpb.SynthesisInput_Text{Text: text}
+	}
+	return input
 }
 
 func googleTTSSynthesisError(err error) error {
@@ -335,6 +412,12 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	if t.ssml && t.markup {
+		return nil, errors.New("SSML support is not available for markup input")
+	}
+	if t.ssml {
+		return nil, errors.New("SSML support is not available for streaming synthesis")
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &googleTTSSynthesizeStream{
 		cancel: cancel,
@@ -344,6 +427,8 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		voice:  t.voice,
 		prompt: t.prompt,
 		audio:  googleCloneAudioConfig(t.audio),
+		custom: t.custom,
+		markup: t.markup,
 	}
 	stream.cond = sync.NewCond(&stream.mu)
 	if !t.registerStream(stream) {
@@ -439,6 +524,8 @@ type googleTTSSynthesizeStream struct {
 	voice      *texttospeechpb.VoiceSelectionParams
 	prompt     *string
 	audio      *texttospeechpb.AudioConfig
+	custom     *texttospeechpb.CustomPronunciations
+	markup     bool
 	buffer     strings.Builder
 	closed     bool
 	inputEnded bool
@@ -537,10 +624,7 @@ func (s *googleTTSSynthesizeStream) sendTextLocked(text string) error {
 	}
 	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
 		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
-			Input: &texttospeechpb.StreamingSynthesisInput{
-				InputSource: &texttospeechpb.StreamingSynthesisInput_Text{Text: text},
-				Prompt:      s.nextPromptLocked(),
-			},
+			Input: googleTTSStreamingInput(text, s.nextPromptLocked(), s.markup),
 		},
 	}); err != nil {
 		return googleTTSSynthesisError(err)
@@ -549,6 +633,16 @@ func (s *googleTTSSynthesizeStream) sendTextLocked(text string) error {
 		state.text.WriteString(text)
 	}
 	return nil
+}
+
+func googleTTSStreamingInput(text string, prompt *string, markup bool) *texttospeechpb.StreamingSynthesisInput {
+	input := &texttospeechpb.StreamingSynthesisInput{Prompt: prompt}
+	if markup {
+		input.InputSource = &texttospeechpb.StreamingSynthesisInput_Markup{Markup: text}
+	} else {
+		input.InputSource = &texttospeechpb.StreamingSynthesisInput_Text{Text: text}
+	}
+	return input
 }
 
 func (s *googleTTSSynthesizeStream) nextPromptLocked() *string {
@@ -576,6 +670,7 @@ func (s *googleTTSSynthesizeStream) ensureActiveStreamLocked() (texttospeechpb.T
 					SampleRateHertz: s.audio.GetSampleRateHertz(),
 					SpeakingRate:    s.audio.GetSpeakingRate(),
 				},
+				CustomPronunciations: s.custom,
 			},
 		},
 	}); err != nil {
@@ -710,9 +805,25 @@ func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionPar
 	voice := &texttospeechpb.VoiceSelectionParams{
 		LanguageCode: cfg.language,
 		Name:         cfg.voice,
+		SsmlGender:   cfg.gender,
+	}
+	if cfg.cloneKey != "" {
+		voice.Name = ""
+		voice.VoiceClone = &texttospeechpb.VoiceCloneParams{VoiceCloningKey: cfg.cloneKey}
 	}
 	if cfg.model != "chirp_3" {
 		voice.ModelName = cfg.model
 	}
 	return voice
+}
+
+func googleTTSSSMLGender(gender string) texttospeechpb.SsmlVoiceGender {
+	switch gender {
+	case "male":
+		return texttospeechpb.SsmlVoiceGender_MALE
+	case "female":
+		return texttospeechpb.SsmlVoiceGender_FEMALE
+	default:
+		return texttospeechpb.SsmlVoiceGender_NEUTRAL
+	}
 }

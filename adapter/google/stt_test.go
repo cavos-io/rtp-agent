@@ -133,11 +133,35 @@ func TestGoogleSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamingCapabilityMatchesReferenceOption(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTStreaming(false))
+
+	capabilities := provider.Capabilities()
+	if capabilities.Streaming {
+		t.Fatal("Streaming capability = true, want false from reference use_streaming option")
+	}
+	if capabilities.AlignedTranscript != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty when streaming disabled", capabilities.AlignedTranscript)
+	}
+}
+
 func TestGoogleSTTChirp3CapabilitiesDisableWordAlignment(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
 
 	if got := provider.Capabilities().AlignedTranscript; got != "" {
 		t.Fatalf("AlignedTranscript = %q, want empty for chirp_3", got)
+	}
+}
+
+func TestGoogleRecognitionConfigDisablesReferenceWordTimeOffsetsWhenConfigured(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTWordTimeOffsets(false))
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.EnableWordTimeOffsets {
+		t.Fatal("word time offsets enabled = true, want false from reference option")
+	}
+	if got := provider.Capabilities().AlignedTranscript; got != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty when word offsets disabled", got)
 	}
 }
 
@@ -175,6 +199,74 @@ func TestGoogleRecognitionConfigUsesProviderOptions(t *testing.T) {
 	}
 	if !config.ProfanityFilter {
 		t.Fatal("profanity filter = false, want true")
+	}
+}
+
+func TestGoogleRecognitionConfigUsesReferenceKeywordAdaptation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTKeywords(
+			GoogleSTTKeyword{Value: "Cavos", Boost: 12.5},
+			GoogleSTTKeyword{Value: "LiveKit", Boost: 9},
+		),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.Adaptation == nil || len(config.Adaptation.PhraseSets) != 1 {
+		t.Fatalf("adaptation = %#v, want one phrase set", config.Adaptation)
+	}
+	phraseSet := config.Adaptation.PhraseSets[0]
+	if phraseSet.Name != "keywords" {
+		t.Fatalf("phrase set name = %q, want keywords", phraseSet.Name)
+	}
+	if len(phraseSet.Phrases) != 2 {
+		t.Fatalf("phrases = %#v, want two keyword phrases", phraseSet.Phrases)
+	}
+	if got := phraseSet.Phrases[0]; got.Value != "Cavos" || got.Boost != 12.5 {
+		t.Fatalf("first phrase = %#v, want Cavos boost 12.5", got)
+	}
+	if got := phraseSet.Phrases[1]; got.Value != "LiveKit" || got.Boost != 9 {
+		t.Fatalf("second phrase = %#v, want LiveKit boost 9", got)
+	}
+}
+
+func TestGoogleRecognitionConfigUsesReferenceAdaptationOverKeywords(t *testing.T) {
+	adaptation := &speechpb.SpeechAdaptation{
+		PhraseSets: []*speechpb.PhraseSet{{
+			Name: "custom",
+			Phrases: []*speechpb.PhraseSet_Phrase{{
+				Value: "Acrux",
+				Boost: 20,
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTKeywords(GoogleSTTKeyword{Value: "ignored", Boost: 1}),
+		WithGoogleSTTAdaptation(adaptation),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.Adaptation != adaptation {
+		t.Fatalf("adaptation = %#v, want configured adaptation over keywords", config.Adaptation)
+	}
+}
+
+func TestGoogleRecognitionConfigUsesReferenceAlternativeLanguages(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTAlternativeLanguages("es-ES", "fr-FR"),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.LanguageCode != "en-US" {
+		t.Fatalf("language code = %q, want en-US", config.LanguageCode)
+	}
+	if len(config.AlternativeLanguageCodes) != 2 {
+		t.Fatalf("alternative languages = %#v, want two entries", config.AlternativeLanguageCodes)
+	}
+	if config.AlternativeLanguageCodes[0] != "es-ES" || config.AlternativeLanguageCodes[1] != "fr-FR" {
+		t.Fatalf("alternative languages = %#v, want [es-ES fr-FR]", config.AlternativeLanguageCodes)
 	}
 }
 
@@ -405,6 +497,25 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 	if !streamClient.closed {
 		t.Fatal("Close did not close streaming client")
+	}
+}
+
+func TestGoogleSTTStreamConfigUsesReferenceInterimResultsOption(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTInterimResults(false),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	config := streamClient.sent[0].GetStreamingConfig()
+	if config.GetInterimResults() {
+		t.Fatal("interim_results = true, want false from reference interim_results option")
 	}
 }
 

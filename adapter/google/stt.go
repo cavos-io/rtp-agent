@@ -27,6 +27,8 @@ type GoogleSTT struct {
 	client               googleSpeechClient
 	closed               bool
 	model                string
+	streaming            bool
+	interimResults       bool
 	punctuate            bool
 	spokenPunctuation    bool
 	profanityFilter      bool
@@ -37,6 +39,9 @@ type GoogleSTT struct {
 	enableWordConfidence bool
 	speechStartTimeout   time.Duration
 	speechEndTimeout     time.Duration
+	keywords             []GoogleSTTKeyword
+	adaptation           *speechpb.SpeechAdaptation
+	alternativeLanguages []string
 }
 
 type googleSpeechClient interface {
@@ -46,11 +51,28 @@ type googleSpeechClient interface {
 
 type GoogleSTTOption func(*GoogleSTT)
 
+type GoogleSTTKeyword struct {
+	Value string
+	Boost float32
+}
+
 func WithGoogleSTTModel(model string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if model != "" {
 			s.model = model
 		}
+	}
+}
+
+func WithGoogleSTTStreaming(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.streaming = enabled
+	}
+}
+
+func WithGoogleSTTInterimResults(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.interimResults = enabled
 	}
 }
 
@@ -100,6 +122,12 @@ func WithGoogleSTTWordConfidence(enabled bool) GoogleSTTOption {
 	}
 }
 
+func WithGoogleSTTWordTimeOffsets(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.enableWordTimeOffset = enabled
+	}
+}
+
 func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if sampleRate > 0 {
@@ -112,6 +140,36 @@ func WithGoogleSTTMinConfidenceThreshold(threshold float64) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if threshold >= 0 {
 			s.minConfidence = threshold
+		}
+	}
+}
+
+func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.keywords = nil
+		for _, keyword := range keywords {
+			if keyword.Value == "" {
+				continue
+			}
+			s.keywords = append(s.keywords, keyword)
+		}
+	}
+}
+
+func WithGoogleSTTAdaptation(adaptation *speechpb.SpeechAdaptation) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.adaptation = adaptation
+	}
+}
+
+func WithGoogleSTTAlternativeLanguages(languages ...string) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.alternativeLanguages = nil
+		for _, language := range languages {
+			if language == "" {
+				continue
+			}
+			s.alternativeLanguages = append(s.alternativeLanguages, language)
 		}
 	}
 }
@@ -138,6 +196,8 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		streams:              make(map[*googleSTTStream]struct{}),
 		client:               client,
 		model:                "latest_long",
+		streaming:            true,
+		interimResults:       true,
 		punctuate:            true,
 		sampleRate:           16000,
 		minConfidence:        0.65,
@@ -153,10 +213,10 @@ func (s *GoogleSTT) Label() string           { return "google.STT" }
 func (s *GoogleSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	alignedTranscript := ""
-	if googleEnableWordTimeOffsets(s) {
+	if s.streaming && googleEnableWordTimeOffsets(s) {
 		alignedTranscript = "word"
 	}
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: s.streaming, InterimResults: true, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
 }
 
 func (s *GoogleSTT) Close() error {
@@ -251,7 +311,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
 				Config:                    googleRecognitionConfig(s, language),
-				InterimResults:            true,
+				InterimResults:            s.interimResults,
 				EnableVoiceActivityEvents: s.voiceActivityEvents || s.speechStartTimeout > 0 || s.speechEndTimeout > 0,
 				VoiceActivityTimeout:      googleVoiceActivityTimeout(s),
 			},
@@ -301,12 +361,45 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 		Encoding:                   speechpb.RecognitionConfig_LINEAR16,
 		SampleRateHertz:            s.sampleRate,
 		LanguageCode:               language,
+		AlternativeLanguageCodes:   append([]string(nil), s.alternativeLanguages...),
 		EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
 		EnableWordConfidence:       s.enableWordConfidence,
 		EnableAutomaticPunctuation: s.punctuate,
 		EnableSpokenPunctuation:    wrapperspb.Bool(s.spokenPunctuation),
 		ProfanityFilter:            s.profanityFilter,
 		Model:                      s.model,
+		Adaptation:                 googleSpeechAdaptation(s),
+	}
+}
+
+func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
+	if s == nil {
+		return nil
+	}
+	if s.adaptation != nil {
+		return s.adaptation
+	}
+	if len(s.keywords) == 0 {
+		return nil
+	}
+	phrases := make([]*speechpb.PhraseSet_Phrase, 0, len(s.keywords))
+	for _, keyword := range s.keywords {
+		if keyword.Value == "" {
+			continue
+		}
+		phrases = append(phrases, &speechpb.PhraseSet_Phrase{
+			Value: keyword.Value,
+			Boost: keyword.Boost,
+		})
+	}
+	if len(phrases) == 0 {
+		return nil
+	}
+	return &speechpb.SpeechAdaptation{
+		PhraseSets: []*speechpb.PhraseSet{{
+			Name:    "keywords",
+			Phrases: phrases,
+		}},
 	}
 }
 

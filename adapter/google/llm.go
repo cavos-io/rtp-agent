@@ -238,6 +238,33 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["response_json_schema"]; ok {
 		config.ResponseJsonSchema = value
 	}
+	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
+		config.ResponseModalities = value
+	}
+	if value, ok := googleSpeechConfigParam(params["speech_config"]); ok {
+		config.SpeechConfig = value
+	}
+	if value, ok := googleBoolParam(params["audio_timestamp"]); ok {
+		config.AudioTimestamp = value
+	}
+	if value, ok := googleServiceTierParam(params["service_tier"]); ok {
+		config.ServiceTier = value
+	}
+	if value, ok := googleThinkingConfigParam(params["thinking_config"]); ok {
+		config.ThinkingConfig = value
+	}
+	if value, ok := googleSafetySettingsParam(params["safety_settings"]); ok {
+		config.SafetySettings = value
+	}
+	if value, ok := googleMediaResolutionParam(params["media_resolution"]); ok {
+		config.MediaResolution = value
+	}
+	if value, ok := googleRetrievalConfigParam(params["retrieval_config"]); ok {
+		if config.ToolConfig == nil {
+			config.ToolConfig = &genai.ToolConfig{}
+		}
+		config.ToolConfig.RetrievalConfig = value
+	}
 }
 
 func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[string]any) {
@@ -245,7 +272,9 @@ func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[s
 		return
 	}
 	config.ResponseMIMEType = "application/json"
-	config.ResponseJsonSchema = format
+	if schema, ok := googleResponseFormatSchema(format); ok {
+		config.ResponseSchema = schema
+	}
 }
 
 func googleFloat32Param(value any) (float32, bool) {
@@ -288,6 +317,129 @@ func googleResponseSchemaParam(value any) (*genai.Schema, bool) {
 		return schema, schema != nil
 	case map[string]any:
 		return googleSchemaFromMap(schema), true
+	default:
+		return nil, false
+	}
+}
+
+func googleResponseFormatSchema(format map[string]any) (*genai.Schema, bool) {
+	if format == nil {
+		return nil, false
+	}
+	if format["type"] == "json_schema" {
+		jsonSchema, ok := format["json_schema"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		return googleResponseSchemaParam(jsonSchema["schema"])
+	}
+	if format["type"] == "json_object" || format["type"] == "text" {
+		return nil, false
+	}
+	return googleResponseSchemaParam(format)
+}
+
+func googleSpeechConfigParam(value any) (*genai.SpeechConfig, bool) {
+	config, ok := value.(*genai.SpeechConfig)
+	return config, ok && config != nil
+}
+
+func googleServiceTierParam(value any) (genai.ServiceTier, bool) {
+	switch tier := value.(type) {
+	case genai.ServiceTier:
+		return tier, tier != ""
+	case string:
+		if tier == "" {
+			return "", false
+		}
+		return genai.ServiceTier(tier), true
+	default:
+		return "", false
+	}
+}
+
+func googleThinkingConfigParam(value any) (*genai.ThinkingConfig, bool) {
+	switch cfg := value.(type) {
+	case *genai.ThinkingConfig:
+		return cfg, cfg != nil
+	case map[string]any:
+		config := &genai.ThinkingConfig{}
+		if value, ok := googleInt32Param(cfg["thinking_budget"]); ok {
+			config.ThinkingBudget = &value
+		}
+		if value, ok := googleBoolParam(cfg["include_thoughts"]); ok {
+			config.IncludeThoughts = value
+		}
+		if value, ok := googleThinkingLevelParam(cfg["thinking_level"]); ok {
+			config.ThinkingLevel = value
+		}
+		return config, true
+	default:
+		return nil, false
+	}
+}
+
+func googleBoolParam(value any) (bool, bool) {
+	v, ok := value.(bool)
+	return v, ok
+}
+
+func googleThinkingLevelParam(value any) (genai.ThinkingLevel, bool) {
+	switch level := value.(type) {
+	case genai.ThinkingLevel:
+		return level, level != ""
+	case string:
+		if level == "" {
+			return "", false
+		}
+		return genai.ThinkingLevel(strings.ToUpper(level)), true
+	default:
+		return "", false
+	}
+}
+
+func googleSafetySettingsParam(value any) ([]*genai.SafetySetting, bool) {
+	switch settings := value.(type) {
+	case []*genai.SafetySetting:
+		if len(settings) == 0 {
+			return nil, false
+		}
+		return append([]*genai.SafetySetting(nil), settings...), true
+	case []genai.SafetySetting:
+		if len(settings) == 0 {
+			return nil, false
+		}
+		result := make([]*genai.SafetySetting, 0, len(settings))
+		for i := range settings {
+			setting := settings[i]
+			result = append(result, &setting)
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleMediaResolutionParam(value any) (genai.MediaResolution, bool) {
+	switch resolution := value.(type) {
+	case genai.MediaResolution:
+		return resolution, resolution != ""
+	case string:
+		if resolution == "" {
+			return "", false
+		}
+		return genai.MediaResolution(resolution), true
+	default:
+		return "", false
+	}
+}
+
+func googleRetrievalConfigParam(value any) (*genai.RetrievalConfig, bool) {
+	switch config := value.(type) {
+	case *genai.RetrievalConfig:
+		return config, config != nil
+	case genai.RetrievalConfig:
+		return &config, true
 	default:
 		return nil, false
 	}

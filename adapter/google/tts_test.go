@@ -107,6 +107,55 @@ func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamMarkupInputMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSMarkup(true))
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("<speak-as interpret-as=\"characters\">ABC</speak-as>"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	if len(client.stream.sent) != 2 {
+		t.Fatalf("sent requests = %d, want config and markup input", len(client.stream.sent))
+	}
+	input := client.stream.sent[1].GetInput()
+	if got := input.GetMarkup(); got != "<speak-as interpret-as=\"characters\">ABC</speak-as>" {
+		t.Fatalf("markup input = %q, want raw markup text", got)
+	}
+	if got := input.GetText(); got != "" {
+		t.Fatalf("text input = %q, want empty when markup is enabled", got)
+	}
+}
+
+func TestGoogleTTSStreamRejectsSSMLLikeReference(t *testing.T) {
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{}, WithGoogleTTSSSML(true))
+
+	stream, err := provider.Stream(context.Background())
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "SSML support is not available for streaming synthesis") {
+		t.Fatalf("Stream error = %v, want reference SSML streaming error", err)
+	}
+}
+
+func TestGoogleTTSSSMLCapabilitiesDisableStreaming(t *testing.T) {
+	provider := newGoogleTTSWithClient(nil, WithGoogleTTSSSML(true))
+
+	if provider.Capabilities().Streaming {
+		t.Fatal("Capabilities().Streaming = true, want false when SSML disables streaming")
+	}
+}
+
 func TestGoogleTTSStreamSendsCompletedSentenceBeforeFlushLikeReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client)
@@ -524,6 +573,102 @@ func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSGenderOptionMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSGender("female"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if got := client.request.GetVoice().GetSsmlGender(); got != texttospeech.SsmlVoiceGender_FEMALE {
+		t.Fatalf("voice gender = %v, want FEMALE", got)
+	}
+}
+
+func TestGoogleTTSVoiceCloneKeyMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSVoiceCloneKey("clone-key"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	voice := client.request.GetVoice()
+	if voice.GetVoiceClone().GetVoiceCloningKey() != "clone-key" {
+		t.Fatalf("voice clone = %+v, want configured clone key", voice.GetVoiceClone())
+	}
+	if voice.GetName() != "" {
+		t.Fatalf("voice name = %q, want empty when voice clone is configured", voice.GetName())
+	}
+}
+
+func TestGoogleTTSSSMLInputMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSSML(true))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if got := client.request.GetInput().GetSsml(); got != "<speak>hello</speak>" {
+		t.Fatalf("ssml input = %q, want reference speak wrapper", got)
+	}
+	if got := client.request.GetInput().GetText(); got != "" {
+		t.Fatalf("text input = %q, want empty when SSML is enabled", got)
+	}
+}
+
+func TestGoogleTTSMarkupInputMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSMarkup(true))
+
+	stream, err := provider.Synthesize(context.Background(), "<speak-as interpret-as=\"characters\">ABC</speak-as>")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if got := client.request.GetInput().GetMarkup(); got != "<speak-as interpret-as=\"characters\">ABC</speak-as>" {
+		t.Fatalf("markup input = %q, want raw markup text", got)
+	}
+	if got := client.request.GetInput().GetText(); got != "" {
+		t.Fatalf("text input = %q, want empty when markup is enabled", got)
+	}
+}
+
+func TestGoogleTTSSynthesizeRejectsSSMLWithMarkupLikeReference(t *testing.T) {
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	},
+		WithGoogleTTSSSML(true),
+		WithGoogleTTSMarkup(true),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "SSML support is not available for markup input") {
+		t.Fatalf("Synthesize error = %v, want reference SSML markup error", err)
+	}
+}
+
 func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
@@ -606,6 +751,50 @@ func TestGoogleTTSPromptMatchesReferenceRequests(t *testing.T) {
 	}
 	if got := client.stream.sent[1].GetInput().GetPrompt(); got != "speak warmly" {
 		t.Fatalf("stream prompt = %q, want speak warmly on first input", got)
+	}
+}
+
+func TestGoogleTTSCustomPronunciationsMatchReferenceRequests(t *testing.T) {
+	phrase := "Cavos"
+	pronunciation := "keIvAs"
+	encoding := texttospeech.CustomPronunciationParams_PHONETIC_ENCODING_X_SAMPA
+	custom := &texttospeech.CustomPronunciations{
+		Pronunciations: []*texttospeech.CustomPronunciationParams{{
+			Phrase:           &phrase,
+			PhoneticEncoding: &encoding,
+			Pronunciation:    &pronunciation,
+		}},
+	}
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSCustomPronunciations(custom))
+
+	chunked, err := provider.Synthesize(context.Background(), "Say Cavos")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetInput().GetCustomPronunciations(); got != custom {
+		t.Fatalf("synthesize custom pronunciations = %#v, want configured value", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Say Cavos"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if got := client.stream.sent[0].GetStreamingConfig().GetCustomPronunciations(); got != custom {
+		t.Fatalf("stream custom pronunciations = %#v, want configured value", got)
 	}
 }
 

@@ -418,6 +418,180 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseSchemaExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsResponseFormatToReferenceSchema(t *testing.T) {
+	options := &llm.ChatOptions{
+		ResponseFormat: map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "WeatherAnswer",
+				"strict": true,
+				"schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"summary": map[string]any{"type": "string"},
+					},
+					"required": []any{"summary"},
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ResponseMIMEType != "application/json" {
+		t.Fatalf("ResponseMIMEType = %q, want application/json", config.ResponseMIMEType)
+	}
+	if config.ResponseJsonSchema != nil {
+		t.Fatalf("ResponseJsonSchema = %#v, want nil because reference uses response_schema", config.ResponseJsonSchema)
+	}
+	if config.ResponseSchema == nil {
+		t.Fatal("ResponseSchema = nil, want schema from response_format")
+	}
+	if config.ResponseSchema.Type != genai.TypeObject {
+		t.Fatalf("ResponseSchema type = %q, want OBJECT", config.ResponseSchema.Type)
+	}
+	summary := config.ResponseSchema.Properties["summary"]
+	if summary == nil || summary.Type != genai.TypeString {
+		t.Fatalf("summary schema = %#v, want string", summary)
+	}
+	if len(config.ResponseSchema.Required) != 1 || config.ResponseSchema.Required[0] != "summary" {
+		t.Fatalf("ResponseSchema required = %#v, want summary", config.ResponseSchema.Required)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceServiceTierExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"service_tier": "priority",
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ServiceTier != genai.ServiceTierPriority {
+		t.Fatalf("ServiceTier = %q, want priority", config.ServiceTier)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"thinking_config": map[string]any{
+				"thinking_budget":  0,
+				"include_thoughts": true,
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ThinkingConfig == nil {
+		t.Fatal("ThinkingConfig = nil, want reference thinking_config extra")
+	}
+	if config.ThinkingConfig.ThinkingBudget == nil || *config.ThinkingConfig.ThinkingBudget != 0 {
+		t.Fatalf("ThinkingBudget = %#v, want 0", config.ThinkingConfig.ThinkingBudget)
+	}
+	if !config.ThinkingConfig.IncludeThoughts {
+		t.Fatal("IncludeThoughts = false, want true")
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *testing.T) {
+	safety := []*genai.SafetySetting{{
+		Category:  genai.HarmCategoryHarassment,
+		Threshold: genai.HarmBlockThresholdBlockOnlyHigh,
+	}}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"safety_settings": safety,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !reflect.DeepEqual(config.SafetySettings, safety) {
+		t.Fatalf("safety settings = %#v, want %#v", config.SafetySettings, safety)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceMediaResolutionExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"media_resolution": "MEDIA_RESOLUTION_HIGH",
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.MediaResolution != genai.MediaResolutionHigh {
+		t.Fatalf("MediaResolution = %q, want high", config.MediaResolution)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceRetrievalConfigExtra(t *testing.T) {
+	retrieval := &genai.RetrievalConfig{LanguageCode: "id-ID"}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"retrieval_config": retrieval,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ToolConfig == nil || config.ToolConfig.RetrievalConfig != retrieval {
+		t.Fatalf("tool config = %#v, want retrieval config", config.ToolConfig)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_modalities": []any{"AUDIO", "TEXT"},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	want := []string{"AUDIO", "TEXT"}
+	if !reflect.DeepEqual(config.ResponseModalities, want) {
+		t.Fatalf("ResponseModalities = %#v, want %#v", config.ResponseModalities, want)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceSpeechConfigExtra(t *testing.T) {
+	speech := &genai.SpeechConfig{
+		LanguageCode: "en-US",
+		VoiceConfig: &genai.VoiceConfig{
+			PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: "Puck"},
+		},
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"speech_config": speech,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.SpeechConfig != speech {
+		t.Fatalf("SpeechConfig = %#v, want %#v", config.SpeechConfig, speech)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceAudioTimestampExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"audio_timestamp": true,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !config.AudioTimestamp {
+		t.Fatal("AudioTimestamp = false, want true")
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false
