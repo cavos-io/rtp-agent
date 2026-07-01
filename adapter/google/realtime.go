@@ -27,30 +27,32 @@ var (
 )
 
 type RealtimeModel struct {
-	apiKey                  string
-	model                   string
-	voice                   string
-	language                string
-	vertexAI                bool
-	project                 string
-	location                string
-	modalities              []string
-	turnDetection           bool
-	inputAudioTranscription bool
+	apiKey                   string
+	model                    string
+	voice                    string
+	language                 string
+	vertexAI                 bool
+	project                  string
+	location                 string
+	modalities               []string
+	turnDetection            bool
+	inputAudioTranscription  bool
+	outputAudioTranscription bool
 }
 
 type GoogleRealtimeOption func(*googleRealtimeOptions)
 
 type googleRealtimeOptions struct {
-	model                   string
-	voice                   string
-	language                string
-	vertexAI                *bool
-	project                 string
-	location                string
-	modalities              []string
-	turnDetection           *bool
-	inputAudioTranscription *bool
+	model                    string
+	voice                    string
+	language                 string
+	vertexAI                 *bool
+	project                  string
+	location                 string
+	modalities               []string
+	turnDetection            *bool
+	inputAudioTranscription  *bool
+	outputAudioTranscription *bool
 }
 
 func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
@@ -108,6 +110,12 @@ func WithGoogleRealtimeTurnDetection(enabled bool) GoogleRealtimeOption {
 func WithGoogleRealtimeInputAudioTranscription(enabled bool) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.inputAudioTranscription = &enabled
+	}
+}
+
+func WithGoogleRealtimeOutputAudioTranscription(enabled bool) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.outputAudioTranscription = &enabled
 	}
 }
 
@@ -175,17 +183,22 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	if options.inputAudioTranscription != nil {
 		inputAudioTranscription = *options.inputAudioTranscription
 	}
+	outputAudioTranscription := true
+	if options.outputAudioTranscription != nil {
+		outputAudioTranscription = *options.outputAudioTranscription
+	}
 	return &RealtimeModel{
-		apiKey:                  apiKey,
-		model:                   modelName,
-		voice:                   voice,
-		language:                options.language,
-		vertexAI:                vertexAI,
-		project:                 project,
-		location:                location,
-		modalities:              modalities,
-		turnDetection:           turnDetection,
-		inputAudioTranscription: inputAudioTranscription,
+		apiKey:                   apiKey,
+		model:                    modelName,
+		voice:                    voice,
+		language:                 options.language,
+		vertexAI:                 vertexAI,
+		project:                  project,
+		location:                 location,
+		modalities:               modalities,
+		turnDetection:            turnDetection,
+		inputAudioTranscription:  inputAudioTranscription,
+		outputAudioTranscription: outputAudioTranscription,
 	}, nil
 }
 

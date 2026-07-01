@@ -114,6 +114,7 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 		WithGoogleRealtimeModalities([]string{"TEXT"}),
 		WithGoogleRealtimeTurnDetection(false),
 		WithGoogleRealtimeInputAudioTranscription(false),
+		WithGoogleRealtimeOutputAudioTranscription(false),
 	)
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -125,6 +126,9 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	}
 	if caps.UserTranscription {
 		t.Fatal("UserTranscription = true, want false when input transcription disabled")
+	}
+	if model.outputAudioTranscription {
+		t.Fatal("outputAudioTranscription = true, want false when output transcription disabled")
 	}
 	if caps.AudioOutput {
 		t.Fatal("AudioOutput = true, want false for TEXT-only modality")
