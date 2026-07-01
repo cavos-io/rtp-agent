@@ -262,10 +262,13 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 
 func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 	s.mu.Lock()
+	oldLanguage := s.language
 	for _, opt := range opts {
 		opt(s)
 	}
 	minConfidence := s.minConfidence
+	language := s.language
+	languageChanged := oldLanguage != language
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -273,7 +276,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 	s.mu.Unlock()
 
 	for _, stream := range streams {
-		stream.updateMinConfidence(minConfidence)
+		stream.updateConfig(minConfidence, language, languageChanged)
 		stream.reconnectForUpdatedConfig()
 	}
 }
@@ -996,10 +999,14 @@ func (s *googleSTTStream) currentMinConfidence() float64 {
 	return s.minConfidence
 }
 
-func (s *googleSTTStream) updateMinConfidence(minConfidence float64) {
+func (s *googleSTTStream) updateConfig(minConfidence float64, language string, languageChanged bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.minConfidence = minConfidence
+	if languageChanged && language != "" {
+		s.language = language
+		s.includeAlternativeLanguages = true
+	}
 }
 
 func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
