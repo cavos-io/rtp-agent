@@ -328,6 +328,34 @@ func TestGoogleStreamingRecognitionConfigV2UsesReferenceKeywordAdaptation(t *tes
 	}
 }
 
+func TestGoogleStreamingRecognitionConfigV2UsesReferenceCustomAdaptationOverKeywords(t *testing.T) {
+	adaptation := &speechv2pb.SpeechAdaptation{
+		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{
+					DisplayName: "custom",
+					Phrases: []*speechv2pb.PhraseSet_Phrase{{
+						Value: "Acrux",
+						Boost: 20,
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithV2Client(nil,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTKeywords(GoogleSTTKeyword{Value: "ignored", Boost: 1}),
+		WithGoogleSTTAdaptationV2(adaptation),
+	)
+
+	config := googleStreamingRecognitionConfigV2(provider, "en-US", true)
+
+	if config.GetConfig().GetAdaptation() != adaptation {
+		t.Fatalf("v2 adaptation = %#v, want configured adaptation over keywords", config.GetConfig().GetAdaptation())
+	}
+}
+
 func TestGoogleStreamingRecognitionConfigV2UsesReferenceDenoiserConfig(t *testing.T) {
 	provider := newGoogleSTTWithV2Client(nil,
 		WithGoogleSTTModel("chirp_3"),

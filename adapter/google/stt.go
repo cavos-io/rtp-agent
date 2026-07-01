@@ -53,6 +53,7 @@ type GoogleSTT struct {
 	endpointingSensitivity string
 	keywords               []GoogleSTTKeyword
 	adaptation             *speechpb.SpeechAdaptation
+	adaptationV2           *speechv2pb.SpeechAdaptation
 	denoiserConfig         *speechv2pb.DenoiserConfig
 	alternativeLanguages   []string
 }
@@ -193,6 +194,12 @@ func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
 func WithGoogleSTTAdaptation(adaptation *speechpb.SpeechAdaptation) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		s.adaptation = adaptation
+	}
+}
+
+func WithGoogleSTTAdaptationV2(adaptation *speechv2pb.SpeechAdaptation) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.adaptationV2 = adaptation
 	}
 }
 
@@ -783,7 +790,13 @@ func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
 }
 
 func googleSpeechAdaptationV2(s *GoogleSTT) *speechv2pb.SpeechAdaptation {
-	if s == nil || len(s.keywords) == 0 {
+	if s == nil {
+		return nil
+	}
+	if s.adaptationV2 != nil {
+		return s.adaptationV2
+	}
+	if len(s.keywords) == 0 {
 		return nil
 	}
 	phrases := make([]*speechv2pb.PhraseSet_Phrase, 0, len(s.keywords))
