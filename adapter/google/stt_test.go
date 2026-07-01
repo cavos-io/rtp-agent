@@ -1071,6 +1071,32 @@ func TestGoogleSTTStreamNextReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamTreatsReference409AsRetryable(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.AlreadyExists) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.AlreadyExists)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for reference 409 restart path")
+	}
+}
+
 func TestGoogleSTTStreamNextErrorTerminatesStream(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.Unavailable, "unavailable")}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
