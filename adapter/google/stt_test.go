@@ -1714,6 +1714,60 @@ func TestGoogleSTTUpdateOptionsSwitchesActiveStreamToReferenceV2(t *testing.T) {
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsCreatesReferenceV2ClientOnVersionSwitch(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	v1Client := &fakeGoogleSpeechClient{
+		stream:       firstStream,
+		streamCallCh: make(chan int, 1),
+	}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRelease}
+	v2Client := &fakeGoogleV2SpeechClient{
+		stream:       secondStream,
+		streamCallCh: make(chan int, 1),
+	}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation("us-central1"),
+		WithGoogleSTTModel("latest_long"),
+	)
+	var createCalls int
+	provider.newClientV2 = func(context.Context) (googleSpeechV2Client, error) {
+		createCalls++
+		return v2Client, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-v1Client.streamCallCh
+
+	provider.UpdateOptions(WithGoogleSTTModel("chirp_3"))
+
+	select {
+	case calls := <-v2Client.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("v2 stream calls = %d, want one v2 reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for v2 reconnect after lazy client creation")
+	}
+	if createCalls != 1 {
+		t.Fatalf("v2 client create calls = %d, want 1", createCalls)
+	}
+	if !firstStream.closed {
+		t.Fatal("first v1 stream closed = false after model update")
+	}
+	if got := secondStream.sent[0].GetStreamingConfig().GetConfig().GetModel(); got != "chirp_3" {
+		t.Fatalf("v2 model = %q, want chirp_3", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTStreamConfidenceThresholdUsesAllReferenceResults(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
