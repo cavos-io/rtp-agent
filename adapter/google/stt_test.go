@@ -623,6 +623,29 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamPushFrameClonesReferenceAudio(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	audio := []byte{1, 2, 3, 4}
+	if err := stream.PushFrame(&model.AudioFrame{Data: audio, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	audio[0] = 9
+
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent requests = %d, want config plus audio", len(streamClient.sent))
+	}
+	if got := streamClient.sent[1].GetAudioContent(); !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio content after caller mutation = %#v, want cloned audio", got)
+	}
+}
+
 func TestGoogleSTTStreamResamplesPushedAudioLikeReference(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})

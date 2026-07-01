@@ -1094,7 +1094,7 @@ func (s *googleSTTStream) sendAudioFrameLocked(frame *model.AudioFrame) error {
 	}
 	if err := s.stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
-			AudioContent: frame.Data,
+			AudioContent: bytes.Clone(frame.Data),
 		},
 	}); err != nil {
 		s.closed = true
