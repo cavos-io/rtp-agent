@@ -519,6 +519,41 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testi
 	}
 }
 
+func TestGoogleLLMStreamReturnsNonRetryableStatusForPromptFeedback(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		PromptFeedback: &genai.GenerateContentResponsePromptFeedback{
+			BlockReason:        genai.BlockedReasonSafety,
+			BlockReasonMessage: "blocked",
+		},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != `{"blockReason":"SAFETY","blockReasonMessage":"blocked"}` {
+		t.Fatalf("APIStatusError message = %q, want prompt feedback JSON", statusErr.Message)
+	}
+	if statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = true, want false for prompt feedback")
+	}
+}
+
 func TestGoogleLLMStreamDelaysContinuingFunctionCall(t *testing.T) {
 	continuing := true
 	responses := []*genai.GenerateContentResponse{

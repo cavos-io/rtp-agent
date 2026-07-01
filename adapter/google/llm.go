@@ -566,6 +566,14 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			},
 		}
 
+		if resp.PromptFeedback != nil {
+			message, marshalErr := json.Marshal(resp.PromptFeedback)
+			if marshalErr != nil {
+				return nil, marshalErr
+			}
+			return nil, llm.NewAPIStatusErrorWithRetryable(string(message), -1, "", nil, false)
+		}
+
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
 			if googleBlockedFinishReason(cand.FinishReason) {
