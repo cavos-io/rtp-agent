@@ -368,13 +368,20 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		return []stt.SpeechData{}
 	}
 	data := stt.SpeechData{
-		Language:   language,
+		Language:   googleRecognizeResultLanguage(results, language),
 		Text:       text,
 		Confidence: confidence / float64(count),
 		Words:      googleTimedStrings(words),
 	}
 	googleApplySpeechDataTiming(&data, words, 0)
 	return []stt.SpeechData{data}
+}
+
+func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult, fallback string) string {
+	if len(results) == 0 || results[0].GetLanguageCode() == "" {
+		return fallback
+	}
+	return results[0].GetLanguageCode()
 }
 
 func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {

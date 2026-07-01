@@ -326,6 +326,31 @@ func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRecognizeUsesProviderResultLanguage(t *testing.T) {
+	client := &fakeGoogleSpeechClient{
+		recognizeResponse: &speechpb.RecognizeResponse{
+			Results: []*speechpb.SpeechRecognitionResult{{
+				LanguageCode: "fr-FR",
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "bonjour",
+				}},
+			}},
+		},
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	if got := event.Alternatives[0].Language; got != "fr-FR" {
+		t.Fatalf("language = %q, want provider result language fr-FR", got)
+	}
+}
+
 func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
