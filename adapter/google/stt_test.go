@@ -556,8 +556,8 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "hello" {
 		t.Fatalf("event = %#v, want final hello transcript", event)
 	}
-	if event.Alternatives[0].Language != "en-US" {
-		t.Fatalf("language = %q, want en-US", event.Alternatives[0].Language)
+	if event.Alternatives[0].Language != "" {
+		t.Fatalf("language = %q, want empty provider language", event.Alternatives[0].Language)
 	}
 }
 
@@ -641,7 +641,7 @@ func TestGoogleSTTRecognizeUsesReferenceTimingWhenLastResultHasNoWords(t *testin
 		},
 	}
 
-	alternatives := googleSpeechDataFromRecognizeResults(results, "en-US")
+	alternatives := googleSpeechDataFromRecognizeResults(results)
 
 	if len(alternatives) != 1 {
 		t.Fatalf("alternatives = %#v, want one final speech data", alternatives)
@@ -794,6 +794,60 @@ func TestGoogleSTTRecognizeUsesProviderResultLanguage(t *testing.T) {
 	}
 	if got := event.Alternatives[0].Language; got != "fr-FR" {
 		t.Fatalf("language = %q, want provider result language fr-FR", got)
+	}
+}
+
+func TestGoogleSTTRecognizePreservesReferenceEmptyProviderLanguage(t *testing.T) {
+	client := &fakeGoogleSpeechClient{
+		recognizeResponse: &speechpb.RecognizeResponse{
+			Results: []*speechpb.SpeechRecognitionResult{{
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "bonjour",
+				}},
+			}},
+		},
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	if got := event.Alternatives[0].Language; got != "" {
+		t.Fatalf("language = %q, want empty provider language", got)
+	}
+}
+
+func TestGoogleSTTRecognizeV2PreservesReferenceEmptyProviderLanguage(t *testing.T) {
+	v1Client := &fakeGoogleSpeechClient{}
+	v2Client := &fakeGoogleV2SpeechClient{
+		recognizeResponse: &speechv2pb.RecognizeResponse{
+			Results: []*speechv2pb.SpeechRecognitionResult{{
+				Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{
+					Transcript: "hello from chirp",
+				}},
+			}},
+		},
+	}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLanguage("id-ID"),
+	)
+	provider.clientV2 = v2Client
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "id-ID")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want one final transcript", event)
+	}
+	if got := event.Alternatives[0].Language; got != "" {
+		t.Fatalf("language = %q, want empty provider language", got)
 	}
 }
 

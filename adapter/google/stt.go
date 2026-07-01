@@ -709,7 +709,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		}
 		return &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
-			Alternatives: googleSpeechDataFromRecognizeResultsV2(resp.GetResults(), language),
+			Alternatives: googleSpeechDataFromRecognizeResultsV2(resp.GetResults()),
 		}, nil
 	}
 
@@ -732,7 +732,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	return &stt.SpeechEvent{
 		Type:         stt.SpeechEventFinalTranscript,
-		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results, language),
+		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results),
 	}, nil
 }
 
@@ -1026,7 +1026,7 @@ func googleSpeechDataFromAlternativeOffset(alt *speechpb.SpeechRecognitionAltern
 	return data
 }
 
-func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionResult, language string) []stt.SpeechData {
+func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionResult) []stt.SpeechData {
 	if len(results) == 0 {
 		return []stt.SpeechData{}
 	}
@@ -1052,7 +1052,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		return []stt.SpeechData{}
 	}
 	data := stt.SpeechData{
-		Language:   googleRecognizeResultLanguage(results, language),
+		Language:   googleRecognizeResultLanguage(results),
 		Text:       text,
 		Confidence: confidence / float64(count),
 		Words:      googleTimedStrings(firstWords),
@@ -1061,7 +1061,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	return []stt.SpeechData{data}
 }
 
-func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognitionResult, language string) []stt.SpeechData {
+func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognitionResult) []stt.SpeechData {
 	if len(results) == 0 {
 		return []stt.SpeechData{}
 	}
@@ -1087,7 +1087,7 @@ func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognit
 		return []stt.SpeechData{}
 	}
 	data := stt.SpeechData{
-		Language:   googleRecognizeResultLanguageV2(results, language),
+		Language:   googleRecognizeResultLanguageV2(results),
 		Text:       text,
 		Confidence: confidence / float64(count),
 		Words:      googleTimedStringsOffsetV2(firstWords, 0),
@@ -1096,16 +1096,16 @@ func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognit
 	return []stt.SpeechData{data}
 }
 
-func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult, fallback string) string {
-	if len(results) == 0 || results[0].GetLanguageCode() == "" {
-		return fallback
+func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult) string {
+	if len(results) == 0 {
+		return ""
 	}
 	return results[0].GetLanguageCode()
 }
 
-func googleRecognizeResultLanguageV2(results []*speechv2pb.SpeechRecognitionResult, fallback string) string {
-	if len(results) == 0 || results[0].GetLanguageCode() == "" {
-		return fallback
+func googleRecognizeResultLanguageV2(results []*speechv2pb.SpeechRecognitionResult) string {
+	if len(results) == 0 {
+		return ""
 	}
 	return results[0].GetLanguageCode()
 }
