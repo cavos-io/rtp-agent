@@ -193,7 +193,10 @@ func (t *TTS) stream(ctx context.Context, appendTextSpace bool) (tts.SynthesizeS
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.endpoint, buildTTSWebsocketHeaders(t))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial slng tts websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial slng tts websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, buildTTSInitPayload(t)); err != nil {
 		conn.Close()

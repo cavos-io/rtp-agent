@@ -157,6 +157,28 @@ func TestSLNGTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("slng tts dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewTTS("test-key")
+	stream, err := provider.Stream(context.Background())
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSLNGLocalEndpointsUsePlainWebsocket(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTBaseURL("localhost:9000"))
 	if provider.endpoint != "ws://localhost:9000/v1/stt/deepgram/nova:3" {
