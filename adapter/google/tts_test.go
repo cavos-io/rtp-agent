@@ -309,13 +309,18 @@ func TestGoogleTTSStreamErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
 	}
 }
 
-func TestGoogleTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
-	streamClient := &fakeGoogleTTSStream{
+func TestGoogleTTSStreamRunsReferenceSegmentsSequentially(t *testing.T) {
+	firstStream := &fakeGoogleTTSStream{
 		responses: []*texttospeech.StreamingSynthesizeResponse{{
 			AudioContent: []byte{1, 2, 3, 4},
 		}},
 	}
-	client := &fakeGoogleTTSClient{stream: streamClient}
+	secondStream := &fakeGoogleTTSStream{
+		responses: []*texttospeech.StreamingSynthesizeResponse{{
+			AudioContent: []byte{5, 6, 7, 8},
+		}},
+	}
+	client := &fakeGoogleTTSClient{streams: []*fakeGoogleTTSStream{firstStream, secondStream}}
 	provider := newGoogleTTSWithClient(client)
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
@@ -339,11 +344,11 @@ func TestGoogleTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
 		t.Fatalf("first final = (%+v, %v), want final marker", final, err)
 	}
-	if !streamClient.closed {
+	if !firstStream.closed {
 		t.Fatal("first stream closed = false after first Flush")
 	}
-	if client.streamCalls != 1 || len(streamClient.sent) != 2 {
-		t.Fatalf("first segment calls = %d sent=%d, want one stream with config and input", client.streamCalls, len(streamClient.sent))
+	if client.streamCalls != 1 || len(firstStream.sent) != 2 {
+		t.Fatalf("first segment calls = %d sent=%d, want one stream with config and input", client.streamCalls, len(firstStream.sent))
 	}
 
 	if err := stream.PushText("second"); err != nil {
@@ -352,14 +357,24 @@ func TestGoogleTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush second returned error: %v", err)
 	}
-	if client.streamCalls != 1 {
-		t.Fatalf("stream calls after second segment = %d, want second segment ignored like reference", client.streamCalls)
+	if client.streamCalls != 2 {
+		t.Fatalf("stream calls after second segment = %d, want second provider stream like reference", client.streamCalls)
 	}
-	if len(streamClient.sent) != 2 {
-		t.Fatalf("sent requests after second segment = %d, want no second provider input", len(streamClient.sent))
+	if len(secondStream.sent) != 2 {
+		t.Fatalf("second stream sent requests = %d, want config and input", len(secondStream.sent))
 	}
-	if got := streamClient.sent[1].GetInput().GetText(); got != "first" {
-		t.Fatalf("provider input after ignored second segment = %q, want first", got)
+	if got := secondStream.sent[1].GetInput().GetText(); got != "second" {
+		t.Fatalf("second provider input = %q, want second", got)
+	}
+	secondAudio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next audio error = %v", err)
+	}
+	if secondAudio == nil || secondAudio.Frame == nil || !bytes.Equal(secondAudio.Frame.Data, []byte{5, 6, 7, 8}) {
+		t.Fatalf("second audio = %+v, want second provider audio", secondAudio)
+	}
+	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("second final = (%+v, %v), want final marker", final, err)
 	}
 }
 
@@ -1154,6 +1169,7 @@ type fakeGoogleTTSClient struct {
 	synthesizeCalls int
 	response        *texttospeech.SynthesizeSpeechResponse
 	stream          *fakeGoogleTTSStream
+	streams         []*fakeGoogleTTSStream
 	streamCalls     int
 	err             error
 }
@@ -1168,6 +1184,12 @@ func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...g
 	c.streamCalls++
 	if c.err != nil {
 		return nil, c.err
+	}
+	if len(c.streams) > 0 {
+		stream := c.streams[0]
+		c.streams = c.streams[1:]
+		c.stream = stream
+		return stream, nil
 	}
 	return c.stream, nil
 }
