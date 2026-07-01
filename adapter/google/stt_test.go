@@ -1787,6 +1787,68 @@ func TestGoogleSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamResetsReferenceUsageAfterReconnect(t *testing.T) {
+	releaseFirst := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			TotalBilledTime: durationpb.New(time.Second),
+			RequestId:       111,
+		}},
+		recvBlock: releaseFirst,
+	}
+	secondStream := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			TotalBilledTime: durationpb.New(500 * time.Millisecond),
+			RequestId:       222,
+		}},
+	}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.Type != stt.SpeechEventRecognitionUsage || first.RecognitionUsage == nil || first.RecognitionUsage.AudioDuration != 1.0 {
+		t.Fatalf("first usage = %#v, want 1s recognition_usage", first)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnect")
+	}
+	close(releaseFirst)
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("second event type = %v, want recognition_usage", second.Type)
+	}
+	if second.RequestID != "222" {
+		t.Fatalf("second request id = %q, want 222", second.RequestID)
+	}
+	if second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.5 {
+		t.Fatalf("second usage = %+v, want fresh 0.5s after reconnect", second.RecognitionUsage)
+	}
+}
+
 func TestGoogleSTTStreamPropagatesClientErrors(t *testing.T) {
 	wantErr := errors.New("stream error")
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: wantErr})

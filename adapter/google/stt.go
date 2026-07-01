@@ -730,9 +730,14 @@ func (n *googleSTTInputAudioNormalizer) reset() {
 func (s *googleSTTStream) readLoop() {
 	defer close(s.events)
 	var lastUsageEventTime float64
+	var usageStream speechpb.Speech_StreamingRecognizeClient
 	var speechStarted bool
 	for {
 		stream := s.currentStream()
+		if stream != usageStream {
+			lastUsageEventTime = 0
+			usageStream = stream
+		}
 		resp, err := stream.Recv()
 		if err != nil {
 			if s.currentStream() != stream {
