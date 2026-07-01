@@ -252,12 +252,16 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 	s.mu.Lock()
 	oldLanguage := s.language
+	oldAlternativeLanguages := append([]string(nil), s.alternativeLanguages...)
 	for _, opt := range opts {
 		opt(s)
 	}
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
+	if languageChanged && googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages) {
+		s.alternativeLanguages = nil
+	}
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -461,6 +465,18 @@ func googleAlternativeLanguageCodes(s *GoogleSTT, include bool) []string {
 		return nil
 	}
 	return append([]string(nil), s.alternativeLanguages...)
+}
+
+func googleStringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
