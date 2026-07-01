@@ -584,6 +584,7 @@ func googleStreamingRecognitionConfigV2(s *GoogleSTT, language string, includeAl
 			},
 			LanguageCodes: googleLanguageCodesV2(s, language, includeAlternativeLanguages),
 			Model:         s.model,
+			Adaptation:    googleSpeechAdaptationV2(s),
 			Features: &speechv2pb.RecognitionFeatures{
 				EnableAutomaticPunctuation: s.punctuate,
 				EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
@@ -693,6 +694,35 @@ func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
 		PhraseSets: []*speechpb.PhraseSet{{
 			Name:    "keywords",
 			Phrases: phrases,
+		}},
+	}
+}
+
+func googleSpeechAdaptationV2(s *GoogleSTT) *speechv2pb.SpeechAdaptation {
+	if s == nil || len(s.keywords) == 0 {
+		return nil
+	}
+	phrases := make([]*speechv2pb.PhraseSet_Phrase, 0, len(s.keywords))
+	for _, keyword := range s.keywords {
+		if keyword.Value == "" {
+			continue
+		}
+		phrases = append(phrases, &speechv2pb.PhraseSet_Phrase{
+			Value: keyword.Value,
+			Boost: keyword.Boost,
+		})
+	}
+	if len(phrases) == 0 {
+		return nil
+	}
+	return &speechv2pb.SpeechAdaptation{
+		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{
+					DisplayName: "keywords",
+					Phrases:     phrases,
+				},
+			},
 		}},
 	}
 }

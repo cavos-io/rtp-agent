@@ -277,6 +277,37 @@ func TestGoogleRecognitionConfigUsesReferenceKeywordAdaptation(t *testing.T) {
 	}
 }
 
+func TestGoogleStreamingRecognitionConfigV2UsesReferenceKeywordAdaptation(t *testing.T) {
+	provider := newGoogleSTTWithV2Client(nil,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTKeywords(
+			GoogleSTTKeyword{Value: "Cavos", Boost: 12.5},
+			GoogleSTTKeyword{Value: "LiveKit", Boost: 9},
+		),
+	)
+
+	config := googleStreamingRecognitionConfigV2(provider, "en-US", true)
+
+	adaptation := config.GetConfig().GetAdaptation()
+	if adaptation == nil || len(adaptation.GetPhraseSets()) != 1 {
+		t.Fatalf("v2 adaptation = %#v, want one inline phrase set", adaptation)
+	}
+	phraseSet := adaptation.GetPhraseSets()[0].GetInlinePhraseSet()
+	if phraseSet == nil {
+		t.Fatalf("v2 phrase set = %#v, want inline phrase set", adaptation.GetPhraseSets()[0])
+	}
+	if len(phraseSet.GetPhrases()) != 2 {
+		t.Fatalf("v2 phrases = %#v, want two keyword phrases", phraseSet.GetPhrases())
+	}
+	if got := phraseSet.GetPhrases()[0]; got.GetValue() != "Cavos" || got.GetBoost() != 12.5 {
+		t.Fatalf("first v2 phrase = %#v, want Cavos boost 12.5", got)
+	}
+	if got := phraseSet.GetPhrases()[1]; got.GetValue() != "LiveKit" || got.GetBoost() != 9 {
+		t.Fatalf("second v2 phrase = %#v, want LiveKit boost 9", got)
+	}
+}
+
 func TestGoogleRecognitionConfigUsesReferenceAdaptationOverKeywords(t *testing.T) {
 	adaptation := &speechpb.SpeechAdaptation{
 		PhraseSets: []*speechpb.PhraseSet{{
