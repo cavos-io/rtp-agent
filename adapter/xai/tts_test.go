@@ -416,6 +416,48 @@ func TestXaiTTSSynthesizeTokenizesTextBeforeDone(t *testing.T) {
 	assertXaiTTSMessage(t, readXaiTTSMessage(t, messages, handlerErr), "text.done", "")
 }
 
+func TestXaiTTSSynthesizeCloseAfterFinalIsSafe(t *testing.T) {
+	handlerErr := make(chan error, 1)
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = newXaiSTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
+		for {
+			_, payload, err := conn.ReadMessage()
+			if err != nil {
+				handlerErr <- err
+				return
+			}
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				handlerErr <- err
+				return
+			}
+			if message["type"] == "text.done" {
+				if err := conn.WriteJSON(map[string]any{"type": "audio.done"}); err != nil {
+					handlerErr <- err
+				}
+				return
+			}
+		}
+	}, handlerErr)
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiTTS("test-key", "ara", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final marker after audio.done", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("Next() = %#v, want final marker", final)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() after final error = %v", err)
+	}
+}
+
 func TestXaiTTSStreamReconnectsBetweenFlushSegments(t *testing.T) {
 	requestURLs := make(chan string, 2)
 	handlerErr := make(chan error, 2)

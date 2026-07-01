@@ -297,8 +297,13 @@ func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *xaiTTSWebsocketChunkedStream) Close() error {
-	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
-	return s.conn.Close()
+	if s.conn == nil {
+		return nil
+	}
+	conn := s.conn
+	s.conn = nil
+	_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
+	return conn.Close()
 }
 
 type xaiTTSSynthesizeStream struct {
