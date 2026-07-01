@@ -639,25 +639,26 @@ func (s *googleTTSChunkedStream) Close() error {
 }
 
 type googleTTSSynthesizeStream struct {
-	mu         sync.Mutex
-	cond       *sync.Cond
-	cancel     context.CancelFunc
-	owner      *GoogleTTS
-	ctx        context.Context
-	client     googleTTSClient
-	streams    []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	active     texttospeechpb.TextToSpeech_StreamingSynthesizeClient
-	segments   map[texttospeechpb.TextToSpeech_StreamingSynthesizeClient]*googleTTSSegmentState
-	voice      *texttospeechpb.VoiceSelectionParams
-	prompt     *string
-	audio      *texttospeechpb.AudioConfig
-	custom     *texttospeechpb.CustomPronunciations
-	markup     bool
-	buffer     strings.Builder
-	closed     bool
-	inputEnded bool
-	sentInput  bool
-	flushed    int
+	mu          sync.Mutex
+	cond        *sync.Cond
+	cancel      context.CancelFunc
+	owner       *GoogleTTS
+	ctx         context.Context
+	client      googleTTSClient
+	streams     []texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	active      texttospeechpb.TextToSpeech_StreamingSynthesizeClient
+	segments    map[texttospeechpb.TextToSpeech_StreamingSynthesizeClient]*googleTTSSegmentState
+	voice       *texttospeechpb.VoiceSelectionParams
+	prompt      *string
+	audio       *texttospeechpb.AudioConfig
+	custom      *texttospeechpb.CustomPronunciations
+	markup      bool
+	buffer      strings.Builder
+	closed      bool
+	ignoreInput bool
+	inputEnded  bool
+	sentInput   bool
+	flushed     int
 }
 
 type googleTTSSegmentState struct {
@@ -670,6 +671,9 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		if s.ignoreInput {
+			return nil
+		}
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
@@ -707,6 +711,9 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		if s.ignoreInput {
+			return nil
+		}
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
@@ -830,6 +837,7 @@ func (s *googleTTSSynthesizeStream) EndInput() error {
 func (s *googleTTSSynthesizeStream) Close() error {
 	s.mu.Lock()
 	s.closed = true
+	s.ignoreInput = true
 	streams := append([]texttospeechpb.TextToSpeech_StreamingSynthesizeClient(nil), s.streams...)
 	s.streams = nil
 	s.active = nil

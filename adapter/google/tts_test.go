@@ -1223,8 +1223,11 @@ func TestGoogleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if !streamClient.closed {
 		t.Fatal("stream client closed = false after provider Close")
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after provider Close error = %v, want nil like reference", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after provider Close error = %v, want nil like reference", err)
 	}
 }
 
@@ -1296,6 +1299,25 @@ func TestGoogleTTSStreamCloseUnblocksPendingNext(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamIgnoresInputAfterCloseLikeReference(t *testing.T) {
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want nil like reference", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want nil like reference", err)
+	}
+}
+
 func TestGoogleTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{}
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
@@ -1318,8 +1340,8 @@ func TestGoogleTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	if !streamClient.closed {
 		t.Fatal("stream client closed = false after rejected registration")
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after rejected registration error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after rejected registration error = %v, want nil like reference", err)
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
