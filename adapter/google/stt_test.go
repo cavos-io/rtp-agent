@@ -1070,6 +1070,38 @@ func TestGoogleSTTStreamNextReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamNextErrorTerminatesStream(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.Unavailable, "unavailable")}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after receive error = %v, want io.ErrClosedPipe", err)
+	}
+	if event, err := stream.Next(); event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after receive error = (%#v, %v), want nil EOF", event, err)
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after receive error")
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("provider streams = %d, want 0 after receive error", len(provider.streams))
+	}
+}
+
 func TestGoogleSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	stream := &googleSTTStream{
 		stream: &fakeGoogleStreamingRecognizeClient{},

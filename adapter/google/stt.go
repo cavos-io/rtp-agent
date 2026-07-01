@@ -438,6 +438,11 @@ func (s *googleSTTStream) readLoop() {
 		if err != nil {
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
+				s.mu.Lock()
+				s.closed = true
+				s.mu.Unlock()
+				_ = s.stream.CloseSend()
+				s.unregister()
 			}
 			return
 		}
