@@ -619,6 +619,59 @@ func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSUpdateOptionsKeepsReferenceAudioFormat(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6, 7, 8}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSSampleRate(16000),
+		WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_PCM),
+	)
+
+	provider.UpdateOptions(
+		WithGoogleTTSSampleRate(48000),
+		WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_MP3),
+	)
+
+	if got := provider.SampleRate(); got != 16000 {
+		t.Fatalf("SampleRate after update = %d, want reference constructor-time 16000", got)
+	}
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	audio := client.request.GetAudioConfig()
+	if got := audio.GetSampleRateHertz(); got != 16000 {
+		t.Fatalf("synthesize sample rate after update = %d, want 16000", got)
+	}
+	if got := audio.GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("synthesize encoding after update = %v, want PCM", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	streamAudio := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := streamAudio.GetSampleRateHertz(); got != 16000 {
+		t.Fatalf("stream sample rate after update = %d, want 16000", got)
+	}
+	if got := streamAudio.GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("stream encoding after update = %v, want PCM", got)
+	}
+}
+
 func TestGoogleTTSDecodesReferenceOggOpusEncoding(t *testing.T) {
 	opusData, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "change-sophie.opus"))
 	if err != nil {

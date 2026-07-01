@@ -404,12 +404,6 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	if cfg.volumeSet {
 		t.audio.VolumeGainDb = cfg.volumeGainDB
 	}
-	if cfg.sampleSet {
-		t.audio.SampleRateHertz = cfg.sampleRate
-	}
-	if cfg.encodingSet {
-		t.audio.AudioEncoding = cfg.encoding
-	}
 	if cfg.customSet {
 		t.custom = cfg.custom
 	}
