@@ -13389,7 +13389,7 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
-	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=none,service_tier=priority")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=none,service_tier=priority,stop_sequences=["</speak>","END"],candidate_count=2`)
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -13407,6 +13407,12 @@ func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T
 	}
 	if params["service_tier"] != "priority" {
 		t.Fatalf("service_tier = %#v, want priority", params["service_tier"])
+	}
+	if !reflect.DeepEqual(params["stop_sequences"], []any{"</speak>", "END"}) {
+		t.Fatalf("stop_sequences = %#v, want [</speak> END]", params["stop_sequences"])
+	}
+	if got := numericTestValue(params["candidate_count"]); got != 2 {
+		t.Fatalf("candidate_count = %#v, want 2", params["candidate_count"])
 	}
 	if app.Session.Options.ToolChoice != llm.ToolChoice("none") {
 		t.Fatalf("ToolChoice = %#v, want none", app.Session.Options.ToolChoice)

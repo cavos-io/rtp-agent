@@ -6988,6 +6988,8 @@ var googleLLMExtraParamKeys = []string{
 	"temperature",
 	"top_p",
 	"top_k",
+	"stop_sequences",
+	"candidate_count",
 	"presence_penalty",
 	"frequency_penalty",
 	"max_output_tokens",
