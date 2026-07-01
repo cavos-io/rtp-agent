@@ -1080,6 +1080,7 @@ func TestGoogleSTTStreamSuppressesEmptyFinalTranscriptWithWordsLikeReference(t *
 func TestGoogleSTTStreamSuppressesLaterInterimAfterEmptyFinalLikeReference(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
+			TotalBilledTime: durationpb.New(time.Second),
 			Results: []*speechpb.StreamingRecognitionResult{
 				{
 					IsFinal: true,
@@ -1107,10 +1108,10 @@ func TestGoogleSTTStreamSuppressesLaterInterimAfterEmptyFinalLikeReference(t *te
 	event, err := stream.Next()
 
 	if event != nil {
-		t.Fatalf("Next event = %#v, want nil after empty final suppresses whole response", event)
+		t.Fatalf("Next event = %#v, want nil after empty final suppresses whole response including usage", event)
 	}
 	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF after suppressed empty final response", err)
+		t.Fatalf("Next error = %v, want EOF after suppressed empty final response including usage", err)
 	}
 }
 
