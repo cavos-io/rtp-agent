@@ -217,6 +217,13 @@ func WithGoogleSTTLocation(location string) GoogleSTTOption {
 func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*GoogleSTT, error) {
 	ctx := context.Background()
 	provider := newGoogleSTTWithClient(nil, providerOpts...)
+	if provider.project == "" {
+		project, err := googleProjectFromCredentialsFile(credentialsFile)
+		if err != nil {
+			return nil, err
+		}
+		provider.project = project
+	}
 	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
 	if err != nil {
 		return nil, err

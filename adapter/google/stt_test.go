@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"testing"
 	"time"
 
@@ -110,6 +111,25 @@ func TestGoogleClientOptionsFromCredentialsFile(t *testing.T) {
 	}
 	if len(fileOpts) != 1 {
 		t.Fatalf("credentials file options = %d, want 1", len(fileOpts))
+	}
+}
+
+func TestGoogleSTTRecognizerUsesReferenceProjectFromCredentialsFile(t *testing.T) {
+	credentials := t.TempDir() + "/service-account.json"
+	err := os.WriteFile(credentials, []byte(`{"type":"service_account","project_id":"voice-project"}`), 0o600)
+	if err != nil {
+		t.Fatalf("write credentials: %v", err)
+	}
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("us-central1"))
+
+	project, err := googleProjectFromCredentialsFile(credentials)
+	if err != nil {
+		t.Fatalf("project from credentials returned error: %v", err)
+	}
+	provider.project = project
+
+	if got := googleSTTRecognizer(provider); got != "projects/voice-project/locations/us-central1/recognizers/_" {
+		t.Fatalf("recognizer = %q, want reference project from credentials", got)
 	}
 }
 
