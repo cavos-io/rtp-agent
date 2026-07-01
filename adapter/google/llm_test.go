@@ -541,6 +541,20 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceServiceTierExtra(t *tes
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceStopSequencesExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"stop_sequences": []string{"</speak>", "END"},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !reflect.DeepEqual(config.StopSequences, []string{"</speak>", "END"}) {
+		t.Fatalf("StopSequences = %#v, want reference stop_sequences", config.StopSequences)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
