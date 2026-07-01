@@ -309,6 +309,39 @@ func TestGoogleTTSStreamEmitsReferenceFinalMarkerAfterAudio(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamEndInputIgnoresLaterInputLikeReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{
+				AudioContent: []byte{1, 2, 3, 4},
+			}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	googleStream := stream.(*googleTTSSynthesizeStream)
+	if err := googleStream.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want nil like reference", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want nil like reference", err)
+	}
+	if err := googleStream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want nil like reference", err)
+	}
+}
+
 func TestGoogleTTSStreamSkipsEmptyAudioResponses(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		stream: &fakeGoogleTTSStream{

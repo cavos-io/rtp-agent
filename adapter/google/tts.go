@@ -677,7 +677,7 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if _, err := s.buffer.WriteString(text); err != nil {
 		return err
@@ -717,7 +717,7 @@ func (s *googleTTSSynthesizeStream) Flush() error {
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
-		return io.ErrClosedPipe
+		return nil
 	}
 	text := s.buffer.String()
 	s.buffer.Reset()
