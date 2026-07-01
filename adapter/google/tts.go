@@ -416,6 +416,7 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		prompt: t.prompt,
 		audio:  googleCloneAudioConfig(t.audio),
 		custom: t.custom,
+		markup: t.markup,
 	}
 	stream.cond = sync.NewCond(&stream.mu)
 	if !t.registerStream(stream) {
@@ -512,6 +513,7 @@ type googleTTSSynthesizeStream struct {
 	prompt     *string
 	audio      *texttospeechpb.AudioConfig
 	custom     *texttospeechpb.CustomPronunciations
+	markup     bool
 	buffer     strings.Builder
 	closed     bool
 	inputEnded bool
@@ -610,10 +612,7 @@ func (s *googleTTSSynthesizeStream) sendTextLocked(text string) error {
 	}
 	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
 		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
-			Input: &texttospeechpb.StreamingSynthesisInput{
-				InputSource: &texttospeechpb.StreamingSynthesisInput_Text{Text: text},
-				Prompt:      s.nextPromptLocked(),
-			},
+			Input: googleTTSStreamingInput(text, s.nextPromptLocked(), s.markup),
 		},
 	}); err != nil {
 		return googleTTSSynthesisError(err)
@@ -622,6 +621,16 @@ func (s *googleTTSSynthesizeStream) sendTextLocked(text string) error {
 		state.text.WriteString(text)
 	}
 	return nil
+}
+
+func googleTTSStreamingInput(text string, prompt *string, markup bool) *texttospeechpb.StreamingSynthesisInput {
+	input := &texttospeechpb.StreamingSynthesisInput{Prompt: prompt}
+	if markup {
+		input.InputSource = &texttospeechpb.StreamingSynthesisInput_Markup{Markup: text}
+	} else {
+		input.InputSource = &texttospeechpb.StreamingSynthesisInput_Text{Text: text}
+	}
+	return input
 }
 
 func (s *googleTTSSynthesizeStream) nextPromptLocked() *string {

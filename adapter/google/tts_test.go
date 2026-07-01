@@ -107,6 +107,34 @@ func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamMarkupInputMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSMarkup(true))
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("<speak-as interpret-as=\"characters\">ABC</speak-as>"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	if len(client.stream.sent) != 2 {
+		t.Fatalf("sent requests = %d, want config and markup input", len(client.stream.sent))
+	}
+	input := client.stream.sent[1].GetInput()
+	if got := input.GetMarkup(); got != "<speak-as interpret-as=\"characters\">ABC</speak-as>" {
+		t.Fatalf("markup input = %q, want raw markup text", got)
+	}
+	if got := input.GetText(); got != "" {
+		t.Fatalf("text input = %q, want empty when markup is enabled", got)
+	}
+}
+
 func TestGoogleTTSStreamSendsCompletedSentenceBeforeFlushLikeReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client)
