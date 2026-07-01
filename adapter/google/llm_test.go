@@ -562,6 +562,23 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceRoutingConfigExtra(t *t
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceModelSelectionConfigExtra(t *testing.T) {
+	selection := &genai.ModelSelectionConfig{
+		FeatureSelectionPreference: genai.FeatureSelectionPreferencePrioritizeQuality,
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"model_selection_config": selection,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ModelSelectionConfig != selection {
+		t.Fatalf("ModelSelectionConfig = %#v, want %#v", config.ModelSelectionConfig, selection)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{

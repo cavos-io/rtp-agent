@@ -241,6 +241,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleRoutingConfigParam(params["routing_config"]); ok {
 		config.RoutingConfig = value
 	}
+	if value, ok := googleModelSelectionConfigParam(params["model_selection_config"]); ok {
+		config.ModelSelectionConfig = value
+	}
 	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
 		config.ResponseModalities = value
 	}
@@ -349,6 +352,11 @@ func googleSpeechConfigParam(value any) (*genai.SpeechConfig, bool) {
 
 func googleRoutingConfigParam(value any) (*genai.GenerationConfigRoutingConfig, bool) {
 	config, ok := value.(*genai.GenerationConfigRoutingConfig)
+	return config, ok && config != nil
+}
+
+func googleModelSelectionConfigParam(value any) (*genai.ModelSelectionConfig, bool) {
+	config, ok := value.(*genai.ModelSelectionConfig)
 	return config, ok && config != nil
 }
 
