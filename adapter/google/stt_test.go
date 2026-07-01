@@ -30,6 +30,9 @@ func TestGoogleRecognitionConfigRequestsWordDetails(t *testing.T) {
 	if config.Model != "latest_long" {
 		t.Fatalf("model = %q, want latest_long", config.Model)
 	}
+	if config.AudioChannelCount != 1 {
+		t.Fatalf("audio channel count = %d, want reference mono channel", config.AudioChannelCount)
+	}
 	if !config.EnableAutomaticPunctuation {
 		t.Fatal("expected automatic punctuation to be enabled")
 	}

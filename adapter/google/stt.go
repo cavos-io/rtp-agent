@@ -360,6 +360,7 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 	return &speechpb.RecognitionConfig{
 		Encoding:                   speechpb.RecognitionConfig_LINEAR16,
 		SampleRateHertz:            s.sampleRate,
+		AudioChannelCount:          1,
 		LanguageCode:               language,
 		AlternativeLanguageCodes:   append([]string(nil), s.alternativeLanguages...),
 		EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
