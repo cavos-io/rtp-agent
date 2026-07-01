@@ -1064,6 +1064,27 @@ func TestGoogleTTSUpdateOptionsReplacesVoiceParamsLikeReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSUpdateOptionsIgnoresReferenceVoiceCloneKey(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSVoiceCloneKey("initial-clone"))
+
+	provider.UpdateOptions(WithGoogleTTSVoiceCloneKey("updated-clone"))
+
+	if got := provider.voice.GetVoiceClone().GetVoiceCloningKey(); got != "initial-clone" {
+		t.Fatalf("provider clone key after update = %q, want constructor-time initial-clone", got)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize after clone update error = %v", err)
+	}
+	defer stream.Close()
+	if got := client.request.GetVoice().GetVoiceClone().GetVoiceCloningKey(); got != "initial-clone" {
+		t.Fatalf("request clone key after update = %q, want constructor-time initial-clone", got)
+	}
+}
+
 func TestGoogleTTSUpdateOptionsPreservesExplicitEmptyVoice(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

@@ -383,6 +383,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	cfg.cloneKeySet = false
 	if cfg.languageSet || cfg.genderSet || cfg.voiceSet || cfg.cloneKeySet || cfg.modelSet {
 		t.voice = googleTTSUpdatedVoiceParams(cfg)
 	}
