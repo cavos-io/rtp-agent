@@ -1,12 +1,18 @@
 package google
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"google.golang.org/genai"
 )
 
 const (
@@ -14,6 +20,8 @@ const (
 	defaultGoogleRealtimeVertexModel = "gemini-live-2.5-flash-native-audio"
 	defaultGoogleRealtimeVoice       = "Puck"
 	defaultGoogleRealtimeLocation    = "us-central1"
+	googleRealtimeInputSampleRate    = 16000
+	googleRealtimeInputChannels      = 1
 )
 
 var (
@@ -56,6 +64,7 @@ type RealtimeModel struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	connector                 googleRealtimeConnector
 }
 
 type GoogleRealtimeOption func(*googleRealtimeOptions)
@@ -92,6 +101,16 @@ type googleRealtimeOptions struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	connector                 googleRealtimeConnector
+}
+
+type googleRealtimeConnector interface {
+	Connect(context.Context, string, *genai.LiveConnectConfig) (googleRealtimeLiveSession, error)
+}
+
+type googleRealtimeLiveSession interface {
+	SendRealtimeInput(genai.LiveRealtimeInput) error
+	Close() error
 }
 
 func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
@@ -227,6 +246,12 @@ func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOpti
 	}
 }
 
+func WithGoogleRealtimeConnector(connector googleRealtimeConnector) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.connector = connector
+	}
+}
+
 func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeModel, error) {
 	options := googleRealtimeOptions{}
 	for _, opt := range opts {
@@ -329,6 +354,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		toolBehaviorSet:           options.toolBehaviorSet,
 		toolResponseScheduling:    options.toolResponseScheduling,
 		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
+		connector:                 options.connector,
 	}, nil
 }
 
@@ -416,3 +442,191 @@ func googleRealtimeHasAudioModality(modalities []string) bool {
 	}
 	return false
 }
+
+func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
+	if m == nil {
+		return nil, errors.New("google realtime model is nil")
+	}
+	connector := m.connector
+	if connector == nil {
+		connector = googleRealtimeDefaultConnector{model: m}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	liveSession, err := connector.Connect(ctx, m.Model(), m.liveConnectConfig())
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &googleRealtimeSession{
+		ctx:         ctx,
+		cancel:      cancel,
+		liveSession: liveSession,
+		eventCh:     make(chan llm.RealtimeEvent),
+		audioStream: audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+	}, nil
+}
+
+func (m *RealtimeModel) Close() error { return nil }
+
+func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
+	config := &genai.LiveConnectConfig{
+		ResponseModalities: googleRealtimeModalities(m.modalities),
+		SpeechConfig: &genai.SpeechConfig{
+			VoiceConfig: &genai.VoiceConfig{
+				PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: m.voice},
+			},
+			LanguageCode: m.language,
+		},
+	}
+	if m.instructions != "" {
+		config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: m.instructions}}}
+	}
+	if m.inputAudioTranscription {
+		config.InputAudioTranscription = &genai.AudioTranscriptionConfig{}
+	}
+	if m.outputAudioTranscription {
+		config.OutputAudioTranscription = &genai.AudioTranscriptionConfig{}
+	}
+	if m.temperatureSet {
+		value := float32(m.temperature)
+		config.Temperature = &value
+	}
+	if m.topPSet {
+		value := float32(m.topP)
+		config.TopP = &value
+	}
+	if m.topKSet {
+		value := float32(m.topK)
+		config.TopK = &value
+	}
+	if m.maxOutputTokensSet {
+		config.MaxOutputTokens = int32(m.maxOutputTokens)
+	}
+	return config
+}
+
+func googleRealtimeModalities(modalities []string) []genai.Modality {
+	out := make([]genai.Modality, 0, len(modalities))
+	for _, modality := range modalities {
+		switch strings.ToUpper(modality) {
+		case "AUDIO":
+			out = append(out, genai.ModalityAudio)
+		case "TEXT":
+			out = append(out, genai.ModalityText)
+		}
+	}
+	return out
+}
+
+type googleRealtimeDefaultConnector struct {
+	model *RealtimeModel
+}
+
+func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
+	clientConfig := &genai.ClientConfig{
+		APIKey: c.model.apiKey,
+		HTTPOptions: genai.HTTPOptions{
+			APIVersion: "v1beta",
+		},
+	}
+	if c.model.vertexAI {
+		clientConfig.Backend = genai.BackendVertexAI
+		clientConfig.Project = c.model.project
+		clientConfig.Location = c.model.location
+	} else {
+		clientConfig.Backend = genai.BackendGeminiAPI
+	}
+	client, err := genai.NewClient(ctx, clientConfig)
+	if err != nil {
+		return nil, err
+	}
+	return client.Live.Connect(ctx, modelName, config)
+}
+
+type googleRealtimeSession struct {
+	ctx         context.Context
+	cancel      context.CancelFunc
+	liveSession googleRealtimeLiveSession
+	eventCh     chan llm.RealtimeEvent
+	audioStream *audio.AudioByteStream
+	closeOnce   sync.Once
+	closeErr    error
+	mu          sync.Mutex
+}
+
+func (s *googleRealtimeSession) UpdateInstructions(string) error {
+	return errors.New("google realtime session instruction update is not implemented")
+}
+func (s *googleRealtimeSession) UpdateChatContext(*llm.ChatContext) error {
+	return errors.New("google realtime session chat context update is not implemented")
+}
+func (s *googleRealtimeSession) UpdateTools([]llm.Tool) error {
+	return errors.New("google realtime session tool update is not implemented")
+}
+func (s *googleRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
+	return errors.New("google realtime session option update is not implemented")
+}
+func (s *googleRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error {
+	return errors.New("google realtime session reply generation is not implemented")
+}
+func (s *googleRealtimeSession) Say(string) error {
+	return errors.New("google realtime session text input is not implemented")
+}
+func (s *googleRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
+func (s *googleRealtimeSession) Interrupt() error {
+	return errors.New("google realtime session interrupt is not implemented")
+}
+func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
+
+func (s *googleRealtimeSession) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		close(s.eventCh)
+		if s.liveSession != nil {
+			s.closeErr = s.liveSession.Close()
+		}
+	})
+	return s.closeErr
+}
+
+func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
+	if s == nil || s.liveSession == nil || frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	resampled, err := audio.ResampleAudioFrame(frame, googleRealtimeInputSampleRate)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, chunk := range s.audioStream.Write(resampled.Data) {
+		if err := s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+			Audio: &genai.Blob{
+				Data:     chunk.Data,
+				MIMEType: "audio/pcm;rate=16000",
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *googleRealtimeSession) PushVideo(*images.VideoFrame) error {
+	return errors.New("google realtime session video input is not implemented")
+}
+func (s *googleRealtimeSession) CommitAudio() error { return nil }
+func (s *googleRealtimeSession) ClearAudio() error {
+	if s != nil && s.audioStream != nil {
+		s.audioStream.Clear()
+	}
+	return nil
+}
+
+var _ llm.RealtimeModel = (*RealtimeModel)(nil)
+var _ llm.RealtimeSession = (*googleRealtimeSession)(nil)
