@@ -13399,6 +13399,7 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
 	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "id-ID-Standard-A")
+	t.Setenv("RTP_AGENT_TTS_VOICE_ID", "clone-key-test")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "gemini-custom")
 	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "speak warmly")
 	t.Setenv("RTP_AGENT_TTS_SPEAKING_RATE", "1.25")
@@ -13420,6 +13421,9 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 	if googleCfg.language != "id-ID" || googleCfg.voice != "id-ID-Standard-A" || googleCfg.model != "gemini-custom" {
 		t.Fatalf("google cfg voice = %+v, want configured language, voice, and model", googleCfg)
+	}
+	if googleCfg.cloneKey != "clone-key-test" {
+		t.Fatalf("clone key = %q, want clone-key-test", googleCfg.cloneKey)
 	}
 	if googleCfg.prompt != "speak warmly" {
 		t.Fatalf("prompt = %q, want speak warmly", googleCfg.prompt)
