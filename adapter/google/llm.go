@@ -232,6 +232,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["response_mime_type"].(string); ok {
 		config.ResponseMIMEType = value
 	}
+	if value, ok := googleResponseSchemaParam(params["response_schema"]); ok {
+		config.ResponseSchema = value
+	}
 	if value, ok := params["response_json_schema"]; ok {
 		config.ResponseJsonSchema = value
 	}
@@ -276,6 +279,17 @@ func googleInt32Param(value any) (int32, bool) {
 		return int32(v), true
 	default:
 		return 0, false
+	}
+}
+
+func googleResponseSchemaParam(value any) (*genai.Schema, bool) {
+	switch schema := value.(type) {
+	case *genai.Schema:
+		return schema, schema != nil
+	case map[string]any:
+		return googleSchemaFromMap(schema), true
+	default:
+		return nil, false
 	}
 }
 

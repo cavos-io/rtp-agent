@@ -384,6 +384,40 @@ func TestBuildGoogleGenerateContentConfigDropsToolsWithCachedContentLikeReferenc
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseSchemaExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_schema": map[string]any{
+				"type":     "object",
+				"required": []any{"answer"},
+				"properties": map[string]any{
+					"answer": map[string]any{"type": "string"},
+				},
+			},
+			"response_mime_type": "application/json",
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ResponseSchema == nil {
+		t.Fatal("ResponseSchema = nil, want schema from response_schema extra param")
+	}
+	if config.ResponseSchema.Type != genai.TypeObject {
+		t.Fatalf("ResponseSchema type = %q, want OBJECT", config.ResponseSchema.Type)
+	}
+	if len(config.ResponseSchema.Required) != 1 || config.ResponseSchema.Required[0] != "answer" {
+		t.Fatalf("ResponseSchema required = %#v, want answer", config.ResponseSchema.Required)
+	}
+	answer := config.ResponseSchema.Properties["answer"]
+	if answer == nil || answer.Type != genai.TypeString {
+		t.Fatalf("answer schema = %#v, want string", answer)
+	}
+	if config.ResponseMIMEType != "application/json" {
+		t.Fatalf("ResponseMIMEType = %q, want application/json", config.ResponseMIMEType)
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false
