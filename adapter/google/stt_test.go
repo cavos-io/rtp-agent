@@ -218,6 +218,28 @@ func TestGoogleRecognitionConfigUsesReferenceKeywordAdaptation(t *testing.T) {
 	}
 }
 
+func TestGoogleRecognitionConfigUsesReferenceAdaptationOverKeywords(t *testing.T) {
+	adaptation := &speechpb.SpeechAdaptation{
+		PhraseSets: []*speechpb.PhraseSet{{
+			Name: "custom",
+			Phrases: []*speechpb.PhraseSet_Phrase{{
+				Value: "Acrux",
+				Boost: 20,
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTKeywords(GoogleSTTKeyword{Value: "ignored", Boost: 1}),
+		WithGoogleSTTAdaptation(adaptation),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.Adaptation != adaptation {
+		t.Fatalf("adaptation = %#v, want configured adaptation over keywords", config.Adaptation)
+	}
+}
+
 func TestGoogleRecognitionConfigUsesReferenceAlternativeLanguages(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil,
 		WithGoogleSTTAlternativeLanguages("es-ES", "fr-FR"),

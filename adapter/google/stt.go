@@ -39,6 +39,7 @@ type GoogleSTT struct {
 	speechStartTimeout   time.Duration
 	speechEndTimeout     time.Duration
 	keywords             []GoogleSTTKeyword
+	adaptation           *speechpb.SpeechAdaptation
 	alternativeLanguages []string
 }
 
@@ -145,6 +146,12 @@ func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
 			}
 			s.keywords = append(s.keywords, keyword)
 		}
+	}
+}
+
+func WithGoogleSTTAdaptation(adaptation *speechpb.SpeechAdaptation) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.adaptation = adaptation
 	}
 }
 
@@ -353,16 +360,22 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 		EnableSpokenPunctuation:    wrapperspb.Bool(s.spokenPunctuation),
 		ProfanityFilter:            s.profanityFilter,
 		Model:                      s.model,
-		Adaptation:                 googleSpeechAdaptation(s.keywords),
+		Adaptation:                 googleSpeechAdaptation(s),
 	}
 }
 
-func googleSpeechAdaptation(keywords []GoogleSTTKeyword) *speechpb.SpeechAdaptation {
-	if len(keywords) == 0 {
+func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
+	if s == nil {
 		return nil
 	}
-	phrases := make([]*speechpb.PhraseSet_Phrase, 0, len(keywords))
-	for _, keyword := range keywords {
+	if s.adaptation != nil {
+		return s.adaptation
+	}
+	if len(s.keywords) == 0 {
+		return nil
+	}
+	phrases := make([]*speechpb.PhraseSet_Phrase, 0, len(s.keywords))
+	for _, keyword := range s.keywords {
 		if keyword.Value == "" {
 			continue
 		}
