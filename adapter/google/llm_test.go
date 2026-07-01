@@ -774,6 +774,21 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesTypedResponseModalities(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_modalities": []genai.Modality{genai.ModalityAudio, genai.ModalityText},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	want := []string{"AUDIO", "TEXT"}
+	if !reflect.DeepEqual(config.ResponseModalities, want) {
+		t.Fatalf("ResponseModalities = %#v, want %#v", config.ResponseModalities, want)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigPreservesEmptyResponseModalities(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{

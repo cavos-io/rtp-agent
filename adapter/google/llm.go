@@ -235,11 +235,22 @@ func googleStringList(value any) []string {
 	switch items := value.(type) {
 	case []string:
 		return append([]string(nil), items...)
+	case []genai.Modality:
+		result := make([]string, 0, len(items))
+		for _, item := range items {
+			result = append(result, string(item))
+		}
+		return result
 	case []any:
 		result := make([]string, 0, len(items))
 		for _, item := range items {
-			if str, ok := item.(string); ok {
-				result = append(result, str)
+			switch typed := item.(type) {
+			case string:
+				result = append(result, typed)
+			case genai.Modality:
+				result = append(result, string(typed))
+			default:
+				continue
 			}
 		}
 		return result
