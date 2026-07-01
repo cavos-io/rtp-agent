@@ -38,6 +38,7 @@ type GoogleSTT struct {
 	speechStartTimeout   time.Duration
 	speechEndTimeout     time.Duration
 	keywords             []GoogleSTTKeyword
+	alternativeLanguages []string
 }
 
 type googleSpeechClient interface {
@@ -130,6 +131,18 @@ func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
 				continue
 			}
 			s.keywords = append(s.keywords, keyword)
+		}
+	}
+}
+
+func WithGoogleSTTAlternativeLanguages(languages ...string) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.alternativeLanguages = nil
+		for _, language := range languages {
+			if language == "" {
+				continue
+			}
+			s.alternativeLanguages = append(s.alternativeLanguages, language)
 		}
 	}
 }
@@ -319,6 +332,7 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 		Encoding:                   speechpb.RecognitionConfig_LINEAR16,
 		SampleRateHertz:            s.sampleRate,
 		LanguageCode:               language,
+		AlternativeLanguageCodes:   append([]string(nil), s.alternativeLanguages...),
 		EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
 		EnableWordConfidence:       s.enableWordConfidence,
 		EnableAutomaticPunctuation: s.punctuate,

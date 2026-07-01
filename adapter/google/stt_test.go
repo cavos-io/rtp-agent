@@ -206,6 +206,24 @@ func TestGoogleRecognitionConfigUsesReferenceKeywordAdaptation(t *testing.T) {
 	}
 }
 
+func TestGoogleRecognitionConfigUsesReferenceAlternativeLanguages(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTAlternativeLanguages("es-ES", "fr-FR"),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.LanguageCode != "en-US" {
+		t.Fatalf("language code = %q, want en-US", config.LanguageCode)
+	}
+	if len(config.AlternativeLanguageCodes) != 2 {
+		t.Fatalf("alternative languages = %#v, want two entries", config.AlternativeLanguageCodes)
+	}
+	if config.AlternativeLanguageCodes[0] != "es-ES" || config.AlternativeLanguageCodes[1] != "fr-FR" {
+		t.Fatalf("alternative languages = %#v, want [es-ES fr-FR]", config.AlternativeLanguageCodes)
+	}
+}
+
 func TestNewGoogleSTTRejectsMissingCredentialsFile(t *testing.T) {
 	_, err := NewGoogleSTT("/definitely/missing/google-credentials.json")
 	if err == nil {
