@@ -567,7 +567,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, io.EOF
 			}
-			return nil, err
+			return nil, googleLLMStreamError(err, !s.responseGenerated)
 		}
 
 		if resp.PromptFeedback != nil {
@@ -612,6 +612,24 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			return chunk, nil
 		}
 	}
+}
+
+func googleLLMStreamError(err error, retryable bool) error {
+	if err == nil {
+		return nil
+	}
+	var apiErr genai.APIError
+	if errors.As(err, &apiErr) {
+		message := "gemini llm: api error"
+		if apiErr.Code >= 400 && apiErr.Code < 500 {
+			message = "gemini llm: client error"
+			retryable = apiErr.Code == 429 || apiErr.Code == 499
+		} else if apiErr.Code >= 500 && apiErr.Code < 600 {
+			message = "gemini llm: server error"
+		}
+		return llm.NewAPIStatusErrorWithRetryable(message, apiErr.Code, "", strings.TrimSpace(apiErr.Message+" "+apiErr.Status), retryable)
+	}
+	return err
 }
 
 func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {

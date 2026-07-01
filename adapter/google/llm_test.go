@@ -632,6 +632,36 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForPromptFeedback(t *testing.T)
 	}
 }
 
+func TestGoogleLLMStreamMapsProviderAPIError(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, genai.APIError{Code: 429, Message: "rate limited", Status: "RESOURCE_EXHAUSTED"}, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "gemini llm: client error" {
+		t.Fatalf("APIStatusError message = %q, want client error", statusErr.Message)
+	}
+	if statusErr.StatusCode != 429 {
+		t.Fatalf("APIStatusError status = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != "rate limited RESOURCE_EXHAUSTED" {
+		t.Fatalf("APIStatusError body = %#v, want provider message and status", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = false, want true for 429 client error")
+	}
+}
+
 func TestGoogleLLMStreamReportsCachedPromptTokens(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
