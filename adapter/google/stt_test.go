@@ -125,6 +125,16 @@ func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsPreservesExplicitEmptyLocation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
+
+	provider.UpdateOptions(WithGoogleSTTLocation(""))
+
+	if got := googleSTTEndpoint(provider); got != "" {
+		t.Fatalf("endpoint = %q, want empty default endpoint after explicit empty location", got)
+	}
+}
+
 func TestGoogleSTTStreamUsesConfiguredReferenceLanguage(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(
@@ -969,6 +979,77 @@ func TestGoogleSTTStreamSuppressesEmptyFinalTranscriptLikeReference(t *testing.T
 	}
 }
 
+func TestGoogleSTTStreamSuppressesEmptyFinalTranscriptWithWordsLikeReference(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal: true,
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "",
+					Confidence: 0.9,
+					Words: []*speechpb.WordInfo{{
+						Word:      "noise",
+						StartTime: durationpb.New(100 * time.Millisecond),
+						EndTime:   durationpb.New(200 * time.Millisecond),
+					}},
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil for empty final transcript with words", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF after suppressed empty final with words", err)
+	}
+}
+
+func TestGoogleSTTStreamSuppressesLaterInterimAfterEmptyFinalLikeReference(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{
+				{
+					IsFinal: true,
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "",
+						Confidence: 0.9,
+					}},
+				},
+				{
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "late interim",
+						Confidence: 0.9,
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil after empty final suppresses whole response", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF after suppressed empty final response", err)
+	}
+}
+
 func TestGoogleSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
@@ -1137,6 +1218,61 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{
+		recvBlock: secondRelease,
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "noise",
+					Confidence: 0,
+				}},
+			}},
+		}},
+	}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(-1))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after negative min confidence update")
+	}
+	close(firstRelease)
+	close(secondRelease)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event = %#v, want interim transcript after negative min confidence", event)
+	}
+	if got := event.Alternatives[0].Text; got != "noise" {
+		t.Fatalf("transcript = %q, want noise", got)
+	}
+}
+
 func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
@@ -1182,6 +1318,50 @@ func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsClearsActiveStreamSpeechTimeouts(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: secondRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client, WithGoogleSTTSpeechEndTimeout(750*time.Millisecond))
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+	if firstStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout().GetSpeechEndTimeout().AsDuration() != 750*time.Millisecond {
+		t.Fatalf("first stream voice timeout = %#v, want speech_end_timeout 750ms", firstStream.sent)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTSpeechEndTimeout(0), WithGoogleSTTSpeechStartTimeout(0))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after timeout reset")
+	}
+	if len(secondStream.sent) != 1 {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+	if timeout := secondStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout(); timeout != nil {
+		t.Fatalf("second stream voice timeout = %#v, want nil after explicit zero reset", timeout)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTUpdateOptionsAppliesActiveStreamLanguage(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
@@ -1221,6 +1401,94 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamLanguage(t *testing.T) {
 	}
 	if got := secondStream.sent[0].GetStreamingConfig().GetConfig().GetLanguageCode(); got != "id-ID" {
 		t.Fatalf("second stream language = %q, want updated id-ID", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
+func TestGoogleSTTUpdateOptionsAppliesEmptyActiveStreamLanguage(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: secondRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client, WithGoogleSTTLanguage("id-ID"))
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+	if got := firstStream.sent[0].GetStreamingConfig().GetConfig().GetLanguageCode(); got != "id-ID" {
+		t.Fatalf("first stream language = %q, want id-ID", got)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTLanguage(""))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after language update")
+	}
+	if len(secondStream.sent) != 1 {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+	if got := secondStream.sent[0].GetStreamingConfig().GetConfig().GetLanguageCode(); got != "" {
+		t.Fatalf("second stream language = %q, want explicit empty language", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
+func TestGoogleSTTUpdateOptionsAppliesEmptyActiveStreamModel(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: secondRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client, WithGoogleSTTModel("command_and_search"))
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+	if got := firstStream.sent[0].GetStreamingConfig().GetConfig().GetModel(); got != "command_and_search" {
+		t.Fatalf("first stream model = %q, want command_and_search", got)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTModel(""))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after model update")
+	}
+	if len(secondStream.sent) != 1 {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+	if got := secondStream.sent[0].GetStreamingConfig().GetConfig().GetModel(); got != "" {
+		t.Fatalf("second stream model = %q, want explicit empty model", got)
 	}
 	close(firstRelease)
 	close(secondRelease)
@@ -1825,6 +2093,159 @@ func TestGoogleSTTStreamRestartsAfterReference409BeforeAudio(t *testing.T) {
 	close(restartedRecv)
 }
 
+func TestGoogleSTTStreamReportsReference409ReconnectError(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
+		streamErrs:   []error{nil, status.Error(codes.Unavailable, "restart failed")},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil reconnect error", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want reconnect APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+}
+
+func TestGoogleSTTStreamRestartsAfterReferenceMaxSessionFinal(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{responses: []*speechpb.StreamingRecognizeResponse{
+		{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+		{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal:      true,
+				LanguageCode: "en-US",
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "done",
+					Confidence: 0.91,
+					Words: []*speechpb.WordInfo{{
+						Word:       "done",
+						StartTime:  durationpb.New(100 * time.Millisecond),
+						EndTime:    durationpb.New(300 * time.Millisecond),
+						Confidence: 0.91,
+					}},
+				}},
+			}},
+		},
+	}}
+	restartedRecv := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	googleStream := stream.(*googleSTTStream)
+	googleStream.mu.Lock()
+	googleStream.sessionConnectedAt = time.Now().Add(-googleSTTMaxSessionDuration - time.Second)
+	googleStream.mu.Unlock()
+	<-client.streamCallCh
+
+	event, err := stream.Next()
+	if err != nil || event == nil || event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = (%#v, %v), want start of speech", event, err)
+	}
+	event, err = stream.Next()
+	if err != nil || event == nil || event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "done" {
+		t.Fatalf("second event = (%#v, %v), want final transcript", event, err)
+	}
+	event, err = stream.Next()
+	if err != nil || event == nil || event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event = (%#v, %v), want end of speech before reconnect", event, err)
+	}
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want max-session restart", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for max-session restart")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after max-session restart")
+	}
+	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+	close(restartedRecv)
+}
+
+func TestGoogleSTTStreamReportsReferenceMaxSessionReconnectError(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{responses: []*speechpb.StreamingRecognizeResponse{
+		{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
+		{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal:      true,
+				LanguageCode: "en-US",
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "done",
+					Confidence: 0.91,
+				}},
+			}},
+		},
+	}}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
+		streamErrs:   []error{nil, status.Error(codes.Unavailable, "restart failed")},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	googleStream := stream.(*googleSTTStream)
+	googleStream.mu.Lock()
+	googleStream.sessionConnectedAt = time.Now().Add(-googleSTTMaxSessionDuration - time.Second)
+	googleStream.mu.Unlock()
+	<-client.streamCallCh
+
+	if event, err := stream.Next(); err != nil || event == nil || event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("first event = (%#v, %v), want start of speech", event, err)
+	}
+	if event, err := stream.Next(); err != nil || event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event = (%#v, %v), want final transcript", event, err)
+	}
+	if event, err := stream.Next(); err != nil || event == nil || event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("third event = (%#v, %v), want end of speech before reconnect error", event, err)
+	}
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("fourth event = %#v, want nil reconnect error", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("fourth Next error = %T %v, want reconnect APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+}
+
 func TestGoogleSTTStreamNextErrorTerminatesStream(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.Unavailable, "unavailable")}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
@@ -2006,6 +2427,7 @@ type fakeGoogleSpeechClient struct {
 	streams           []speechpb.Speech_StreamingRecognizeClient
 	stream            speechpb.Speech_StreamingRecognizeClient
 	streamErr         error
+	streamErrs        []error
 	streamCallCh      chan int
 	streamCalls       int
 	recognizeRequest  *speechpb.RecognizeRequest
@@ -2019,12 +2441,17 @@ func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ..
 	if c.streamCallCh != nil {
 		c.streamCallCh <- c.streamCalls
 	}
+	err := c.streamErr
+	if len(c.streamErrs) > 0 {
+		err = c.streamErrs[0]
+		c.streamErrs = c.streamErrs[1:]
+	}
 	if len(c.streams) > 0 {
 		stream := c.streams[0]
 		c.streams = c.streams[1:]
-		return stream, c.streamErr
+		return stream, err
 	}
-	return c.stream, c.streamErr
+	return c.stream, err
 }
 
 func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.RecognizeRequest, opts ...gax.CallOption) (*speechpb.RecognizeResponse, error) {

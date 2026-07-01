@@ -90,6 +90,14 @@ func TestNewGoogleLLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMProviderMatchesReference(t *testing.T) {
+	model := &GoogleLLM{}
+
+	if got := model.Provider(); got != "Gemini" {
+		t.Fatalf("Provider() = %q, want Gemini", got)
+	}
+}
+
 func TestBuildGoogleContentsGroupsToolCallsWithResponses(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"
@@ -427,6 +435,31 @@ func TestBuildGoogleGenerateContentConfigDropsToolsWithCachedContentLikeReferenc
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigDropsToolsWithEmptyCachedContent(t *testing.T) {
+	options := &llm.ChatOptions{
+		Tools:      []llm.Tool{googleRequestTestTool{}},
+		ToolChoice: "required",
+		ExtraParams: map[string]any{
+			"cached_content": "",
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "system prompt\n")
+
+	if config.CachedContent != "" {
+		t.Fatalf("CachedContent = %q, want explicit empty value", config.CachedContent)
+	}
+	if config.SystemInstruction != nil {
+		t.Fatalf("SystemInstruction = %#v, want nil with present cached_content", config.SystemInstruction)
+	}
+	if config.Tools != nil {
+		t.Fatalf("Tools = %#v, want nil with present cached_content", config.Tools)
+	}
+	if config.ToolConfig != nil {
+		t.Fatalf("ToolConfig = %#v, want nil with present cached_content", config.ToolConfig)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseSchemaExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
@@ -516,6 +549,52 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceServiceTierExtra(t *tes
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceStopSequencesExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"stop_sequences": []string{"</speak>", "END"},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !reflect.DeepEqual(config.StopSequences, []string{"</speak>", "END"}) {
+		t.Fatalf("StopSequences = %#v, want reference stop_sequences", config.StopSequences)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceCandidateCountExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"candidate_count": 2,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.CandidateCount != 2 {
+		t.Fatalf("CandidateCount = %d, want 2", config.CandidateCount)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceLogprobsExtras(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_logprobs": true,
+			"logprobs":          3,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !config.ResponseLogprobs {
+		t.Fatal("ResponseLogprobs = false, want true")
+	}
+	if config.Logprobs == nil || *config.Logprobs != 3 {
+		t.Fatalf("Logprobs = %#v, want 3", config.Logprobs)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
@@ -583,6 +662,29 @@ func TestGoogleLLMChatRejectsGemini25ThinkingLevelLikeReference(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMChatRejectsNonIntegerThinkingBudgetLikeReference(t *testing.T) {
+	model := &GoogleLLM{model: "gemini-2.5-flash"}
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Chat panicked with %v, want reference thinking_budget validation error", recovered)
+		}
+	}()
+
+	_, err := model.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
+		"thinking_config": map[string]any{
+			"thinking_budget": 1.5,
+		},
+	}))
+	if err == nil {
+		t.Fatal("Chat error = nil, want non-integer thinking_budget validation error")
+	}
+	if !strings.Contains(err.Error(), "thinking_budget inside thinking_config must be an integer") {
+		t.Fatalf("Chat error = %v, want reference thinking_budget validation", err)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *testing.T) {
 	safety := []*genai.SafetySetting{{
 		Category:  genai.HarmCategoryHarassment,
@@ -598,6 +700,23 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *
 
 	if !reflect.DeepEqual(config.SafetySettings, safety) {
 		t.Fatalf("safety settings = %#v, want %#v", config.SafetySettings, safety)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigPreservesEmptySafetySettings(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"safety_settings": []*genai.SafetySetting{},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.SafetySettings == nil {
+		t.Fatal("SafetySettings = nil, want explicit empty list")
+	}
+	if len(config.SafetySettings) != 0 {
+		t.Fatalf("SafetySettings = %#v, want empty list", config.SafetySettings)
 	}
 }
 
@@ -684,6 +803,23 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceLabelsExtra(t *testing.
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigPreservesEmptyLabels(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"labels": map[string]string{},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.Labels == nil {
+		t.Fatal("Labels = nil, want explicit empty map")
+	}
+	if len(config.Labels) != 0 {
+		t.Fatalf("Labels = %#v, want empty map", config.Labels)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceModelArmorConfigExtra(t *testing.T) {
 	armor := &genai.ModelArmorConfig{
 		PromptTemplateName:   "projects/p/locations/us/templates/prompt",
@@ -746,6 +882,38 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra
 	want := []string{"AUDIO", "TEXT"}
 	if !reflect.DeepEqual(config.ResponseModalities, want) {
 		t.Fatalf("ResponseModalities = %#v, want %#v", config.ResponseModalities, want)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesTypedResponseModalities(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_modalities": []genai.Modality{genai.ModalityAudio, genai.ModalityText},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	want := []string{"AUDIO", "TEXT"}
+	if !reflect.DeepEqual(config.ResponseModalities, want) {
+		t.Fatalf("ResponseModalities = %#v, want %#v", config.ResponseModalities, want)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigPreservesEmptyResponseModalities(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_modalities": []any{},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ResponseModalities == nil {
+		t.Fatal("ResponseModalities = nil, want explicit empty list")
+	}
+	if len(config.ResponseModalities) != 0 {
+		t.Fatalf("ResponseModalities = %#v, want empty list", config.ResponseModalities)
 	}
 }
 

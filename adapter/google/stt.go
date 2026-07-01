@@ -22,6 +22,8 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+const googleSTTMaxSessionDuration = 240 * time.Second
+
 type GoogleSTT struct {
 	mu                   sync.Mutex
 	streams              map[*googleSTTStream]struct{}
@@ -62,17 +64,13 @@ type GoogleSTTKeyword struct {
 
 func WithGoogleSTTModel(model string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if model != "" {
-			s.model = model
-		}
+		s.model = model
 	}
 }
 
 func WithGoogleSTTLanguage(language string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if language != "" {
-			s.language = language
-		}
+		s.language = language
 	}
 }
 
@@ -120,17 +118,13 @@ func WithGoogleSTTVoiceActivityEvents(enabled bool) GoogleSTTOption {
 
 func WithGoogleSTTSpeechStartTimeout(timeout time.Duration) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if timeout > 0 {
-			s.speechStartTimeout = timeout
-		}
+		s.speechStartTimeout = timeout
 	}
 }
 
 func WithGoogleSTTSpeechEndTimeout(timeout time.Duration) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if timeout > 0 {
-			s.speechEndTimeout = timeout
-		}
+		s.speechEndTimeout = timeout
 	}
 }
 
@@ -156,9 +150,7 @@ func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 
 func WithGoogleSTTMinConfidenceThreshold(threshold float64) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if threshold >= 0 {
-			s.minConfidence = threshold
-		}
+		s.minConfidence = threshold
 	}
 }
 
@@ -194,9 +186,7 @@ func WithGoogleSTTAlternativeLanguages(languages ...string) GoogleSTTOption {
 
 func WithGoogleSTTLocation(location string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if location != "" {
-			s.location = location
-		}
+		s.location = location
 	}
 }
 
@@ -352,6 +342,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 		owner:                       s,
 		ctx:                         ctx,
 		stream:                      stream,
+		sessionConnectedAt:          time.Now(),
 		language:                    language,
 		includeAlternativeLanguages: !explicitLanguage,
 		minConfidence:               s.minConfidence,
@@ -616,6 +607,7 @@ type googleSTTStream struct {
 	owner                       *GoogleSTT
 	ctx                         context.Context
 	stream                      speechpb.Speech_StreamingRecognizeClient
+	sessionConnectedAt          time.Time
 	language                    string
 	includeAlternativeLanguages bool
 	minConfidence               float64
@@ -736,6 +728,7 @@ func (n *googleSTTInputAudioNormalizer) reset() {
 func (s *googleSTTStream) readLoop() {
 	defer close(s.events)
 	var lastUsageEventTime float64
+	var speechStarted bool
 	for {
 		stream := s.currentStream()
 		resp, err := stream.Recv()
@@ -744,9 +737,13 @@ func (s *googleSTTStream) readLoop() {
 				continue
 			}
 			if s.shouldRestartAfterConflict(err) {
-				if s.restartStream(stream) {
+				restarted, restartErr := s.restartStreamWithError(stream)
+				if restarted {
 					lastUsageEventTime = 0
 					continue
+				}
+				if restartErr != nil {
+					err = restartErr
 				}
 			}
 			if err != io.EOF {
@@ -759,8 +756,10 @@ func (s *googleSTTStream) readLoop() {
 		switch resp.GetSpeechEventType() {
 		case speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN:
 			s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
+			speechStarted = true
 		case speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_END:
 			s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+			speechStarted = false
 		}
 
 		if resp.GetSpeechEventType() == speechpb.StreamingRecognizeResponse_SPEECH_EVENT_UNSPECIFIED {
@@ -768,6 +767,22 @@ func (s *googleSTTStream) readLoop() {
 				s.events <- &stt.SpeechEvent{
 					Type:         eventType,
 					Alternatives: []stt.SpeechData{data},
+				}
+				if eventType == stt.SpeechEventFinalTranscript && s.shouldRestartAfterMaxSession(stream) {
+					if speechStarted {
+						s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+						speechStarted = false
+					}
+					restarted, restartErr := s.restartStreamWithError(stream)
+					if restarted {
+						lastUsageEventTime = 0
+						continue
+					}
+					if restartErr != nil {
+						s.errCh <- googleSTTStreamError(restartErr)
+						s.terminate()
+						return
+					}
 				}
 			}
 		}
@@ -800,22 +815,34 @@ func (s *googleSTTStream) shouldRestartAfterConflict(err error) bool {
 	return !s.closed && !s.inputClosed
 }
 
+func (s *googleSTTStream) shouldRestartAfterMaxSession(stream speechpb.Speech_StreamingRecognizeClient) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.closed && !s.inputClosed && s.stream == stream && !s.sessionConnectedAt.IsZero() && time.Since(s.sessionConnectedAt) > googleSTTMaxSessionDuration
+}
+
 func (s *googleSTTStream) restartStream(old speechpb.Speech_StreamingRecognizeClient) bool {
+	restarted, _ := s.restartStreamWithError(old)
+	return restarted
+}
+
+func (s *googleSTTStream) restartStreamWithError(old speechpb.Speech_StreamingRecognizeClient) (bool, error) {
 	_ = old.CloseSend()
 	stream, err := s.owner.newStreamingRecognizeStream(s.ctx, s.language, s.includeAlternativeLanguages)
 	if err != nil {
-		return false
+		return false, err
 	}
 	s.mu.Lock()
 	if s.closed || s.inputClosed || s.stream != old {
 		s.mu.Unlock()
 		_ = stream.CloseSend()
-		return false
+		return false, nil
 	}
 	s.stream = stream
+	s.sessionConnectedAt = time.Now()
 	s.audioPushed = false
 	s.mu.Unlock()
-	return true
+	return true, nil
 }
 
 func (s *googleSTTStream) reconnectForUpdatedConfig() bool {
@@ -874,7 +901,10 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 	if len(results) == 0 {
 		return stt.SpeechData{}, "", false
 	}
-	if data, ok := googleFinalSpeechDataFromStreamingResults(results, startTimeOffset, language); ok {
+	if data, handled, ok := googleFinalSpeechDataFromStreamingResults(results, startTimeOffset, language); handled {
+		if !ok {
+			return stt.SpeechData{}, "", false
+		}
 		eventType := stt.SpeechEventInterimTranscript
 		if results[0].GetIsFinal() {
 			eventType = stt.SpeechEventFinalTranscript
@@ -913,15 +943,15 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 	return data, stt.SpeechEventInterimTranscript, true
 }
 
-func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, startTimeOffset float64, language string) (stt.SpeechData, bool) {
+func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, startTimeOffset float64, language string) (stt.SpeechData, bool, bool) {
 	for _, result := range results {
 		if !result.GetIsFinal() || len(result.GetAlternatives()) == 0 {
 			continue
 		}
 		alt := result.GetAlternatives()[0]
 		words := alt.GetWords()
-		if alt.GetTranscript() == "" && len(words) == 0 {
-			continue
+		if alt.GetTranscript() == "" {
+			return stt.SpeechData{}, true, false
 		}
 		data := stt.SpeechData{
 			Language:   googleStreamingResultLanguage(result, language),
@@ -930,9 +960,9 @@ func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingReco
 			Words:      googleTimedStringsOffset(words, startTimeOffset),
 		}
 		googleApplySpeechDataTiming(&data, words, startTimeOffset)
-		return data, true
+		return data, true, true
 	}
-	return stt.SpeechData{}, false
+	return stt.SpeechData{}, false, false
 }
 
 func googleStreamingResultLanguage(result *speechpb.StreamingRecognitionResult, fallback string) string {
@@ -1003,7 +1033,7 @@ func (s *googleSTTStream) updateConfig(minConfidence float64, language string, l
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.minConfidence = minConfidence
-	if languageChanged && language != "" {
+	if languageChanged {
 		s.language = language
 		s.includeAlternativeLanguages = true
 	}

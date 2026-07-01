@@ -109,10 +109,8 @@ func WithGoogleTTSVoice(voice string) GoogleTTSOption {
 
 func WithGoogleTTSVoiceCloneKey(key string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if key != "" {
-			cfg.cloneKey = key
-			cfg.cloneKeySet = true
-		}
+		cfg.cloneKey = key
+		cfg.cloneKeySet = true
 	}
 }
 
@@ -247,8 +245,11 @@ func googleTTSConfigFromOptions(opts ...GoogleTTSOption) googleTTSConfig {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.cloneKeySet && !cfg.modelSet && !cfg.promptSet {
+	if !cfg.modelSet && !cfg.promptSet && (cfg.cloneKeySet || (cfg.voiceSet && strings.Contains(strings.ToLower(cfg.voice), "chirp"))) {
 		cfg.model = "chirp_3"
+	}
+	if cfg.model == "chirp_3" && !cfg.voiceSet && !cfg.cloneKeySet {
+		cfg.voice = "en-US-Chirp3-HD-Charon"
 	}
 	return cfg
 }
@@ -1010,7 +1011,7 @@ func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionPar
 		Name:         cfg.voice,
 		SsmlGender:   cfg.gender,
 	}
-	if cfg.cloneKey != "" {
+	if cfg.cloneKeySet {
 		voice.Name = ""
 		voice.VoiceClone = &texttospeechpb.VoiceCloneParams{VoiceCloningKey: cfg.cloneKey}
 	}

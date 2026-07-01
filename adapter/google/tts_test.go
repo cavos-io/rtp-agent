@@ -814,6 +814,78 @@ func TestGoogleTTSVoiceCloneKeyMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSEmptyVoiceCloneKeyMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSVoiceCloneKey(""))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	voice := client.request.GetVoice()
+	if voice.GetVoiceClone() == nil {
+		t.Fatalf("voice clone = nil, want explicit empty clone key")
+	}
+	if voice.GetVoiceClone().GetVoiceCloningKey() != "" {
+		t.Fatalf("voice clone key = %q, want empty", voice.GetVoiceClone().GetVoiceCloningKey())
+	}
+	if voice.GetName() != "" {
+		t.Fatalf("voice name = %q, want empty when voice clone is configured", voice.GetName())
+	}
+	if voice.GetModelName() != "" {
+		t.Fatalf("voice model = %q, want empty for Chirp 3 clone voice", voice.GetModelName())
+	}
+}
+
+func TestGoogleTTSChirpVoiceSelectsReferenceModel(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSVoice("en-US-Chirp3-HD-Charon"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	voice := client.request.GetVoice()
+	if voice.GetName() != "en-US-Chirp3-HD-Charon" {
+		t.Fatalf("voice name = %q, want Chirp voice", voice.GetName())
+	}
+	if voice.GetModelName() != "" {
+		t.Fatalf("voice model = %q, want empty for Chirp 3 voice", voice.GetModelName())
+	}
+	if got := provider.Model(); got != "chirp_3" {
+		t.Fatalf("Model() = %q, want chirp_3", got)
+	}
+}
+
+func TestGoogleTTSChirpModelUsesReferenceDefaultVoice(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSModel("chirp_3"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	voice := client.request.GetVoice()
+	if voice.GetName() != "en-US-Chirp3-HD-Charon" {
+		t.Fatalf("voice name = %q, want reference Chirp 3 default voice", voice.GetName())
+	}
+	if voice.GetModelName() != "" {
+		t.Fatalf("voice model = %q, want empty for Chirp 3", voice.GetModelName())
+	}
+}
+
 func TestGoogleTTSSSMLInputMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

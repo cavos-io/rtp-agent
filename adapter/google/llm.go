@@ -61,13 +61,16 @@ func googleModelRequiresThoughtSignatures(model string) bool {
 
 func (l *GoogleLLM) Model() string { return l.model }
 func (l *GoogleLLM) Provider() string {
-	return "google"
+	return "Gemini"
 }
 
 func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	options := &llm.ChatOptions{}
 	for _, opt := range opts {
 		opt(options)
+	}
+	if err := validateGoogleChatExtraParams(options.ExtraParams); err != nil {
+		return nil, err
 	}
 
 	contents, systemInstructions := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
@@ -87,6 +90,23 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		thoughtMu:         &l.thoughtMu,
 		thoughtSignatures: l.thoughtSignaturesForStream(),
 	}, nil
+}
+
+func validateGoogleChatExtraParams(params map[string]any) error {
+	thinkingConfig, ok := params["thinking_config"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	budget, ok := thinkingConfig["thinking_budget"]
+	if !ok || budget == nil {
+		return nil
+	}
+	switch budget.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32:
+		return nil
+	default:
+		return errors.New("thinking_budget inside thinking_config must be an integer")
+	}
 }
 
 func (l *GoogleLLM) snapshotThoughtSignatures() map[string][]byte {
@@ -139,7 +159,8 @@ func buildGoogleGenerateContentConfigForModel(model string, options *llm.ChatOpt
 	applyGoogleExtraParams(config, options.ExtraParams)
 	normalizeGoogleThinkingConfigForModel(config, model)
 	applyGoogleResponseFormat(config, options.ResponseFormat)
-	if config.CachedContent != "" {
+	_, cachedContentSet := options.ExtraParams["cached_content"]
+	if cachedContentSet || config.CachedContent != "" {
 		config.SystemInstruction = nil
 		config.Tools = nil
 		config.ToolConfig = nil
@@ -234,11 +255,22 @@ func googleStringList(value any) []string {
 	switch items := value.(type) {
 	case []string:
 		return append([]string(nil), items...)
+	case []genai.Modality:
+		result := make([]string, 0, len(items))
+		for _, item := range items {
+			result = append(result, string(item))
+		}
+		return result
 	case []any:
 		result := make([]string, 0, len(items))
 		for _, item := range items {
-			if str, ok := item.(string); ok {
-				result = append(result, str)
+			switch typed := item.(type) {
+			case string:
+				result = append(result, typed)
+			case genai.Modality:
+				result = append(result, string(typed))
+			default:
+				continue
 			}
 		}
 		return result
@@ -265,6 +297,18 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	}
 	if value, ok := googleFloat32Param(params["top_k"]); ok {
 		config.TopK = &value
+	}
+	if value, ok := params["stop_sequences"]; ok {
+		config.StopSequences = googleStringList(value)
+	}
+	if value, ok := googleInt32Param(params["candidate_count"]); ok {
+		config.CandidateCount = value
+	}
+	if value, ok := googleBoolParam(params["response_logprobs"]); ok {
+		config.ResponseLogprobs = value
+	}
+	if value, ok := googleInt32Param(params["logprobs"]); ok {
+		config.Logprobs = &value
 	}
 	if value, ok := googleFloat32Param(params["presence_penalty"]); ok {
 		config.PresencePenalty = &value
@@ -305,8 +349,8 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleImageConfigParam(params["image_config"]); ok {
 		config.ImageConfig = value
 	}
-	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
-		config.ResponseModalities = value
+	if value, ok := params["response_modalities"]; ok {
+		config.ResponseModalities = googleStringList(value)
 	}
 	if value, ok := googleSpeechConfigParam(params["speech_config"]); ok {
 		config.SpeechConfig = value
@@ -437,10 +481,14 @@ func googleModelSelectionConfigParam(value any) (*genai.ModelSelectionConfig, bo
 
 func googleLabelsParam(value any) (map[string]string, bool) {
 	labels, ok := value.(map[string]string)
-	if !ok || len(labels) == 0 {
+	if !ok {
 		return nil, false
 	}
-	return labels, true
+	result := make(map[string]string, len(labels))
+	for key, value := range labels {
+		result[key] = value
+	}
+	return result, true
 }
 
 func googleModelArmorConfigParam(value any) (*genai.ModelArmorConfig, bool) {
@@ -510,14 +558,10 @@ func googleThinkingLevelParam(value any) (genai.ThinkingLevel, bool) {
 func googleSafetySettingsParam(value any) ([]*genai.SafetySetting, bool) {
 	switch settings := value.(type) {
 	case []*genai.SafetySetting:
-		if len(settings) == 0 {
-			return nil, false
-		}
-		return append([]*genai.SafetySetting(nil), settings...), true
+		result := make([]*genai.SafetySetting, len(settings))
+		copy(result, settings)
+		return result, true
 	case []genai.SafetySetting:
-		if len(settings) == 0 {
-			return nil, false
-		}
 		result := make([]*genai.SafetySetting, 0, len(settings))
 		for i := range settings {
 			setting := settings[i]
