@@ -110,6 +110,7 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	model, err := NewRealtimeModel("test-key",
 		WithGoogleRealtimeModel("gemini-3.1-flash-live-preview"),
 		WithGoogleRealtimeVoice("Charon"),
+		WithGoogleRealtimeLanguage("es-US"),
 		WithGoogleRealtimeModalities([]string{"TEXT"}),
 		WithGoogleRealtimeTurnDetection(false),
 		WithGoogleRealtimeInputAudioTranscription(false),
@@ -133,5 +134,8 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	}
 	if model.voice != "Charon" {
 		t.Fatalf("voice = %q, want explicit reference voice", model.voice)
+	}
+	if model.language != "es-US" {
+		t.Fatalf("language = %q, want explicit reference language", model.language)
 	}
 }
