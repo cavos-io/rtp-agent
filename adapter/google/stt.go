@@ -864,7 +864,10 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 	if len(results) == 0 {
 		return stt.SpeechData{}, "", false
 	}
-	if data, ok := googleFinalSpeechDataFromStreamingResults(results, startTimeOffset, language); ok {
+	if data, handled, ok := googleFinalSpeechDataFromStreamingResults(results, startTimeOffset, language); handled {
+		if !ok {
+			return stt.SpeechData{}, "", false
+		}
 		eventType := stt.SpeechEventInterimTranscript
 		if results[0].GetIsFinal() {
 			eventType = stt.SpeechEventFinalTranscript
@@ -903,7 +906,7 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 	return data, stt.SpeechEventInterimTranscript, true
 }
 
-func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, startTimeOffset float64, language string) (stt.SpeechData, bool) {
+func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, startTimeOffset float64, language string) (stt.SpeechData, bool, bool) {
 	for _, result := range results {
 		if !result.GetIsFinal() || len(result.GetAlternatives()) == 0 {
 			continue
@@ -911,7 +914,7 @@ func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingReco
 		alt := result.GetAlternatives()[0]
 		words := alt.GetWords()
 		if alt.GetTranscript() == "" {
-			continue
+			return stt.SpeechData{}, true, false
 		}
 		data := stt.SpeechData{
 			Language:   googleStreamingResultLanguage(result, language),
@@ -920,9 +923,9 @@ func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingReco
 			Words:      googleTimedStringsOffset(words, startTimeOffset),
 		}
 		googleApplySpeechDataTiming(&data, words, startTimeOffset)
-		return data, true
+		return data, true, true
 	}
-	return stt.SpeechData{}, false
+	return stt.SpeechData{}, false, false
 }
 
 func googleStreamingResultLanguage(result *speechpb.StreamingRecognitionResult, fallback string) string {
