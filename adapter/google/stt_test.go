@@ -756,6 +756,44 @@ func TestGoogleSTTStreamPropagatesClientErrors(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamReturnsAPIStatusErrorForClientStatusError(t *testing.T) {
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: status.Error(codes.Unavailable, "unavailable")})
+
+	_, err := provider.Stream(context.Background(), "")
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Stream error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for unavailable")
+	}
+}
+
+func TestGoogleSTTStreamReturnsAPIStatusErrorForConfigSendFailure(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{sendErrOnConfig: status.Error(codes.PermissionDenied, "permission denied")}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	_, err := provider.Stream(context.Background(), "en-US")
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Stream error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.PermissionDenied) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.PermissionDenied)
+	}
+	if statusErr.Retryable {
+		t.Fatal("status retryable = true, want false for permission denied")
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after config send failure")
+	}
+}
+
 func TestGoogleSTTStreamClosesAfterAudioSendFailure(t *testing.T) {
 	wantErr := errors.New("send failed")
 	streamClient := &fakeGoogleStreamingRecognizeClient{sendErrAfterConfig: wantErr}
@@ -1021,11 +1059,15 @@ type fakeGoogleStreamingRecognizeClient struct {
 	recvIndex          int
 	recvErr            error
 	closed             bool
+	sendErrOnConfig    error
 	sendErrAfterConfig error
 }
 
 func (c *fakeGoogleStreamingRecognizeClient) Send(req *speechpb.StreamingRecognizeRequest) error {
 	c.sent = append(c.sent, req)
+	if req.GetStreamingConfig() != nil && c.sendErrOnConfig != nil {
+		return c.sendErrOnConfig
+	}
 	if req.GetAudioContent() != nil && c.sendErrAfterConfig != nil {
 		return c.sendErrAfterConfig
 	}

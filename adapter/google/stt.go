@@ -221,7 +221,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 
 	stream, err := s.client.StreamingRecognize(ctx)
 	if err != nil {
-		return nil, err
+		return nil, googleSTTStreamError(err)
 	}
 	if s.isClosed() {
 		_ = stream.CloseSend()
@@ -240,7 +240,8 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	})
 
 	if err != nil {
-		return nil, err
+		_ = stream.CloseSend()
+		return nil, googleSTTStreamError(err)
 	}
 	if s.isClosed() {
 		_ = stream.CloseSend()
