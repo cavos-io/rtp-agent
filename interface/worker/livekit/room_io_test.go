@@ -1083,6 +1083,31 @@ func TestRoomIOPublishAudioBoundedLeadPacing(t *testing.T) {
 	}
 }
 
+func TestRoomIOResampleMonoForOpus(t *testing.T) {
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 4*2*2),
+		SampleRate:        48000,
+		NumChannels:       2,
+		SamplesPerChannel: 4,
+	}
+	mono, err := roomIOResampleMonoForOpus(frame)
+	if err != nil {
+		t.Fatalf("roomIOResampleMonoForOpus error = %v", err)
+	}
+	if mono.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want 1", mono.NumChannels)
+	}
+	if mono.SampleRate != roomIOOpusClockRate {
+		t.Fatalf("SampleRate = %d, want %d", mono.SampleRate, roomIOOpusClockRate)
+	}
+	if mono.SamplesPerChannel != 4 {
+		t.Fatalf("SamplesPerChannel = %d, want 4", mono.SamplesPerChannel)
+	}
+	if len(mono.Data) != int(mono.SamplesPerChannel)*2 {
+		t.Fatalf("Data length = %d, want %d", len(mono.Data), int(mono.SamplesPerChannel)*2)
+	}
+}
+
 func TestRoomIOFlushWaitsForQueuedAudioDrain(t *testing.T) {
 	rio := &RoomIO{
 		audioTrack: newRoomIOTestAudioTrack(t),
