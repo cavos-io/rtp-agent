@@ -648,12 +648,7 @@ func (s *googleRealtimeSession) PushVideo(*images.VideoFrame) error {
 	return errors.New("google realtime session video input is not implemented")
 }
 func (s *googleRealtimeSession) CommitAudio() error { return nil }
-func (s *googleRealtimeSession) ClearAudio() error {
-	if s != nil && s.audioStream != nil {
-		s.audioStream.Clear()
-	}
-	return nil
-}
+func (s *googleRealtimeSession) ClearAudio() error  { return nil }
 
 var _ llm.RealtimeModel = (*RealtimeModel)(nil)
 var _ llm.RealtimeSession = (*googleRealtimeSession)(nil)

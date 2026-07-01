@@ -347,6 +347,50 @@ func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionClearAudioPreservesReferenceBufferedTail(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.PushAudio(&audiomodel.AudioFrame{
+		Data:              bytes.Repeat([]byte{1, 2}, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	})
+	if err != nil {
+		t.Fatalf("first PushAudio error = %v", err)
+	}
+	if len(liveSession.inputs) != 0 {
+		t.Fatalf("live inputs after half chunk = %d, want buffered tail only", len(liveSession.inputs))
+	}
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v", err)
+	}
+	err = session.PushAudio(&audiomodel.AudioFrame{
+		Data:              bytes.Repeat([]byte{3, 4}, 400),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	})
+	if err != nil {
+		t.Fatalf("second PushAudio error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs after second half chunk = %d, want preserved tail emitted", len(liveSession.inputs))
+	}
+	if got := liveSession.inputs[0].Audio.Data; len(got) != 1600 || !bytes.Equal(got[:2], []byte{1, 2}) || !bytes.Equal(got[len(got)-2:], []byte{3, 4}) {
+		t.Fatalf("audio data = len %d first %v last %v, want first and second halves preserved", len(got), got[:2], got[len(got)-2:])
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
