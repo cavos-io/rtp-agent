@@ -259,6 +259,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 	for _, opt := range opts {
 		opt(provider)
 	}
+	googleSTTSanitizeEndpointing(provider)
 	return provider
 }
 
@@ -292,6 +293,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 	for _, opt := range opts {
 		opt(s)
 	}
+	googleSTTSanitizeEndpointing(s)
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
@@ -680,6 +682,13 @@ func googleSTTUsesV2(model string) bool {
 	default:
 		return false
 	}
+}
+
+func googleSTTSanitizeEndpointing(s *GoogleSTT) {
+	if s == nil || s.model == "chirp_3" {
+		return
+	}
+	s.endpointingSensitivity = ""
 }
 
 func googleSpeechDataFromAlternative(alt *speechpb.SpeechRecognitionAlternative) stt.SpeechData {

@@ -1993,6 +1993,50 @@ func TestGoogleSTTStreamIgnoresReferenceV2EndpointingForNonChirp3(t *testing.T) 
 	}
 }
 
+func TestGoogleSTTUpdateOptionsDoesNotResurrectReferenceEndpointingForChirp3(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRelease}
+	client := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithV2Client(
+		client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_2"),
+		WithGoogleSTTEndpointingSensitivity("ENDPOINTING_SENSITIVITY_SHORT"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	provider.UpdateOptions(WithGoogleSTTModel("chirp_3"))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want v2 reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for model update reconnect")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after model update")
+	}
+	streaming := secondStream.sent[0].GetStreamingConfig().GetStreamingFeatures()
+	if got := streaming.GetEndpointingSensitivity(); got != speechv2pb.StreamingRecognitionFeatures_ENDPOINTING_SENSITIVITY_UNSPECIFIED {
+		t.Fatalf("endpointing sensitivity = %v, want unspecified because reference ignored earlier non-chirp_3 option", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTStreamEmitsReferenceV2RecognitionUsage(t *testing.T) {
 	streamClient := &fakeGoogleV2StreamingRecognizeClient{
 		responses: []*speechv2pb.StreamingRecognizeResponse{
@@ -2898,6 +2942,7 @@ func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.Re
 }
 
 type fakeGoogleV2SpeechClient struct {
+	streams      []speechv2pb.Speech_StreamingRecognizeClient
 	stream       speechv2pb.Speech_StreamingRecognizeClient
 	streamCallCh chan int
 	streamCalls  int
@@ -2908,6 +2953,11 @@ func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts 
 	c.streamCalls++
 	if c.streamCallCh != nil {
 		c.streamCallCh <- c.streamCalls
+	}
+	if len(c.streams) > 0 {
+		stream := c.streams[0]
+		c.streams = c.streams[1:]
+		return stream, c.streamErr
 	}
 	return c.stream, c.streamErr
 }
