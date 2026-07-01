@@ -653,6 +653,47 @@ func TestGoogleLLMStreamEmitsPartsAsOrderedDeltas(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamPrioritizesFunctionCallOverTextLikeReference(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							Text: "ignored when tool call exists",
+							FunctionCall: &genai.FunctionCall{
+								ID:   "call_lookup",
+								Name: "lookup",
+								Args: map[string]any{"query": "weather"},
+							},
+						}},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one tool-call delta", chunk)
+	}
+	if chunk.Delta.Content != "" {
+		t.Fatalf("content = %q, want empty when function_call is present", chunk.Delta.Content)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.CallID != "call_lookup" || call.Name != "lookup" || call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("tool call = %#v, want lookup weather", call)
+	}
+}
+
 func TestGoogleLLMStreamTagsChunksWithReferenceRequestID(t *testing.T) {
 	read := false
 	stream := &googleLLMStream{

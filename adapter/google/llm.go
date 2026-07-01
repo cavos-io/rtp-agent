@@ -733,11 +733,11 @@ func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {
 			Role: llm.ChatRoleAssistant,
 		},
 	}
-	if part.Text != "" {
-		chunk.Delta.Content = part.Text
-		return chunk
-	}
 	if part.FunctionCall == nil {
+		if part.Text != "" {
+			chunk.Delta.Content = part.Text
+			return chunk
+		}
 		return nil
 	}
 	args, _ := json.Marshal(part.FunctionCall.Args)
