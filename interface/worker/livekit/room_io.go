@@ -1592,7 +1592,29 @@ func (rio *RoomIO) removePlaybackWaiter(waiter chan struct{}) {
 }
 
 func (rio *RoomIO) Flush() {
+	ctx := context.Background()
+	rio.waitForAudioOutputDrain(ctx)
 	rio.finishPlayback(false, "")
+}
+
+func (rio *RoomIO) waitForAudioOutputDrain(ctx context.Context) {
+	if rio == nil {
+		return
+	}
+	rio.mu.Lock()
+	deadline := rio.audioOutputDeadline
+	rio.mu.Unlock()
+	if deadline.IsZero() {
+		return
+	}
+	wait := time.Until(deadline)
+	if wait <= 0 {
+		return
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(wait):
+	}
 }
 
 func (rio *RoomIO) ClearBuffer() {

@@ -1083,6 +1083,29 @@ func TestRoomIOPublishAudioBoundedLeadPacing(t *testing.T) {
 	}
 }
 
+func TestRoomIOFlushWaitsForQueuedAudioDrain(t *testing.T) {
+	rio := &RoomIO{
+		audioTrack: newRoomIOTestAudioTrack(t),
+		encoder:    &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}},
+	}
+	frame := &model.AudioFrame{
+		Data:              make([]byte, 960*2),
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 960,
+	}
+	for i := 0; i < 15; i++ {
+		if err := rio.PublishAudio(context.Background(), frame); err != nil {
+			t.Fatalf("PublishAudio(%d) error = %v", i, err)
+		}
+	}
+	start := time.Now()
+	rio.Flush()
+	if waited := time.Since(start); waited < 50*time.Millisecond {
+		t.Fatalf("Flush returned after %v, want it to wait for queued audio to drain", waited)
+	}
+}
+
 func TestRoomIOPublishAudioEncodeValidationFailureDoesNotStartPlayback(t *testing.T) {
 	encoder := &recordingRoomIOEncoder{encoded: []byte{0x01, 0x02}}
 	rio := &RoomIO{
