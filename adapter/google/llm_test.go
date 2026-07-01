@@ -456,6 +456,63 @@ func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamGeneratesDistinctReferenceFunctionCallIDs(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{
+		{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							Name: "lookup",
+							Args: map[string]any{"query": "first"},
+						},
+					}},
+				},
+			}},
+		},
+		{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							Name: "lookup",
+							Args: map[string]any{"query": "second"},
+						},
+					}},
+				},
+			}},
+		},
+	}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+
+	firstID := first.Delta.ToolCalls[0].CallID
+	secondID := second.Delta.ToolCalls[0].CallID
+	if !strings.HasPrefix(firstID, "function_call_") || !strings.HasPrefix(secondID, "function_call_") {
+		t.Fatalf("generated call IDs = %q, %q, want function_call_ prefix", firstID, secondID)
+	}
+	if firstID == secondID {
+		t.Fatalf("generated call IDs both %q, want distinct IDs", firstID)
+	}
+}
+
 func TestGoogleLLMStreamStoresReferenceThoughtSignatures(t *testing.T) {
 	read := false
 	signatures := map[string][]byte{}

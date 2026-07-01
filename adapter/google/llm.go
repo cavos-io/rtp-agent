@@ -767,7 +767,7 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 	if call.ID != "" {
 		return call.ID
 	}
-	return "call_" + call.Name
+	return cavosmath.ShortUUID("function_call_")
 }
 
 func (s *googleLLMStream) Close() error {
