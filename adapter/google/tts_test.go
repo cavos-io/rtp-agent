@@ -639,6 +639,44 @@ func TestGoogleTTSDecodesReferenceOggOpusEncoding(t *testing.T) {
 	assertGoogleDecodedOpusFrame(t, streamAudio, opusData)
 }
 
+func TestGoogleTTSStreamDecodesSplitReferenceOggOpusAudio(t *testing.T) {
+	opusData, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "change-sophie.opus"))
+	if err != nil {
+		t.Fatalf("read opus fixture: %v", err)
+	}
+	splitAt := 8
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{
+				{AudioContent: opusData[:splitAt]},
+				{AudioContent: opusData[splitAt:]},
+			},
+		},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_OGG_OPUS),
+		WithGoogleTTSSampleRate(48000),
+	)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	assertGoogleDecodedOpusFrame(t, audio, opusData)
+}
+
 func TestGoogleTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	client := &fakeGoogleTTSClient{err: context.DeadlineExceeded}
 	provider := newGoogleTTSWithClient(client)

@@ -663,6 +663,7 @@ type googleTTSSynthesizeStream struct {
 type googleTTSSegmentState struct {
 	text         strings.Builder
 	emittedAudio bool
+	opusBuffer   []byte
 }
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
@@ -901,7 +902,10 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		if len(data) == 0 {
 			continue
 		}
-		frame, err := googleTTSStreamingAudioFrame(data, s.audio.GetAudioEncoding(), s.audio.GetSampleRateHertz())
+		frame, needMore, err := s.googleTTSStreamingAudioFrame(stream, data)
+		if needMore {
+			continue
+		}
 		if err != nil {
 			_ = stream.CloseSend()
 			s.mu.Lock()
@@ -920,6 +924,39 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		s.mu.Unlock()
 		return &tts.SynthesizedAudio{Frame: frame}, nil
 	}
+}
+
+func (s *googleTTSSynthesizeStream) googleTTSStreamingAudioFrame(stream texttospeechpb.TextToSpeech_StreamingSynthesizeClient, data []byte) (*model.AudioFrame, bool, error) {
+	encoding := s.audio.GetAudioEncoding()
+	if encoding != texttospeechpb.AudioEncoding_OGG_OPUS {
+		frame, err := googleTTSStreamingAudioFrame(data, encoding, s.audio.GetSampleRateHertz())
+		return frame, false, err
+	}
+
+	s.mu.Lock()
+	segment := s.segments[stream]
+	if segment == nil {
+		segment = &googleTTSSegmentState{}
+		s.segments[stream] = segment
+	}
+	segment.opusBuffer = append(segment.opusBuffer, data...)
+	buffer := append([]byte(nil), segment.opusBuffer...)
+	s.mu.Unlock()
+
+	frame, err := googleTTSStreamingAudioFrame(buffer, encoding, s.audio.GetSampleRateHertz())
+	if err != nil {
+		if googleTTSOpusDecodeNeedsMore(err, len(buffer)) {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+
+	s.mu.Lock()
+	if segment := s.segments[stream]; segment != nil {
+		segment.opusBuffer = nil
+	}
+	s.mu.Unlock()
+	return frame, false, nil
 }
 
 func (s *googleTTSSynthesizeStream) markClosedLocked() {
@@ -955,6 +992,14 @@ func googleTTSStreamingAudioFrame(data []byte, encoding texttospeechpb.AudioEnco
 		NumChannels:       1,
 		SamplesPerChannel: uint32(len(data) / 2),
 	}, nil
+}
+
+func googleTTSOpusDecodeNeedsMore(err error, buffered int) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "EOF") || (buffered < 64 && strings.Contains(message, "OP_ENOTFORMAT"))
 }
 
 func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionParams {
