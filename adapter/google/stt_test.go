@@ -328,6 +328,30 @@ func TestGoogleStreamingRecognitionConfigV2UsesReferenceKeywordAdaptation(t *tes
 	}
 }
 
+func TestGoogleStreamingRecognitionConfigV2UsesReferenceDenoiserConfig(t *testing.T) {
+	provider := newGoogleSTTWithV2Client(nil,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTDenoiserConfig(&speechv2pb.DenoiserConfig{
+			DenoiseAudio: true,
+			SnrThreshold: 8.5,
+		}),
+	)
+
+	config := googleStreamingRecognitionConfigV2(provider, "en-US", true)
+
+	denoiser := config.GetConfig().GetDenoiserConfig()
+	if denoiser == nil {
+		t.Fatal("v2 denoiser config = nil, want configured denoiser")
+	}
+	if !denoiser.GetDenoiseAudio() {
+		t.Fatal("v2 denoise audio = false, want true")
+	}
+	if denoiser.GetSnrThreshold() != 8.5 {
+		t.Fatalf("v2 SNR threshold = %v, want 8.5", denoiser.GetSnrThreshold())
+	}
+}
+
 func TestGoogleRecognitionConfigUsesReferenceAdaptationOverKeywords(t *testing.T) {
 	adaptation := &speechpb.SpeechAdaptation{
 		PhraseSets: []*speechpb.PhraseSet{{

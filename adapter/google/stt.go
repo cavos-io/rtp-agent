@@ -53,6 +53,7 @@ type GoogleSTT struct {
 	endpointingSensitivity string
 	keywords               []GoogleSTTKeyword
 	adaptation             *speechpb.SpeechAdaptation
+	denoiserConfig         *speechv2pb.DenoiserConfig
 	alternativeLanguages   []string
 }
 
@@ -191,6 +192,12 @@ func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
 func WithGoogleSTTAdaptation(adaptation *speechpb.SpeechAdaptation) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		s.adaptation = adaptation
+	}
+}
+
+func WithGoogleSTTDenoiserConfig(config *speechv2pb.DenoiserConfig) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.denoiserConfig = config
 	}
 }
 
@@ -589,9 +596,10 @@ func googleStreamingRecognitionConfigV2(s *GoogleSTT, language string, includeAl
 					AudioChannelCount: 1,
 				},
 			},
-			LanguageCodes: googleLanguageCodesV2(s, language, includeAlternativeLanguages),
-			Model:         s.model,
-			Adaptation:    googleSpeechAdaptationV2(s),
+			LanguageCodes:  googleLanguageCodesV2(s, language, includeAlternativeLanguages),
+			Model:          s.model,
+			Adaptation:     googleSpeechAdaptationV2(s),
+			DenoiserConfig: s.denoiserConfig,
 			Features: &speechv2pb.RecognitionFeatures{
 				EnableAutomaticPunctuation: s.punctuate,
 				EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
