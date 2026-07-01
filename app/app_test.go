@@ -22,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
+	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
@@ -13387,7 +13389,7 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
-	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=none,service_tier=priority")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=none,service_tier=priority,stop_sequences=["</speak>","END"],candidate_count=2,response_logprobs=true,logprobs=3`)
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -13405,6 +13407,18 @@ func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T
 	}
 	if params["service_tier"] != "priority" {
 		t.Fatalf("service_tier = %#v, want priority", params["service_tier"])
+	}
+	if !reflect.DeepEqual(params["stop_sequences"], []any{"</speak>", "END"}) {
+		t.Fatalf("stop_sequences = %#v, want [</speak> END]", params["stop_sequences"])
+	}
+	if got := numericTestValue(params["candidate_count"]); got != 2 {
+		t.Fatalf("candidate_count = %#v, want 2", params["candidate_count"])
+	}
+	if params["response_logprobs"] != true {
+		t.Fatalf("response_logprobs = %#v, want true", params["response_logprobs"])
+	}
+	if got := numericTestValue(params["logprobs"]); got != 3 {
+		t.Fatalf("logprobs = %#v, want 3", params["logprobs"])
 	}
 	if app.Session.Options.ToolChoice != llm.ToolChoice("none") {
 		t.Fatalf("ToolChoice = %#v, want none", app.Session.Options.ToolChoice)
@@ -13676,6 +13690,91 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndSeconds(t *testing.T)
 
 	if googleCfg.speechEndTimeout != 750*time.Millisecond {
 		t.Fatalf("speechEndTimeout = %v, want 750ms", googleCfg.speechEndTimeout)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"denoiser_config": map[string]any{
+				"denoise_audio": true,
+				"snr_threshold": "8.5",
+			},
+		},
+	})
+
+	if googleCfg.denoiserConfig == nil {
+		t.Fatal("denoiserConfig = nil, want reference Google STT v2 denoiser config")
+	}
+	if got := googleCfg.denoiserConfig.DenoiseAudio; !got {
+		t.Fatalf("denoise audio = %v, want true", got)
+	}
+	if got := googleCfg.denoiserConfig.SnrThreshold; got != 8.5 {
+		t.Fatalf("snr threshold = %v, want 8.5", got)
+	}
+
+	explicit := &speechv2pb.DenoiserConfig{DenoiseAudio: true, SnrThreshold: 6.25}
+	googleCfg = googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"denoiser_config": explicit,
+		},
+	})
+	if googleCfg.denoiserConfig != explicit {
+		t.Fatalf("denoiserConfig = %#v, want explicit config pointer", googleCfg.denoiserConfig)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceV2Adaptation(t *testing.T) {
+	adaptation := &speechv2pb.SpeechAdaptation{
+		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{
+					Phrases: []*speechv2pb.PhraseSet_Phrase{{Value: "Acrux", Boost: 20}},
+				},
+			},
+		}},
+	}
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"adaptation": adaptation,
+		},
+	})
+
+	if googleCfg.adaptationV2 != adaptation {
+		t.Fatalf("adaptationV2 = %#v, want reference Google STT v2 adaptation", googleCfg.adaptationV2)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceV1Adaptation(t *testing.T) {
+	adaptation := &speechpb.SpeechAdaptation{
+		PhraseSets: []*speechpb.PhraseSet{{
+			Name: "domain",
+			Phrases: []*speechpb.PhraseSet_Phrase{{
+				Value: "Acrux",
+				Boost: 20,
+			}},
+		}},
+	}
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"adaptation": adaptation,
+		},
+	})
+
+	if googleCfg.adaptation != adaptation {
+		t.Fatalf("adaptation = %#v, want reference Google STT v1 adaptation", googleCfg.adaptation)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceEndpointingSensitivity(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"endpointing_sensitivity": "ENDPOINTING_SENSITIVITY_SHORT",
+		},
+	})
+
+	if googleCfg.endpointingSensitivity != "ENDPOINTING_SENSITIVITY_SHORT" {
+		t.Fatalf("endpointingSensitivity = %q, want reference Google STT v2 sensitivity", googleCfg.endpointingSensitivity)
 	}
 }
 

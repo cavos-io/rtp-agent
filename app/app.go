@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
+	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
 	awstranscribetypes "github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
@@ -134,24 +136,28 @@ type appGoogleTTSConfig struct {
 }
 
 type appGoogleSTTConfig struct {
-	model                string
-	location             string
-	language             string
-	streaming            *bool
-	sampleRate           *int
-	punctuate            *bool
-	spokenPunctuation    *bool
-	profanityFilter      *bool
-	detectLanguage       *bool
-	interimResults       *bool
-	wordTimeOffsets      *bool
-	wordConfidence       *bool
-	speechStartTimeout   time.Duration
-	speechEndTimeout     time.Duration
-	minConfidence        *float64
-	voiceActivityEvents  *bool
-	alternativeLanguages []string
-	keywords             []adaptergoogle.GoogleSTTKeyword
+	model                  string
+	location               string
+	language               string
+	streaming              *bool
+	sampleRate             *int
+	punctuate              *bool
+	spokenPunctuation      *bool
+	profanityFilter        *bool
+	detectLanguage         *bool
+	interimResults         *bool
+	wordTimeOffsets        *bool
+	wordConfidence         *bool
+	speechStartTimeout     time.Duration
+	speechEndTimeout       time.Duration
+	minConfidence          *float64
+	voiceActivityEvents    *bool
+	alternativeLanguages   []string
+	keywords               []adaptergoogle.GoogleSTTKeyword
+	denoiserConfig         *speechv2pb.DenoiserConfig
+	adaptation             *speechpb.SpeechAdaptation
+	adaptationV2           *speechv2pb.SpeechAdaptation
+	endpointingSensitivity string
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
@@ -209,6 +215,18 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if len(cfg.keywords) > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTKeywords(cfg.keywords...))
+	}
+	if cfg.denoiserConfig != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTDenoiserConfig(cfg.denoiserConfig))
+	}
+	if cfg.adaptation != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAdaptation(cfg.adaptation))
+	}
+	if cfg.adaptationV2 != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAdaptationV2(cfg.adaptationV2))
+	}
+	if cfg.endpointingSensitivity != "" {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTEndpointingSensitivity(cfg.endpointingSensitivity))
 	}
 	return adaptergoogle.NewGoogleSTT(credentialsFile, sttOpts...)
 }
@@ -4040,22 +4058,26 @@ func cavosTTSFromConfig(cfg AppConfig) coretts.TTS {
 
 func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	googleCfg := appGoogleSTTConfig{
-		model:                cfg.STTModel,
-		location:             cfg.STTRegion,
-		language:             cfg.STTLanguage,
-		streaming:            cfg.STTStreaming,
-		sampleRate:           cfg.STTSampleRate,
-		punctuate:            cfg.STTPunctuate,
-		spokenPunctuation:    cfg.STTSpokenPunctuation,
-		profanityFilter:      cfg.STTProfanityFilter,
-		detectLanguage:       cfg.STTLanguageDetection,
-		interimResults:       cfg.STTInterimResults,
-		wordTimeOffsets:      cfg.STTWordTimestamps,
-		wordConfidence:       cfg.STTWordConfidence,
-		minConfidence:        cfg.STTMinConfidenceThreshold,
-		voiceActivityEvents:  cfg.STTVoiceActivityEvents,
-		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
-		keywords:             googleSTTKeywordsFromConfig(cfg.STTKeywords),
+		model:                  cfg.STTModel,
+		location:               cfg.STTRegion,
+		language:               cfg.STTLanguage,
+		streaming:              cfg.STTStreaming,
+		sampleRate:             cfg.STTSampleRate,
+		punctuate:              cfg.STTPunctuate,
+		spokenPunctuation:      cfg.STTSpokenPunctuation,
+		profanityFilter:        cfg.STTProfanityFilter,
+		detectLanguage:         cfg.STTLanguageDetection,
+		interimResults:         cfg.STTInterimResults,
+		wordTimeOffsets:        cfg.STTWordTimestamps,
+		wordConfidence:         cfg.STTWordConfidence,
+		minConfidence:          cfg.STTMinConfidenceThreshold,
+		voiceActivityEvents:    cfg.STTVoiceActivityEvents,
+		alternativeLanguages:   splitStringList(cfg.STTLanguageOptions),
+		keywords:               googleSTTKeywordsFromConfig(cfg.STTKeywords),
+		denoiserConfig:         googleSTTDenoiserConfigFromOptions(cfg.STTModelOptions),
+		adaptation:             googleSTTAdaptationFromOptions(cfg.STTModelOptions),
+		adaptationV2:           googleSTTAdaptationV2FromOptions(cfg.STTModelOptions),
+		endpointingSensitivity: modelOptionString(cfg.STTModelOptions, "endpointing_sensitivity"),
 	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
@@ -4066,6 +4088,58 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond
 	}
 	return googleCfg
+}
+
+func googleSTTDenoiserConfigFromOptions(options map[string]any) *speechv2pb.DenoiserConfig {
+	if len(options) == 0 {
+		return nil
+	}
+	if denoiser, ok := options["denoiser_config"].(*speechv2pb.DenoiserConfig); ok {
+		return denoiser
+	}
+	configOptions := options
+	if nested, ok := options["denoiser_config"].(map[string]any); ok {
+		configOptions = nested
+	}
+	denoiseAudio := modelOptionBool(configOptions, "denoise_audio")
+	snrThreshold := modelOptionFloat(configOptions, "snr_threshold")
+	if denoiseAudio == nil && snrThreshold == nil {
+		return nil
+	}
+	config := &speechv2pb.DenoiserConfig{}
+	if denoiseAudio != nil {
+		config.DenoiseAudio = *denoiseAudio
+	}
+	if snrThreshold != nil {
+		config.SnrThreshold = float32(*snrThreshold)
+	}
+	return config
+}
+
+func googleSTTAdaptationFromOptions(options map[string]any) *speechpb.SpeechAdaptation {
+	if len(options) == 0 {
+		return nil
+	}
+	if adaptation, ok := options["adaptation"].(*speechpb.SpeechAdaptation); ok {
+		return adaptation
+	}
+	if adaptation, ok := options["speech_adaptation"].(*speechpb.SpeechAdaptation); ok {
+		return adaptation
+	}
+	return nil
+}
+
+func googleSTTAdaptationV2FromOptions(options map[string]any) *speechv2pb.SpeechAdaptation {
+	if len(options) == 0 {
+		return nil
+	}
+	if adaptation, ok := options["adaptation"].(*speechv2pb.SpeechAdaptation); ok {
+		return adaptation
+	}
+	if adaptation, ok := options["speech_adaptation"].(*speechv2pb.SpeechAdaptation); ok {
+		return adaptation
+	}
+	return nil
 }
 
 func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adaptergoogle.GoogleSTTKeyword {
@@ -6914,6 +6988,10 @@ var googleLLMExtraParamKeys = []string{
 	"temperature",
 	"top_p",
 	"top_k",
+	"stop_sequences",
+	"candidate_count",
+	"response_logprobs",
+	"logprobs",
 	"presence_penalty",
 	"frequency_penalty",
 	"max_output_tokens",

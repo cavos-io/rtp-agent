@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -328,6 +329,34 @@ func TestGoogleStreamingRecognitionConfigV2UsesReferenceKeywordAdaptation(t *tes
 	}
 }
 
+func TestGoogleStreamingRecognitionConfigV2UsesReferenceCustomAdaptationOverKeywords(t *testing.T) {
+	adaptation := &speechv2pb.SpeechAdaptation{
+		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{
+					DisplayName: "custom",
+					Phrases: []*speechv2pb.PhraseSet_Phrase{{
+						Value: "Acrux",
+						Boost: 20,
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithV2Client(nil,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTKeywords(GoogleSTTKeyword{Value: "ignored", Boost: 1}),
+		WithGoogleSTTAdaptationV2(adaptation),
+	)
+
+	config := googleStreamingRecognitionConfigV2(provider, "en-US", true)
+
+	if config.GetConfig().GetAdaptation() != adaptation {
+		t.Fatalf("v2 adaptation = %#v, want configured adaptation over keywords", config.GetConfig().GetAdaptation())
+	}
+}
+
 func TestGoogleStreamingRecognitionConfigV2UsesReferenceDenoiserConfig(t *testing.T) {
 	provider := newGoogleSTTWithV2Client(nil,
 		WithGoogleSTTModel("chirp_3"),
@@ -412,6 +441,52 @@ func TestNewGoogleSTTRejectsMissingCredentialsFile(t *testing.T) {
 	_, err := NewGoogleSTT("/definitely/missing/google-credentials.json")
 	if err == nil {
 		t.Fatal("NewGoogleSTT returned nil error, want missing credentials error")
+	}
+}
+
+func TestNewGoogleSTTRejectsReferenceAdaptationVersionMismatch(t *testing.T) {
+	_, err := NewGoogleSTT("",
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTAdaptation(&speechpb.SpeechAdaptation{}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "adaptation must be cloud_speech_v2.SpeechAdaptation for v2 models") {
+		t.Fatalf("v2 adaptation mismatch error = %v, want reference v2 adaptation type error", err)
+	}
+
+	_, err = NewGoogleSTT("",
+		WithGoogleSTTModel("latest_long"),
+		WithGoogleSTTAdaptationV2(&speechv2pb.SpeechAdaptation{}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "adaptation must be resource_v1.SpeechAdaptation for v1 models") {
+		t.Fatalf("v1 adaptation mismatch error = %v, want reference v1 adaptation type error", err)
+	}
+}
+
+func TestGoogleSTTUpdateOptionsRejectsReferenceAdaptationVersionMismatch(t *testing.T) {
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{},
+		WithGoogleSTTModel("latest_long"),
+		WithGoogleSTTAdaptation(&speechpb.SpeechAdaptation{}),
+	)
+
+	err := provider.UpdateOptions(WithGoogleSTTModel("chirp_3"))
+	if err == nil || !strings.Contains(err.Error(), "adaptation must be cloud_speech_v2.SpeechAdaptation for v2 models") {
+		t.Fatalf("v2 update mismatch error = %v, want reference v2 adaptation type error", err)
+	}
+	if provider.model != "latest_long" {
+		t.Fatalf("model after rejected v2 update = %q, want latest_long", provider.model)
+	}
+
+	provider = newGoogleSTTWithV2Client(&fakeGoogleV2SpeechClient{},
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTAdaptationV2(&speechv2pb.SpeechAdaptation{}),
+	)
+
+	err = provider.UpdateOptions(WithGoogleSTTModel("latest_long"))
+	if err == nil || !strings.Contains(err.Error(), "adaptation must be resource_v1.SpeechAdaptation for v1 models") {
+		t.Fatalf("v1 update mismatch error = %v, want reference v1 adaptation type error", err)
+	}
+	if provider.model != "chirp_3" {
+		t.Fatalf("model after rejected v1 update = %q, want chirp_3", provider.model)
 	}
 }
 
@@ -1846,6 +1921,69 @@ func TestGoogleSTTUpdateOptionsSwitchesActiveStreamToReferenceV2(t *testing.T) {
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsReplacesReferenceAdaptationOnVersionSwitch(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	v1Client := &fakeGoogleSpeechClient{
+		stream:       firstStream,
+		streamCallCh: make(chan int, 1),
+	}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRelease}
+	v2Client := &fakeGoogleV2SpeechClient{
+		stream:       secondStream,
+		streamCallCh: make(chan int, 1),
+	}
+	v2Adaptation := &speechv2pb.SpeechAdaptation{
+		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{
+					Phrases: []*speechv2pb.PhraseSet_Phrase{{Value: "Cavos"}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation("us-central1"),
+		WithGoogleSTTModel("latest_long"),
+		WithGoogleSTTAdaptation(&speechpb.SpeechAdaptation{}),
+	)
+	provider.clientV2 = v2Client
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-v1Client.streamCallCh
+
+	if err := provider.UpdateOptions(WithGoogleSTTModel("chirp_3"), WithGoogleSTTAdaptationV2(v2Adaptation)); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+
+	select {
+	case calls := <-v2Client.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("v2 stream calls = %d, want one v2 reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for v2 reconnect after adaptation replacement")
+	}
+	if provider.adaptation != nil {
+		t.Fatalf("v1 adaptation = %#v, want cleared after v2 adaptation update", provider.adaptation)
+	}
+	if provider.adaptationV2 != v2Adaptation {
+		t.Fatalf("v2 adaptation = %#v, want replacement adaptation", provider.adaptationV2)
+	}
+	got := secondStream.sent[0].GetStreamingConfig().GetConfig().GetAdaptation()
+	if got != v2Adaptation {
+		t.Fatalf("v2 streaming adaptation = %#v, want replacement adaptation", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTUpdateOptionsCreatesReferenceV2ClientOnVersionSwitch(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
@@ -1895,6 +2033,63 @@ func TestGoogleSTTUpdateOptionsCreatesReferenceV2ClientOnVersionSwitch(t *testin
 	}
 	if got := secondStream.sent[0].GetStreamingConfig().GetConfig().GetModel(); got != "chirp_3" {
 		t.Fatalf("v2 model = %q, want chirp_3", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
+func TestGoogleSTTUpdateOptionsRecreatesReferenceV2ClientOnLocationChange(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: firstRelease}
+	oldExtraStream := &fakeGoogleV2StreamingRecognizeClient{}
+	oldClient := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, oldExtraStream},
+		streamCallCh: make(chan int, 2),
+	}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRelease}
+	newClient := &fakeGoogleV2SpeechClient{
+		stream:       secondStream,
+		streamCallCh: make(chan int, 1),
+	}
+	provider := newGoogleSTTWithV2Client(
+		oldClient,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+	createCalls := 0
+	provider.newClientV2 = func(context.Context) (googleSpeechV2Client, error) {
+		createCalls++
+		return newClient, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-oldClient.streamCallCh
+
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("us-central1")); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+
+	select {
+	case calls := <-newClient.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("new client stream calls = %d, want one reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for new v2 client reconnect after location update")
+	}
+	if createCalls != 1 {
+		t.Fatalf("v2 client create calls = %d, want one after location update", createCalls)
+	}
+	if oldClient.streamCalls != 1 {
+		t.Fatalf("old client stream calls = %d, want no reconnect on stale client", oldClient.streamCalls)
+	}
+	if got := secondStream.sent[0].GetRecognizer(); got != "projects/voice-project/locations/us-central1/recognizers/_" {
+		t.Fatalf("reconnected recognizer = %q, want updated location", got)
 	}
 	close(firstRelease)
 	close(secondRelease)
@@ -2276,6 +2471,91 @@ func TestGoogleSTTStreamEmitsReferenceV2RecognitionUsage(t *testing.T) {
 	}
 	if second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.6 {
 		t.Fatalf("second usage = %+v, want 0.6s delta", second.RecognitionUsage)
+	}
+}
+
+func TestGoogleSTTStreamResetsReferenceV2UsageAfterMaxSessionReconnect(t *testing.T) {
+	firstStream := &fakeGoogleV2StreamingRecognizeClient{responses: []*speechv2pb.StreamingRecognizeResponse{
+		{
+			Metadata: &speechv2pb.RecognitionResponseMetadata{
+				RequestId:           "first-usage",
+				TotalBilledDuration: durationpb.New(time.Second),
+			},
+		},
+		{
+			Results: []*speechv2pb.StreamingRecognitionResult{{
+				IsFinal:      true,
+				LanguageCode: "en-US",
+				Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{
+					Transcript: "done",
+					Confidence: 0.91,
+					Words: []*speechv2pb.WordInfo{{
+						Word:        "done",
+						StartOffset: durationpb.New(100 * time.Millisecond),
+						EndOffset:   durationpb.New(300 * time.Millisecond),
+						Confidence:  0.91,
+					}},
+				}},
+			}},
+		},
+	}}
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{responses: []*speechv2pb.StreamingRecognizeResponse{{
+		Metadata: &speechv2pb.RecognitionResponseMetadata{
+			RequestId:           "second-usage",
+			TotalBilledDuration: durationpb.New(500 * time.Millisecond),
+		},
+	}}}
+	client := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithV2Client(
+		client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	googleStream := stream.(*googleSTTStream)
+	googleStream.mu.Lock()
+	googleStream.sessionConnectedAt = time.Now().Add(-googleSTTMaxSessionDuration - time.Second)
+	googleStream.mu.Unlock()
+	<-client.streamCallCh
+
+	first, err := stream.Next()
+	if err != nil || first == nil || first.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("first event = (%#v, %v), want v2 recognition usage", first, err)
+	}
+	if first.RequestID != "first-usage" || first.RecognitionUsage == nil || first.RecognitionUsage.AudioDuration != 1 {
+		t.Fatalf("first usage = %#v, want 1s from first stream", first)
+	}
+	final, err := stream.Next()
+	if err != nil || final == nil || final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("second event = (%#v, %v), want final transcript", final, err)
+	}
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want v2 max-session restart", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for v2 max-session restart")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after v2 max-session restart")
+	}
+
+	second, err := stream.Next()
+	if err != nil || second == nil || second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("third event = (%#v, %v), want fresh usage from restarted stream", second, err)
+	}
+	if second.RequestID != "second-usage" || second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.5 {
+		t.Fatalf("second usage = %#v, want fresh 0.5s after v2 reconnect", second)
 	}
 }
 
