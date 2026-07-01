@@ -737,9 +737,13 @@ func (s *googleSTTStream) readLoop() {
 				continue
 			}
 			if s.shouldRestartAfterConflict(err) {
-				if s.restartStream(stream) {
+				restarted, restartErr := s.restartStreamWithError(stream)
+				if restarted {
 					lastUsageEventTime = 0
 					continue
+				}
+				if restartErr != nil {
+					err = restartErr
 				}
 			}
 			if err != io.EOF {

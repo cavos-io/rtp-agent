@@ -2093,6 +2093,35 @@ func TestGoogleSTTStreamRestartsAfterReference409BeforeAudio(t *testing.T) {
 	close(restartedRecv)
 }
 
+func TestGoogleSTTStreamReportsReference409ReconnectError(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
+		streamErrs:   []error{nil, status.Error(codes.Unavailable, "restart failed")},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil reconnect error", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want reconnect APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+}
+
 func TestGoogleSTTStreamRestartsAfterReferenceMaxSessionFinal(t *testing.T) {
 	firstStream := &fakeGoogleStreamingRecognizeClient{responses: []*speechpb.StreamingRecognizeResponse{
 		{SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN},
