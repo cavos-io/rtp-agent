@@ -571,7 +571,7 @@ func googleStreamingRecognitionFeaturesV2(s *GoogleSTT) *speechv2pb.StreamingRec
 		InterimResults:            s.interimResults,
 		EnableVoiceActivityEvents: s.voiceActivityEvents || timeout != nil,
 		VoiceActivityTimeout:      timeout,
-		EndpointingSensitivity:    googleEndpointingSensitivityV2(s.endpointingSensitivity),
+		EndpointingSensitivity:    googleEndpointingSensitivityV2(s.model, s.endpointingSensitivity),
 	}
 }
 
@@ -595,7 +595,10 @@ func googleVoiceActivityTimeoutV2(s *GoogleSTT) *speechv2pb.StreamingRecognition
 	return timeout
 }
 
-func googleEndpointingSensitivityV2(value string) speechv2pb.StreamingRecognitionFeatures_EndpointingSensitivity {
+func googleEndpointingSensitivityV2(model string, value string) speechv2pb.StreamingRecognitionFeatures_EndpointingSensitivity {
+	if model != "chirp_3" {
+		return speechv2pb.StreamingRecognitionFeatures_ENDPOINTING_SENSITIVITY_UNSPECIFIED
+	}
 	if enum, ok := speechv2pb.StreamingRecognitionFeatures_EndpointingSensitivity_value[value]; ok {
 		return speechv2pb.StreamingRecognitionFeatures_EndpointingSensitivity(enum)
 	}

@@ -1965,6 +1965,33 @@ func TestGoogleSTTStreamUsesReferenceV2EndpointingConfig(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamIgnoresReferenceV2EndpointingForNonChirp3(t *testing.T) {
+	streamClient := &fakeGoogleV2StreamingRecognizeClient{}
+	provider := newGoogleSTTWithV2Client(
+		&fakeGoogleV2SpeechClient{stream: streamClient},
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_2"),
+		WithGoogleSTTEndpointingSensitivity("ENDPOINTING_SENSITIVITY_SHORT"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if len(streamClient.sent) != 1 {
+		t.Fatalf("sent requests = %d, want initial v2 config", len(streamClient.sent))
+	}
+	streaming := streamClient.sent[0].GetStreamingConfig().GetStreamingFeatures()
+	if streaming == nil {
+		t.Fatal("streaming features = nil")
+	}
+	if got := streaming.GetEndpointingSensitivity(); got != speechv2pb.StreamingRecognitionFeatures_ENDPOINTING_SENSITIVITY_UNSPECIFIED {
+		t.Fatalf("endpointing sensitivity = %v, want unspecified for non-chirp_3 model", got)
+	}
+}
+
 func TestGoogleSTTStreamEmitsReferenceV2RecognitionUsage(t *testing.T) {
 	streamClient := &fakeGoogleV2StreamingRecognizeClient{
 		responses: []*speechv2pb.StreamingRecognizeResponse{
