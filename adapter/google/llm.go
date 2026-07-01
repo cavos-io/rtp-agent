@@ -245,7 +245,9 @@ func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[s
 		return
 	}
 	config.ResponseMIMEType = "application/json"
-	config.ResponseJsonSchema = format
+	if schema, ok := googleResponseFormatSchema(format); ok {
+		config.ResponseSchema = schema
+	}
 }
 
 func googleFloat32Param(value any) (float32, bool) {
@@ -291,6 +293,23 @@ func googleResponseSchemaParam(value any) (*genai.Schema, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func googleResponseFormatSchema(format map[string]any) (*genai.Schema, bool) {
+	if format == nil {
+		return nil, false
+	}
+	if format["type"] == "json_schema" {
+		jsonSchema, ok := format["json_schema"].(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		return googleResponseSchemaParam(jsonSchema["schema"])
+	}
+	if format["type"] == "json_object" || format["type"] == "text" {
+		return nil, false
+	}
+	return googleResponseSchemaParam(format)
 }
 
 func buildGoogleToolConfig(tools []llm.Tool, choice llm.ToolChoice) *genai.ToolConfig {

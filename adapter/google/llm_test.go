@@ -418,6 +418,47 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseSchemaExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsResponseFormatToReferenceSchema(t *testing.T) {
+	options := &llm.ChatOptions{
+		ResponseFormat: map[string]any{
+			"type": "json_schema",
+			"json_schema": map[string]any{
+				"name":   "WeatherAnswer",
+				"strict": true,
+				"schema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"summary": map[string]any{"type": "string"},
+					},
+					"required": []any{"summary"},
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ResponseMIMEType != "application/json" {
+		t.Fatalf("ResponseMIMEType = %q, want application/json", config.ResponseMIMEType)
+	}
+	if config.ResponseJsonSchema != nil {
+		t.Fatalf("ResponseJsonSchema = %#v, want nil because reference uses response_schema", config.ResponseJsonSchema)
+	}
+	if config.ResponseSchema == nil {
+		t.Fatal("ResponseSchema = nil, want schema from response_format")
+	}
+	if config.ResponseSchema.Type != genai.TypeObject {
+		t.Fatalf("ResponseSchema type = %q, want OBJECT", config.ResponseSchema.Type)
+	}
+	summary := config.ResponseSchema.Properties["summary"]
+	if summary == nil || summary.Type != genai.TypeString {
+		t.Fatalf("summary schema = %#v, want string", summary)
+	}
+	if len(config.ResponseSchema.Required) != 1 || config.ResponseSchema.Required[0] != "summary" {
+		t.Fatalf("ResponseSchema required = %#v, want summary", config.ResponseSchema.Required)
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false
