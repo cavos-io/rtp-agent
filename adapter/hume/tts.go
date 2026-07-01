@@ -176,27 +176,15 @@ func (t *HumeTTS) Model() string    { return "Octave" }
 func (t *HumeTTS) Provider() string { return "Hume" }
 
 func (t *HumeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	req, err := buildHumeTTSRequest(ctx, t, text)
-	if err != nil {
+	if _, err := buildHumeTTSRequest(ctx, t, text); err != nil {
 		return nil, err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Hume TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
+	opts := *t
 	return &humeTTSChunkedStream{
-		resp:        resp,
+		ctx:         ctx,
+		text:        text,
+		opts:        opts,
 		audioFormat: t.audioFormat,
 		sampleRate:  t.sampleRate,
 	}, nil
@@ -309,16 +297,27 @@ func (t *HumeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 type humeTTSChunkedStream struct {
 	resp          *http.Response
+	ctx           context.Context
+	text          string
+	opts          HumeTTS
 	audioFormat   string
 	sampleRate    int
 	scanner       *bufio.Scanner
 	decoder       codecs.AudioStreamDecoder
+	requested     bool
 	decodeStarted bool
+	closed        bool
 	hasAudio      bool
 	finalSent     bool
 }
 
 func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
@@ -367,6 +366,34 @@ func (s *humeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	s.finalSent = true
 	return &tts.SynthesizedAudio{IsFinal: true}, nil
+}
+
+func (s *humeTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildHumeTTSRequest(s.ctx, &s.opts, s.text)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Hume TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+
+	s.resp = resp
+	return nil
 }
 
 func (s *humeTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
@@ -429,6 +456,7 @@ func (s *humeTTSChunkedStream) collectJSONLineAudio() ([]byte, error) {
 }
 
 func (s *humeTTSChunkedStream) Close() error {
+	s.closed = true
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}
