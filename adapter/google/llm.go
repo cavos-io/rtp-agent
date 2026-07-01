@@ -247,6 +247,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleLabelsParam(params["labels"]); ok {
 		config.Labels = value
 	}
+	if value, ok := googleModelArmorConfigParam(params["model_armor_config"]); ok {
+		config.ModelArmorConfig = value
+	}
 	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
 		config.ResponseModalities = value
 	}
@@ -369,6 +372,11 @@ func googleLabelsParam(value any) (map[string]string, bool) {
 		return nil, false
 	}
 	return labels, true
+}
+
+func googleModelArmorConfigParam(value any) (*genai.ModelArmorConfig, bool) {
+	config, ok := value.(*genai.ModelArmorConfig)
+	return config, ok && config != nil
 }
 
 func googleServiceTierParam(value any) (genai.ServiceTier, bool) {

@@ -597,6 +597,24 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceLabelsExtra(t *testing.
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceModelArmorConfigExtra(t *testing.T) {
+	armor := &genai.ModelArmorConfig{
+		PromptTemplateName:   "projects/p/locations/us/templates/prompt",
+		ResponseTemplateName: "projects/p/locations/us/templates/response",
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"model_armor_config": armor,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ModelArmorConfig != armor {
+		t.Fatalf("ModelArmorConfig = %#v, want %#v", config.ModelArmorConfig, armor)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
