@@ -31,6 +31,39 @@ func (googleRequestTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
 
+type googleNestedSchemaTestTool struct{}
+
+func (googleNestedSchemaTestTool) ID() string          { return "schedule" }
+func (googleNestedSchemaTestTool) Name() string        { return "schedule" }
+func (googleNestedSchemaTestTool) Description() string { return "schedule a callback" }
+func (googleNestedSchemaTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"priority": map[string]any{
+				"type":        "string",
+				"description": "callback priority",
+				"enum":        []any{"low", "high"},
+			},
+			"window": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"start": map[string]any{"type": "string", "description": "start time"},
+				},
+				"required": []any{"start"},
+			},
+			"tags": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+			},
+		},
+		"required": []any{"priority", "window"},
+	}
+}
+func (googleNestedSchemaTestTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+
 func TestNewGoogleLLMUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "env-key")
 
@@ -191,6 +224,42 @@ func TestBuildGoogleFunctionDeclarationKeepsStringRequiredFields(t *testing.T) {
 	}
 	if declaration.Parameters.Properties["query"] == nil {
 		t.Fatalf("query property missing: %#v", declaration.Parameters.Properties)
+	}
+}
+
+func TestBuildGoogleFunctionDeclarationPreservesNestedSchema(t *testing.T) {
+	declaration := buildGoogleFunctionDeclaration(googleNestedSchemaTestTool{})
+
+	params := declaration.Parameters
+	if params.Type != genai.TypeObject {
+		t.Fatalf("parameters type = %q, want OBJECT", params.Type)
+	}
+	if !reflect.DeepEqual(params.Required, []string{"priority", "window"}) {
+		t.Fatalf("required = %#v, want priority/window", params.Required)
+	}
+	priority := params.Properties["priority"]
+	if priority == nil {
+		t.Fatalf("priority property missing: %#v", params.Properties)
+	}
+	if priority.Type != genai.TypeString || priority.Description != "callback priority" {
+		t.Fatalf("priority schema = %#v, want string with description", priority)
+	}
+	if !reflect.DeepEqual(priority.Enum, []string{"low", "high"}) {
+		t.Fatalf("priority enum = %#v, want low/high", priority.Enum)
+	}
+	window := params.Properties["window"]
+	if window == nil || window.Type != genai.TypeObject {
+		t.Fatalf("window schema = %#v, want object", window)
+	}
+	if !reflect.DeepEqual(window.Required, []string{"start"}) {
+		t.Fatalf("window required = %#v, want start", window.Required)
+	}
+	if window.Properties["start"] == nil || window.Properties["start"].Type != genai.TypeString {
+		t.Fatalf("window start schema = %#v, want string", window.Properties["start"])
+	}
+	tags := params.Properties["tags"]
+	if tags == nil || tags.Type != genai.TypeArray || tags.Items == nil || tags.Items.Type != genai.TypeString {
+		t.Fatalf("tags schema = %#v, want string array", tags)
 	}
 }
 
