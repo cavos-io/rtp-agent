@@ -260,6 +260,23 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: s.streaming, InterimResults: true, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
 }
 
+func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
+	s.mu.Lock()
+	for _, opt := range opts {
+		opt(s)
+	}
+	minConfidence := s.minConfidence
+	streams := make([]*googleSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		stream.updateMinConfidence(minConfidence)
+	}
+}
+
 func (s *GoogleSTT) Close() error {
 	s.mu.Lock()
 	s.closed = true
@@ -637,7 +654,7 @@ func (s *googleSTTStream) readLoop() {
 		}
 
 		if resp.GetSpeechEventType() == speechpb.StreamingRecognizeResponse_SPEECH_EVENT_UNSPECIFIED {
-			if data, eventType, ok := googleSpeechDataFromStreamingResultsOffset(resp.Results, s.minConfidence, s.currentStartTimeOffset(), s.language); ok {
+			if data, eventType, ok := googleSpeechDataFromStreamingResultsOffset(resp.Results, s.currentMinConfidence(), s.currentStartTimeOffset(), s.language); ok {
 				s.events <- &stt.SpeechEvent{
 					Type:         eventType,
 					Alternatives: []stt.SpeechData{data},
@@ -855,6 +872,18 @@ func (s *googleSTTStream) currentStartTimeOffset() float64 {
 	s.timingMu.Lock()
 	defer s.timingMu.Unlock()
 	return s.startTimeOffset
+}
+
+func (s *googleSTTStream) currentMinConfidence() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.minConfidence
+}
+
+func (s *googleSTTStream) updateMinConfidence(minConfidence float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.minConfidence = minConfidence
 }
 
 func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {

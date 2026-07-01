@@ -892,6 +892,41 @@ func TestGoogleSTTConfiguredMinConfidenceThresholdFiltersInterimTranscript(t *te
 	}
 }
 
+func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
+	release := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		recvBlock: release,
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "maybe",
+					Confidence: 0.6,
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
+	close(release)
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventInterimTranscript {
+		t.Fatalf("event = %#v, want interim transcript after lowered min confidence", event)
+	}
+	if got := event.Alternatives[0].Text; got != "maybe" {
+		t.Fatalf("transcript = %q, want maybe", got)
+	}
+}
+
 func TestGoogleSTTStreamConfidenceThresholdUsesAllReferenceResults(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
