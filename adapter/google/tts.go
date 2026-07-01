@@ -2,6 +2,7 @@ package google
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -9,9 +10,12 @@ import (
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type GoogleTTS struct {
@@ -294,13 +298,35 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	resp, err := t.client.SynthesizeSpeech(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, googleTTSSynthesisError(err)
 	}
 
 	return &googleTTSChunkedStream{
 		data:       resp.AudioContent,
 		sampleRate: t.audio.GetSampleRateHertz(),
 	}, nil
+}
+
+func googleTTSSynthesisError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	if st, ok := status.FromError(err); ok {
+		return llm.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleTTSStatusRetryable(st.Code()))
+	}
+	return err
+}
+
+func googleTTSStatusRetryable(code codes.Code) bool {
+	switch code {
+	case codes.InvalidArgument, codes.NotFound, codes.AlreadyExists, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.OutOfRange:
+		return false
+	default:
+		return true
+	}
 }
 
 func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {

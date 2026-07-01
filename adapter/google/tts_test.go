@@ -10,9 +10,12 @@ import (
 	"time"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestNewGoogleTTSRejectsMissingCredentialsFile(t *testing.T) {
@@ -355,6 +358,42 @@ func TestGoogleTTSUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if streamAudio.Frame.SampleRate != 16000 {
 		t.Fatalf("stream frame sample rate = %d, want 16000", streamAudio.Frame.SampleRate)
+	}
+}
+
+func TestGoogleTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	client := &fakeGoogleTTSClient{err: context.DeadlineExceeded}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGoogleTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
+	client := &fakeGoogleTTSClient{err: status.Error(codes.PermissionDenied, "permission denied")}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.PermissionDenied) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.PermissionDenied)
+	}
+	if statusErr.Retryable {
+		t.Fatal("status retryable = true, want false for permission denied")
 	}
 }
 
