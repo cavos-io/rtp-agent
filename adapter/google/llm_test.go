@@ -519,6 +519,32 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigDropsBudgetForGemini3LikeReference(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"thinking_config": map[string]any{
+				"thinking_budget":  256,
+				"include_thoughts": true,
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfigForModel("gemini-3-flash", options, "")
+
+	if config.ThinkingConfig == nil {
+		t.Fatal("ThinkingConfig = nil, want Gemini 3 reference thinking_level")
+	}
+	if config.ThinkingConfig.ThinkingBudget != nil {
+		t.Fatalf("ThinkingBudget = %#v, want nil for Gemini 3 reference", config.ThinkingConfig.ThinkingBudget)
+	}
+	if config.ThinkingConfig.IncludeThoughts {
+		t.Fatal("IncludeThoughts = true, want false because Gemini 3 reference sends thinking_level only")
+	}
+	if config.ThinkingConfig.ThinkingLevel != genai.ThinkingLevel("MINIMAL") {
+		t.Fatalf("ThinkingLevel = %q, want MINIMAL for Gemini 3 Flash default", config.ThinkingConfig.ThinkingLevel)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *testing.T) {
 	safety := []*genai.SafetySetting{{
 		Category:  genai.HarmCategoryHarassment,

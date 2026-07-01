@@ -72,7 +72,7 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	contents, systemInstructions := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
 
-	config := buildGoogleGenerateContentConfig(options, systemInstructions)
+	config := buildGoogleGenerateContentConfigForModel(l.model, options, systemInstructions)
 
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
 
@@ -110,6 +110,10 @@ func (l *GoogleLLM) thoughtSignaturesForStream() map[string][]byte {
 }
 
 func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructions string) *genai.GenerateContentConfig {
+	return buildGoogleGenerateContentConfigForModel("", options, systemInstructions)
+}
+
+func buildGoogleGenerateContentConfigForModel(model string, options *llm.ChatOptions, systemInstructions string) *genai.GenerateContentConfig {
 	config := &genai.GenerateContentConfig{}
 	if systemInstructions != "" {
 		config.SystemInstruction = genai.NewContentFromText(systemInstructions, genai.RoleUser)
@@ -130,6 +134,7 @@ func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructio
 	}
 
 	applyGoogleExtraParams(config, options.ExtraParams)
+	normalizeGoogleThinkingConfigForModel(config, model)
 	applyGoogleResponseFormat(config, options.ResponseFormat)
 	if config.CachedContent != "" {
 		config.SystemInstruction = nil
@@ -138,6 +143,31 @@ func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructio
 	}
 
 	return config
+}
+
+func normalizeGoogleThinkingConfigForModel(config *genai.GenerateContentConfig, model string) {
+	if config == nil || config.ThinkingConfig == nil || !googleIsGemini3Model(model) {
+		return
+	}
+	level := config.ThinkingConfig.ThinkingLevel
+	if level == "" {
+		if googleIsGemini3FlashModel(model) {
+			level = genai.ThinkingLevel("MINIMAL")
+		} else {
+			level = genai.ThinkingLevel("LOW")
+		}
+	}
+	config.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: level}
+}
+
+func googleIsGemini3Model(model string) bool {
+	model = strings.ToLower(model)
+	return strings.Contains(model, "gemini-3") || strings.HasPrefix(model, "gemini-3")
+}
+
+func googleIsGemini3FlashModel(model string) bool {
+	model = strings.ToLower(model)
+	return strings.Contains(model, "gemini-3-flash") || strings.HasPrefix(model, "gemini-3-flash")
 }
 
 func buildGoogleFunctionDeclaration(t llm.Tool) *genai.FunctionDeclaration {
