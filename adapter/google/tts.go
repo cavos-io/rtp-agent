@@ -296,13 +296,22 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		client: t.client,
 		voice:  t.voice,
 		prompt: t.prompt,
-		audio:  t.audio,
+		audio:  googleCloneAudioConfig(t.audio),
 	}
 	stream.cond = sync.NewCond(&stream.mu)
 	if !t.registerStream(stream) {
 		return nil, io.ErrClosedPipe
 	}
 	return stream, nil
+}
+
+func googleCloneAudioConfig(config *texttospeechpb.AudioConfig) *texttospeechpb.AudioConfig {
+	if config == nil {
+		return nil
+	}
+	clone := *config
+	clone.EffectsProfileId = append([]string(nil), config.GetEffectsProfileId()...)
+	return &clone
 }
 
 type googleTTSChunkedStream struct {
