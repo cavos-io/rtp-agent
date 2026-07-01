@@ -651,6 +651,24 @@ func TestGoogleTTSMarkupInputMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeRejectsSSMLWithMarkupLikeReference(t *testing.T) {
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	},
+		WithGoogleTTSSSML(true),
+		WithGoogleTTSMarkup(true),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "SSML support is not available for markup input") {
+		t.Fatalf("Synthesize error = %v, want reference SSML markup error", err)
+	}
+}
+
 func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

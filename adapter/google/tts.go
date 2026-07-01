@@ -350,6 +350,9 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	if t.ssml && t.markup {
+		return nil, errors.New("SSML support is not available for markup input")
+	}
 	req := &texttospeechpb.SynthesizeSpeechRequest{
 		Input:       googleTTSSynthesisInput(text, t.prompt, t.custom, t.ssml, t.markup),
 		Voice:       t.voice,
@@ -408,6 +411,9 @@ func googleTTSStatusRetryable(code codes.Code) bool {
 func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
+	}
+	if t.ssml && t.markup {
+		return nil, errors.New("SSML support is not available for markup input")
 	}
 	if t.ssml {
 		return nil, errors.New("SSML support is not available for streaming synthesis")
