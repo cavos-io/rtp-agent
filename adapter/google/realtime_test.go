@@ -9,6 +9,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"google.golang.org/genai"
 )
 
@@ -472,6 +473,36 @@ func TestGoogleRealtimeSessionSaySendsReferenceRealtimeText(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionPushVideoSendsReferenceJPEGInput(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.PushVideo(&images.VideoFrame{
+		Data:   []byte{255, 0, 0, 255},
+		Width:  1,
+		Height: 1,
+		Format: "rgba",
+	})
+	if err != nil {
+		t.Fatalf("PushVideo error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs = %d, want one video input", len(liveSession.inputs))
+	}
+	video := liveSession.inputs[0].Video
+	if video == nil || len(video.Data) == 0 || video.MIMEType != "image/jpeg" {
+		t.Fatalf("video input = %#v, want reference JPEG blob", video)
+	}
+}
+
 func TestGoogleRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -533,6 +564,7 @@ func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
 		},
 	}
 
+	expectGoogleRealtimeGeneration(t, session.EventCh())
 	textEvent := nextGoogleRealtimeTestEvent(t, session.EventCh())
 	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "hello" {
 		t.Fatalf("text event = %#v, want reference text delta", textEvent)
@@ -540,6 +572,147 @@ func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
 	audioEvent := nextGoogleRealtimeTestEvent(t, session.EventCh())
 	if audioEvent.Type != llm.RealtimeEventTypeAudio || !bytes.Equal(audioEvent.Data, audioData) {
 		t.Fatalf("audio event = %#v, want reference audio delta", audioEvent)
+	}
+}
+
+func TestGoogleRealtimeSessionAgentGenerationEmitsReferenceSpeechStartedFirst(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+
+	first := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if first.Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("first event = %#v, want speech_started before generation_created", first)
+	}
+	second := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if second.Type != llm.RealtimeEventTypeGenerationCreated || second.Generation == nil {
+		t.Fatalf("second event = %#v, want generation_created", second)
+	}
+}
+
+func TestGoogleRealtimeSessionCreatesReferenceGenerationForModelTurn(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	audioData := []byte{1, 2, 3, 4}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{
+				Parts: []*genai.Part{
+					{Text: "hello"},
+					{InlineData: &genai.Blob{Data: audioData, MIMEType: "audio/pcm;rate=24000"}},
+				},
+			},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	if generation.ResponseID == "" || generation.UserInitiated {
+		t.Fatalf("generation = %#v, want non-user-initiated response id", generation)
+	}
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if message.MessageID != generation.ResponseID {
+		t.Fatalf("message id = %q, want response id %q", message.MessageID, generation.ResponseID)
+	}
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "hello" {
+		t.Fatalf("message text = %q, want hello", text)
+	}
+	frame := nextGoogleRealtimeTestAudio(t, message.AudioCh)
+	if !bytes.Equal(frame.Data, audioData) || frame.SampleRate != 24000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 2 {
+		t.Fatalf("message audio frame = %#v, want 24 kHz mono provider bytes", frame)
+	}
+}
+
+func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		UsageMetadata: &genai.UsageMetadata{
+			PromptTokenCount:   3,
+			ResponseTokenCount: 5,
+			TotalTokenCount:    8,
+		},
+	}
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta
+
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeMetricsCollected || event.Metrics == nil {
+		t.Fatalf("metrics event = %#v, want metrics_collected", event)
+	}
+	metrics := event.Metrics
+	if metrics.RequestID != generation.ResponseID {
+		t.Fatalf("request id = %q, want generation response id %q", metrics.RequestID, generation.ResponseID)
+	}
+	if metrics.InputTokens != 3 || metrics.OutputTokens != 5 || metrics.TotalTokens != 8 {
+		t.Fatalf("tokens = input %d output %d total %d, want 3/5/8", metrics.InputTokens, metrics.OutputTokens, metrics.TotalTokens)
+	}
+	if metrics.Metadata == nil || metrics.Metadata.ModelName != model.Model() || metrics.Metadata.ModelProvider != model.Provider() {
+		t.Fatalf("metadata = %#v, want model/provider", metrics.Metadata)
+	}
+}
+
+func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ToolCall: &genai.LiveServerToolCall{
+			FunctionCalls: []*genai.FunctionCall{{
+				ID:   "call_1",
+				Name: "lookup",
+				Args: map[string]any{"query": "hello"},
+			}},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	call := nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
+	if call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
+		t.Fatalf("function call = %#v, want reference Gemini tool call", call)
 	}
 }
 
@@ -561,6 +734,7 @@ func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T)
 		},
 	}
 
+	expectGoogleRealtimeGeneration(t, session.EventCh())
 	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
 	if event.Type != llm.RealtimeEventTypeText || event.Text != "spoken words" {
 		t.Fatalf("output transcription event = %#v, want reference text delta", event)
@@ -593,6 +767,7 @@ func TestGoogleRealtimeSessionAccumulatesReferenceInputTranscription(t *testing.
 		ServerContent: &genai.LiveServerContent{TurnComplete: true},
 	}
 
+	expectGoogleRealtimeGeneration(t, session.EventCh())
 	first := nextGoogleRealtimeTestEvent(t, session.EventCh())
 	if first.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || first.InputTranscription == nil {
 		t.Fatalf("first transcript event = %#v, want input transcription", first)
@@ -621,6 +796,57 @@ func TestGoogleRealtimeSessionAccumulatesReferenceInputTranscription(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionInterruptedEmitsReferenceSpeechStarted(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{Interrupted: true},
+	}
+
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("interrupted event = %#v, want speech_started", event)
+	}
+}
+
+func TestGoogleRealtimeSessionTurnCompleteEmitsReferenceSpeechStopped(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{TurnComplete: true},
+	}
+
+	expectGoogleRealtimeGeneration(t, session.EventCh())
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeSpeechStopped || event.SpeechStopped == nil || event.SpeechStopped.UserTranscriptionEnabled {
+		t.Fatalf("turn complete event = %#v, want speech_stopped with transcription disabled", event)
+	}
+}
+
 func nextGoogleRealtimeTestEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent) llm.RealtimeEvent {
 	t.Helper()
 	select {
@@ -630,6 +856,62 @@ func nextGoogleRealtimeTestEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent)
 		t.Fatal("timed out waiting for realtime event")
 	}
 	return llm.RealtimeEvent{}
+}
+
+func expectGoogleRealtimeGeneration(t *testing.T, eventCh <-chan llm.RealtimeEvent) llm.GenerationCreatedEvent {
+	t.Helper()
+	event := nextGoogleRealtimeTestEvent(t, eventCh)
+	if event.Type == llm.RealtimeEventTypeSpeechStarted {
+		event = nextGoogleRealtimeTestEvent(t, eventCh)
+	}
+	if event.Type != llm.RealtimeEventTypeGenerationCreated || event.Generation == nil {
+		t.Fatalf("event = %#v, want generation_created", event)
+	}
+	return *event.Generation
+}
+
+func nextGoogleRealtimeTestMessage(t *testing.T, messageCh <-chan llm.MessageGeneration) llm.MessageGeneration {
+	t.Helper()
+	select {
+	case message := <-messageCh:
+		return message
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime message")
+	}
+	return llm.MessageGeneration{}
+}
+
+func nextGoogleRealtimeTestText(t *testing.T, textCh <-chan string) string {
+	t.Helper()
+	select {
+	case text := <-textCh:
+		return text
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime text")
+	}
+	return ""
+}
+
+func nextGoogleRealtimeTestAudio(t *testing.T, audioCh <-chan *audiomodel.AudioFrame) *audiomodel.AudioFrame {
+	t.Helper()
+	select {
+	case frame := <-audioCh:
+		return frame
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime audio")
+	}
+	return nil
+}
+
+func nextGoogleRealtimeTestFunction(t *testing.T, functionCh <-chan *llm.FunctionCall) *llm.FunctionCall {
+	t.Helper()
+	select {
+	case call := <-functionCh:
+		return call
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime function call")
+	}
+	return nil
 }
 
 type fakeGoogleRealtimeConnector struct {
