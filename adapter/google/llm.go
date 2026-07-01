@@ -552,7 +552,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 				for _, part := range cand.Content.Parts {
 					if part.Text != "" {
 						chunk.Delta.Content += part.Text
-					} else if part.FunctionCall != nil {
+					} else if part.FunctionCall != nil && !googleFunctionCallWillContinue(part.FunctionCall) {
 						args, _ := json.Marshal(part.FunctionCall.Args)
 						chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
 							Name:      part.FunctionCall.Name,
@@ -587,6 +587,10 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 		return call.ID
 	}
 	return "call_" + call.Name
+}
+
+func googleFunctionCallWillContinue(call *genai.FunctionCall) bool {
+	return call != nil && call.WillContinue != nil && *call.WillContinue
 }
 
 func googleChatChunkHasOutput(chunk *llm.ChatChunk) bool {

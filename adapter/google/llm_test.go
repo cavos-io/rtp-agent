@@ -430,6 +430,64 @@ func TestGoogleLLMStreamSkipsEmptyProviderDeltas(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamDelaysContinuingFunctionCall(t *testing.T) {
+	continuing := true
+	responses := []*genai.GenerateContentResponse{
+		{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							ID:           "call_lookup",
+							Name:         "lookup",
+							Args:         map[string]any{"query": "wea"},
+							WillContinue: &continuing,
+						},
+					}},
+				},
+			}},
+		},
+		{
+			Candidates: []*genai.Candidate{{
+				Content: &genai.Content{
+					Parts: []*genai.Part{{
+						FunctionCall: &genai.FunctionCall{
+							ID:   "call_lookup",
+							Name: "lookup",
+							Args: map[string]any{"query": "weather"},
+						},
+					}},
+				},
+			}},
+		},
+	}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want final tool call chunk", chunk)
+	}
+	call := chunk.Delta.ToolCalls[0]
+	if call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("Arguments = %q, want final arguments", call.Arguments)
+	}
+	if len(responses) != 0 {
+		t.Fatalf("remaining responses = %d, want continuing function call skipped", len(responses))
+	}
+}
+
 func assertGoogleTextPart(t *testing.T, parts []*genai.Part, index int, want string) {
 	t.Helper()
 	if len(parts) <= index {
