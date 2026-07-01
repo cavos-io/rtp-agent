@@ -18,7 +18,6 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -369,8 +368,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
 				Config:                    googleRecognitionConfigWithAlternatives(s, language, includeAlternativeLanguages),
 				InterimResults:            s.interimResults,
-				EnableVoiceActivityEvents: s.voiceActivityEvents || s.speechStartTimeout > 0 || s.speechEndTimeout > 0,
-				VoiceActivityTimeout:      googleVoiceActivityTimeout(s),
+				EnableVoiceActivityEvents: s.voiceActivityEvents,
 			},
 		},
 	})
@@ -501,20 +499,6 @@ func googleEnableWordTimeOffsets(s *GoogleSTT) bool {
 		return false
 	}
 	return s.enableWordTimeOffset
-}
-
-func googleVoiceActivityTimeout(s *GoogleSTT) *speechpb.StreamingRecognitionConfig_VoiceActivityTimeout {
-	if s.speechStartTimeout <= 0 && s.speechEndTimeout <= 0 {
-		return nil
-	}
-	timeout := &speechpb.StreamingRecognitionConfig_VoiceActivityTimeout{}
-	if s.speechStartTimeout > 0 {
-		timeout.SpeechStartTimeout = durationpb.New(s.speechStartTimeout)
-	}
-	if s.speechEndTimeout > 0 {
-		timeout.SpeechEndTimeout = durationpb.New(s.speechEndTimeout)
-	}
-	return timeout
 }
 
 func googleSpeechDataFromAlternative(alt *speechpb.SpeechRecognitionAlternative) stt.SpeechData {
