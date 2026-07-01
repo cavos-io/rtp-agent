@@ -339,6 +339,7 @@ type googleLLMStream struct {
 	stop              func()
 	closed            bool
 	responseGenerated bool
+	chunkEmitted      bool
 	requestID         string
 	thoughtMu         *sync.RWMutex
 	thoughtSignatures map[string][]byte
@@ -615,7 +616,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, io.EOF
 			}
-			return nil, googleLLMStreamError(err, !s.responseGenerated, requestID)
+			return nil, googleLLMStreamError(err, !s.chunkEmitted, requestID)
 		}
 
 		if resp.PromptFeedback != nil {
@@ -652,6 +653,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 					if chunk := googleChatChunkFromPart(part); chunk != nil {
 						chunk.ID = requestID
 						s.storeThoughtSignature(part, chunk)
+						s.chunkEmitted = true
 						s.pending = append(s.pending, chunk)
 					}
 				}

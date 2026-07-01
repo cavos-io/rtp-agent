@@ -749,6 +749,44 @@ func TestGoogleLLMStreamTreatsEmptyProviderPartAsGeneratedLikeReference(t *testi
 	}
 }
 
+func TestGoogleLLMStreamKeepsRetryableErrorAfterEmptyPartLikeReference(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{}},
+			},
+		}},
+	}}
+	readError := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) > 0 {
+				resp := responses[0]
+				responses = responses[1:]
+				return resp, nil, true
+			}
+			if !readError {
+				readError = true
+				return nil, genai.APIError{Code: 500, Message: "server broke", Status: "INTERNAL"}, true
+			}
+			return nil, nil, false
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = false, want true before any emitted chat chunk")
+	}
+}
+
 func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		Candidates: []*genai.Candidate{{
