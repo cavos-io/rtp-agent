@@ -771,7 +771,7 @@ func TestGoogleLLMStreamReportsCachedPromptTokens(t *testing.T) {
 	}
 }
 
-func TestGoogleLLMStreamDelaysContinuingFunctionCall(t *testing.T) {
+func TestGoogleLLMStreamEmitsContinuingFunctionCallLikeReference(t *testing.T) {
 	continuing := true
 	responses := []*genai.GenerateContentResponse{
 		{
@@ -818,14 +818,26 @@ func TestGoogleLLMStreamDelaysContinuingFunctionCall(t *testing.T) {
 		t.Fatalf("Next() error = %v", err)
 	}
 	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
-		t.Fatalf("chunk = %#v, want final tool call chunk", chunk)
+		t.Fatalf("chunk = %#v, want continuing tool call chunk", chunk)
 	}
 	call := chunk.Delta.ToolCalls[0]
+	if call.Arguments != `{"query":"wea"}` {
+		t.Fatalf("Arguments = %q, want continuing arguments", call.Arguments)
+	}
+
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("second chunk = %#v, want final tool call chunk", chunk)
+	}
+	call = chunk.Delta.ToolCalls[0]
 	if call.Arguments != `{"query":"weather"}` {
-		t.Fatalf("Arguments = %q, want final arguments", call.Arguments)
+		t.Fatalf("second Arguments = %q, want final arguments", call.Arguments)
 	}
 	if len(responses) != 0 {
-		t.Fatalf("remaining responses = %d, want continuing function call skipped", len(responses))
+		t.Fatalf("remaining responses = %d, want all function-call parts emitted", len(responses))
 	}
 }
 

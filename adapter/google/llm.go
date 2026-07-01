@@ -657,7 +657,7 @@ func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {
 		chunk.Delta.Content = part.Text
 		return chunk
 	}
-	if part.FunctionCall == nil || googleFunctionCallWillContinue(part.FunctionCall) {
+	if part.FunctionCall == nil {
 		return nil
 	}
 	args, _ := json.Marshal(part.FunctionCall.Args)
@@ -692,10 +692,6 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 		return call.ID
 	}
 	return "call_" + call.Name
-}
-
-func googleFunctionCallWillContinue(call *genai.FunctionCall) bool {
-	return call != nil && call.WillContinue != nil && *call.WillContinue
 }
 
 func googleChatChunkHasOutput(chunk *llm.ChatChunk) bool {
