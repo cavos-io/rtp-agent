@@ -14,6 +14,7 @@ import (
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/googleapis/gax-go/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -583,6 +584,59 @@ func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 	if got := config.GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
 		t.Fatalf("stream audio encoding = %v, want reference PCM fallback for MP3", got)
 	}
+}
+
+func TestGoogleTTSDecodesReferenceOggOpusEncoding(t *testing.T) {
+	opusData, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "change-sophie.opus"))
+	if err != nil {
+		t.Fatalf("read opus fixture: %v", err)
+	}
+
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: opusData},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: opusData}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_OGG_OPUS),
+		WithGoogleTTSSampleRate(48000),
+	)
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_OGG_OPUS {
+		t.Fatalf("synthesize audio encoding = %v, want OGG_OPUS", got)
+	}
+	batchAudio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("chunked Next returned error: %v", err)
+	}
+	assertGoogleDecodedOpusFrame(t, batchAudio, opusData)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetAudioEncoding(); got != texttospeech.AudioEncoding_OGG_OPUS {
+		t.Fatalf("stream audio encoding = %v, want OGG_OPUS", got)
+	}
+	streamAudio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("stream Next returned error: %v", err)
+	}
+	assertGoogleDecodedOpusFrame(t, streamAudio, opusData)
 }
 
 func TestGoogleTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
@@ -1474,6 +1528,29 @@ func TestGoogleTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func assertGoogleDecodedOpusFrame(t *testing.T, audio *tts.SynthesizedAudio, opusData []byte) {
+	t.Helper()
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %+v, want decoded opus audio frame", audio)
+	}
+	if audio.Frame.SampleRate != 48000 {
+		t.Fatalf("sample rate = %d, want decoded opus sample rate 48000", audio.Frame.SampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want decoded opus mono", audio.Frame.NumChannels)
+	}
+	if audio.Frame.SamplesPerChannel == 0 {
+		t.Fatal("decoded opus frame has no samples")
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded opus frame is empty")
+	}
+	prefixLen := min(len(audio.Frame.Data), len(opusData))
+	if bytes.Equal(audio.Frame.Data[:prefixLen], opusData[:prefixLen]) {
+		t.Fatal("frame data still contains compressed opus bytes")
 	}
 }
 

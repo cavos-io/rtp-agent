@@ -535,8 +535,8 @@ type googleTTSChunkedStream struct {
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.encoding == texttospeechpb.AudioEncoding_MP3 {
-		return s.nextMP3Audio()
+	if googleTTSUsesCompressedDecoder(s.encoding) {
+		return s.nextDecodedAudio()
 	}
 
 	if !s.headerStripped && len(s.data) >= 44 {
@@ -580,9 +580,9 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
-func (s *googleTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
+func (s *googleTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, error) {
 	if !s.decoderStarted {
-		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		s.decoder = googleTTSCompressedDecoder(s.encoding, s.sampleRate)
 		s.decoderStarted = true
 		go func() {
 			s.decoder.Push(s.data)
@@ -606,6 +606,20 @@ func (s *googleTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
 
 	s.emittedAudio = true
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func googleTTSUsesCompressedDecoder(encoding texttospeechpb.AudioEncoding) bool {
+	return encoding == texttospeechpb.AudioEncoding_MP3 || encoding == texttospeechpb.AudioEncoding_OGG_OPUS
+}
+
+func googleTTSCompressedDecoder(encoding texttospeechpb.AudioEncoding, sampleRate int32) codecs.AudioStreamDecoder {
+	if encoding == texttospeechpb.AudioEncoding_OGG_OPUS {
+		if sampleRate <= 0 {
+			sampleRate = 24000
+		}
+		return codecs.NewOpusAudioStreamDecoder(int(sampleRate), 1)
+	}
+	return codecs.NewMP3AudioStreamDecoder()
 }
 
 func (s *googleTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
@@ -887,19 +901,24 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		if len(data) == 0 {
 			continue
 		}
+		frame, err := googleTTSStreamingAudioFrame(data, s.audio.GetAudioEncoding(), s.audio.GetSampleRateHertz())
+		if err != nil {
+			_ = stream.CloseSend()
+			s.mu.Lock()
+			if len(s.streams) > 0 && s.streams[0] == stream {
+				s.streams = s.streams[1:]
+			}
+			delete(s.segments, stream)
+			s.markClosedLocked()
+			s.mu.Unlock()
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("google TTS streaming audio decode: %v", err))
+		}
 		s.mu.Lock()
 		if segment := s.segments[stream]; segment != nil {
 			segment.emittedAudio = true
 		}
 		s.mu.Unlock()
-		return &tts.SynthesizedAudio{
-			Frame: &model.AudioFrame{
-				Data:              data,
-				SampleRate:        uint32(s.audio.GetSampleRateHertz()),
-				NumChannels:       1,
-				SamplesPerChannel: uint32(len(data) / 2),
-			},
-		}, nil
+		return &tts.SynthesizedAudio{Frame: frame}, nil
 	}
 }
 
@@ -921,6 +940,21 @@ func googleTTSStreamingAudioEncoding(encoding texttospeechpb.AudioEncoding) text
 	default:
 		return texttospeechpb.AudioEncoding_PCM
 	}
+}
+
+func googleTTSStreamingAudioFrame(data []byte, encoding texttospeechpb.AudioEncoding, sampleRate int32) (*model.AudioFrame, error) {
+	if encoding == texttospeechpb.AudioEncoding_OGG_OPUS {
+		if sampleRate <= 0 {
+			sampleRate = 24000
+		}
+		return codecs.DecodeOpusAudio(data, int(sampleRate), 1)
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        uint32(sampleRate),
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(data) / 2),
+	}, nil
 }
 
 func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionParams {
