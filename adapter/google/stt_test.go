@@ -839,8 +839,8 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	if event.Type != stt.SpeechEventFinalTranscript || event.Alternatives[0].Text != "streamed" {
 		t.Fatalf("event = %#v, want final streamed transcript", event)
 	}
-	if event.Alternatives[0].Language != "id-ID" {
-		t.Fatalf("language = %q, want id-ID", event.Alternatives[0].Language)
+	if event.Alternatives[0].Language != "" {
+		t.Fatalf("language = %q, want empty provider language", event.Alternatives[0].Language)
 	}
 
 	if err := stream.Close(); err != nil {
@@ -848,6 +848,50 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 	if !streamClient.closed {
 		t.Fatal("Close did not close streaming client")
+	}
+}
+
+func TestGoogleSTTStreamPreservesReferenceEmptyProviderLanguage(t *testing.T) {
+	tests := []struct {
+		name      string
+		isFinal   bool
+		eventType stt.SpeechEventType
+	}{
+		{name: "interim", eventType: stt.SpeechEventInterimTranscript},
+		{name: "final", isFinal: true, eventType: stt.SpeechEventFinalTranscript},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			streamClient := &fakeGoogleStreamingRecognizeClient{
+				responses: []*speechpb.StreamingRecognizeResponse{{
+					Results: []*speechpb.StreamingRecognitionResult{{
+						IsFinal: tt.isFinal,
+						Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+							Transcript: "streamed",
+							Confidence: 0.9,
+						}},
+					}},
+				}},
+			}
+			provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+			stream, err := provider.Stream(context.Background(), "en-US")
+			if err != nil {
+				t.Fatalf("Stream returned error: %v", err)
+			}
+			defer stream.Close()
+
+			event, err := stream.Next()
+			if err != nil {
+				t.Fatalf("Next returned error: %v", err)
+			}
+			if event.Type != tt.eventType || len(event.Alternatives) != 1 {
+				t.Fatalf("event = %#v, want one %s transcript", event, tt.eventType)
+			}
+			if got := event.Alternatives[0].Language; got != "" {
+				t.Fatalf("language = %q, want empty provider language", got)
+			}
+		})
 	}
 }
 
