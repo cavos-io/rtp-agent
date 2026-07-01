@@ -814,6 +814,33 @@ func TestGoogleTTSVoiceCloneKeyMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSEmptyVoiceCloneKeyMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSVoiceCloneKey(""))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	voice := client.request.GetVoice()
+	if voice.GetVoiceClone() == nil {
+		t.Fatalf("voice clone = nil, want explicit empty clone key")
+	}
+	if voice.GetVoiceClone().GetVoiceCloningKey() != "" {
+		t.Fatalf("voice clone key = %q, want empty", voice.GetVoiceClone().GetVoiceCloningKey())
+	}
+	if voice.GetName() != "" {
+		t.Fatalf("voice name = %q, want empty when voice clone is configured", voice.GetName())
+	}
+	if voice.GetModelName() != "" {
+		t.Fatalf("voice model = %q, want empty for Chirp 3 clone voice", voice.GetModelName())
+	}
+}
+
 func TestGoogleTTSSSMLInputMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

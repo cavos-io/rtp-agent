@@ -109,10 +109,8 @@ func WithGoogleTTSVoice(voice string) GoogleTTSOption {
 
 func WithGoogleTTSVoiceCloneKey(key string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if key != "" {
-			cfg.cloneKey = key
-			cfg.cloneKeySet = true
-		}
+		cfg.cloneKey = key
+		cfg.cloneKeySet = true
 	}
 }
 
@@ -1010,7 +1008,7 @@ func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionPar
 		Name:         cfg.voice,
 		SsmlGender:   cfg.gender,
 	}
-	if cfg.cloneKey != "" {
+	if cfg.cloneKeySet {
 		voice.Name = ""
 		voice.VoiceClone = &texttospeechpb.VoiceCloneParams{VoiceCloningKey: cfg.cloneKey}
 	}
