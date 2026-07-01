@@ -27,32 +27,44 @@ var (
 )
 
 type RealtimeModel struct {
-	apiKey                   string
-	model                    string
-	voice                    string
-	language                 string
-	vertexAI                 bool
-	project                  string
-	location                 string
-	modalities               []string
-	turnDetection            bool
-	inputAudioTranscription  bool
-	outputAudioTranscription bool
+	apiKey                    string
+	model                     string
+	voice                     string
+	language                  string
+	vertexAI                  bool
+	project                   string
+	location                  string
+	modalities                []string
+	turnDetection             bool
+	inputAudioTranscription   bool
+	outputAudioTranscription  bool
+	temperature               float64
+	temperatureSet            bool
+	toolBehavior              any
+	toolBehaviorSet           bool
+	toolResponseScheduling    any
+	toolResponseSchedulingSet bool
 }
 
 type GoogleRealtimeOption func(*googleRealtimeOptions)
 
 type googleRealtimeOptions struct {
-	model                    string
-	voice                    string
-	language                 string
-	vertexAI                 *bool
-	project                  string
-	location                 string
-	modalities               []string
-	turnDetection            *bool
-	inputAudioTranscription  *bool
-	outputAudioTranscription *bool
+	model                     string
+	voice                     string
+	language                  string
+	vertexAI                  *bool
+	project                   string
+	location                  string
+	modalities                []string
+	turnDetection             *bool
+	inputAudioTranscription   *bool
+	outputAudioTranscription  *bool
+	temperature               float64
+	temperatureSet            bool
+	toolBehavior              any
+	toolBehaviorSet           bool
+	toolResponseScheduling    any
+	toolResponseSchedulingSet bool
 }
 
 func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
@@ -116,6 +128,27 @@ func WithGoogleRealtimeInputAudioTranscription(enabled bool) GoogleRealtimeOptio
 func WithGoogleRealtimeOutputAudioTranscription(enabled bool) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.outputAudioTranscription = &enabled
+	}
+}
+
+func WithGoogleRealtimeTemperature(temperature float64) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.temperature = temperature
+		options.temperatureSet = true
+	}
+}
+
+func WithGoogleRealtimeToolBehavior(behavior any) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.toolBehavior = behavior
+		options.toolBehaviorSet = true
+	}
+}
+
+func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.toolResponseScheduling = scheduling
+		options.toolResponseSchedulingSet = true
 	}
 }
 
@@ -188,18 +221,49 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		outputAudioTranscription = *options.outputAudioTranscription
 	}
 	return &RealtimeModel{
-		apiKey:                   apiKey,
-		model:                    modelName,
-		voice:                    voice,
-		language:                 options.language,
-		vertexAI:                 vertexAI,
-		project:                  project,
-		location:                 location,
-		modalities:               modalities,
-		turnDetection:            turnDetection,
-		inputAudioTranscription:  inputAudioTranscription,
-		outputAudioTranscription: outputAudioTranscription,
+		apiKey:                    apiKey,
+		model:                     modelName,
+		voice:                     voice,
+		language:                  options.language,
+		vertexAI:                  vertexAI,
+		project:                   project,
+		location:                  location,
+		modalities:                modalities,
+		turnDetection:             turnDetection,
+		inputAudioTranscription:   inputAudioTranscription,
+		outputAudioTranscription:  outputAudioTranscription,
+		temperature:               options.temperature,
+		temperatureSet:            options.temperatureSet,
+		toolBehavior:              options.toolBehavior,
+		toolBehaviorSet:           options.toolBehaviorSet,
+		toolResponseScheduling:    options.toolResponseScheduling,
+		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
 	}, nil
+}
+
+func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
+	if m == nil {
+		return
+	}
+	options := googleRealtimeOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if options.voice != "" {
+		m.voice = options.voice
+	}
+	if options.temperatureSet {
+		m.temperature = options.temperature
+		m.temperatureSet = true
+	}
+	if options.toolBehaviorSet {
+		m.toolBehavior = options.toolBehavior
+		m.toolBehaviorSet = true
+	}
+	if options.toolResponseSchedulingSet {
+		m.toolResponseScheduling = options.toolResponseScheduling
+		m.toolResponseSchedulingSet = true
+	}
 }
 
 func googleRealtimeDefaultVertexAI() bool {

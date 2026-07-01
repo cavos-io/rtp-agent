@@ -143,3 +143,30 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 		t.Fatalf("language = %q, want explicit reference language", model.language)
 	}
 }
+
+func TestGoogleRealtimeUpdateOptionsMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	model.UpdateOptions(
+		WithGoogleRealtimeVoice("Kore"),
+		WithGoogleRealtimeTemperature(0.4),
+		WithGoogleRealtimeToolBehavior("BLOCKING"),
+		WithGoogleRealtimeToolResponseScheduling("WHEN_IDLE"),
+	)
+
+	if model.voice != "Kore" {
+		t.Fatalf("voice = %q, want updated voice", model.voice)
+	}
+	if !model.temperatureSet || model.temperature != 0.4 {
+		t.Fatalf("temperature = (%v, %v), want explicit 0.4", model.temperatureSet, model.temperature)
+	}
+	if model.toolBehavior != "BLOCKING" {
+		t.Fatalf("toolBehavior = %#v, want BLOCKING", model.toolBehavior)
+	}
+	if model.toolResponseScheduling != "WHEN_IDLE" {
+		t.Fatalf("toolResponseScheduling = %#v, want WHEN_IDLE", model.toolResponseScheduling)
+	}
+}
