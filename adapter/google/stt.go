@@ -280,11 +280,12 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	explicitLanguage := language != ""
 	if language == "" {
 		language = "en-US"
 	}
 
-	stream, err := s.newStreamingRecognizeStream(ctx, language)
+	stream, err := s.newStreamingRecognizeStream(ctx, language, !explicitLanguage)
 	if err != nil {
 		return nil, err
 	}
@@ -294,13 +295,14 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 
 	gs := &googleSTTStream{
-		owner:         s,
-		ctx:           ctx,
-		stream:        stream,
-		language:      language,
-		minConfidence: s.minConfidence,
-		events:        make(chan *stt.SpeechEvent, 10),
-		errCh:         make(chan error, 1),
+		owner:                       s,
+		ctx:                         ctx,
+		stream:                      stream,
+		language:                    language,
+		includeAlternativeLanguages: !explicitLanguage,
+		minConfidence:               s.minConfidence,
+		events:                      make(chan *stt.SpeechEvent, 10),
+		errCh:                       make(chan error, 1),
 	}
 	if !s.registerStream(gs) {
 		return nil, io.ErrClosedPipe
@@ -310,7 +312,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	return gs, nil
 }
 
-func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language string) (speechpb.Speech_StreamingRecognizeClient, error) {
+func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language string, includeAlternativeLanguages bool) (speechpb.Speech_StreamingRecognizeClient, error) {
 	stream, err := s.client.StreamingRecognize(ctx)
 	if err != nil {
 		return nil, googleSTTStreamError(err)
@@ -318,7 +320,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 	err = stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
-				Config:                    googleRecognitionConfig(s, language),
+				Config:                    googleRecognitionConfigWithAlternatives(s, language, includeAlternativeLanguages),
 				InterimResults:            s.interimResults,
 				EnableVoiceActivityEvents: s.voiceActivityEvents || s.speechStartTimeout > 0 || s.speechEndTimeout > 0,
 				VoiceActivityTimeout:      googleVoiceActivityTimeout(s),
@@ -336,6 +338,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	explicitLanguage := language != ""
 	if language == "" {
 		language = "en-US"
 	}
@@ -346,7 +349,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 
 	resp, err := s.client.Recognize(ctx, &speechpb.RecognizeRequest{
-		Config: googleRecognitionConfig(s, language),
+		Config: googleRecognitionConfigWithAlternatives(s, language, !explicitLanguage),
 		Audio: &speechpb.RecognitionAudio{
 			AudioSource: &speechpb.RecognitionAudio_Content{
 				Content: buf.Bytes(),
@@ -365,12 +368,16 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 }
 
 func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.RecognitionConfig {
+	return googleRecognitionConfigWithAlternatives(s, language, true)
+}
+
+func googleRecognitionConfigWithAlternatives(s *GoogleSTT, language string, includeAlternativeLanguages bool) *speechpb.RecognitionConfig {
 	return &speechpb.RecognitionConfig{
 		Encoding:                   speechpb.RecognitionConfig_LINEAR16,
 		SampleRateHertz:            s.sampleRate,
 		AudioChannelCount:          1,
 		LanguageCode:               language,
-		AlternativeLanguageCodes:   googleAlternativeLanguageCodes(s),
+		AlternativeLanguageCodes:   googleAlternativeLanguageCodes(s, includeAlternativeLanguages),
 		EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
 		EnableWordConfidence:       s.enableWordConfidence,
 		EnableAutomaticPunctuation: s.punctuate,
@@ -381,8 +388,8 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 	}
 }
 
-func googleAlternativeLanguageCodes(s *GoogleSTT) []string {
-	if s == nil || !s.detectLanguage {
+func googleAlternativeLanguageCodes(s *GoogleSTT, include bool) []string {
+	if s == nil || !include || !s.detectLanguage {
 		return nil
 	}
 	return append([]string(nil), s.alternativeLanguages...)
@@ -528,21 +535,22 @@ func googleSpeakerID(word *speechpb.WordInfo) string {
 }
 
 type googleSTTStream struct {
-	mu               sync.Mutex
-	owner            *GoogleSTT
-	ctx              context.Context
-	stream           speechpb.Speech_StreamingRecognizeClient
-	language         string
-	minConfidence    float64
-	events           chan *stt.SpeechEvent
-	errCh            chan error
-	closed           bool
-	inputClosed      bool
-	audioPushed      bool
-	pushedSampleRate uint32
-	timingMu         sync.Mutex
-	startTimeOffset  float64
-	startTime        float64
+	mu                          sync.Mutex
+	owner                       *GoogleSTT
+	ctx                         context.Context
+	stream                      speechpb.Speech_StreamingRecognizeClient
+	language                    string
+	includeAlternativeLanguages bool
+	minConfidence               float64
+	events                      chan *stt.SpeechEvent
+	errCh                       chan error
+	closed                      bool
+	inputClosed                 bool
+	audioPushed                 bool
+	pushedSampleRate            uint32
+	timingMu                    sync.Mutex
+	startTimeOffset             float64
+	startTime                   float64
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -614,7 +622,7 @@ func (s *googleSTTStream) shouldRestartAfterConflict(err error) bool {
 
 func (s *googleSTTStream) restartStream(old speechpb.Speech_StreamingRecognizeClient) bool {
 	_ = old.CloseSend()
-	stream, err := s.owner.newStreamingRecognizeStream(s.ctx, s.language)
+	stream, err := s.owner.newStreamingRecognizeStream(s.ctx, s.language, s.includeAlternativeLanguages)
 	if err != nil {
 		return false
 	}

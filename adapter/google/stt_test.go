@@ -519,6 +519,31 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamExplicitLanguageOverridesReferenceAlternatives(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTAlternativeLanguages("es-ES", "fr-FR"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "id-ID")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if len(streamClient.sent) != 1 {
+		t.Fatalf("initial sends = %d, want 1", len(streamClient.sent))
+	}
+	config := streamClient.sent[0].GetStreamingConfig().GetConfig()
+	if config.GetLanguageCode() != "id-ID" {
+		t.Fatalf("language code = %q, want id-ID", config.GetLanguageCode())
+	}
+	if len(config.GetAlternativeLanguageCodes()) != 0 {
+		t.Fatalf("alternative languages = %#v, want none for explicit stream language", config.GetAlternativeLanguageCodes())
+	}
+}
+
 func TestGoogleSTTStreamConfigUsesReferenceInterimResultsOption(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(
