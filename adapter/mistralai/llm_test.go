@@ -86,7 +86,11 @@ func TestMistralLLMUpdateOptionsAppliesReferenceSamplingParams(t *testing.T) {
 		WithMistralLLMMaxCompletionTokens(256),
 	)
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	mistralLLMRunChat(
+		provider,
+		llm.WithTools([]llm.Tool{mistralLLMRequestTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
 
 	for _, want := range []string{`"temperature":0.3`, `"top_p":0.4`, `"max_tokens":256`} {
 		if !strings.Contains(capture.requestBody, want) {
@@ -110,7 +114,7 @@ func TestMistralLLMUpdateOptionsAppliesReferencePenaltyAndSeedParams(t *testing.
 		WithMistralLLMRandomSeed(42),
 	)
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	mistralLLMRunChat(provider, llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	for _, want := range []string{`"presence_penalty":0.2`, `"frequency_penalty":0.5`, `"random_seed":42`} {
 		if !strings.Contains(capture.requestBody, want) {
@@ -127,7 +131,7 @@ func TestMistralLLMUpdateOptionsAppliesReferenceToolChoice(t *testing.T) {
 	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
 	provider.UpdateOptions(WithMistralLLMToolChoice("none"))
 
-	_, _ = provider.Chat(context.Background(), llm.NewChatContext(), llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
+	mistralLLMRunChat(provider, llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}))
 
 	if !strings.Contains(capture.requestBody, `"tool_choice":"none"`) {
 		t.Fatalf("request body = %s, want tool_choice none", capture.requestBody)
@@ -141,9 +145,8 @@ func TestMistralLLMSerializesReferenceProviderTools(t *testing.T) {
 	}
 	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
 
-	_, _ = provider.Chat(
-		context.Background(),
-		llm.NewChatContext(),
+	mistralLLMRunChat(
+		provider,
 		llm.WithTools([]llm.Tool{
 			&WebSearchTool{},
 			&DocumentLibraryTool{LibraryIDs: []string{"library-a", "library-b"}},
@@ -178,9 +181,8 @@ func TestMistralLLMProviderToolsMapRequiredToolChoiceToAuto(t *testing.T) {
 	provider := NewMistralLLM("test-key", "", withMistralLLMHTTPClient(capture))
 	provider.UpdateOptions(WithMistralLLMToolChoice("required"))
 
-	_, _ = provider.Chat(
-		context.Background(),
-		llm.NewChatContext(),
+	mistralLLMRunChat(
+		provider,
 		llm.WithTools([]llm.Tool{&WebSearchTool{}}),
 		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
 	)
@@ -191,6 +193,23 @@ func TestMistralLLMProviderToolsMapRequiredToolChoiceToAuto(t *testing.T) {
 	if strings.Contains(capture.requestBody, `"tool_choice":"required"`) {
 		t.Fatalf("request body = %s, want required remapped for provider tools", capture.requestBody)
 	}
+}
+
+func mistralLLMTestChatContext() *llm.ChatContext {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	return chatCtx
+}
+
+func mistralLLMRunChat(provider *MistralLLM, opts ...llm.ChatOption) {
+	stream, err := provider.Chat(context.Background(), mistralLLMTestChatContext(), opts...)
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+	_, _ = stream.Next()
 }
 
 type mistralLLMCaptureHTTPClient struct {
@@ -213,4 +232,22 @@ func (c *mistralLLMCaptureHTTPClient) Do(req *http.Request) (*http.Response, err
 		Body:       io.NopCloser(strings.NewReader(c.responseBody)),
 		Request:    req,
 	}, nil
+}
+
+type mistralLLMRequestTestTool struct{}
+
+func (mistralLLMRequestTestTool) ID() string          { return "lookup" }
+func (mistralLLMRequestTestTool) Name() string        { return "lookup" }
+func (mistralLLMRequestTestTool) Description() string { return "Lookup things." }
+func (mistralLLMRequestTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string"},
+		},
+		"required": []string{"query"},
+	}
+}
+func (mistralLLMRequestTestTool) Execute(context.Context, string) (string, error) {
+	return "", nil
 }
