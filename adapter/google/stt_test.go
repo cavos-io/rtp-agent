@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -440,6 +441,24 @@ func TestNewGoogleSTTRejectsMissingCredentialsFile(t *testing.T) {
 	_, err := NewGoogleSTT("/definitely/missing/google-credentials.json")
 	if err == nil {
 		t.Fatal("NewGoogleSTT returned nil error, want missing credentials error")
+	}
+}
+
+func TestNewGoogleSTTRejectsReferenceAdaptationVersionMismatch(t *testing.T) {
+	_, err := NewGoogleSTT("",
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTAdaptation(&speechpb.SpeechAdaptation{}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "adaptation must be cloud_speech_v2.SpeechAdaptation for v2 models") {
+		t.Fatalf("v2 adaptation mismatch error = %v, want reference v2 adaptation type error", err)
+	}
+
+	_, err = NewGoogleSTT("",
+		WithGoogleSTTModel("latest_long"),
+		WithGoogleSTTAdaptationV2(&speechv2pb.SpeechAdaptation{}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "adaptation must be resource_v1.SpeechAdaptation for v1 models") {
+		t.Fatalf("v1 adaptation mismatch error = %v, want reference v1 adaptation type error", err)
 	}
 }
 

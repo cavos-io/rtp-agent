@@ -232,6 +232,9 @@ func WithGoogleSTTLocation(location string) GoogleSTTOption {
 func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*GoogleSTT, error) {
 	ctx := context.Background()
 	provider := newGoogleSTTWithClient(nil, providerOpts...)
+	if err := googleSTTValidateAdaptation(provider); err != nil {
+		return nil, err
+	}
 	if provider.project == "" {
 		project, err := googleProjectFromCredentialsFile(credentialsFile)
 		if err != nil {
@@ -287,6 +290,19 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 	}
 	googleSTTSanitizeEndpointing(provider)
 	return provider
+}
+
+func googleSTTValidateAdaptation(s *GoogleSTT) error {
+	if googleSTTUsesV2(s.model) {
+		if s.adaptation != nil {
+			return errors.New("adaptation must be cloud_speech_v2.SpeechAdaptation for v2 models")
+		}
+		return nil
+	}
+	if s.adaptationV2 != nil {
+		return errors.New("adaptation must be resource_v1.SpeechAdaptation for v1 models")
+	}
+	return nil
 }
 
 func newGoogleSTTWithV2Client(client googleSpeechV2Client, opts ...GoogleSTTOption) *GoogleSTT {
