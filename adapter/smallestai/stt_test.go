@@ -275,6 +275,24 @@ func TestSmallestAISTTStreamAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestSmallestAISTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	provider := NewSmallestAISTT("test-key",
+		withSmallestAISTTWebsocketDialer(func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.New("smallestai stt dial failed")
+		}),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en")
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSmallestAISTTUnexpectedNormalCloseReturnsError(t *testing.T) {
 	dialer := newSmallestAISTTTestWebsocketDialer(t, func(conn *websocket.Conn, _ *http.Request) {
 		_ = conn.WriteControl(
