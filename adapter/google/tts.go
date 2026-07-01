@@ -30,6 +30,7 @@ type GoogleTTS struct {
 	audio   *texttospeechpb.AudioConfig
 	custom  *texttospeechpb.CustomPronunciations
 	ssml    bool
+	markup  bool
 }
 
 type googleTTSClient interface {
@@ -65,6 +66,7 @@ type googleTTSConfig struct {
 	custom       *texttospeechpb.CustomPronunciations
 	customSet    bool
 	enableSSML   bool
+	useMarkup    bool
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
@@ -169,6 +171,12 @@ func WithGoogleTTSSSML(enabled bool) GoogleTTSOption {
 	}
 }
 
+func WithGoogleTTSMarkup(enabled bool) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.useMarkup = enabled
+	}
+}
+
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
@@ -210,6 +218,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		prompt:  cfg.prompt,
 		custom:  cfg.custom,
 		ssml:    cfg.enableSSML,
+		markup:  cfg.useMarkup,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
 			SampleRateHertz:  cfg.sampleRate,
@@ -339,7 +348,7 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		return nil, io.ErrClosedPipe
 	}
 	req := &texttospeechpb.SynthesizeSpeechRequest{
-		Input:       googleTTSSynthesisInput(text, t.prompt, t.custom, t.ssml),
+		Input:       googleTTSSynthesisInput(text, t.prompt, t.custom, t.ssml, t.markup),
 		Voice:       t.voice,
 		AudioConfig: t.audio,
 	}
@@ -356,12 +365,14 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}, nil
 }
 
-func googleTTSSynthesisInput(text string, prompt *string, custom *texttospeechpb.CustomPronunciations, ssml bool) *texttospeechpb.SynthesisInput {
+func googleTTSSynthesisInput(text string, prompt *string, custom *texttospeechpb.CustomPronunciations, ssml bool, markup bool) *texttospeechpb.SynthesisInput {
 	input := &texttospeechpb.SynthesisInput{
 		Prompt:               prompt,
 		CustomPronunciations: custom,
 	}
-	if ssml {
+	if markup {
+		input.InputSource = &texttospeechpb.SynthesisInput_Markup{Markup: text}
+	} else if ssml {
 		input.InputSource = &texttospeechpb.SynthesisInput_Ssml{Ssml: "<speak>" + text + "</speak>"}
 	} else {
 		input.InputSource = &texttospeechpb.SynthesisInput_Text{Text: text}

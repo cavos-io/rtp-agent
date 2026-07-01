@@ -582,6 +582,26 @@ func TestGoogleTTSSSMLInputMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSMarkupInputMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSMarkup(true))
+
+	stream, err := provider.Synthesize(context.Background(), "<speak-as interpret-as=\"characters\">ABC</speak-as>")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if got := client.request.GetInput().GetMarkup(); got != "<speak-as interpret-as=\"characters\">ABC</speak-as>" {
+		t.Fatalf("markup input = %q, want raw markup text", got)
+	}
+	if got := client.request.GetInput().GetText(); got != "" {
+		t.Fatalf("text input = %q, want empty when markup is enabled", got)
+	}
+}
+
 func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
