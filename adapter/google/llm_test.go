@@ -473,6 +473,29 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceServiceTierExtra(t *tes
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"thinking_config": map[string]any{
+				"thinking_budget":  0,
+				"include_thoughts": true,
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ThinkingConfig == nil {
+		t.Fatal("ThinkingConfig = nil, want reference thinking_config extra")
+	}
+	if config.ThinkingConfig.ThinkingBudget == nil || *config.ThinkingConfig.ThinkingBudget != 0 {
+		t.Fatalf("ThinkingBudget = %#v, want 0", config.ThinkingConfig.ThinkingBudget)
+	}
+	if !config.ThinkingConfig.IncludeThoughts {
+		t.Fatal("IncludeThoughts = false, want true")
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false

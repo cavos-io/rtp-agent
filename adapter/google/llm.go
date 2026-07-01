@@ -241,6 +241,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleServiceTierParam(params["service_tier"]); ok {
 		config.ServiceTier = value
 	}
+	if value, ok := googleThinkingConfigParam(params["thinking_config"]); ok {
+		config.ThinkingConfig = value
+	}
 }
 
 func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[string]any) {
@@ -324,6 +327,46 @@ func googleServiceTierParam(value any) (genai.ServiceTier, bool) {
 			return "", false
 		}
 		return genai.ServiceTier(tier), true
+	default:
+		return "", false
+	}
+}
+
+func googleThinkingConfigParam(value any) (*genai.ThinkingConfig, bool) {
+	switch cfg := value.(type) {
+	case *genai.ThinkingConfig:
+		return cfg, cfg != nil
+	case map[string]any:
+		config := &genai.ThinkingConfig{}
+		if value, ok := googleInt32Param(cfg["thinking_budget"]); ok {
+			config.ThinkingBudget = &value
+		}
+		if value, ok := googleBoolParam(cfg["include_thoughts"]); ok {
+			config.IncludeThoughts = value
+		}
+		if value, ok := googleThinkingLevelParam(cfg["thinking_level"]); ok {
+			config.ThinkingLevel = value
+		}
+		return config, true
+	default:
+		return nil, false
+	}
+}
+
+func googleBoolParam(value any) (bool, bool) {
+	v, ok := value.(bool)
+	return v, ok
+}
+
+func googleThinkingLevelParam(value any) (genai.ThinkingLevel, bool) {
+	switch level := value.(type) {
+	case genai.ThinkingLevel:
+		return level, level != ""
+	case string:
+		if level == "" {
+			return "", false
+		}
+		return genai.ThinkingLevel(strings.ToUpper(level)), true
 	default:
 		return "", false
 	}
