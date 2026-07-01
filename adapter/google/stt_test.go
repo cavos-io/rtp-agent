@@ -147,6 +147,26 @@ func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTClientOptionsUseCurrentReferenceLocation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
+	options, err := googleSTTClientOptions("", provider)
+	if err != nil {
+		t.Fatalf("googleSTTClientOptions returned error: %v", err)
+	}
+	if got := fmt.Sprintf("%#v", options); !strings.Contains(got, "europe-west1-speech.googleapis.com") {
+		t.Fatalf("client options = %s, want europe-west1 endpoint", got)
+	}
+
+	provider.location = "us-central1"
+	options, err = googleSTTClientOptions("", provider)
+	if err != nil {
+		t.Fatalf("googleSTTClientOptions after update returned error: %v", err)
+	}
+	if got := fmt.Sprintf("%#v", options); !strings.Contains(got, "us-central1-speech.googleapis.com") || strings.Contains(got, "europe-west1-speech.googleapis.com") {
+		t.Fatalf("client options after location update = %s, want current us-central1 endpoint only", got)
+	}
+}
+
 func TestGoogleSTTUpdateOptionsPreservesExplicitEmptyLocation(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
 

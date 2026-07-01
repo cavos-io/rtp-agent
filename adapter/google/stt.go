@@ -31,6 +31,7 @@ type GoogleSTT struct {
 	streams                map[*googleSTTStream]struct{}
 	client                 googleSpeechClient
 	clientV2               googleSpeechV2Client
+	newClient              func(context.Context) (googleSpeechClient, error)
 	newClientV2            func(context.Context) (googleSpeechV2Client, error)
 	closed                 bool
 	model                  string
@@ -244,18 +245,22 @@ func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*Goo
 		}
 		provider.project = project
 	}
-	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
-	if err != nil {
-		return nil, err
-	}
-	if endpoint := googleSTTEndpoint(provider); endpoint != "" {
-		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
+	provider.newClient = func(ctx context.Context) (googleSpeechClient, error) {
+		clientOpts, err := googleSTTClientOptions(credentialsFile, provider)
+		if err != nil {
+			return nil, err
+		}
+		return speech.NewClient(ctx, clientOpts...)
 	}
 	provider.newClientV2 = func(ctx context.Context) (googleSpeechV2Client, error) {
+		clientOpts, err := googleSTTClientOptions(credentialsFile, provider)
+		if err != nil {
+			return nil, err
+		}
 		return speechv2.NewClient(ctx, clientOpts...)
 	}
 
-	client, err := speech.NewClient(ctx, clientOpts...)
+	client, err := provider.newClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -263,13 +268,26 @@ func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*Goo
 	if googleSTTUsesV2(provider.model) {
 		clientV2, err := provider.ensureClientV2(ctx)
 		if err != nil {
-			_ = client.Close()
+			if closer, ok := client.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
 			return nil, err
 		}
 		provider.clientV2 = clientV2
 	}
 
 	return provider, nil
+}
+
+func googleSTTClientOptions(credentialsFile string, provider *GoogleSTT) ([]option.ClientOption, error) {
+	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
+	if err != nil {
+		return nil, err
+	}
+	if endpoint := googleSTTEndpoint(provider); endpoint != "" {
+		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
+	}
+	return clientOpts, nil
 }
 
 func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) *GoogleSTT {
@@ -348,8 +366,13 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
-	if oldLocation != s.location && s.newClientV2 != nil {
-		s.clientV2 = nil
+	if oldLocation != s.location {
+		if s.newClient != nil {
+			s.client = nil
+		}
+		if s.newClientV2 != nil {
+			s.clientV2 = nil
+		}
 	}
 	if languageChanged && googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages) {
 		s.alternativeLanguages = nil
@@ -553,10 +576,11 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language string, includeAlternativeLanguages bool) (speechpb.Speech_StreamingRecognizeClient, error) {
-	if s.client == nil {
-		return nil, googleSTTStreamError(errors.New("google STT v1 client is not configured"))
+	client, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, googleSTTStreamError(err)
 	}
-	stream, err := s.client.StreamingRecognize(ctx)
+	stream, err := client.StreamingRecognize(ctx)
 	if err != nil {
 		return nil, googleSTTStreamError(err)
 	}
@@ -574,6 +598,30 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 		return nil, googleSTTStreamError(err)
 	}
 	return stream, nil
+}
+
+func (s *GoogleSTT) ensureClient(ctx context.Context) (googleSpeechClient, error) {
+	s.mu.Lock()
+	client := s.client
+	newClient := s.newClient
+	s.mu.Unlock()
+	if client != nil {
+		return client, nil
+	}
+	if newClient == nil {
+		return nil, errors.New("google STT v1 client is not configured")
+	}
+	client, err := newClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if s.client == nil {
+		s.client = client
+	}
+	client = s.client
+	s.mu.Unlock()
+	return client, nil
 }
 
 func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language string, includeAlternativeLanguages bool) (speechv2pb.Speech_StreamingRecognizeClient, error) {
@@ -665,7 +713,11 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		}, nil
 	}
 
-	resp, err := s.client.Recognize(ctx, &speechpb.RecognizeRequest{
+	client, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, googleSTTStreamError(err)
+	}
+	resp, err := client.Recognize(ctx, &speechpb.RecognizeRequest{
 		Config: googleRecognitionConfigForFrames(s, language, !explicitLanguage, frames),
 		Audio: &speechpb.RecognitionAudio{
 			AudioSource: &speechpb.RecognitionAudio_Content{
