@@ -618,6 +618,7 @@ type googleSTTStream struct {
 	minConfidence               float64
 	events                      chan *stt.SpeechEvent
 	errCh                       chan error
+	pendingErr                  error
 	closed                      bool
 	inputClosed                 bool
 	audioPushed                 bool
@@ -1088,6 +1089,17 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 	if s.isClosed() {
 		return nil, io.EOF
 	}
+	if s.pendingErr != nil {
+		if event, ok := s.nextQueuedEvent(); ok {
+			return event, nil
+		}
+		err := s.pendingErr
+		s.pendingErr = nil
+		return nil, err
+	}
+	if event, ok := s.nextQueuedEvent(); ok {
+		return event, nil
+	}
 	select {
 	case event, ok := <-s.events:
 		if !ok {
@@ -1100,15 +1112,23 @@ func (s *googleSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+		if event, ok := s.nextQueuedEvent(); ok {
+			s.pendingErr = err
+			return event, nil
 		}
 		return nil, err
 	}
+}
+
+func (s *googleSTTStream) nextQueuedEvent() (*stt.SpeechEvent, bool) {
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, true
+		}
+	default:
+	}
+	return nil, false
 }
 
 func (s *googleSTTStream) unregister() {

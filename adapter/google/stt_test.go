@@ -1616,6 +1616,7 @@ func TestGoogleSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 				{Text: "hello"},
 			},
 		}
+		close(stream.events)
 		stream.errCh <- errors.New("stream failed")
 
 		event, err := stream.Next()
@@ -1627,6 +1628,10 @@ func TestGoogleSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 		}
 		if got := event.Alternatives[0].Text; got != "hello" {
 			t.Fatalf("transcript = %q, want hello", got)
+		}
+
+		if _, err := stream.Next(); err == nil || err.Error() != "stream failed" {
+			t.Fatalf("second Next error = %v, want queued stream error after transcript drains", err)
 		}
 	}
 }
