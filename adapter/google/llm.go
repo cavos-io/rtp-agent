@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
 	"os"
@@ -567,6 +568,9 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
+			if googleBlockedFinishReason(cand.FinishReason) {
+				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, "", nil, false)
+			}
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
 					if part.Text != "" {
@@ -597,6 +601,20 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		if googleChatChunkHasOutput(chunk) {
 			return chunk, nil
 		}
+	}
+}
+
+func googleBlockedFinishReason(reason genai.FinishReason) bool {
+	switch reason {
+	case genai.FinishReasonSafety,
+		genai.FinishReasonSPII,
+		genai.FinishReasonProhibitedContent,
+		genai.FinishReasonBlocklist,
+		genai.FinishReasonLanguage,
+		genai.FinishReasonRecitation:
+		return true
+	default:
+		return false
 	}
 }
 
