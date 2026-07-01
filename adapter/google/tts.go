@@ -574,6 +574,9 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		data := resp.GetAudioContent()
+		if len(data) == 0 {
+			continue
+		}
 		return &tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
 				Data:              data,
