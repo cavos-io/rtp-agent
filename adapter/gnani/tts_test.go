@@ -119,6 +119,32 @@ func TestGnaniTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestGnaniTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("gnani tts dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewTTS("test-key")
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error before flush: %v", err)
+	}
+	if err := stream.PushText("namaste"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	err = stream.Flush()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestGnaniTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	provider := NewTTS("test-key")
 
