@@ -615,6 +615,20 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceModelArmorConfigExtra(t
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceEnhancedCivicAnswersExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"enable_enhanced_civic_answers": true,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.EnableEnhancedCivicAnswers == nil || !*config.EnableEnhancedCivicAnswers {
+		t.Fatalf("EnableEnhancedCivicAnswers = %#v, want true", config.EnableEnhancedCivicAnswers)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{

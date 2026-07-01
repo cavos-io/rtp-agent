@@ -250,6 +250,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleModelArmorConfigParam(params["model_armor_config"]); ok {
 		config.ModelArmorConfig = value
 	}
+	if value, ok := googleBoolParam(params["enable_enhanced_civic_answers"]); ok {
+		config.EnableEnhancedCivicAnswers = &value
+	}
 	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
 		config.ResponseModalities = value
 	}
