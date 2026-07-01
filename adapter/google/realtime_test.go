@@ -567,6 +567,60 @@ func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionAccumulatesReferenceInputTranscription(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 3)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			InputTranscription: &genai.Transcription{Text: " hello"},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			InputTranscription: &genai.Transcription{Text: " world"},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{TurnComplete: true},
+	}
+
+	first := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if first.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || first.InputTranscription == nil {
+		t.Fatalf("first transcript event = %#v, want input transcription", first)
+	}
+	if first.InputTranscription.Transcript != "hello" || first.InputTranscription.IsFinal {
+		t.Fatalf("first transcript = %#v, want interim stripped transcript", first.InputTranscription)
+	}
+	if first.InputTranscription.ItemID == "" {
+		t.Fatal("first transcript item id empty")
+	}
+
+	second := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if second.InputTranscription == nil || second.InputTranscription.Transcript != "hello world" || second.InputTranscription.IsFinal {
+		t.Fatalf("second transcript = %#v, want accumulated interim transcript", second.InputTranscription)
+	}
+	if second.InputTranscription.ItemID != first.InputTranscription.ItemID {
+		t.Fatalf("second item id = %q, want %q", second.InputTranscription.ItemID, first.InputTranscription.ItemID)
+	}
+
+	final := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if final.InputTranscription == nil || final.InputTranscription.Transcript != "hello world" || !final.InputTranscription.IsFinal {
+		t.Fatalf("final transcript = %#v, want accumulated final transcript", final.InputTranscription)
+	}
+	if final.InputTranscription.ItemID != first.InputTranscription.ItemID {
+		t.Fatalf("final item id = %q, want %q", final.InputTranscription.ItemID, first.InputTranscription.ItemID)
+	}
+}
+
 func nextGoogleRealtimeTestEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent) llm.RealtimeEvent {
 	t.Helper()
 	select {

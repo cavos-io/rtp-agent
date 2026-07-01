@@ -553,6 +553,9 @@ type googleRealtimeSession struct {
 	liveSession googleRealtimeLiveSession
 	eventCh     chan llm.RealtimeEvent
 	audioStream *audio.AudioByteStream
+	inputID     string
+	inputSeq    int
+	inputText   string
 	closeOnce   sync.Once
 	closeErr    error
 	closed      bool
@@ -651,6 +654,19 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			Text: message.ServerContent.OutputTranscription.Text,
 		})
 	}
+	if message.ServerContent.InputTranscription != nil && message.ServerContent.InputTranscription.Text != "" {
+		text := message.ServerContent.InputTranscription.Text
+		if s.inputText == "" {
+			text = strings.TrimLeft(text, " \t\r\n")
+		}
+		s.inputText += text
+		s.emitInputTranscription(false)
+	}
+	if message.ServerContent.TurnComplete && s.inputText != "" {
+		s.emitInputTranscription(true)
+		s.inputID = ""
+		s.inputText = ""
+	}
 }
 
 func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
@@ -661,6 +677,26 @@ func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
 	case s.eventCh <- event:
 	case <-s.ctx.Done():
 	}
+}
+
+func (s *googleRealtimeSession) emitInputTranscription(final bool) {
+	itemID := s.currentInputID()
+	s.emitEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+		InputTranscription: &llm.InputTranscriptionCompleted{
+			ItemID:     itemID,
+			Transcript: s.inputText,
+			IsFinal:    final,
+		},
+	})
+}
+
+func (s *googleRealtimeSession) currentInputID() string {
+	if s.inputID == "" {
+		s.inputSeq++
+		s.inputID = fmt.Sprintf("GI_%d", s.inputSeq)
+	}
+	return s.inputID
 }
 
 func (s *googleRealtimeSession) Close() error {
