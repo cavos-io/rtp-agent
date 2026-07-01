@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
@@ -338,7 +339,7 @@ func googleToolNames(tools []llm.Tool) []string {
 type googleLLMStream struct {
 	next              func() (*genai.GenerateContentResponse, error, bool)
 	stop              func()
-	closed            bool
+	closed            atomic.Bool
 	responseGenerated bool
 	chunkEmitted      bool
 	requestID         string
@@ -591,7 +592,7 @@ func googleGroupID(itemID string, groupID *string) string {
 }
 
 func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
-	if s.closed {
+	if s.closed.Load() {
 		return nil, io.EOF
 	}
 	requestID := s.id()
@@ -604,6 +605,9 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		resp, err, ok := s.next()
+		if s.closed.Load() {
+			return nil, io.EOF
+		}
 		if !ok {
 			if !s.responseGenerated {
 				return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(s.finishReason))
@@ -771,7 +775,7 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 }
 
 func (s *googleLLMStream) Close() error {
-	s.closed = true
+	s.closed.Store(true)
 	if s.stop != nil {
 		s.stop()
 	}

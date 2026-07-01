@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"google.golang.org/genai"
@@ -410,6 +411,48 @@ func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	}
 	if !stopped {
 		t.Fatal("Close() did not stop provider iterator")
+	}
+}
+
+func TestGoogleLLMStreamCloseUnblocksPendingNext(t *testing.T) {
+	released := make(chan struct{})
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			<-released
+			return nil, nil, false
+		},
+		stop: func() {
+			close(released)
+		},
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		chunk, err := stream.Next()
+		if chunk != nil {
+			errCh <- errors.New("Next returned chunk after Close")
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Next returned before Close: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want EOF", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next did not unblock after Close")
 	}
 }
 
