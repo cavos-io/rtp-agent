@@ -1182,6 +1182,50 @@ func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsClearsActiveStreamSpeechTimeouts(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: secondRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client, WithGoogleSTTSpeechEndTimeout(750*time.Millisecond))
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+	if firstStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout().GetSpeechEndTimeout().AsDuration() != 750*time.Millisecond {
+		t.Fatalf("first stream voice timeout = %#v, want speech_end_timeout 750ms", firstStream.sent)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTSpeechEndTimeout(0), WithGoogleSTTSpeechStartTimeout(0))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after timeout reset")
+	}
+	if len(secondStream.sent) != 1 {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+	if timeout := secondStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout(); timeout != nil {
+		t.Fatalf("second stream voice timeout = %#v, want nil after explicit zero reset", timeout)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTUpdateOptionsAppliesActiveStreamLanguage(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}

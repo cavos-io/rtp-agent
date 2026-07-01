@@ -116,17 +116,13 @@ func WithGoogleSTTVoiceActivityEvents(enabled bool) GoogleSTTOption {
 
 func WithGoogleSTTSpeechStartTimeout(timeout time.Duration) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if timeout > 0 {
-			s.speechStartTimeout = timeout
-		}
+		s.speechStartTimeout = timeout
 	}
 }
 
 func WithGoogleSTTSpeechEndTimeout(timeout time.Duration) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if timeout > 0 {
-			s.speechEndTimeout = timeout
-		}
+		s.speechEndTimeout = timeout
 	}
 }
 
