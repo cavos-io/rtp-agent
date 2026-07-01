@@ -415,13 +415,10 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		AudioConfig: audio,
 	}
 
-	resp, err := t.client.SynthesizeSpeech(ctx, req)
-	if err != nil {
-		return nil, googleTTSSynthesisError(err)
-	}
-
 	return &googleTTSChunkedStream{
-		data:       resp.AudioContent,
+		ctx:        ctx,
+		client:     t.client,
+		request:    req,
 		encoding:   audio.GetAudioEncoding(),
 		inputText:  text,
 		sampleRate: audio.GetSampleRateHertz(),
@@ -504,6 +501,10 @@ func googleCloneAudioConfig(config *texttospeechpb.AudioConfig) *texttospeechpb.
 }
 
 type googleTTSChunkedStream struct {
+	ctx            context.Context
+	client         googleTTSClient
+	request        *texttospeechpb.SynthesizeSpeechRequest
+	requested      bool
 	data           []byte
 	offset         int
 	encoding       texttospeechpb.AudioEncoding
@@ -517,6 +518,9 @@ type googleTTSChunkedStream struct {
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
 	if googleTTSUsesCompressedDecoder(s.encoding) {
 		return s.nextDecodedAudio()
 	}
@@ -560,6 +564,22 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			SamplesPerChannel: uint32(len(chunk) / 2),
 		},
 	}, nil
+}
+
+func (s *googleTTSChunkedStream) ensureResponse() error {
+	if s.requested || s.client == nil || s.request == nil || s.finalSent {
+		return nil
+	}
+	s.requested = true
+	resp, err := s.client.SynthesizeSpeech(s.ctx, s.request)
+	if err != nil {
+		s.finalSent = true
+		return googleTTSSynthesisError(err)
+	}
+	if resp != nil {
+		s.data = resp.AudioContent
+	}
+	return nil
 }
 
 func (s *googleTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, error) {

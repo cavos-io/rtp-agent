@@ -490,10 +490,7 @@ func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	}
 	defer stream.Close()
 
-	req := client.request
-	if req == nil {
-		t.Fatal("SynthesizeSpeech request = nil")
-	}
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
 	if got := req.GetVoice().GetLanguageCode(); got != "en-US" {
 		t.Fatalf("voice language = %q, want en-US", got)
 	}
@@ -531,7 +528,8 @@ func TestGoogleTTSUsesConfiguredSampleRate(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer chunked.Close()
-	if got := client.request.GetAudioConfig().GetSampleRateHertz(); got != 16000 {
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetSampleRateHertz(); got != 16000 {
 		t.Fatalf("synthesize sample rate = %d, want 16000", got)
 	}
 	audio, err := chunked.Next()
@@ -585,7 +583,8 @@ func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer chunked.Close()
-	if got := client.request.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_MP3 {
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_MP3 {
 		t.Fatalf("synthesize audio encoding = %v, want MP3", got)
 	}
 	audio, err := chunked.Next()
@@ -644,7 +643,8 @@ func TestGoogleTTSUpdateOptionsKeepsReferenceAudioFormat(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer chunked.Close()
-	audio := client.request.GetAudioConfig()
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	audio := req.GetAudioConfig()
 	if got := audio.GetSampleRateHertz(); got != 16000 {
 		t.Fatalf("synthesize sample rate after update = %d, want 16000", got)
 	}
@@ -694,7 +694,8 @@ func TestGoogleTTSDecodesReferenceOggOpusEncoding(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer chunked.Close()
-	if got := client.request.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_OGG_OPUS {
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_OGG_OPUS {
 		t.Fatalf("synthesize audio encoding = %v, want OGG_OPUS", got)
 	}
 	batchAudio, err := chunked.Next()
@@ -768,13 +769,18 @@ func TestGoogleTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	provider := newGoogleTTSWithClient(client)
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
 
-	if stream != nil {
-		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
 	}
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -783,13 +789,18 @@ func TestGoogleTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := newGoogleTTSWithClient(client)
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
 
-	if stream != nil {
-		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != int(codes.PermissionDenied) {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.PermissionDenied)
@@ -815,7 +826,8 @@ func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
 	}
 	defer stream.Close()
 
-	voice := client.request.GetVoice()
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	voice := req.GetVoice()
 	if voice.GetLanguageCode() != "id-ID" || voice.GetName() != "id-ID-Standard-A" || voice.GetModelName() != "gemini-custom" {
 		t.Fatalf("voice = %+v, want configured language, voice, and model", voice)
 	}
@@ -833,7 +845,8 @@ func TestGoogleTTSGenderOptionMatchesReference(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if got := client.request.GetVoice().GetSsmlGender(); got != texttospeech.SsmlVoiceGender_FEMALE {
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if got := req.GetVoice().GetSsmlGender(); got != texttospeech.SsmlVoiceGender_FEMALE {
 		t.Fatalf("voice gender = %v, want FEMALE", got)
 	}
 }
@@ -858,7 +871,8 @@ func TestGoogleTTSVoiceCloneKeyMatchesReference(t *testing.T) {
 	}
 	defer stream.Close()
 
-	voice := client.request.GetVoice()
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	voice := req.GetVoice()
 	if voice.GetVoiceClone().GetVoiceCloningKey() != "clone-key" {
 		t.Fatalf("voice clone = %+v, want configured clone key", voice.GetVoiceClone())
 	}
@@ -879,7 +893,8 @@ func TestGoogleTTSEmptyVoiceCloneKeyMatchesReference(t *testing.T) {
 	}
 	defer stream.Close()
 
-	voice := client.request.GetVoice()
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	voice := req.GetVoice()
 	if voice.GetVoiceClone() == nil {
 		t.Fatalf("voice clone = nil, want explicit empty clone key")
 	}
@@ -906,7 +921,8 @@ func TestGoogleTTSChirpVoiceSelectsReferenceModel(t *testing.T) {
 	}
 	defer stream.Close()
 
-	voice := client.request.GetVoice()
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	voice := req.GetVoice()
 	if voice.GetName() != "en-US-Chirp3-HD-Charon" {
 		t.Fatalf("voice name = %q, want Chirp voice", voice.GetName())
 	}
@@ -930,7 +946,8 @@ func TestGoogleTTSChirpModelUsesReferenceDefaultVoice(t *testing.T) {
 	}
 	defer stream.Close()
 
-	voice := client.request.GetVoice()
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	voice := req.GetVoice()
 	if voice.GetName() != "en-US-Chirp3-HD-Charon" {
 		t.Fatalf("voice name = %q, want reference Chirp 3 default voice", voice.GetName())
 	}
@@ -951,10 +968,11 @@ func TestGoogleTTSSSMLInputMatchesReference(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if got := client.request.GetInput().GetSsml(); got != "<speak>hello</speak>" {
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if got := req.GetInput().GetSsml(); got != "<speak>hello</speak>" {
 		t.Fatalf("ssml input = %q, want reference speak wrapper", got)
 	}
-	if got := client.request.GetInput().GetText(); got != "" {
+	if got := req.GetInput().GetText(); got != "" {
 		t.Fatalf("text input = %q, want empty when SSML is enabled", got)
 	}
 }
@@ -971,10 +989,11 @@ func TestGoogleTTSMarkupInputMatchesReference(t *testing.T) {
 	}
 	defer stream.Close()
 
-	if got := client.request.GetInput().GetMarkup(); got != "<speak-as interpret-as=\"characters\">ABC</speak-as>" {
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if got := req.GetInput().GetMarkup(); got != "<speak-as interpret-as=\"characters\">ABC</speak-as>" {
 		t.Fatalf("markup input = %q, want raw markup text", got)
 	}
-	if got := client.request.GetInput().GetText(); got != "" {
+	if got := req.GetInput().GetText(); got != "" {
 		t.Fatalf("text input = %q, want empty when markup is enabled", got)
 	}
 }
@@ -1015,7 +1034,8 @@ func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 	defer stream.Close()
 
-	voice := client.request.GetVoice()
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	voice := req.GetVoice()
 	if voice.GetLanguageCode() != "id-ID" || voice.GetName() != "id-ID-Standard-A" || voice.GetModelName() != "gemini-custom" {
 		t.Fatalf("voice = %+v, want updated language, voice, and model", voice)
 	}
@@ -1044,7 +1064,8 @@ func TestGoogleTTSUpdateOptionsReplacesVoiceParamsLikeReference(t *testing.T) {
 		t.Fatalf("Synthesize after voice update error = %v", err)
 	}
 	defer stream.Close()
-	if voice := client.request.GetVoice(); voice.GetLanguageCode() != "" || voice.GetName() != "id-ID-Standard-B" || voice.GetModelName() != "" {
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if voice := req.GetVoice(); voice.GetLanguageCode() != "" || voice.GetName() != "id-ID-Standard-B" || voice.GetModelName() != "" {
 		t.Fatalf("request voice = %+v, want reference replacement with only new voice name", voice)
 	}
 
@@ -1080,7 +1101,8 @@ func TestGoogleTTSUpdateOptionsIgnoresReferenceVoiceCloneKey(t *testing.T) {
 		t.Fatalf("Synthesize after clone update error = %v", err)
 	}
 	defer stream.Close()
-	if got := client.request.GetVoice().GetVoiceClone().GetVoiceCloningKey(); got != "initial-clone" {
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if got := req.GetVoice().GetVoiceClone().GetVoiceCloningKey(); got != "initial-clone" {
 		t.Fatalf("request clone key after update = %q, want constructor-time initial-clone", got)
 	}
 }
@@ -1101,7 +1123,8 @@ func TestGoogleTTSUpdateOptionsPreservesExplicitEmptyVoice(t *testing.T) {
 		t.Fatalf("Synthesize after empty voice update error = %v", err)
 	}
 	defer stream.Close()
-	if voice := client.request.GetVoice(); voice.GetName() != "" || voice.GetLanguageCode() != "" || voice.GetModelName() != "" {
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if voice := req.GetVoice(); voice.GetName() != "" || voice.GetLanguageCode() != "" || voice.GetModelName() != "" {
 		t.Fatalf("request voice = %+v, want explicit empty voice name", voice)
 	}
 }
@@ -1125,7 +1148,8 @@ func TestGoogleTTSUpdateOptionsPreservesExplicitEmptyModel(t *testing.T) {
 		t.Fatalf("Synthesize after empty model update error = %v", err)
 	}
 	defer stream.Close()
-	if voice := client.request.GetVoice(); voice.GetName() != "" || voice.GetLanguageCode() != "" || voice.GetModelName() != "" {
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if voice := req.GetVoice(); voice.GetName() != "" || voice.GetLanguageCode() != "" || voice.GetModelName() != "" {
 		t.Fatalf("request voice = %+v, want explicit empty model", voice)
 	}
 }
@@ -1146,7 +1170,8 @@ func TestGoogleTTSUpdateOptionsPreservesExplicitEmptyLanguage(t *testing.T) {
 		t.Fatalf("Synthesize after empty language update error = %v", err)
 	}
 	defer stream.Close()
-	if voice := client.request.GetVoice(); voice.GetName() != "" || voice.GetLanguageCode() != "" || voice.GetModelName() != "" {
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if voice := req.GetVoice(); voice.GetName() != "" || voice.GetLanguageCode() != "" || voice.GetModelName() != "" {
 		t.Fatalf("request voice = %+v, want explicit empty language", voice)
 	}
 }
@@ -1165,7 +1190,8 @@ func TestGoogleTTSPromptMatchesReferenceRequests(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer chunked.Close()
-	if got := client.request.GetInput().GetPrompt(); got != "speak warmly" {
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetInput().GetPrompt(); got != "speak warmly" {
 		t.Fatalf("synthesize prompt = %q, want speak warmly", got)
 	}
 
@@ -1209,7 +1235,8 @@ func TestGoogleTTSCustomPronunciationsMatchReferenceRequests(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer chunked.Close()
-	if got := client.request.GetInput().GetCustomPronunciations(); got != custom {
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetInput().GetCustomPronunciations(); got != custom {
 		t.Fatalf("synthesize custom pronunciations = %#v, want configured value", got)
 	}
 
@@ -1629,6 +1656,30 @@ func TestGoogleTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeCloseBeforeNextSkipsReferenceRequest(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	if client.synthesizeCalls != 0 {
+		t.Fatalf("Synthesize calls before Next = %d, want 0 like reference cancellable ChunkedStream", client.synthesizeCalls)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after close = (%+v, %v), want EOF", audio, err)
+	}
+	if client.synthesizeCalls != 0 {
+		t.Fatalf("Synthesize calls after Close = %d, want 0", client.synthesizeCalls)
+	}
+}
+
 func TestGoogleTTSStreamAfterCloseIsRejected(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client)
@@ -1663,7 +1714,8 @@ func TestGoogleTTSSpeakingRateMatchesReferenceRequests(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer chunked.Close()
-	if got := client.request.GetAudioConfig().GetSpeakingRate(); got != 1.25 {
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetSpeakingRate(); got != 1.25 {
 		t.Fatalf("synthesize speaking rate = %v, want 1.25", got)
 	}
 
@@ -1723,7 +1775,8 @@ func TestGoogleTTSAudioConfigOptionsMatchReferenceRequests(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer chunked.Close()
-	audio := client.request.GetAudioConfig()
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	audio := req.GetAudioConfig()
 	if got := audio.GetPitch(); got != 2.5 {
 		t.Fatalf("pitch = %v, want 2.5", got)
 	}
@@ -1740,7 +1793,8 @@ func TestGoogleTTSAudioConfigOptionsMatchReferenceRequests(t *testing.T) {
 		t.Fatalf("Synthesize after update returned error: %v", err)
 	}
 	defer chunked.Close()
-	if got := client.request.GetAudioConfig().GetVolumeGainDb(); got != 3.5 {
+	req = requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetVolumeGainDb(); got != 3.5 {
 		t.Fatalf("updated volume gain = %v, want 3.5", got)
 	}
 }
@@ -1765,7 +1819,8 @@ func TestGoogleTTSSynthesizeSnapshotsReferenceAudioConfig(t *testing.T) {
 		WithGoogleTTSVolumeGainDB(3.5),
 	)
 
-	audio := client.request.GetAudioConfig()
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	audio := req.GetAudioConfig()
 	if got := audio.GetSpeakingRate(); got != 1.25 {
 		t.Fatalf("request speaking rate after provider update = %v, want snapshot 1.25", got)
 	}
@@ -1814,14 +1869,15 @@ func TestGoogleTTSUpdateOptionsKeepsReferencePronunciationControls(t *testing.T)
 		t.Fatalf("Synthesize after update returned error: %v", err)
 	}
 	defer chunked.Close()
-	audio := client.request.GetAudioConfig()
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	audio := req.GetAudioConfig()
 	if got := audio.GetPitch(); got != 2.5 {
 		t.Fatalf("pitch after update = %v, want constructor-time 2.5", got)
 	}
 	if got := audio.GetEffectsProfileId(); len(got) != 1 || got[0] != "telephony-class-application" {
 		t.Fatalf("effects profile after update = %v, want constructor-time telephony-class-application", got)
 	}
-	if got := client.request.GetInput().GetCustomPronunciations(); got != initialCustom {
+	if got := req.GetInput().GetCustomPronunciations(); got != initialCustom {
 		t.Fatalf("custom pronunciations after update = %#v, want constructor-time value", got)
 	}
 }
@@ -1847,8 +1903,9 @@ func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
-	if client.request == nil || client.request.GetInput().GetText() != "hello" {
-		t.Fatalf("request = %#v, want hello text input", client.request)
+	req := requireGoogleTTSSynthesizeRequest(t, stream, client)
+	if req.GetInput().GetText() != "hello" {
+		t.Fatalf("request = %#v, want hello text input", req)
 	}
 
 	chunk, err := stream.Next()
@@ -1954,6 +2011,21 @@ func assertGoogleDecodedOpusFrame(t *testing.T, audio *tts.SynthesizedAudio, opu
 	if bytes.Equal(audio.Frame.Data[:prefixLen], opusData[:prefixLen]) {
 		t.Fatal("frame data still contains compressed opus bytes")
 	}
+}
+
+func requireGoogleTTSSynthesizeRequest(t *testing.T, stream tts.ChunkedStream, client *fakeGoogleTTSClient) *texttospeech.SynthesizeSpeechRequest {
+	t.Helper()
+	googleStream, ok := stream.(*googleTTSChunkedStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *googleTTSChunkedStream", stream)
+	}
+	if err := googleStream.ensureResponse(); err != nil {
+		t.Fatalf("ensure synthesize response returned error: %v", err)
+	}
+	if client.request == nil {
+		t.Fatal("SynthesizeSpeech request = nil")
+	}
+	return client.request
 }
 
 type fakeGoogleTTSClient struct {
