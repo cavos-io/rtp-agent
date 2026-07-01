@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
@@ -13456,6 +13457,27 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 	if googleCfg.volumeGainDB != -2.5 {
 		t.Fatalf("volume gain = %v, want -2.5", googleCfg.volumeGainDB)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
+	phrase := "Cavos"
+	pronunciation := "keIvAs"
+	encoding := texttospeechpb.CustomPronunciationParams_PHONETIC_ENCODING_X_SAMPA
+	custom := &texttospeechpb.CustomPronunciations{
+		Pronunciations: []*texttospeechpb.CustomPronunciationParams{{
+			Phrase:           &phrase,
+			PhoneticEncoding: &encoding,
+			Pronunciation:    &pronunciation,
+		}},
+	}
+
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"custom_pronunciations": custom},
+	})
+
+	if googleCfg.customPronunciations != custom {
+		t.Fatalf("custom pronunciations = %#v, want configured value", googleCfg.customPronunciations)
 	}
 }
 

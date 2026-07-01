@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
 	awstranscribetypes "github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/cavos-io/rtp-agent/adapter/anam"
@@ -113,21 +114,22 @@ var appNewAgoraChannelClient = workeragora.NewSDKChannelClient
 var appNewAgoraDataPublisher = workeragora.NewSDKDataPublisher
 
 type appGoogleTTSConfig struct {
-	language         string
-	location         string
-	voice            string
-	gender           string
-	cloneKey         string
-	model            string
-	prompt           string
-	speakingRate     float64
-	pitch            float64
-	sampleRate       *int
-	effectsProfileID string
-	volumeGainDB     float64
-	streaming        *bool
-	ssml             *bool
-	markup           *bool
+	language             string
+	location             string
+	voice                string
+	gender               string
+	cloneKey             string
+	model                string
+	prompt               string
+	speakingRate         float64
+	pitch                float64
+	sampleRate           *int
+	effectsProfileID     string
+	volumeGainDB         float64
+	streaming            *bool
+	ssml                 *bool
+	markup               *bool
+	customPronunciations *texttospeechpb.CustomPronunciations
 }
 
 type appGoogleSTTConfig struct {
@@ -256,6 +258,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	}
 	if cfg.markup != nil {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSMarkup(*cfg.markup))
+	}
+	if cfg.customPronunciations != nil {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSCustomPronunciations(cfg.customPronunciations))
 	}
 	return adaptergoogle.NewGoogleTTS(credentialsFile, ttsOpts...)
 }
@@ -4103,7 +4108,13 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	if volumeGainDB := modelOptionFloat(cfg.TTSModelOptions, "volume_gain_db"); volumeGainDB != nil {
 		googleCfg.volumeGainDB = *volumeGainDB
 	}
+	googleCfg.customPronunciations = googleTTSCustomPronunciationsFromOptions(cfg.TTSModelOptions)
 	return googleCfg
+}
+
+func googleTTSCustomPronunciationsFromOptions(options map[string]any) *texttospeechpb.CustomPronunciations {
+	custom, _ := options["custom_pronunciations"].(*texttospeechpb.CustomPronunciations)
+	return custom
 }
 
 func liveKitTTSOptionsFromConfig(cfg AppConfig) ([]adapterlivekit.TTSOption, error) {
