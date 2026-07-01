@@ -909,6 +909,27 @@ func TestGoogleSTTStreamPushFrameReturnsAPIStatusErrorForAudioSendFailure(t *tes
 	}
 }
 
+func TestGoogleSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000}); err != nil {
+		t.Fatalf("first PushFrame error = %v", err)
+	}
+	err = stream.PushFrame(&model.AudioFrame{Data: []byte("second"), SampleRate: 24000})
+	if err == nil || err.Error() != "the sample rate of the input frames must be consistent" {
+		t.Fatalf("second PushFrame error = %v, want reference sample-rate consistency error", err)
+	}
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent requests = %d, want config plus first audio only", len(streamClient.sent))
+	}
+}
+
 func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})

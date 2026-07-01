@@ -416,17 +416,18 @@ func googleSpeakerID(word *speechpb.WordInfo) string {
 }
 
 type googleSTTStream struct {
-	mu              sync.Mutex
-	owner           *GoogleSTT
-	stream          speechpb.Speech_StreamingRecognizeClient
-	language        string
-	minConfidence   float64
-	events          chan *stt.SpeechEvent
-	errCh           chan error
-	closed          bool
-	timingMu        sync.Mutex
-	startTimeOffset float64
-	startTime       float64
+	mu               sync.Mutex
+	owner            *GoogleSTT
+	stream           speechpb.Speech_StreamingRecognizeClient
+	language         string
+	minConfidence    float64
+	events           chan *stt.SpeechEvent
+	errCh            chan error
+	closed           bool
+	pushedSampleRate uint32
+	timingMu         sync.Mutex
+	startTimeOffset  float64
+	startTime        float64
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -625,6 +626,12 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if frame != nil && frame.SampleRate != 0 {
+		if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
+			return errors.New("the sample rate of the input frames must be consistent")
+		}
+		s.pushedSampleRate = frame.SampleRate
 	}
 	if err := s.stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
