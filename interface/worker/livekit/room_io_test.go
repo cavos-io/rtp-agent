@@ -1026,6 +1026,7 @@ func TestRoomIOPublishAudioDownmixesStereoToMonoOutput(t *testing.T) {
 	if err := rio.PublishAudio(context.Background(), frame); err != nil {
 		t.Fatalf("PublishAudio error = %v", err)
 	}
+	rio.Flush()
 
 	if got, want := len(encoder.pcm), int(roomIOValidOpusSamples(2))*2; got != want {
 		t.Fatalf("encoder PCM length = %d, want %d bytes for mono Opus frame", got, want)
@@ -1080,6 +1081,73 @@ func TestRoomIOPublishAudioBoundedLeadPacing(t *testing.T) {
 	}
 	if elapsed := time.Since(startB); elapsed < roomIOOutputMaxLead {
 		t.Fatalf("publishing %dms of audio took %v, want real-time pacing beyond the lead budget", frames*20, elapsed)
+	}
+}
+
+func TestRoomIOChunkOpusWithCarryNoMidStreamPadding(t *testing.T) {
+	frameBytes := int(roomIOOpusFrameSamples) * 2
+
+	ramp := func(start int, n int) []byte {
+		b := make([]byte, n)
+		for i := range b {
+			v := byte((start + i) % 255)
+			if v == 0 {
+				v = 1
+			}
+			b[i] = v
+		}
+		return b
+	}
+	a := ramp(1, 2304)
+	b := ramp(1000, 2304)
+	input := append(append([]byte{}, a...), b...)
+
+	var emitted []byte
+	assertFull := func(frames []*model.AudioFrame) {
+		for _, f := range frames {
+			if len(f.Data) != frameBytes || f.SamplesPerChannel != roomIOOpusFrameSamples {
+				t.Fatalf("mid-stream frame = %d bytes / %d samples, want full %d/%d (no padding)",
+					len(f.Data), f.SamplesPerChannel, frameBytes, roomIOOpusFrameSamples)
+			}
+			emitted = append(emitted, f.Data...)
+		}
+	}
+
+	frames, carry := roomIOChunkOpusWithCarry(nil, a, false)
+	assertFull(frames)
+	frames, carry = roomIOChunkOpusWithCarry(carry, b, false)
+	assertFull(frames)
+
+	if len(emitted) == 0 || len(emitted) > len(input) {
+		t.Fatalf("emitted %d bytes, input %d bytes", len(emitted), len(input))
+	}
+	for i := 0; i < len(emitted); i++ {
+		if emitted[i] != input[i] {
+			t.Fatalf("emitted byte %d = %d, want %d (silence injected mid-stream)", i, emitted[i], input[i])
+		}
+	}
+
+	tailFrames, tailCarry := roomIOChunkOpusWithCarry(carry, nil, true)
+	if tailCarry != nil {
+		t.Fatalf("carry after flush = %v, want nil", tailCarry)
+	}
+	var tail []byte
+	for _, f := range tailFrames {
+		tail = append(tail, f.Data...)
+	}
+	remaining := input[len(emitted):]
+	if len(tail) < len(remaining) {
+		t.Fatalf("flushed tail %d bytes < remaining %d bytes", len(tail), len(remaining))
+	}
+	for i := 0; i < len(remaining); i++ {
+		if tail[i] != remaining[i] {
+			t.Fatalf("flushed tail byte %d = %d, want %d", i, tail[i], remaining[i])
+		}
+	}
+	for i := len(remaining); i < len(tail); i++ {
+		if tail[i] != 0 {
+			t.Fatalf("flush padding byte %d = %d, want 0", i, tail[i])
+		}
 	}
 }
 
