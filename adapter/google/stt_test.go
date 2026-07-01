@@ -901,6 +901,23 @@ func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamCloseSuppressesProviderCloseError(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{closeErr: errors.New("close failed")}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v, want nil cleanup error", err)
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after Close")
+	}
+}
+
 func TestGoogleSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		stream := &googleSTTStream{
@@ -1119,6 +1136,7 @@ type fakeGoogleStreamingRecognizeClient struct {
 	recvIndex          int
 	recvErr            error
 	closed             bool
+	closeErr           error
 	sendErrOnConfig    error
 	sendErrAfterConfig error
 }
@@ -1148,7 +1166,7 @@ func (c *fakeGoogleStreamingRecognizeClient) Recv() (*speechpb.StreamingRecogniz
 
 func (c *fakeGoogleStreamingRecognizeClient) CloseSend() error {
 	c.closed = true
-	return nil
+	return c.closeErr
 }
 
 func (c *fakeGoogleStreamingRecognizeClient) Header() (metadata.MD, error) { return nil, nil }

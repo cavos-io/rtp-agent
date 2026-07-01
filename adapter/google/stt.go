@@ -169,13 +169,10 @@ func (s *GoogleSTT) Close() error {
 	s.streams = make(map[*googleSTTStream]struct{})
 	s.mu.Unlock()
 
-	var closeErr error
 	for _, stream := range streams {
-		if err := stream.Close(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		_ = stream.Close()
 	}
-	return closeErr
+	return nil
 }
 
 func (s *GoogleSTT) isClosed() bool {
@@ -647,9 +644,9 @@ func (s *googleSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
-	err := s.stream.CloseSend()
+	_ = s.stream.CloseSend()
 	s.unregister()
-	return err
+	return nil
 }
 
 func (s *googleSTTStream) isClosed() bool {
