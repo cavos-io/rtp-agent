@@ -2169,6 +2169,52 @@ func TestGoogleTTSSynthesizeDropsReferenceTrailingPartialPCMSample(t *testing.T)
 	}
 }
 
+func TestGoogleTTSSynthesizeBuffersReferenceProgressivePCMFrames(t *testing.T) {
+	firstFrame := bytes.Repeat([]byte{1, 2}, 480)
+	secondFrame := bytes.Repeat([]byte{3, 4}, 960)
+	response := append(append([]byte(nil), firstFrame...), secondFrame...)
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: response},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if got := first.Frame.Data; !bytes.Equal(got, firstFrame) {
+		t.Fatalf("first frame length = %d, want reference 20ms frame length %d", len(got), len(firstFrame))
+	}
+	if got := first.Frame.SamplesPerChannel; got != 480 {
+		t.Fatalf("first samples per channel = %d, want reference 20ms frame", got)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := second.Frame.Data; !bytes.Equal(got, secondFrame) {
+		t.Fatalf("second frame length = %d, want reference 40ms frame length %d", len(got), len(secondFrame))
+	}
+	if got := second.Frame.SamplesPerChannel; got != 960 {
+		t.Fatalf("second samples per channel = %d, want reference 40ms frame", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+}
+
 func TestGoogleTTSSynthesizeStripsExtendedWAVHeaderLikeReference(t *testing.T) {
 	var payload bytes.Buffer
 	payload.WriteString("RIFF")
