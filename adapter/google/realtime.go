@@ -552,6 +552,7 @@ type googleRealtimeSession struct {
 	audioStream *audio.AudioByteStream
 	closeOnce   sync.Once
 	closeErr    error
+	closed      bool
 	mu          sync.Mutex
 }
 
@@ -568,7 +569,7 @@ func (s *googleRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error 
 	return errors.New("google realtime session option update is not implemented")
 }
 func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
-	if s == nil || s.liveSession == nil {
+	if s == nil || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
 	turns := make([]*genai.Content, 0, 2)
@@ -589,14 +590,14 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 	})
 }
 func (s *googleRealtimeSession) Say(text string) error {
-	if s == nil || s.liveSession == nil || text == "" {
+	if s == nil || s.liveSession == nil || text == "" || s.isClosed() {
 		return nil
 	}
 	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{Text: text})
 }
 func (s *googleRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *googleRealtimeSession) Interrupt() error {
-	if s == nil || s.liveSession == nil {
+	if s == nil || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
 	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
@@ -610,6 +611,9 @@ func (s *googleRealtimeSession) Close() error {
 		return nil
 	}
 	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
 		if s.cancel != nil {
 			s.cancel()
 		}
@@ -621,8 +625,14 @@ func (s *googleRealtimeSession) Close() error {
 	return s.closeErr
 }
 
+func (s *googleRealtimeSession) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
 func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
-	if s == nil || s.liveSession == nil || frame == nil || len(frame.Data) == 0 {
+	if s == nil || s.liveSession == nil || frame == nil || len(frame.Data) == 0 || s.isClosed() {
 		return nil
 	}
 	resampled, err := audio.ResampleAudioFrame(frame, googleRealtimeInputSampleRate)

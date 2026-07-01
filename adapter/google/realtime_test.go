@@ -471,6 +471,43 @@ func TestGoogleRealtimeSessionSaySendsReferenceRealtimeText(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	if err := session.PushAudio(&audiomodel.AudioFrame{
+		Data:              bytes.Repeat([]byte{1, 2}, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushAudio after Close error = %v", err)
+	}
+	if err := session.Say("late text"); err != nil {
+		t.Fatalf("Say after Close error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "late"}); err != nil {
+		t.Fatalf("GenerateReply after Close error = %v", err)
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt after Close error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 0 || len(liveSession.clientContents) != 0 {
+		t.Fatalf("late sends = inputs %d clientContent %d, want suppressed after close", len(liveSession.inputs), len(liveSession.clientContents))
+	}
+}
+
 type fakeGoogleRealtimeConnector struct {
 	model   string
 	config  *genai.LiveConnectConfig
