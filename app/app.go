@@ -123,6 +123,50 @@ type appGoogleTTSConfig struct {
 	volumeGainDB     float64
 }
 
+type appGoogleSTTConfig struct {
+	model                string
+	sampleRate           *int
+	punctuate            *bool
+	spokenPunctuation    *bool
+	profanityFilter      *bool
+	detectLanguage       *bool
+	interimResults       *bool
+	wordTimeOffsets      *bool
+	alternativeLanguages []string
+}
+
+var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
+	sttOpts := []adaptergoogle.GoogleSTTOption{}
+	if cfg.model != "" {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTModel(cfg.model))
+	}
+	if cfg.sampleRate != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSampleRate(int32(*cfg.sampleRate)))
+	}
+	if cfg.punctuate != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTPunctuate(*cfg.punctuate))
+	}
+	if cfg.spokenPunctuation != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpokenPunctuation(*cfg.spokenPunctuation))
+	}
+	if cfg.profanityFilter != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTProfanityFilter(*cfg.profanityFilter))
+	}
+	if cfg.detectLanguage != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTDetectLanguage(*cfg.detectLanguage))
+	}
+	if cfg.interimResults != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTInterimResults(*cfg.interimResults))
+	}
+	if cfg.wordTimeOffsets != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTWordTimeOffsets(*cfg.wordTimeOffsets))
+	}
+	if len(cfg.alternativeLanguages) > 0 {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAlternativeLanguages(cfg.alternativeLanguages...))
+	}
+	return adaptergoogle.NewGoogleSTT(credentialsFile, sttOpts...)
+}
+
 var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (coretts.TTS, error) {
 	ttsOpts := []adaptergoogle.GoogleTTSOption{}
 	if cfg.language != "" {
@@ -3907,6 +3951,20 @@ func cavosTTSFromConfig(cfg AppConfig) coretts.TTS {
 	return cavos.NewTTS(ttsOpts...)
 }
 
+func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
+	return appGoogleSTTConfig{
+		model:                cfg.STTModel,
+		sampleRate:           cfg.STTSampleRate,
+		punctuate:            cfg.STTPunctuate,
+		spokenPunctuation:    cfg.STTSpokenPunctuation,
+		profanityFilter:      cfg.STTProfanityFilter,
+		detectLanguage:       cfg.STTLanguageDetection,
+		interimResults:       cfg.STTInterimResults,
+		wordTimeOffsets:      cfg.STTWordTimestamps,
+		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
+	}
+}
+
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
 		language: cfg.TTSLanguage,
@@ -4939,23 +4997,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.STT = provider
 	case providerGoogle:
-		sttOpts := []adaptergoogle.GoogleSTTOption{}
-		if cfg.STTModel != "" {
-			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTModel(cfg.STTModel))
-		}
-		if cfg.STTSampleRate != nil {
-			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSampleRate(int32(*cfg.STTSampleRate)))
-		}
-		if cfg.STTPunctuate != nil {
-			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTPunctuate(*cfg.STTPunctuate))
-		}
-		if cfg.STTSpokenPunctuation != nil {
-			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpokenPunctuation(*cfg.STTSpokenPunctuation))
-		}
-		if cfg.STTProfanityFilter != nil {
-			sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTProfanityFilter(*cfg.STTProfanityFilter))
-		}
-		provider, err := adaptergoogle.NewGoogleSTT(cfg.GoogleCredentialsFile, sttOpts...)
+		provider, err := appNewGoogleSTT(cfg.GoogleCredentialsFile, googleSTTConfigFromAppConfig(cfg))
 		if err != nil {
 			return nil, err
 		}

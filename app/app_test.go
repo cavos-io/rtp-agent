@@ -13435,6 +13435,53 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
+	original := appNewGoogleSTT
+	defer func() { appNewGoogleSTT = original }()
+
+	var credentialsFile string
+	var googleCfg appGoogleSTTConfig
+	appNewGoogleSTT = func(credentials string, cfg appGoogleSTTConfig) (stt.STT, error) {
+		credentialsFile = credentials
+		googleCfg = cfg
+		return &fakeAppSTT{}, nil
+	}
+
+	t.Setenv("RTP_AGENT_STT_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_STT_MODEL", "latest_short")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE_OPTIONS", "es-ES,fr-FR")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE_DETECTION", "false")
+	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
+	t.Setenv("RTP_AGENT_STT_WORD_TIMESTAMPS", "false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.STT == nil {
+		t.Fatal("Session STT is nil")
+	}
+	if credentialsFile != "/tmp/google-credentials.json" {
+		t.Fatalf("credentials file = %q, want /tmp/google-credentials.json", credentialsFile)
+	}
+	if googleCfg.model != "latest_short" {
+		t.Fatalf("model = %q, want latest_short", googleCfg.model)
+	}
+	if googleCfg.detectLanguage == nil || *googleCfg.detectLanguage {
+		t.Fatalf("detectLanguage = %#v, want explicit false", googleCfg.detectLanguage)
+	}
+	if googleCfg.interimResults == nil || *googleCfg.interimResults {
+		t.Fatalf("interimResults = %#v, want explicit false", googleCfg.interimResults)
+	}
+	if googleCfg.wordTimeOffsets == nil || *googleCfg.wordTimeOffsets {
+		t.Fatalf("wordTimeOffsets = %#v, want explicit false", googleCfg.wordTimeOffsets)
+	}
+	if !reflect.DeepEqual(googleCfg.alternativeLanguages, []string{"es-ES", "fr-FR"}) {
+		t.Fatalf("alternativeLanguages = %#v, want [es-ES fr-FR]", googleCfg.alternativeLanguages)
+	}
+}
+
 func TestGroqSTTFallbackPassesReferenceOptions(t *testing.T) {
 	provider, err := fallbackSTTFromProvider(AppConfig{
 		GroqAPIKey:        "test-groq-key",
