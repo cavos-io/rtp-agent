@@ -726,6 +726,23 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceLabelsExtra(t *testing.
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigPreservesEmptyLabels(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"labels": map[string]string{},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.Labels == nil {
+		t.Fatal("Labels = nil, want explicit empty map")
+	}
+	if len(config.Labels) != 0 {
+		t.Fatalf("Labels = %#v, want empty map", config.Labels)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceModelArmorConfigExtra(t *testing.T) {
 	armor := &genai.ModelArmorConfig{
 		PromptTemplateName:   "projects/p/locations/us/templates/prompt",

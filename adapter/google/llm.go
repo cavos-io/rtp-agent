@@ -449,10 +449,14 @@ func googleModelSelectionConfigParam(value any) (*genai.ModelSelectionConfig, bo
 
 func googleLabelsParam(value any) (map[string]string, bool) {
 	labels, ok := value.(map[string]string)
-	if !ok || len(labels) == 0 {
+	if !ok {
 		return nil, false
 	}
-	return labels, true
+	result := make(map[string]string, len(labels))
+	for key, value := range labels {
+		result[key] = value
+	}
+	return result, true
 }
 
 func googleModelArmorConfigParam(value any) (*genai.ModelArmorConfig, bool) {
