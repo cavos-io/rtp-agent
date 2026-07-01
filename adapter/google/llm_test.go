@@ -1051,6 +1051,23 @@ func TestGoogleLLMStreamCloseUnblocksPendingNext(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamTreatsReference499AsEOF(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, genai.APIError{Code: 499, Message: "client closed", Status: "CLIENT_CLOSED"}, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil", chunk)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF for reference client-closed 499", err)
+	}
+}
+
 func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
 	read := false
 	stream := &googleLLMStream{

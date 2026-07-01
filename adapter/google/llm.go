@@ -1098,6 +1098,9 @@ func googleLLMStreamError(err error, retryable bool, requestID string) error {
 	}
 	var apiErr genai.APIError
 	if errors.As(err, &apiErr) {
+		if apiErr.Code == 499 {
+			return io.EOF
+		}
 		message := "gemini llm: api error"
 		if apiErr.Code >= 400 && apiErr.Code < 500 {
 			message = "gemini llm: client error"
