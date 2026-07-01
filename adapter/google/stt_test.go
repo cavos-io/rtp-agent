@@ -133,6 +133,18 @@ func TestGoogleSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamingCapabilityMatchesReferenceOption(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTStreaming(false))
+
+	capabilities := provider.Capabilities()
+	if capabilities.Streaming {
+		t.Fatal("Streaming capability = true, want false from reference use_streaming option")
+	}
+	if capabilities.AlignedTranscript != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty when streaming disabled", capabilities.AlignedTranscript)
+	}
+}
+
 func TestGoogleSTTChirp3CapabilitiesDisableWordAlignment(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
 

@@ -27,6 +27,7 @@ type GoogleSTT struct {
 	client               googleSpeechClient
 	closed               bool
 	model                string
+	streaming            bool
 	interimResults       bool
 	punctuate            bool
 	spokenPunctuation    bool
@@ -60,6 +61,12 @@ func WithGoogleSTTModel(model string) GoogleSTTOption {
 		if model != "" {
 			s.model = model
 		}
+	}
+}
+
+func WithGoogleSTTStreaming(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.streaming = enabled
 	}
 }
 
@@ -189,6 +196,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		streams:              make(map[*googleSTTStream]struct{}),
 		client:               client,
 		model:                "latest_long",
+		streaming:            true,
 		interimResults:       true,
 		punctuate:            true,
 		sampleRate:           16000,
@@ -205,10 +213,10 @@ func (s *GoogleSTT) Label() string           { return "google.STT" }
 func (s *GoogleSTT) InputSampleRate() uint32 { return uint32(s.sampleRate) }
 func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	alignedTranscript := ""
-	if googleEnableWordTimeOffsets(s) {
+	if s.streaming && googleEnableWordTimeOffsets(s) {
 		alignedTranscript = "word"
 	}
-	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: s.streaming, InterimResults: true, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
 }
 
 func (s *GoogleSTT) Close() error {
