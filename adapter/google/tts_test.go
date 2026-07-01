@@ -309,13 +309,14 @@ func TestGoogleTTSStreamErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
 	}
 }
 
-func TestGoogleTTSStreamErrorsWhenLaterReferenceSegmentProducesNoAudio(t *testing.T) {
+func TestGoogleTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{
 		responses: []*texttospeech.StreamingSynthesizeResponse{{
 			AudioContent: []byte{1, 2, 3, 4},
 		}},
 	}
-	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	client := &fakeGoogleTTSClient{stream: streamClient}
+	provider := newGoogleTTSWithClient(client)
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
@@ -338,6 +339,12 @@ func TestGoogleTTSStreamErrorsWhenLaterReferenceSegmentProducesNoAudio(t *testin
 	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
 		t.Fatalf("first final = (%+v, %v), want final marker", final, err)
 	}
+	if !streamClient.closed {
+		t.Fatal("first stream closed = false after first Flush")
+	}
+	if client.streamCalls != 1 || len(streamClient.sent) != 2 {
+		t.Fatalf("first segment calls = %d sent=%d, want one stream with config and input", client.streamCalls, len(streamClient.sent))
+	}
 
 	if err := stream.PushText("second"); err != nil {
 		t.Fatalf("PushText second returned error: %v", err)
@@ -345,18 +352,14 @@ func TestGoogleTTSStreamErrorsWhenLaterReferenceSegmentProducesNoAudio(t *testin
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush second returned error: %v", err)
 	}
-
-	audio, err = stream.Next()
-
-	if audio != nil {
-		t.Fatalf("second Next audio = %+v, want nil no-audio error", audio)
+	if client.streamCalls != 1 {
+		t.Fatalf("stream calls after second segment = %d, want second segment ignored like reference", client.streamCalls)
 	}
-	var apiErr *llm.APIError
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("second Next error = %T %v, want APIError", err, err)
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent requests after second segment = %d, want no second provider input", len(streamClient.sent))
 	}
-	if !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: second") {
-		t.Fatalf("APIError = %q, want second segment no-audio message", apiErr.Error())
+	if got := streamClient.sent[1].GetInput().GetText(); got != "first" {
+		t.Fatalf("provider input after ignored second segment = %q, want first", got)
 	}
 }
 
