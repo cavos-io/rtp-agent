@@ -1376,6 +1376,16 @@ func (s *googleSTTStream) readLoopV2() {
 			if s.currentStreamV2() != stream {
 				continue
 			}
+			if s.shouldRestartAfterConflict(err) {
+				restarted, restartErr := s.restartStreamV2WithError(stream)
+				if restarted {
+					lastUsageEventTime = 0
+					continue
+				}
+				if restartErr != nil {
+					err = restartErr
+				}
+			}
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
 			}

@@ -2767,6 +2767,51 @@ func TestGoogleSTTStreamResetsReferenceUsageAfterReconnect(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamRestartsV2AfterReference409(t *testing.T) {
+	firstStream := &fakeGoogleV2StreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	restartedRecv := make(chan struct{})
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: restartedRecv}
+	client := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithV2Client(
+		client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want v2 restarted stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for v2 restarted stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first v2 stream closed = false after restart")
+	}
+	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
+		t.Fatalf("second v2 stream sent = %#v, want fresh config", secondStream.sent)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("second"), SampleRate: 16000}); err != nil {
+		t.Fatalf("PushFrame after v2 restart returned error: %v", err)
+	}
+	if len(secondStream.sent) != 2 || string(secondStream.sent[1].GetAudio()) != "second" {
+		t.Fatalf("second v2 stream sent = %#v, want later audio on restarted stream", secondStream.sent)
+	}
+	close(restartedRecv)
+}
+
 func TestGoogleSTTStreamPropagatesClientErrors(t *testing.T) {
 	wantErr := errors.New("stream error")
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: wantErr})
@@ -3507,6 +3552,7 @@ type fakeGoogleV2StreamingRecognizeClient struct {
 	responses []*speechv2pb.StreamingRecognizeResponse
 	recvIndex int
 	recvBlock chan struct{}
+	recvErr   error
 	closed    bool
 	closeErr  error
 }
@@ -3521,6 +3567,9 @@ func (c *fakeGoogleV2StreamingRecognizeClient) Recv() (*speechv2pb.StreamingReco
 		if c.recvBlock != nil {
 			<-c.recvBlock
 			c.recvBlock = nil
+		}
+		if c.recvErr != nil {
+			return nil, c.recvErr
 		}
 		return nil, io.EOF
 	}
