@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/speech/apiv1/speechpb"
+	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -1832,6 +1833,78 @@ func TestGoogleSTTStreamConfigOmitsReferenceV1SpeechTimeouts(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamUsesReferenceV2EndpointingConfig(t *testing.T) {
+	streamClient := &fakeGoogleV2StreamingRecognizeClient{}
+	provider := newGoogleSTTWithV2Client(
+		&fakeGoogleV2SpeechClient{stream: streamClient},
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation("us-central1"),
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTSpeechStartTimeout(1500*time.Millisecond),
+		WithGoogleSTTSpeechEndTimeout(750*time.Millisecond),
+		WithGoogleSTTEndpointingSensitivity("ENDPOINTING_SENSITIVITY_SHORT"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if len(streamClient.sent) != 1 {
+		t.Fatalf("sent requests = %d, want initial v2 config", len(streamClient.sent))
+	}
+	req := streamClient.sent[0]
+	if got := req.GetRecognizer(); got != "projects/voice-project/locations/us-central1/recognizers/_" {
+		t.Fatalf("recognizer = %q, want reference implicit recognizer", got)
+	}
+	config := req.GetStreamingConfig()
+	if config == nil {
+		t.Fatal("streaming config = nil")
+	}
+	recognition := config.GetConfig()
+	if recognition == nil {
+		t.Fatal("recognition config = nil")
+	}
+	decoding := recognition.GetExplicitDecodingConfig()
+	if decoding == nil {
+		t.Fatal("explicit decoding config = nil")
+	}
+	if decoding.GetEncoding() != speechv2pb.ExplicitDecodingConfig_LINEAR16 || decoding.GetSampleRateHertz() != 16000 || decoding.GetAudioChannelCount() != 1 {
+		t.Fatalf("decoding = %+v, want LINEAR16 16k mono", decoding)
+	}
+	features := recognition.GetFeatures()
+	if features == nil {
+		t.Fatal("recognition features = nil")
+	}
+	if features.GetEnableWordTimeOffsets() {
+		t.Fatal("word time offsets = true, want disabled for chirp_3")
+	}
+	streaming := config.GetStreamingFeatures()
+	if streaming == nil {
+		t.Fatal("streaming features = nil")
+	}
+	if !streaming.GetInterimResults() {
+		t.Fatal("interim results = false, want true")
+	}
+	if !streaming.GetEnableVoiceActivityEvents() {
+		t.Fatal("voice activity events = false, want auto-enabled when v2 timeouts are set")
+	}
+	timeout := streaming.GetVoiceActivityTimeout()
+	if timeout == nil {
+		t.Fatal("voice activity timeout = nil")
+	}
+	if timeout.GetSpeechStartTimeout().AsDuration() != 1500*time.Millisecond {
+		t.Fatalf("speech start timeout = %v, want 1.5s", timeout.GetSpeechStartTimeout().AsDuration())
+	}
+	if timeout.GetSpeechEndTimeout().AsDuration() != 750*time.Millisecond {
+		t.Fatalf("speech end timeout = %v, want 750ms", timeout.GetSpeechEndTimeout().AsDuration())
+	}
+	if got := streaming.GetEndpointingSensitivity(); got != speechv2pb.StreamingRecognitionFeatures_ENDPOINTING_SENSITIVITY_SHORT {
+		t.Fatalf("endpointing sensitivity = %v, want short", got)
+	}
+}
+
 func TestGoogleSTTStreamIgnoresTranscriptOnVoiceActivityEvent(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
@@ -2679,6 +2752,52 @@ func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.Re
 	c.recognizeRequest = req
 	return c.recognizeResponse, c.recognizeErr
 }
+
+type fakeGoogleV2SpeechClient struct {
+	stream      speechv2pb.Speech_StreamingRecognizeClient
+	streamCalls int
+	streamErr   error
+}
+
+func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechv2pb.Speech_StreamingRecognizeClient, error) {
+	c.streamCalls++
+	return c.stream, c.streamErr
+}
+
+type fakeGoogleV2StreamingRecognizeClient struct {
+	sent      []*speechv2pb.StreamingRecognizeRequest
+	responses []*speechv2pb.StreamingRecognizeResponse
+	recvIndex int
+	closed    bool
+	closeErr  error
+}
+
+func (c *fakeGoogleV2StreamingRecognizeClient) Send(req *speechv2pb.StreamingRecognizeRequest) error {
+	c.sent = append(c.sent, req)
+	return nil
+}
+
+func (c *fakeGoogleV2StreamingRecognizeClient) Recv() (*speechv2pb.StreamingRecognizeResponse, error) {
+	if c.recvIndex >= len(c.responses) {
+		return nil, io.EOF
+	}
+	resp := c.responses[c.recvIndex]
+	c.recvIndex++
+	return resp, nil
+}
+
+func (c *fakeGoogleV2StreamingRecognizeClient) CloseSend() error {
+	c.closed = true
+	return c.closeErr
+}
+
+func (c *fakeGoogleV2StreamingRecognizeClient) Header() (metadata.MD, error) {
+	return nil, nil
+}
+func (c *fakeGoogleV2StreamingRecognizeClient) Trailer() metadata.MD     { return nil }
+func (c *fakeGoogleV2StreamingRecognizeClient) Context() context.Context { return context.Background() }
+func (c *fakeGoogleV2StreamingRecognizeClient) SendMsg(m any) error      { return nil }
+func (c *fakeGoogleV2StreamingRecognizeClient) RecvMsg(m any) error      { return nil }
 
 type fakeGoogleStreamingRecognizeClient struct {
 	sent               []*speechpb.StreamingRecognizeRequest
