@@ -123,6 +123,7 @@ type appGoogleTTSConfig struct {
 	volumeGainDB     float64
 	streaming        *bool
 	ssml             *bool
+	markup           *bool
 }
 
 type appGoogleSTTConfig struct {
@@ -200,6 +201,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	}
 	if cfg.ssml != nil {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSSSML(*cfg.ssml))
+	}
+	if cfg.markup != nil {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSMarkup(*cfg.markup))
 	}
 	return adaptergoogle.NewGoogleTTS(credentialsFile, ttsOpts...)
 }
@@ -3983,6 +3987,10 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		prompt:    cfg.TTSInstructions,
 		streaming: cfg.TTSStreaming,
 		ssml:      cfg.TTSEnableSSMLParsing,
+	}
+	if strings.EqualFold(cfg.TTSTextType, "markup") {
+		markup := true
+		googleCfg.markup = &markup
 	}
 	if cfg.TTSSpeakingRate != nil {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate

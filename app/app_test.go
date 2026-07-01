@@ -13443,6 +13443,32 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleTTSMarkup(t *testing.T) {
+	original := appNewGoogleTTS
+	defer func() { appNewGoogleTTS = original }()
+
+	var googleCfg appGoogleTTSConfig
+	appNewGoogleTTS = func(_ string, cfg appGoogleTTSConfig) (tts.TTS, error) {
+		googleCfg = cfg
+		return &fakeAppTTS{}, nil
+	}
+
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_TTS_TEXT_TYPE", "markup")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if googleCfg.markup == nil || !*googleCfg.markup {
+		t.Fatalf("markup = %v, want explicit true", googleCfg.markup)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	original := appNewGoogleSTT
 	defer func() { appNewGoogleSTT = original }()
