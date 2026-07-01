@@ -984,6 +984,27 @@ func TestGoogleTTSUpdateOptionsPreservesExplicitEmptyModel(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSUpdateOptionsPreservesExplicitEmptyLanguage(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSLanguage("id-ID"))
+
+	provider.UpdateOptions(WithGoogleTTSLanguage(""))
+
+	if provider.voice.GetName() != "" || provider.voice.GetLanguageCode() != "" || provider.voice.GetModelName() != "" {
+		t.Fatalf("voice = %+v, want reference replacement with explicit empty language", provider.voice)
+	}
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize after empty language update error = %v", err)
+	}
+	defer stream.Close()
+	if voice := client.request.GetVoice(); voice.GetName() != "" || voice.GetLanguageCode() != "" || voice.GetModelName() != "" {
+		t.Fatalf("request voice = %+v, want explicit empty language", voice)
+	}
+}
+
 func TestGoogleTTSPromptMatchesReferenceRequests(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

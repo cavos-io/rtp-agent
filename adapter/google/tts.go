@@ -79,10 +79,8 @@ type googleTTSConfig struct {
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if language != "" {
-			cfg.language = language
-			cfg.languageSet = true
-		}
+		cfg.language = language
+		cfg.languageSet = true
 	}
 }
 
