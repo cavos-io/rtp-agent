@@ -1745,6 +1745,35 @@ func TestGoogleTTSAudioConfigOptionsMatchReferenceRequests(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeSnapshotsReferenceAudioConfig(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client,
+		WithGoogleTTSSpeakingRate(1.25),
+		WithGoogleTTSVolumeGainDB(-2.0),
+	)
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+
+	provider.UpdateOptions(
+		WithGoogleTTSSpeakingRate(0.8),
+		WithGoogleTTSVolumeGainDB(3.5),
+	)
+
+	audio := client.request.GetAudioConfig()
+	if got := audio.GetSpeakingRate(); got != 1.25 {
+		t.Fatalf("request speaking rate after provider update = %v, want snapshot 1.25", got)
+	}
+	if got := audio.GetVolumeGainDb(); got != -2.0 {
+		t.Fatalf("request volume gain after provider update = %v, want snapshot -2.0", got)
+	}
+}
+
 func TestGoogleTTSUpdateOptionsKeepsReferencePronunciationControls(t *testing.T) {
 	initialEncoding := texttospeech.CustomPronunciationParams_PHONETIC_ENCODING_X_SAMPA
 	initialPhrase := "Cavos"

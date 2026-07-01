@@ -408,10 +408,11 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	if t.ssml && t.markup {
 		return nil, errors.New("SSML support is not available for markup input")
 	}
+	audio := googleCloneAudioConfig(t.audio)
 	req := &texttospeechpb.SynthesizeSpeechRequest{
 		Input:       googleTTSSynthesisInput(text, t.prompt, t.custom, t.ssml, t.markup),
 		Voice:       t.voice,
-		AudioConfig: t.audio,
+		AudioConfig: audio,
 	}
 
 	resp, err := t.client.SynthesizeSpeech(ctx, req)
@@ -421,9 +422,9 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	return &googleTTSChunkedStream{
 		data:       resp.AudioContent,
-		encoding:   t.audio.GetAudioEncoding(),
+		encoding:   audio.GetAudioEncoding(),
 		inputText:  text,
-		sampleRate: t.audio.GetSampleRateHertz(),
+		sampleRate: audio.GetSampleRateHertz(),
 	}, nil
 }
 
