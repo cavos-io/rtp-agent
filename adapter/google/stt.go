@@ -28,6 +28,7 @@ type GoogleSTT struct {
 	closed               bool
 	model                string
 	streaming            bool
+	detectLanguage       bool
 	interimResults       bool
 	punctuate            bool
 	spokenPunctuation    bool
@@ -67,6 +68,12 @@ func WithGoogleSTTModel(model string) GoogleSTTOption {
 func WithGoogleSTTStreaming(enabled bool) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		s.streaming = enabled
+	}
+}
+
+func WithGoogleSTTDetectLanguage(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.detectLanguage = enabled
 	}
 }
 
@@ -197,6 +204,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		client:               client,
 		model:                "latest_long",
 		streaming:            true,
+		detectLanguage:       true,
 		interimResults:       true,
 		punctuate:            true,
 		sampleRate:           16000,
@@ -362,7 +370,7 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 		SampleRateHertz:            s.sampleRate,
 		AudioChannelCount:          1,
 		LanguageCode:               language,
-		AlternativeLanguageCodes:   append([]string(nil), s.alternativeLanguages...),
+		AlternativeLanguageCodes:   googleAlternativeLanguageCodes(s),
 		EnableWordTimeOffsets:      googleEnableWordTimeOffsets(s),
 		EnableWordConfidence:       s.enableWordConfidence,
 		EnableAutomaticPunctuation: s.punctuate,
@@ -371,6 +379,13 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 		Model:                      s.model,
 		Adaptation:                 googleSpeechAdaptation(s),
 	}
+}
+
+func googleAlternativeLanguageCodes(s *GoogleSTT) []string {
+	if s == nil || !s.detectLanguage {
+		return nil
+	}
+	return append([]string(nil), s.alternativeLanguages...)
 }
 
 func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
