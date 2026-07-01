@@ -960,7 +960,7 @@ func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
 	}
 }
 
-func TestGoogleSTTStreamEmitsEndOfSpeechAfterFinalTranscript(t *testing.T) {
+func TestGoogleSTTStreamDoesNotEndSpeechAfterFinalTranscriptOnly(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{{
@@ -988,12 +988,54 @@ func TestGoogleSTTStreamEmitsEndOfSpeechAfterFinalTranscript(t *testing.T) {
 		t.Fatalf("first event type = %v, want final transcript", final.Type)
 	}
 
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("second event = %#v, want no end-of-speech without provider activity end", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
+func TestGoogleSTTStreamEmitsProviderActivityEndAfterFinalTranscript(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{
+			{
+				Results: []*speechpb.StreamingRecognitionResult{{
+					IsFinal: true,
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "done",
+						Confidence: 0.9,
+					}},
+				}},
+			},
+			{
+				SpeechEventType: speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_END,
+			},
+		},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("first event type = %v, want final transcript", final.Type)
+	}
+
 	end, err := stream.Next()
 	if err != nil {
 		t.Fatalf("second Next returned error: %v", err)
 	}
 	if end.Type != stt.SpeechEventEndOfSpeech {
-		t.Fatalf("second event type = %v, want end of speech", end.Type)
+		t.Fatalf("second event type = %v, want provider end of speech", end.Type)
 	}
 }
 
