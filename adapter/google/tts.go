@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
@@ -414,9 +415,11 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		Voice:       t.voice,
 		AudioConfig: audio,
 	}
+	streamCtx, cancel := context.WithCancel(ctx)
 
 	return &googleTTSChunkedStream{
-		ctx:        ctx,
+		ctx:        streamCtx,
+		cancel:     cancel,
 		client:     t.client,
 		request:    req,
 		encoding:   audio.GetAudioEncoding(),
@@ -502,9 +505,11 @@ func googleCloneAudioConfig(config *texttospeechpb.AudioConfig) *texttospeechpb.
 
 type googleTTSChunkedStream struct {
 	ctx            context.Context
+	cancel         context.CancelFunc
 	client         googleTTSClient
 	request        *texttospeechpb.SynthesizeSpeechRequest
 	requested      bool
+	closed         atomic.Bool
 	data           []byte
 	offset         int
 	encoding       texttospeechpb.AudioEncoding
@@ -518,8 +523,14 @@ type googleTTSChunkedStream struct {
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed.Load() {
+		return nil, io.EOF
+	}
 	if err := s.ensureResponse(); err != nil {
 		return nil, err
+	}
+	if s.closed.Load() {
+		return nil, io.EOF
 	}
 	if googleTTSUsesCompressedDecoder(s.encoding) {
 		return s.nextDecodedAudio()
@@ -574,7 +585,13 @@ func (s *googleTTSChunkedStream) ensureResponse() error {
 	resp, err := s.client.SynthesizeSpeech(s.ctx, s.request)
 	if err != nil {
 		s.finalSent = true
+		if s.closed.Load() {
+			return io.EOF
+		}
 		return googleTTSSynthesisError(err)
+	}
+	if s.closed.Load() {
+		return io.EOF
 	}
 	if resp != nil {
 		s.data = resp.AudioContent
@@ -633,7 +650,10 @@ func (s *googleTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *googleTTSChunkedStream) Close() error {
-	s.finalSent = true
+	s.closed.Store(true)
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.decoder != nil {
 		return s.decoder.Close()
 	}

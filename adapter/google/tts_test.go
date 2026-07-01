@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -1687,6 +1688,59 @@ func TestGoogleTTSSynthesizeCloseBeforeNextSkipsReferenceRequest(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeCloseCancelsInFlightReferenceRequest(t *testing.T) {
+	entered := make(chan struct{})
+	client := &fakeGoogleTTSClient{
+		blockSynthesize:  entered,
+		response:         &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		synthesizeErrCh:  make(chan error, 1),
+		synthesizeDoneCh: make(chan struct{}),
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			errCh <- fmt.Errorf("Next audio = %#v, want nil after close", audio)
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("provider synthesize request did not start")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	select {
+	case err := <-client.synthesizeErrCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("provider synthesize error = %v, want context.Canceled", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("provider synthesize did not observe context cancellation")
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want EOF", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next did not unblock after Close")
+	}
+}
+
 func TestGoogleTTSStreamAfterCloseIsRejected(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client)
@@ -2036,18 +2090,36 @@ func requireGoogleTTSSynthesizeRequest(t *testing.T, stream tts.ChunkedStream, c
 }
 
 type fakeGoogleTTSClient struct {
-	request         *texttospeech.SynthesizeSpeechRequest
-	synthesizeCalls int
-	response        *texttospeech.SynthesizeSpeechResponse
-	stream          *fakeGoogleTTSStream
-	streams         []*fakeGoogleTTSStream
-	streamCalls     int
-	err             error
+	request          *texttospeech.SynthesizeSpeechRequest
+	synthesizeCalls  int
+	response         *texttospeech.SynthesizeSpeechResponse
+	blockSynthesize  chan struct{}
+	synthesizeErrCh  chan error
+	synthesizeDoneCh chan struct{}
+	stream           *fakeGoogleTTSStream
+	streams          []*fakeGoogleTTSStream
+	streamCalls      int
+	err              error
 }
 
 func (c *fakeGoogleTTSClient) SynthesizeSpeech(ctx context.Context, req *texttospeech.SynthesizeSpeechRequest, opts ...gax.CallOption) (*texttospeech.SynthesizeSpeechResponse, error) {
 	c.synthesizeCalls++
 	c.request = req
+	if c.blockSynthesize != nil {
+		close(c.blockSynthesize)
+		err := ctx.Err()
+		if err == nil {
+			<-ctx.Done()
+			err = ctx.Err()
+		}
+		if c.synthesizeErrCh != nil {
+			c.synthesizeErrCh <- err
+		}
+		if c.synthesizeDoneCh != nil {
+			close(c.synthesizeDoneCh)
+		}
+		return nil, err
+	}
 	return c.response, c.err
 }
 
