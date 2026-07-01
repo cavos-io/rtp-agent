@@ -120,10 +120,8 @@ func WithGoogleTTSVoiceCloneKey(key string) GoogleTTSOption {
 
 func WithGoogleTTSModel(model string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if model != "" {
-			cfg.model = model
-			cfg.modelSet = true
-		}
+		cfg.model = model
+		cfg.modelSet = true
 	}
 }
 
