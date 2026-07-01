@@ -562,6 +562,9 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		}
 		if err != nil {
 			if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
+				if !s.responseGenerated {
+					return nil, llm.NewAPIStatusError("no response generated", -1, "", nil)
+				}
 				return nil, io.EOF
 			}
 			return nil, err

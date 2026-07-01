@@ -542,6 +542,27 @@ func TestGoogleLLMStreamReturnsAPIStatusErrorWhenNoResponseGenerated(t *testing.
 	}
 }
 
+func TestGoogleLLMStreamReturnsAPIStatusErrorWhenPageDoneWithoutOutput(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, genai.ErrPageDone, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "no response generated" {
+		t.Fatalf("APIStatusError message = %q, want no response generated", statusErr.Message)
+	}
+}
+
 func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		Candidates: []*genai.Candidate{{
