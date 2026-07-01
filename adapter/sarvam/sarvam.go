@@ -296,7 +296,10 @@ func (s *SarvamSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSarvamSTTWebsocketURL(s, language).String(), buildSarvamSTTWebsocketHeaders(s))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial sarvam stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial sarvam stt websocket: %v", err))
 	}
 	if s.isClosed() {
 		conn.Close()
