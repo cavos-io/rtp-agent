@@ -27,6 +27,7 @@ type GoogleSTT struct {
 	client               googleSpeechClient
 	closed               bool
 	model                string
+	interimResults       bool
 	punctuate            bool
 	spokenPunctuation    bool
 	profanityFilter      bool
@@ -58,6 +59,12 @@ func WithGoogleSTTModel(model string) GoogleSTTOption {
 		if model != "" {
 			s.model = model
 		}
+	}
+}
+
+func WithGoogleSTTInterimResults(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.interimResults = enabled
 	}
 }
 
@@ -169,6 +176,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		streams:              make(map[*googleSTTStream]struct{}),
 		client:               client,
 		model:                "latest_long",
+		interimResults:       true,
 		punctuate:            true,
 		sampleRate:           16000,
 		minConfidence:        0.65,
@@ -282,7 +290,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
 				Config:                    googleRecognitionConfig(s, language),
-				InterimResults:            true,
+				InterimResults:            s.interimResults,
 				EnableVoiceActivityEvents: s.voiceActivityEvents || s.speechStartTimeout > 0 || s.speechEndTimeout > 0,
 				VoiceActivityTimeout:      googleVoiceActivityTimeout(s),
 			},

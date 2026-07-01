@@ -454,6 +454,25 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamConfigUsesReferenceInterimResultsOption(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTInterimResults(false),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	config := streamClient.sent[0].GetStreamingConfig()
+	if config.GetInterimResults() {
+		t.Fatal("interim_results = true, want false from reference interim_results option")
+	}
+}
+
 func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
