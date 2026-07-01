@@ -496,6 +496,24 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *testing.T) {
+	safety := []*genai.SafetySetting{{
+		Category:  genai.HarmCategoryHarassment,
+		Threshold: genai.HarmBlockThresholdBlockOnlyHigh,
+	}}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"safety_settings": safety,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !reflect.DeepEqual(config.SafetySettings, safety) {
+		t.Fatalf("safety settings = %#v, want %#v", config.SafetySettings, safety)
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false

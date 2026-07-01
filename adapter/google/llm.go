@@ -244,6 +244,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleThinkingConfigParam(params["thinking_config"]); ok {
 		config.ThinkingConfig = value
 	}
+	if value, ok := googleSafetySettingsParam(params["safety_settings"]); ok {
+		config.SafetySettings = value
+	}
 }
 
 func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[string]any) {
@@ -369,6 +372,28 @@ func googleThinkingLevelParam(value any) (genai.ThinkingLevel, bool) {
 		return genai.ThinkingLevel(strings.ToUpper(level)), true
 	default:
 		return "", false
+	}
+}
+
+func googleSafetySettingsParam(value any) ([]*genai.SafetySetting, bool) {
+	switch settings := value.(type) {
+	case []*genai.SafetySetting:
+		if len(settings) == 0 {
+			return nil, false
+		}
+		return append([]*genai.SafetySetting(nil), settings...), true
+	case []genai.SafetySetting:
+		if len(settings) == 0 {
+			return nil, false
+		}
+		result := make([]*genai.SafetySetting, 0, len(settings))
+		for i := range settings {
+			setting := settings[i]
+			result = append(result, &setting)
+		}
+		return result, true
+	default:
+		return nil, false
 	}
 }
 
