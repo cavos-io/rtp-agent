@@ -976,6 +976,7 @@ func (s *googleSTTStream) readLoop() {
 func (s *googleSTTStream) readLoopV2() {
 	defer close(s.events)
 	var speechStarted bool
+	var lastUsageEventTime float64
 	for {
 		stream := s.currentStreamV2()
 		resp, err := stream.Recv()
@@ -1021,6 +1022,17 @@ func (s *googleSTTStream) readLoopV2() {
 					}
 				}
 			}
+		}
+
+		if audioDuration := googleStreamingAudioDurationV2(resp, lastUsageEventTime); audioDuration > 0 {
+			s.events <- &stt.SpeechEvent{
+				Type:      stt.SpeechEventRecognitionUsage,
+				RequestID: googleStreamingRequestIDV2(resp),
+				RecognitionUsage: &stt.RecognitionUsage{
+					AudioDuration: audioDuration,
+				},
+			}
+			lastUsageEventTime += audioDuration
 		}
 	}
 }
@@ -1194,6 +1206,26 @@ func googleStreamingAudioDuration(resp *speechpb.StreamingRecognizeResponse, las
 		total = resp.GetSpeechEventTime().AsDuration().Seconds()
 	}
 	return total - lastUsageEventTime
+}
+
+func googleStreamingAudioDurationV2(resp *speechv2pb.StreamingRecognizeResponse, lastUsageEventTime float64) float64 {
+	if resp == nil {
+		return 0
+	}
+	var total float64
+	if resp.GetMetadata().GetTotalBilledDuration() != nil {
+		total = resp.GetMetadata().GetTotalBilledDuration().AsDuration().Seconds()
+	} else if resp.GetSpeechEventOffset() != nil {
+		total = resp.GetSpeechEventOffset().AsDuration().Seconds()
+	}
+	return total - lastUsageEventTime
+}
+
+func googleStreamingRequestIDV2(resp *speechv2pb.StreamingRecognizeResponse) string {
+	if resp == nil || resp.GetMetadata() == nil {
+		return ""
+	}
+	return resp.GetMetadata().GetRequestId()
 }
 
 func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRecognitionResult, minConfidence float64, startTimeOffset float64, language string) (stt.SpeechData, stt.SpeechEventType, bool) {

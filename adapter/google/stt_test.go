@@ -1905,6 +1905,62 @@ func TestGoogleSTTStreamUsesReferenceV2EndpointingConfig(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamEmitsReferenceV2RecognitionUsage(t *testing.T) {
+	streamClient := &fakeGoogleV2StreamingRecognizeClient{
+		responses: []*speechv2pb.StreamingRecognizeResponse{
+			{
+				SpeechEventOffset: durationpb.New(400 * time.Millisecond),
+				Metadata:          &speechv2pb.RecognitionResponseMetadata{RequestId: "v2-first"},
+			},
+			{
+				Metadata: &speechv2pb.RecognitionResponseMetadata{
+					RequestId:           "v2-final",
+					TotalBilledDuration: durationpb.New(time.Second),
+				},
+			},
+		},
+	}
+	provider := newGoogleSTTWithV2Client(
+		&fakeGoogleV2SpeechClient{stream: streamClient},
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("first event type = %v, want recognition_usage", first.Type)
+	}
+	if first.RequestID != "v2-first" {
+		t.Fatalf("first request id = %q, want v2-first", first.RequestID)
+	}
+	if first.RecognitionUsage == nil || first.RecognitionUsage.AudioDuration != 0.4 {
+		t.Fatalf("first usage = %+v, want 0.4s", first.RecognitionUsage)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("second event type = %v, want recognition_usage", second.Type)
+	}
+	if second.RequestID != "v2-final" {
+		t.Fatalf("second request id = %q, want v2-final", second.RequestID)
+	}
+	if second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.6 {
+		t.Fatalf("second usage = %+v, want 0.6s delta", second.RecognitionUsage)
+	}
+}
+
 func TestGoogleSTTStreamIgnoresTranscriptOnVoiceActivityEvent(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
