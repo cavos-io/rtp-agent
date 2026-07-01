@@ -139,7 +139,8 @@ func buildGoogleGenerateContentConfigForModel(model string, options *llm.ChatOpt
 	applyGoogleExtraParams(config, options.ExtraParams)
 	normalizeGoogleThinkingConfigForModel(config, model)
 	applyGoogleResponseFormat(config, options.ResponseFormat)
-	if config.CachedContent != "" {
+	_, cachedContentSet := options.ExtraParams["cached_content"]
+	if cachedContentSet || config.CachedContent != "" {
 		config.SystemInstruction = nil
 		config.Tools = nil
 		config.ToolConfig = nil

@@ -427,6 +427,31 @@ func TestBuildGoogleGenerateContentConfigDropsToolsWithCachedContentLikeReferenc
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigDropsToolsWithEmptyCachedContent(t *testing.T) {
+	options := &llm.ChatOptions{
+		Tools:      []llm.Tool{googleRequestTestTool{}},
+		ToolChoice: "required",
+		ExtraParams: map[string]any{
+			"cached_content": "",
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "system prompt\n")
+
+	if config.CachedContent != "" {
+		t.Fatalf("CachedContent = %q, want explicit empty value", config.CachedContent)
+	}
+	if config.SystemInstruction != nil {
+		t.Fatalf("SystemInstruction = %#v, want nil with present cached_content", config.SystemInstruction)
+	}
+	if config.Tools != nil {
+		t.Fatalf("Tools = %#v, want nil with present cached_content", config.Tools)
+	}
+	if config.ToolConfig != nil {
+		t.Fatalf("ToolConfig = %#v, want nil with present cached_content", config.ToolConfig)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseSchemaExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
