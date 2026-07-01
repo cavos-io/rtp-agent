@@ -309,6 +309,75 @@ func TestGoogleTTSStreamErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamRunsReferenceSegmentsSequentially(t *testing.T) {
+	firstStream := &fakeGoogleTTSStream{
+		responses: []*texttospeech.StreamingSynthesizeResponse{{
+			AudioContent: []byte{1, 2, 3, 4},
+		}},
+	}
+	secondStream := &fakeGoogleTTSStream{
+		responses: []*texttospeech.StreamingSynthesizeResponse{{
+			AudioContent: []byte{5, 6, 7, 8},
+		}},
+	}
+	client := &fakeGoogleTTSClient{streams: []*fakeGoogleTTSStream{firstStream, secondStream}}
+	provider := newGoogleTTSWithClient(client)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText first returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush first returned error: %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first Next audio = %+v, want audio", audio)
+	}
+	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("first final = (%+v, %v), want final marker", final, err)
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after first Flush")
+	}
+	if client.streamCalls != 1 || len(firstStream.sent) != 2 {
+		t.Fatalf("first segment calls = %d sent=%d, want one stream with config and input", client.streamCalls, len(firstStream.sent))
+	}
+
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText second returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush second returned error: %v", err)
+	}
+	if client.streamCalls != 2 {
+		t.Fatalf("stream calls after second segment = %d, want second provider stream like reference", client.streamCalls)
+	}
+	if len(secondStream.sent) != 2 {
+		t.Fatalf("second stream sent requests = %d, want config and input", len(secondStream.sent))
+	}
+	if got := secondStream.sent[1].GetInput().GetText(); got != "second" {
+		t.Fatalf("second provider input = %q, want second", got)
+	}
+	secondAudio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next audio error = %v", err)
+	}
+	if secondAudio == nil || secondAudio.Frame == nil || !bytes.Equal(secondAudio.Frame.Data, []byte{5, 6, 7, 8}) {
+		t.Fatalf("second audio = %+v, want second provider audio", secondAudio)
+	}
+	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("second final = (%+v, %v), want final marker", final, err)
+	}
+}
+
 func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
@@ -685,6 +754,38 @@ func TestGoogleTTSStreamNextReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamTreatsReference409AsRetryable(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.AlreadyExists) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.AlreadyExists)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for reference 409 path")
+	}
+}
+
 func TestGoogleTTSStreamNextErrorTerminatesStream(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{recvErr: status.Error(codes.Unavailable, "unavailable")}
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
@@ -771,6 +872,52 @@ func TestGoogleTTSStreamCloseSuppressesProviderCloseError(t *testing.T) {
 	}
 	if !streamClient.closed {
 		t.Fatal("stream client closed = false after Close")
+	}
+}
+
+func TestGoogleTTSStreamCloseUnblocksPendingNext(t *testing.T) {
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleTTSStream{recvBlock: recvBlock}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			errCh <- errors.New("Next returned audio after Close")
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Next returned before Close: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want EOF", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next did not unblock after Close")
 	}
 }
 
@@ -1068,6 +1215,7 @@ type fakeGoogleTTSClient struct {
 	synthesizeCalls int
 	response        *texttospeech.SynthesizeSpeechResponse
 	stream          *fakeGoogleTTSStream
+	streams         []*fakeGoogleTTSStream
 	streamCalls     int
 	err             error
 }
@@ -1083,13 +1231,25 @@ func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...g
 	if c.err != nil {
 		return nil, c.err
 	}
+	if len(c.streams) > 0 {
+		stream := c.streams[0]
+		c.streams = c.streams[1:]
+		c.stream = stream
+		stream.ctx = ctx
+		return stream, nil
+	}
+	if c.stream != nil {
+		c.stream.ctx = ctx
+	}
 	return c.stream, nil
 }
 
 type fakeGoogleTTSStream struct {
 	grpc.ClientStream
+	ctx                context.Context
 	sent               []*texttospeech.StreamingSynthesizeRequest
 	responses          []*texttospeech.StreamingSynthesizeResponse
+	recvBlock          chan struct{}
 	recvErr            error
 	closed             bool
 	closeErr           error
@@ -1105,6 +1265,13 @@ func (s *fakeGoogleTTSStream) Send(req *texttospeech.StreamingSynthesizeRequest)
 }
 
 func (s *fakeGoogleTTSStream) Recv() (*texttospeech.StreamingSynthesizeResponse, error) {
+	if s.recvBlock != nil {
+		select {
+		case <-s.recvBlock:
+		case <-s.ctx.Done():
+		}
+		s.recvBlock = nil
+	}
 	if len(s.responses) == 0 {
 		if s.recvErr != nil {
 			return nil, s.recvErr
@@ -1122,6 +1289,11 @@ func (s *fakeGoogleTTSStream) CloseSend() error {
 	s.closed = true
 	return s.closeErr
 }
-func (s *fakeGoogleTTSStream) Context() context.Context { return context.Background() }
-func (s *fakeGoogleTTSStream) SendMsg(m any) error      { return nil }
-func (s *fakeGoogleTTSStream) RecvMsg(m any) error      { return nil }
+func (s *fakeGoogleTTSStream) Context() context.Context {
+	if s.ctx == nil {
+		return context.Background()
+	}
+	return s.ctx
+}
+func (s *fakeGoogleTTSStream) SendMsg(m any) error { return nil }
+func (s *fakeGoogleTTSStream) RecvMsg(m any) error { return nil }

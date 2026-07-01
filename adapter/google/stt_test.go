@@ -542,6 +542,35 @@ func TestGoogleSTTStreamUsesFirstReferenceFinalResult(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamSuppressesEmptyFinalTranscriptLikeReference(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal: true,
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "",
+					Confidence: 0.9,
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil for empty final transcript", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF after suppressed empty final", err)
+	}
+}
+
 func TestGoogleSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
@@ -712,6 +741,43 @@ func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
 	}
 	if start.Type != stt.SpeechEventStartOfSpeech {
 		t.Fatalf("first event type = %v, want start of speech", start.Type)
+	}
+
+	end, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("second event type = %v, want end of speech", end.Type)
+	}
+}
+
+func TestGoogleSTTStreamEmitsEndOfSpeechAfterFinalTranscript(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal: true,
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "done",
+					Confidence: 0.9,
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("first event type = %v, want final transcript", final.Type)
 	}
 
 	end, err := stream.Next()
@@ -1071,6 +1137,105 @@ func TestGoogleSTTStreamNextReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamTreatsReference409AsRetryable(t *testing.T) {
+	err := googleSTTStreamError(status.Error(codes.AlreadyExists, "stream conflict"))
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("mapped error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.AlreadyExists) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.AlreadyExists)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for reference 409 restart path")
+	}
+}
+
+func TestGoogleSTTStreamRestartsAfterReference409WithAudio(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	restartedRecv := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000}); err != nil {
+		t.Fatalf("first PushFrame returned error: %v", err)
+	}
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want restarted stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for restarted stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after restart")
+	}
+	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("second"), SampleRate: 16000}); err != nil {
+		t.Fatalf("second PushFrame after restart returned error: %v", err)
+	}
+	if len(secondStream.sent) != 2 || string(secondStream.sent[1].GetAudioContent()) != "second" {
+		t.Fatalf("second stream sent = %#v, want later audio on restarted stream", secondStream.sent)
+	}
+	close(restartedRecv)
+}
+
+func TestGoogleSTTStreamRestartsAfterReference409BeforeAudio(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	restartedRecv := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want pre-audio restart", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for pre-audio restart")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after pre-audio restart")
+	}
+	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000}); err != nil {
+		t.Fatalf("PushFrame after pre-audio restart returned error: %v", err)
+	}
+	if len(secondStream.sent) != 2 || string(secondStream.sent[1].GetAudioContent()) != "first" {
+		t.Fatalf("second stream sent = %#v, want audio on restarted stream", secondStream.sent)
+	}
+	close(restartedRecv)
+}
+
 func TestGoogleSTTStreamNextErrorTerminatesStream(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.Unavailable, "unavailable")}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
@@ -1249,8 +1414,10 @@ func TestGoogleSTTRecognizeAfterCloseIsRejected(t *testing.T) {
 }
 
 type fakeGoogleSpeechClient struct {
+	streams           []speechpb.Speech_StreamingRecognizeClient
 	stream            speechpb.Speech_StreamingRecognizeClient
 	streamErr         error
+	streamCallCh      chan int
 	streamCalls       int
 	recognizeRequest  *speechpb.RecognizeRequest
 	recognizeCalls    int
@@ -1260,6 +1427,14 @@ type fakeGoogleSpeechClient struct {
 
 func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechpb.Speech_StreamingRecognizeClient, error) {
 	c.streamCalls++
+	if c.streamCallCh != nil {
+		c.streamCallCh <- c.streamCalls
+	}
+	if len(c.streams) > 0 {
+		stream := c.streams[0]
+		c.streams = c.streams[1:]
+		return stream, c.streamErr
+	}
 	return c.stream, c.streamErr
 }
 
@@ -1274,6 +1449,7 @@ type fakeGoogleStreamingRecognizeClient struct {
 	responses          []*speechpb.StreamingRecognizeResponse
 	recvIndex          int
 	recvErr            error
+	recvBlock          chan struct{}
 	closed             bool
 	closeErr           error
 	sendErrOnConfig    error
@@ -1293,6 +1469,10 @@ func (c *fakeGoogleStreamingRecognizeClient) Send(req *speechpb.StreamingRecogni
 
 func (c *fakeGoogleStreamingRecognizeClient) Recv() (*speechpb.StreamingRecognizeResponse, error) {
 	if c.recvIndex >= len(c.responses) {
+		if c.recvBlock != nil {
+			<-c.recvBlock
+			c.recvBlock = nil
+		}
 		if c.recvErr != nil {
 			return nil, c.recvErr
 		}

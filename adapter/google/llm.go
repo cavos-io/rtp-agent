@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	cavosmath "github.com/cavos-io/rtp-agent/library/math"
@@ -54,7 +55,8 @@ func resolveGoogleAPIKey(apiKey string) string {
 }
 
 func googleModelRequiresThoughtSignatures(model string) bool {
-	return strings.HasPrefix(model, "gemini-2.5")
+	model = strings.ToLower(model)
+	return strings.Contains(model, "gemini-3") || strings.Contains(model, "gemini-2.5")
 }
 
 func (l *GoogleLLM) Model() string { return l.model }
@@ -230,6 +232,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["response_mime_type"].(string); ok {
 		config.ResponseMIMEType = value
 	}
+	if value, ok := googleResponseSchemaParam(params["response_schema"]); ok {
+		config.ResponseSchema = value
+	}
 	if value, ok := params["response_json_schema"]; ok {
 		config.ResponseJsonSchema = value
 	}
@@ -274,6 +279,17 @@ func googleInt32Param(value any) (int32, bool) {
 		return int32(v), true
 	default:
 		return 0, false
+	}
+}
+
+func googleResponseSchemaParam(value any) (*genai.Schema, bool) {
+	switch schema := value.(type) {
+	case *genai.Schema:
+		return schema, schema != nil
+	case map[string]any:
+		return googleSchemaFromMap(schema), true
+	default:
+		return nil, false
 	}
 }
 
@@ -337,13 +353,14 @@ func googleToolNames(tools []llm.Tool) []string {
 type googleLLMStream struct {
 	next              func() (*genai.GenerateContentResponse, error, bool)
 	stop              func()
-	closed            bool
+	closed            atomic.Bool
 	responseGenerated bool
 	chunkEmitted      bool
 	requestID         string
 	thoughtMu         *sync.RWMutex
 	thoughtSignatures map[string][]byte
 	pending           []*llm.ChatChunk
+	finishReason      genai.FinishReason
 }
 
 func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
@@ -589,11 +606,10 @@ func googleGroupID(itemID string, groupID *string) string {
 }
 
 func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
-	if s.closed {
+	if s.closed.Load() {
 		return nil, io.EOF
 	}
 	requestID := s.id()
-	finishReason := genai.FinishReasonUnspecified
 
 	for {
 		if len(s.pending) > 0 {
@@ -603,16 +619,19 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		resp, err, ok := s.next()
+		if s.closed.Load() {
+			return nil, io.EOF
+		}
 		if !ok {
 			if !s.responseGenerated {
-				return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(finishReason))
+				return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(s.finishReason))
 			}
 			return nil, io.EOF
 		}
 		if err != nil {
 			if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
 				if !s.responseGenerated {
-					return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(finishReason))
+					return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(s.finishReason))
 				}
 				return nil, io.EOF
 			}
@@ -642,7 +661,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
 			if cand.FinishReason != genai.FinishReasonUnspecified {
-				finishReason = cand.FinishReason
+				s.finishReason = cand.FinishReason
 			}
 			if googleBlockedFinishReason(cand.FinishReason) {
 				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, requestID, nil, false)
@@ -728,11 +747,11 @@ func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {
 			Role: llm.ChatRoleAssistant,
 		},
 	}
-	if part.Text != "" {
-		chunk.Delta.Content = part.Text
-		return chunk
-	}
 	if part.FunctionCall == nil {
+		if part.Text != "" {
+			chunk.Delta.Content = part.Text
+			return chunk
+		}
 		return nil
 	}
 	args, _ := json.Marshal(part.FunctionCall.Args)
@@ -766,11 +785,11 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 	if call.ID != "" {
 		return call.ID
 	}
-	return "call_" + call.Name
+	return cavosmath.ShortUUID("function_call_")
 }
 
 func (s *googleLLMStream) Close() error {
-	s.closed = true
+	s.closed.Store(true)
 	if s.stop != nil {
 		s.stop()
 	}
