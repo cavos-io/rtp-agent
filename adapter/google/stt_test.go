@@ -125,6 +125,16 @@ func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsPreservesExplicitEmptyLocation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
+
+	provider.UpdateOptions(WithGoogleSTTLocation(""))
+
+	if got := googleSTTEndpoint(provider); got != "" {
+		t.Fatalf("endpoint = %q, want empty default endpoint after explicit empty location", got)
+	}
+}
+
 func TestGoogleSTTStreamUsesConfiguredReferenceLanguage(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(

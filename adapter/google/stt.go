@@ -186,9 +186,7 @@ func WithGoogleSTTAlternativeLanguages(languages ...string) GoogleSTTOption {
 
 func WithGoogleSTTLocation(location string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if location != "" {
-			s.location = location
-		}
+		s.location = location
 	}
 }
 
