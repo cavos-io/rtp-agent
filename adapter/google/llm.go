@@ -305,6 +305,7 @@ type googleLLMStream struct {
 	stop              func()
 	closed            bool
 	responseGenerated bool
+	pending           []*llm.ChatChunk
 }
 
 func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
@@ -546,6 +547,12 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 	}
 
 	for {
+		if len(s.pending) > 0 {
+			chunk := s.pending[0]
+			s.pending = s.pending[1:]
+			return chunk, nil
+		}
+
 		resp, err, ok := s.next()
 		if !ok {
 			if !s.responseGenerated {
@@ -560,18 +567,23 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			return nil, err
 		}
 
-		chunk := &llm.ChatChunk{
-			Delta: &llm.ChoiceDelta{
-				Role: llm.ChatRoleAssistant,
-			},
-		}
-
 		if resp.PromptFeedback != nil {
 			message, marshalErr := json.Marshal(resp.PromptFeedback)
 			if marshalErr != nil {
 				return nil, marshalErr
 			}
 			return nil, llm.NewAPIStatusErrorWithRetryable(string(message), -1, "", nil, false)
+		}
+
+		if resp.UsageMetadata != nil {
+			s.pending = append(s.pending, &llm.ChatChunk{
+				Usage: &llm.CompletionUsage{
+					PromptTokens:       int(resp.UsageMetadata.PromptTokenCount),
+					PromptCachedTokens: int(resp.UsageMetadata.CachedContentTokenCount),
+					CompletionTokens:   int(resp.UsageMetadata.CandidatesTokenCount),
+					TotalTokens:        int(resp.UsageMetadata.TotalTokenCount),
+				},
+			})
 		}
 
 		if len(resp.Candidates) > 0 {
@@ -581,36 +593,48 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
-					if part.Text != "" {
-						chunk.Delta.Content += part.Text
-						s.responseGenerated = true
-					} else if part.FunctionCall != nil && !googleFunctionCallWillContinue(part.FunctionCall) {
-						args, _ := json.Marshal(part.FunctionCall.Args)
-						chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
-							Name:      part.FunctionCall.Name,
-							Arguments: string(args),
-							Type:      "function",
-							CallID:    googleFunctionCallID(part.FunctionCall),
-						})
-						s.responseGenerated = true
+					if chunk := googleChatChunkFromPart(part); chunk != nil {
+						if googleChatChunkHasOutput(chunk) {
+							s.responseGenerated = true
+						}
+						s.pending = append(s.pending, chunk)
 					}
 				}
 			}
 		}
 
-		if resp.UsageMetadata != nil {
-			chunk.Usage = &llm.CompletionUsage{
-				PromptTokens:       int(resp.UsageMetadata.PromptTokenCount),
-				PromptCachedTokens: int(resp.UsageMetadata.CachedContentTokenCount),
-				CompletionTokens:   int(resp.UsageMetadata.CandidatesTokenCount),
-				TotalTokens:        int(resp.UsageMetadata.TotalTokenCount),
-			}
-		}
-
-		if googleChatChunkHasOutput(chunk) {
+		if len(s.pending) > 0 {
+			chunk := s.pending[0]
+			s.pending = s.pending[1:]
 			return chunk, nil
 		}
 	}
+}
+
+func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {
+	if part == nil {
+		return nil
+	}
+	chunk := &llm.ChatChunk{
+		Delta: &llm.ChoiceDelta{
+			Role: llm.ChatRoleAssistant,
+		},
+	}
+	if part.Text != "" {
+		chunk.Delta.Content = part.Text
+		return chunk
+	}
+	if part.FunctionCall == nil || googleFunctionCallWillContinue(part.FunctionCall) {
+		return nil
+	}
+	args, _ := json.Marshal(part.FunctionCall.Args)
+	chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
+		Name:      part.FunctionCall.Name,
+		Arguments: string(args),
+		Type:      "function",
+		CallID:    googleFunctionCallID(part.FunctionCall),
+	})
+	return chunk
 }
 
 func googleBlockedFinishReason(reason genai.FinishReason) bool {

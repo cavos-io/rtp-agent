@@ -424,6 +424,63 @@ func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamEmitsPartsAsOrderedDeltas(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{
+							{Text: "checking"},
+							{
+								FunctionCall: &genai.FunctionCall{
+									ID:   "call_lookup",
+									Name: "lookup",
+									Args: map[string]any{"query": "weather"},
+								},
+							},
+						},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	textChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next() error = %v", err)
+	}
+	if textChunk == nil || textChunk.Delta == nil {
+		t.Fatalf("first chunk = %#v, want text delta", textChunk)
+	}
+	if textChunk.Delta.Content != "checking" {
+		t.Fatalf("first content = %q, want checking", textChunk.Delta.Content)
+	}
+	if len(textChunk.Delta.ToolCalls) != 0 {
+		t.Fatalf("first tool calls = %#v, want none", textChunk.Delta.ToolCalls)
+	}
+
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if toolChunk == nil || toolChunk.Delta == nil || len(toolChunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("second chunk = %#v, want one tool-call delta", toolChunk)
+	}
+	if toolChunk.Delta.Content != "" {
+		t.Fatalf("second content = %q, want empty", toolChunk.Delta.Content)
+	}
+	call := toolChunk.Delta.ToolCalls[0]
+	if call.CallID != "call_lookup" || call.Name != "lookup" || call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("tool call = %#v, want lookup weather", call)
+	}
+}
+
 func TestGoogleLLMStreamSkipsEmptyProviderDeltas(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{
 		{},
