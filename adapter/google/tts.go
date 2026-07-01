@@ -681,6 +681,9 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 	if s.inputEnded {
 		return nil
 	}
+	if s.flushed > 0 {
+		return nil
+	}
 	if _, err := s.buffer.WriteString(text); err != nil {
 		return err
 	}
