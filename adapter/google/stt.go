@@ -1369,8 +1369,13 @@ func (s *googleSTTStream) readLoopV2() {
 	defer close(s.events)
 	var speechStarted bool
 	var lastUsageEventTime float64
+	var usageStream speechv2pb.Speech_StreamingRecognizeClient
 	for {
 		stream := s.currentStreamV2()
+		if stream != usageStream {
+			lastUsageEventTime = 0
+			usageStream = stream
+		}
 		resp, err := stream.Recv()
 		if err != nil {
 			if s.currentStreamV2() != stream {

@@ -2767,6 +2767,68 @@ func TestGoogleSTTStreamResetsReferenceUsageAfterReconnect(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamResetsReferenceV2UsageAfterUpdateReconnect(t *testing.T) {
+	releaseFirst := make(chan struct{})
+	firstStream := &fakeGoogleV2StreamingRecognizeClient{
+		responses: []*speechv2pb.StreamingRecognizeResponse{{
+			Metadata: &speechv2pb.RecognitionResponseMetadata{
+				RequestId:           "first-usage",
+				TotalBilledDuration: durationpb.New(time.Second),
+			},
+		}},
+		recvBlock: releaseFirst,
+	}
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{responses: []*speechv2pb.StreamingRecognizeResponse{{
+		Metadata: &speechv2pb.RecognitionResponseMetadata{
+			RequestId:           "second-usage",
+			TotalBilledDuration: durationpb.New(500 * time.Millisecond),
+		},
+	}}}
+	client := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithV2Client(
+		client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	first, err := stream.Next()
+	if err != nil || first == nil || first.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("first event = (%#v, %v), want v2 recognition usage", first, err)
+	}
+	if first.RequestID != "first-usage" || first.RecognitionUsage == nil || first.RecognitionUsage.AudioDuration != 1 {
+		t.Fatalf("first usage = %#v, want 1s from first stream", first)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want v2 update reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for v2 update reconnect")
+	}
+	close(releaseFirst)
+
+	second, err := stream.Next()
+	if err != nil || second == nil || second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("second event = (%#v, %v), want fresh v2 usage from updated stream", second, err)
+	}
+	if second.RequestID != "second-usage" || second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.5 {
+		t.Fatalf("second usage = %#v, want fresh 0.5s after v2 update reconnect", second)
+	}
+}
+
 func TestGoogleSTTStreamRestartsV2AfterReference409(t *testing.T) {
 	firstStream := &fakeGoogleV2StreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
 	restartedRecv := make(chan struct{})
