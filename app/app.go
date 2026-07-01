@@ -6990,6 +6990,8 @@ var googleLLMExtraParamKeys = []string{
 	"top_k",
 	"stop_sequences",
 	"candidate_count",
+	"response_logprobs",
+	"logprobs",
 	"presence_penalty",
 	"frequency_penalty",
 	"max_output_tokens",

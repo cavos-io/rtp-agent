@@ -13389,7 +13389,7 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
-	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=none,service_tier=priority,stop_sequences=["</speak>","END"],candidate_count=2`)
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=none,service_tier=priority,stop_sequences=["</speak>","END"],candidate_count=2,response_logprobs=true,logprobs=3`)
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -13413,6 +13413,12 @@ func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T
 	}
 	if got := numericTestValue(params["candidate_count"]); got != 2 {
 		t.Fatalf("candidate_count = %#v, want 2", params["candidate_count"])
+	}
+	if params["response_logprobs"] != true {
+		t.Fatalf("response_logprobs = %#v, want true", params["response_logprobs"])
+	}
+	if got := numericTestValue(params["logprobs"]); got != 3 {
+		t.Fatalf("logprobs = %#v, want 3", params["logprobs"])
 	}
 	if app.Session.Options.ToolChoice != llm.ToolChoice("none") {
 		t.Fatalf("ToolChoice = %#v, want none", app.Session.Options.ToolChoice)
