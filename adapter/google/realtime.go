@@ -39,6 +39,17 @@ type RealtimeModel struct {
 	turnDetection             bool
 	inputAudioTranscription   bool
 	outputAudioTranscription  bool
+	candidateCount            int
+	maxOutputTokens           int
+	maxOutputTokensSet        bool
+	topP                      float64
+	topPSet                   bool
+	topK                      int
+	topKSet                   bool
+	presencePenalty           float64
+	presencePenaltySet        bool
+	frequencyPenalty          float64
+	frequencyPenaltySet       bool
 	temperature               float64
 	temperatureSet            bool
 	toolBehavior              any
@@ -61,6 +72,17 @@ type googleRealtimeOptions struct {
 	turnDetection             *bool
 	inputAudioTranscription   *bool
 	outputAudioTranscription  *bool
+	candidateCount            int
+	maxOutputTokens           int
+	maxOutputTokensSet        bool
+	topP                      float64
+	topPSet                   bool
+	topK                      int
+	topKSet                   bool
+	presencePenalty           float64
+	presencePenaltySet        bool
+	frequencyPenalty          float64
+	frequencyPenaltySet       bool
 	temperature               float64
 	temperatureSet            bool
 	toolBehavior              any
@@ -136,6 +158,47 @@ func WithGoogleRealtimeInputAudioTranscription(enabled bool) GoogleRealtimeOptio
 func WithGoogleRealtimeOutputAudioTranscription(enabled bool) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.outputAudioTranscription = &enabled
+	}
+}
+
+func WithGoogleRealtimeCandidateCount(count int) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.candidateCount = count
+	}
+}
+
+func WithGoogleRealtimeMaxOutputTokens(tokens int) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.maxOutputTokens = tokens
+		options.maxOutputTokensSet = true
+	}
+}
+
+func WithGoogleRealtimeTopP(topP float64) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.topP = topP
+		options.topPSet = true
+	}
+}
+
+func WithGoogleRealtimeTopK(topK int) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.topK = topK
+		options.topKSet = true
+	}
+}
+
+func WithGoogleRealtimePresencePenalty(penalty float64) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.presencePenalty = penalty
+		options.presencePenaltySet = true
+	}
+}
+
+func WithGoogleRealtimeFrequencyPenalty(penalty float64) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.frequencyPenalty = penalty
+		options.frequencyPenaltySet = true
 	}
 }
 
@@ -228,6 +291,10 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	if options.outputAudioTranscription != nil {
 		outputAudioTranscription = *options.outputAudioTranscription
 	}
+	candidateCount := options.candidateCount
+	if candidateCount == 0 {
+		candidateCount = 1
+	}
 	return &RealtimeModel{
 		apiKey:                    apiKey,
 		instructions:              options.instructions,
@@ -241,6 +308,17 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		turnDetection:             turnDetection,
 		inputAudioTranscription:   inputAudioTranscription,
 		outputAudioTranscription:  outputAudioTranscription,
+		candidateCount:            candidateCount,
+		maxOutputTokens:           options.maxOutputTokens,
+		maxOutputTokensSet:        options.maxOutputTokensSet,
+		topP:                      options.topP,
+		topPSet:                   options.topPSet,
+		topK:                      options.topK,
+		topKSet:                   options.topKSet,
+		presencePenalty:           options.presencePenalty,
+		presencePenaltySet:        options.presencePenaltySet,
+		frequencyPenalty:          options.frequencyPenalty,
+		frequencyPenaltySet:       options.frequencyPenaltySet,
 		temperature:               options.temperature,
 		temperatureSet:            options.temperatureSet,
 		toolBehavior:              options.toolBehavior,

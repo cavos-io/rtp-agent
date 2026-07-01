@@ -174,3 +174,36 @@ func TestGoogleRealtimeUpdateOptionsMatchesReference(t *testing.T) {
 		t.Fatalf("toolResponseScheduling = %#v, want WHEN_IDLE", model.toolResponseScheduling)
 	}
 }
+
+func TestGoogleRealtimeGenerationOptionsMatchReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeCandidateCount(2),
+		WithGoogleRealtimeMaxOutputTokens(96),
+		WithGoogleRealtimeTopP(0.7),
+		WithGoogleRealtimeTopK(32),
+		WithGoogleRealtimePresencePenalty(0.2),
+		WithGoogleRealtimeFrequencyPenalty(0.3),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	if model.candidateCount != 2 {
+		t.Fatalf("candidateCount = %d, want 2", model.candidateCount)
+	}
+	if !model.maxOutputTokensSet || model.maxOutputTokens != 96 {
+		t.Fatalf("maxOutputTokens = (%v, %d), want explicit 96", model.maxOutputTokensSet, model.maxOutputTokens)
+	}
+	if !model.topPSet || model.topP != 0.7 {
+		t.Fatalf("topP = (%v, %v), want explicit 0.7", model.topPSet, model.topP)
+	}
+	if !model.topKSet || model.topK != 32 {
+		t.Fatalf("topK = (%v, %d), want explicit 32", model.topKSet, model.topK)
+	}
+	if !model.presencePenaltySet || model.presencePenalty != 0.2 {
+		t.Fatalf("presencePenalty = (%v, %v), want explicit 0.2", model.presencePenaltySet, model.presencePenalty)
+	}
+	if !model.frequencyPenaltySet || model.frequencyPenalty != 0.3 {
+		t.Fatalf("frequencyPenalty = (%v, %v), want explicit 0.3", model.frequencyPenaltySet, model.frequencyPenalty)
+	}
+}
