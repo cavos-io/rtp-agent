@@ -822,6 +822,7 @@ func (s *googleSTTStream) terminate() {
 	s.mu.Lock()
 	if s.inputClosed {
 		s.mu.Unlock()
+		s.unregister()
 		return
 	}
 	s.inputClosed = true
@@ -1043,6 +1044,20 @@ func (s *googleSTTStream) Flush() error {
 	if tail := s.inputAudio.flush(); tail != nil {
 		return s.sendAudioFrameLocked(tail)
 	}
+	return nil
+}
+
+func (s *googleSTTStream) EndInput() error {
+	if err := s.Flush(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputClosed {
+		return io.ErrClosedPipe
+	}
+	s.inputClosed = true
+	_ = s.stream.CloseSend()
 	return nil
 }
 

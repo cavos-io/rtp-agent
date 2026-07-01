@@ -634,6 +634,84 @@ func TestGoogleSTTStreamFlushesReferenceResamplerTail(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamEndInputFlushesTailAndDrainsFinalLikeReference(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal: true,
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "done",
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{7, 0},
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatalf("stream type = %T, want reference EndInput support", stream)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+	if !streamClient.closed {
+		t.Fatal("EndInput did not close provider send side")
+	}
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent after EndInput = %d, want config plus flushed resampler tail", len(streamClient.sent))
+	}
+	if got, want := streamClient.sent[1].GetAudioContent(), []byte{7, 0}; !bytes.Equal(got, want) {
+		t.Fatalf("EndInput audio content = %#v, want flushed tail %#v", got, want)
+	}
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next after EndInput returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "done" {
+		t.Fatalf("Next after EndInput = %#v, want final transcript", event)
+	}
+}
+
+func TestGoogleSTTProviderCloseClosesEndedInputStream(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: make(chan struct{})}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatalf("stream type = %T, want EndInput support", stream)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput returned error: %v", err)
+	}
+	streamClient.closed = false
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close returned error: %v", err)
+	}
+	if !streamClient.closed {
+		t.Fatal("provider Close did not close stream after EndInput")
+	}
+	close(streamClient.recvBlock)
+}
+
 func TestGoogleSTTStreamExplicitLanguageOverridesReferenceAlternatives(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(
