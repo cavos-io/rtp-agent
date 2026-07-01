@@ -238,6 +238,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["response_json_schema"]; ok {
 		config.ResponseJsonSchema = value
 	}
+	if value, ok := googleRoutingConfigParam(params["routing_config"]); ok {
+		config.RoutingConfig = value
+	}
 	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
 		config.ResponseModalities = value
 	}
@@ -341,6 +344,11 @@ func googleResponseFormatSchema(format map[string]any) (*genai.Schema, bool) {
 
 func googleSpeechConfigParam(value any) (*genai.SpeechConfig, bool) {
 	config, ok := value.(*genai.SpeechConfig)
+	return config, ok && config != nil
+}
+
+func googleRoutingConfigParam(value any) (*genai.GenerationConfigRoutingConfig, bool) {
+	config, ok := value.(*genai.GenerationConfigRoutingConfig)
 	return config, ok && config != nil
 }
 

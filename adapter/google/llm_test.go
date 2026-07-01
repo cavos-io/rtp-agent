@@ -543,6 +543,25 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceRetrievalConfigExtra(t 
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceRoutingConfigExtra(t *testing.T) {
+	routing := &genai.GenerationConfigRoutingConfig{
+		ManualMode: &genai.GenerationConfigRoutingConfigManualRoutingMode{
+			ModelName: "gemini-2.5-flash",
+		},
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"routing_config": routing,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.RoutingConfig != routing {
+		t.Fatalf("RoutingConfig = %#v, want %#v", config.RoutingConfig, routing)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
