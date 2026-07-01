@@ -619,7 +619,7 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, googleTTSSynthesisError(err)
 		}
 		data := resp.GetAudioContent()
 		if len(data) == 0 {

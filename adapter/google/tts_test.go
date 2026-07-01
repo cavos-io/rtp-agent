@@ -533,6 +533,64 @@ func TestGoogleTTSStreamClosesAfterInputSendFailure(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamNextReturnsAPITimeoutError(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{recvErr: context.DeadlineExceeded}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGoogleTTSStreamNextReturnsAPIStatusError(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{recvErr: status.Error(codes.Unavailable, "unavailable")}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("status retryable = false, want true for unavailable")
+	}
+}
+
 func TestGoogleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{}
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
@@ -867,6 +925,7 @@ type fakeGoogleTTSStream struct {
 	grpc.ClientStream
 	sent               []*texttospeech.StreamingSynthesizeRequest
 	responses          []*texttospeech.StreamingSynthesizeResponse
+	recvErr            error
 	closed             bool
 	sendErrAfterConfig error
 }
@@ -881,6 +940,9 @@ func (s *fakeGoogleTTSStream) Send(req *texttospeech.StreamingSynthesizeRequest)
 
 func (s *fakeGoogleTTSStream) Recv() (*texttospeech.StreamingSynthesizeResponse, error) {
 	if len(s.responses) == 0 {
+		if s.recvErr != nil {
+			return nil, s.recvErr
+		}
 		return nil, io.EOF
 	}
 	resp := s.responses[0]
