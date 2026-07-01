@@ -15,6 +15,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -27,6 +28,7 @@ type GoogleSTT struct {
 	client               googleSpeechClient
 	closed               bool
 	model                string
+	language             string
 	streaming            bool
 	detectLanguage       bool
 	interimResults       bool
@@ -40,6 +42,7 @@ type GoogleSTT struct {
 	enableWordConfidence bool
 	speechStartTimeout   time.Duration
 	speechEndTimeout     time.Duration
+	location             string
 	keywords             []GoogleSTTKeyword
 	adaptation           *speechpb.SpeechAdaptation
 	alternativeLanguages []string
@@ -61,6 +64,14 @@ func WithGoogleSTTModel(model string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if model != "" {
 			s.model = model
+		}
+	}
+}
+
+func WithGoogleSTTLanguage(language string) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if language != "" {
+			s.language = language
 		}
 	}
 }
@@ -181,21 +192,34 @@ func WithGoogleSTTAlternativeLanguages(languages ...string) GoogleSTTOption {
 	}
 }
 
+func WithGoogleSTTLocation(location string) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if location != "" {
+			s.location = location
+		}
+	}
+}
+
 // NewGoogleSTT creates a new STT client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*GoogleSTT, error) {
 	ctx := context.Background()
+	provider := newGoogleSTTWithClient(nil, providerOpts...)
 	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
 	if err != nil {
 		return nil, err
+	}
+	if endpoint := googleSTTEndpoint(provider); endpoint != "" {
+		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
 	}
 
 	client, err := speech.NewClient(ctx, clientOpts...)
 	if err != nil {
 		return nil, err
 	}
+	provider.client = client
 
-	return newGoogleSTTWithClient(client, providerOpts...), nil
+	return provider, nil
 }
 
 func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) *GoogleSTT {
@@ -203,6 +227,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		streams:              make(map[*googleSTTStream]struct{}),
 		client:               client,
 		model:                "latest_long",
+		language:             "en-US",
 		streaming:            true,
 		detectLanguage:       true,
 		interimResults:       true,
@@ -210,11 +235,19 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		sampleRate:           16000,
 		minConfidence:        0.65,
 		enableWordTimeOffset: true,
+		location:             "global",
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
 	return provider
+}
+
+func googleSTTEndpoint(s *GoogleSTT) string {
+	if s.location == "" || s.location == "global" {
+		return ""
+	}
+	return s.location + "-speech.googleapis.com"
 }
 
 func (s *GoogleSTT) Label() string           { return "google.STT" }
@@ -282,7 +315,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	explicitLanguage := language != ""
 	if language == "" {
-		language = "en-US"
+		language = s.language
 	}
 
 	stream, err := s.newStreamingRecognizeStream(ctx, language, !explicitLanguage)
@@ -340,7 +373,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	explicitLanguage := language != ""
 	if language == "" {
-		language = "en-US"
+		language = s.language
 	}
 
 	var buf bytes.Buffer
@@ -349,7 +382,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 
 	resp, err := s.client.Recognize(ctx, &speechpb.RecognizeRequest{
-		Config: googleRecognitionConfigWithAlternatives(s, language, !explicitLanguage),
+		Config: googleRecognitionConfigForFrames(s, language, !explicitLanguage, frames),
 		Audio: &speechpb.RecognitionAudio{
 			AudioSource: &speechpb.RecognitionAudio_Content{
 				Content: buf.Bytes(),
@@ -386,6 +419,29 @@ func googleRecognitionConfigWithAlternatives(s *GoogleSTT, language string, incl
 		Model:                      s.model,
 		Adaptation:                 googleSpeechAdaptation(s),
 	}
+}
+
+func googleRecognitionConfigForFrames(s *GoogleSTT, language string, includeAlternativeLanguages bool, frames []*model.AudioFrame) *speechpb.RecognitionConfig {
+	config := googleRecognitionConfigWithAlternatives(s, language, includeAlternativeLanguages)
+	haveSampleRate := false
+	haveChannels := false
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && !haveSampleRate {
+			config.SampleRateHertz = int32(frame.SampleRate)
+			haveSampleRate = true
+		}
+		if frame.NumChannels > 0 && !haveChannels {
+			config.AudioChannelCount = int32(frame.NumChannels)
+			haveChannels = true
+		}
+		if haveSampleRate && haveChannels {
+			break
+		}
+	}
+	return config
 }
 
 func googleAlternativeLanguageCodes(s *GoogleSTT, include bool) []string {

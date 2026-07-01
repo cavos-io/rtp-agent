@@ -111,6 +111,38 @@ func TestGoogleClientOptionsFromCredentialsFile(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
+
+	if got := googleSTTEndpoint(provider); got != "europe-west1-speech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want europe-west1-speech.googleapis.com", got)
+	}
+
+	globalProvider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("global"))
+	if got := googleSTTEndpoint(globalProvider); got != "" {
+		t.Fatalf("global endpoint = %q, want empty default endpoint", got)
+	}
+}
+
+func TestGoogleSTTStreamUsesConfiguredReferenceLanguage(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTLanguage("id-ID"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	config := streamClient.sent[0].GetStreamingConfig().GetConfig()
+	if config.GetLanguageCode() != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", config.GetLanguageCode())
+	}
+}
+
 func TestGoogleSpeechDataFromAlternativeToleratesMissingWordTimes(t *testing.T) {
 	alt := &speechpb.SpeechRecognitionAlternative{
 		Transcript: "hello",
@@ -344,6 +376,27 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	}
 	if event.Alternatives[0].Language != "en-US" {
 		t.Fatalf("language = %q, want en-US", event.Alternatives[0].Language)
+	}
+}
+
+func TestGoogleSTTRecognizeUsesReferenceFrameAudioFormat(t *testing.T) {
+	client := &fakeGoogleSpeechClient{recognizeResponse: &speechpb.RecognizeResponse{}}
+	provider := newGoogleSTTWithClient(client)
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{
+		{Data: []byte("one"), SampleRate: 48000, NumChannels: 2},
+		{Data: []byte("two"), SampleRate: 48000, NumChannels: 2},
+	}, "")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+
+	config := client.recognizeRequest.GetConfig()
+	if config.GetSampleRateHertz() != 48000 {
+		t.Fatalf("sample rate = %d, want reference frame sample rate 48000", config.GetSampleRateHertz())
+	}
+	if config.GetAudioChannelCount() != 2 {
+		t.Fatalf("audio channel count = %d, want reference frame channel count 2", config.GetAudioChannelCount())
 	}
 }
 

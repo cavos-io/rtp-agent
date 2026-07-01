@@ -10,11 +10,13 @@ import (
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -44,6 +46,8 @@ type GoogleTTSOption func(*googleTTSConfig)
 type googleTTSConfig struct {
 	language     string
 	languageSet  bool
+	location     string
+	locationSet  bool
 	gender       texttospeechpb.SsmlVoiceGender
 	genderSet    bool
 	voice        string
@@ -64,6 +68,8 @@ type googleTTSConfig struct {
 	volumeSet    bool
 	sampleRate   int32
 	sampleSet    bool
+	encoding     texttospeechpb.AudioEncoding
+	encodingSet  bool
 	custom       *texttospeechpb.CustomPronunciations
 	customSet    bool
 	streaming    bool
@@ -76,6 +82,15 @@ func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 		if language != "" {
 			cfg.language = language
 			cfg.languageSet = true
+		}
+	}
+}
+
+func WithGoogleTTSLocation(location string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if location != "" {
+			cfg.location = location
+			cfg.locationSet = true
 		}
 	}
 }
@@ -160,6 +175,15 @@ func WithGoogleTTSSampleRate(sampleRate int32) GoogleTTSOption {
 	}
 }
 
+func WithGoogleTTSAudioEncoding(encoding texttospeechpb.AudioEncoding) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if encoding != texttospeechpb.AudioEncoding_AUDIO_ENCODING_UNSPECIFIED {
+			cfg.encoding = encoding
+			cfg.encodingSet = true
+		}
+	}
+}
+
 func WithGoogleTTSCustomPronunciations(custom *texttospeechpb.CustomPronunciations) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
 		cfg.custom = custom
@@ -198,6 +222,9 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 	if err != nil {
 		return nil, err
 	}
+	if endpoint := googleTTSEndpoint(cfg); endpoint != "" {
+		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
+	}
 
 	client, err := texttospeech.NewClient(ctx, clientOpts...)
 	if err != nil {
@@ -214,11 +241,13 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 func googleTTSConfigFromOptions(opts ...GoogleTTSOption) googleTTSConfig {
 	cfg := googleTTSConfig{
 		language:     "en-US",
+		location:     "global",
 		gender:       texttospeechpb.SsmlVoiceGender_NEUTRAL,
 		voice:        "Charon",
 		model:        "gemini-2.5-flash-tts",
 		speakingRate: 1.0,
 		sampleRate:   24000,
+		encoding:     texttospeechpb.AudioEncoding_PCM,
 		streaming:    true,
 	}
 	for _, opt := range opts {
@@ -242,6 +271,13 @@ func validateGoogleTTSConfig(cfg googleTTSConfig) error {
 	return nil
 }
 
+func googleTTSEndpoint(cfg googleTTSConfig) string {
+	if cfg.location == "" || cfg.location == "global" {
+		return ""
+	}
+	return cfg.location + "-texttospeech.googleapis.com"
+}
+
 func newGoogleTTSWithConfig(client googleTTSClient, cfg googleTTSConfig) *GoogleTTS {
 	return &GoogleTTS{
 		streams: make(map[*googleTTSSynthesizeStream]struct{}),
@@ -254,7 +290,7 @@ func newGoogleTTSWithConfig(client googleTTSClient, cfg googleTTSConfig) *Google
 		ssml:    cfg.enableSSML,
 		markup:  cfg.useMarkup,
 		audio: &texttospeechpb.AudioConfig{
-			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
+			AudioEncoding:    cfg.encoding,
 			SampleRateHertz:  cfg.sampleRate,
 			SpeakingRate:     cfg.speakingRate,
 			Pitch:            cfg.pitch,
@@ -346,6 +382,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		effects:      append([]string(nil), t.audio.GetEffectsProfileId()...),
 		volumeGainDB: t.audio.GetVolumeGainDb(),
 		sampleRate:   t.audio.GetSampleRateHertz(),
+		encoding:     t.audio.GetAudioEncoding(),
 		custom:       t.custom,
 	}
 	for _, opt := range opts {
@@ -375,6 +412,9 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	if cfg.sampleSet {
 		t.audio.SampleRateHertz = cfg.sampleRate
 	}
+	if cfg.encodingSet {
+		t.audio.AudioEncoding = cfg.encoding
+	}
 	if cfg.customSet {
 		t.custom = cfg.custom
 	}
@@ -400,6 +440,7 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	return &googleTTSChunkedStream{
 		data:       resp.AudioContent,
+		encoding:   t.audio.GetAudioEncoding(),
 		inputText:  text,
 		sampleRate: t.audio.GetSampleRateHertz(),
 	}, nil
@@ -483,6 +524,9 @@ func googleCloneAudioConfig(config *texttospeechpb.AudioConfig) *texttospeechpb.
 type googleTTSChunkedStream struct {
 	data           []byte
 	offset         int
+	encoding       texttospeechpb.AudioEncoding
+	decoder        codecs.AudioStreamDecoder
+	decoderStarted bool
 	headerStripped bool
 	finalSent      bool
 	emittedAudio   bool
@@ -491,6 +535,10 @@ type googleTTSChunkedStream struct {
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.encoding == texttospeechpb.AudioEncoding_MP3 {
+		return s.nextMP3Audio()
+	}
+
 	if !s.headerStripped && len(s.data) >= 44 {
 		// Google TTS LINEAR16 usually returns a WAV with a 44-byte header.
 		// Verify RIFF and WAVE tags.
@@ -532,6 +580,34 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *googleTTSChunkedStream) nextMP3Audio() (*tts.SynthesizedAudio, error) {
+	if !s.decoderStarted {
+		s.decoder = codecs.NewMP3AudioStreamDecoder()
+		s.decoderStarted = true
+		go func() {
+			s.decoder.Push(s.data)
+			s.decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			if s.emittedAudio {
+				return s.emitFinal()
+			}
+			if strings.TrimSpace(s.inputText) != "" && !s.finalSent {
+				s.finalSent = true
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), err, true)
+			}
+		}
+		return nil, err
+	}
+
+	s.emittedAudio = true
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
 func (s *googleTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -542,6 +618,9 @@ func (s *googleTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 
 func (s *googleTTSChunkedStream) Close() error {
 	s.finalSent = true
+	if s.decoder != nil {
+		return s.decoder.Close()
+	}
 	return nil
 }
 
@@ -700,7 +779,7 @@ func (s *googleTTSSynthesizeStream) ensureActiveStreamLocked() (texttospeechpb.T
 			StreamingConfig: &texttospeechpb.StreamingSynthesizeConfig{
 				Voice: s.voice,
 				StreamingAudioConfig: &texttospeechpb.StreamingAudioConfig{
-					AudioEncoding:   texttospeechpb.AudioEncoding_PCM,
+					AudioEncoding:   googleTTSStreamingAudioEncoding(s.audio.GetAudioEncoding()),
 					SampleRateHertz: s.audio.GetSampleRateHertz(),
 					SpeakingRate:    s.audio.GetSpeakingRate(),
 				},
@@ -832,6 +911,15 @@ func (s *googleTTSSynthesizeStream) markClosedLocked() {
 func (s *googleTTSSynthesizeStream) unregister() {
 	if s.owner != nil {
 		s.owner.unregisterStream(s)
+	}
+}
+
+func googleTTSStreamingAudioEncoding(encoding texttospeechpb.AudioEncoding) texttospeechpb.AudioEncoding {
+	switch encoding {
+	case texttospeechpb.AudioEncoding_OGG_OPUS, texttospeechpb.AudioEncoding_PCM:
+		return encoding
+	default:
+		return texttospeechpb.AudioEncoding_PCM
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
@@ -13383,6 +13384,46 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T) {
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=none,service_tier=priority")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	params := app.Session.Options.LLMExtraParams
+	if params["temperature"] != 0.2 {
+		t.Fatalf("temperature = %#v, want 0.2", params["temperature"])
+	}
+	if params["top_p"] != 0.8 {
+		t.Fatalf("top_p = %#v, want 0.8", params["top_p"])
+	}
+	if got := numericTestValue(params["max_output_tokens"]); got != 128 {
+		t.Fatalf("max_output_tokens = %#v, want 128", params["max_output_tokens"])
+	}
+	if params["service_tier"] != "priority" {
+		t.Fatalf("service_tier = %#v, want priority", params["service_tier"])
+	}
+	if app.Session.Options.ToolChoice != llm.ToolChoice("none") {
+		t.Fatalf("ToolChoice = %#v, want none", app.Session.Options.ToolChoice)
+	}
+}
+
+func numericTestValue(value any) float64 {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case float64:
+		return typed
+	default:
+		return 0
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	original := appNewGoogleTTS
 	defer func() { appNewGoogleTTS = original }()
@@ -13397,8 +13438,10 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "google")
 	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_TTS_REGION", "europe-west1")
 	t.Setenv("RTP_AGENT_TTS_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "id-ID-Standard-A")
+	t.Setenv("RTP_AGENT_TTS_GENDER", "female")
 	t.Setenv("RTP_AGENT_TTS_VOICE_ID", "clone-key-test")
 	t.Setenv("RTP_AGENT_TTS_MODEL", "gemini-custom")
 	t.Setenv("RTP_AGENT_TTS_INSTRUCTIONS", "speak warmly")
@@ -13421,6 +13464,12 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 	if googleCfg.language != "id-ID" || googleCfg.voice != "id-ID-Standard-A" || googleCfg.model != "gemini-custom" {
 		t.Fatalf("google cfg voice = %+v, want configured language, voice, and model", googleCfg)
+	}
+	if googleCfg.location != "europe-west1" {
+		t.Fatalf("location = %q, want europe-west1", googleCfg.location)
+	}
+	if googleCfg.gender != "female" {
+		t.Fatalf("gender = %q, want female", googleCfg.gender)
 	}
 	if googleCfg.cloneKey != "clone-key-test" {
 		t.Fatalf("clone key = %q, want clone-key-test", googleCfg.cloneKey)
@@ -13451,6 +13500,37 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
+	phrase := "Cavos"
+	pronunciation := "keIvAs"
+	encoding := texttospeechpb.CustomPronunciationParams_PHONETIC_ENCODING_X_SAMPA
+	custom := &texttospeechpb.CustomPronunciations{
+		Pronunciations: []*texttospeechpb.CustomPronunciationParams{{
+			Phrase:           &phrase,
+			PhoneticEncoding: &encoding,
+			Pronunciation:    &pronunciation,
+		}},
+	}
+
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"custom_pronunciations": custom},
+	})
+
+	if googleCfg.customPronunciations != custom {
+		t.Fatalf("custom pronunciations = %#v, want configured value", googleCfg.customPronunciations)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceAudioEncoding(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSEncoding: "mp3",
+	})
+
+	if googleCfg.audioEncoding == nil || *googleCfg.audioEncoding != texttospeechpb.AudioEncoding_MP3 {
+		t.Fatalf("audioEncoding = %v, want MP3", googleCfg.audioEncoding)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleTTSMarkup(t *testing.T) {
 	original := appNewGoogleTTS
 	defer func() { appNewGoogleTTS = original }()
@@ -13477,6 +13557,33 @@ func TestDefaultConfigFromEnvSelectsGoogleTTSMarkup(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleTTSSSMLTextType(t *testing.T) {
+	original := appNewGoogleTTS
+	defer func() { appNewGoogleTTS = original }()
+
+	var googleCfg appGoogleTTSConfig
+	appNewGoogleTTS = func(_ string, cfg appGoogleTTSConfig) (tts.TTS, error) {
+		googleCfg = cfg
+		return &fakeAppTTS{}, nil
+	}
+
+	t.Setenv("RTP_AGENT_TTS_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_TTS_TEXT_TYPE", "ssml")
+	t.Setenv("RTP_AGENT_TTS_STREAMING", "false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.TTS == nil {
+		t.Fatal("Session TTS is nil")
+	}
+	if googleCfg.ssml == nil || !*googleCfg.ssml {
+		t.Fatalf("ssml = %v, want explicit true", googleCfg.ssml)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	original := appNewGoogleSTT
 	defer func() { appNewGoogleSTT = original }()
@@ -13491,15 +13598,20 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "google")
 	t.Setenv("RTP_AGENT_GOOGLE_CREDENTIALS_FILE", "/tmp/google-credentials.json")
+	t.Setenv("RTP_AGENT_STT_REGION", "europe-west1")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_STT_MODEL", "latest_short")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE_OPTIONS", "es-ES,fr-FR")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE_DETECTION", "false")
 	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
 	t.Setenv("RTP_AGENT_STT_WORD_TIMESTAMPS", "false")
 	t.Setenv("RTP_AGENT_STT_WORD_CONFIDENCE", "true")
+	t.Setenv("RTP_AGENT_STT_STREAMING", "false")
+	t.Setenv("RTP_AGENT_STT_SPEECH_START_TIMEOUT_MS", "1200")
 	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "250")
 	t.Setenv("RTP_AGENT_STT_MIN_CONFIDENCE_THRESHOLD", "0.72")
 	t.Setenv("RTP_AGENT_STT_VOICE_ACTIVITY_EVENTS", "true")
+	t.Setenv("RTP_AGENT_STT_KEYWORDS", "Cavos:12.5,LiveKit:9")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -13514,6 +13626,12 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	if googleCfg.model != "latest_short" {
 		t.Fatalf("model = %q, want latest_short", googleCfg.model)
 	}
+	if googleCfg.location != "europe-west1" {
+		t.Fatalf("location = %q, want europe-west1", googleCfg.location)
+	}
+	if googleCfg.language != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", googleCfg.language)
+	}
 	if googleCfg.detectLanguage == nil || *googleCfg.detectLanguage {
 		t.Fatalf("detectLanguage = %#v, want explicit false", googleCfg.detectLanguage)
 	}
@@ -13526,6 +13644,12 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	if googleCfg.wordConfidence == nil || !*googleCfg.wordConfidence {
 		t.Fatalf("wordConfidence = %#v, want explicit true", googleCfg.wordConfidence)
 	}
+	if googleCfg.streaming == nil || *googleCfg.streaming {
+		t.Fatalf("streaming = %#v, want explicit false", googleCfg.streaming)
+	}
+	if googleCfg.speechStartTimeout != 1200*time.Millisecond {
+		t.Fatalf("speechStartTimeout = %v, want 1200ms", googleCfg.speechStartTimeout)
+	}
 	if googleCfg.speechEndTimeout != 250*time.Millisecond {
 		t.Fatalf("speechEndTimeout = %v, want 250ms", googleCfg.speechEndTimeout)
 	}
@@ -13537,6 +13661,21 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(googleCfg.alternativeLanguages, []string{"es-ES", "fr-FR"}) {
 		t.Fatalf("alternativeLanguages = %#v, want [es-ES fr-FR]", googleCfg.alternativeLanguages)
+	}
+	if !reflect.DeepEqual(googleCfg.keywords, []adaptergoogle.GoogleSTTKeyword{{Value: "Cavos", Boost: 12.5}, {Value: "LiveKit", Boost: 9}}) {
+		t.Fatalf("keywords = %#v, want Cavos and LiveKit boosts", googleCfg.keywords)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndSeconds(t *testing.T) {
+	endpointing := 0.75
+
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTEndpointingSeconds: &endpointing,
+	})
+
+	if googleCfg.speechEndTimeout != 750*time.Millisecond {
+		t.Fatalf("speechEndTimeout = %v, want 750ms", googleCfg.speechEndTimeout)
 	}
 }
 

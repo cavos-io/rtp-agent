@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -530,6 +532,59 @@ func TestGoogleTTSUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: mp3Data},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6, 7, 8}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_MP3))
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_MP3 {
+		t.Fatalf("synthesize audio encoding = %v, want MP3", got)
+	}
+	audio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("chunked Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("chunked Next = %+v, want decoded MP3 audio frame", audio)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded MP3 frame is empty")
+	}
+	if len(audio.Frame.Data) <= len(mp3Data) && bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
+		t.Fatal("frame data still contains compressed MP3 bytes")
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("stream audio encoding = %v, want reference PCM fallback for MP3", got)
+	}
+}
+
 func TestGoogleTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	client := &fakeGoogleTTSClient{err: context.DeadlineExceeded}
 	provider := newGoogleTTSWithClient(client)
@@ -602,6 +657,14 @@ func TestGoogleTTSGenderOptionMatchesReference(t *testing.T) {
 
 	if got := client.request.GetVoice().GetSsmlGender(); got != texttospeech.SsmlVoiceGender_FEMALE {
 		t.Fatalf("voice gender = %v, want FEMALE", got)
+	}
+}
+
+func TestGoogleTTSLocationOptionMatchesReferenceEndpoint(t *testing.T) {
+	cfg := googleTTSConfigFromOptions(WithGoogleTTSLocation("europe-west1"))
+
+	if got := googleTTSEndpoint(cfg); got != "europe-west1-texttospeech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want europe-west1-texttospeech.googleapis.com", got)
 	}
 }
 

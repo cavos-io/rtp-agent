@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
 	awstranscribetypes "github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/cavos-io/rtp-agent/adapter/anam"
@@ -113,23 +114,30 @@ var appNewAgoraChannelClient = workeragora.NewSDKChannelClient
 var appNewAgoraDataPublisher = workeragora.NewSDKDataPublisher
 
 type appGoogleTTSConfig struct {
-	language         string
-	voice            string
-	cloneKey         string
-	model            string
-	prompt           string
-	speakingRate     float64
-	pitch            float64
-	sampleRate       *int
-	effectsProfileID string
-	volumeGainDB     float64
-	streaming        *bool
-	ssml             *bool
-	markup           *bool
+	language             string
+	location             string
+	voice                string
+	gender               string
+	cloneKey             string
+	model                string
+	prompt               string
+	speakingRate         float64
+	pitch                float64
+	sampleRate           *int
+	audioEncoding        *texttospeechpb.AudioEncoding
+	effectsProfileID     string
+	volumeGainDB         float64
+	streaming            *bool
+	ssml                 *bool
+	markup               *bool
+	customPronunciations *texttospeechpb.CustomPronunciations
 }
 
 type appGoogleSTTConfig struct {
 	model                string
+	location             string
+	language             string
+	streaming            *bool
 	sampleRate           *int
 	punctuate            *bool
 	spokenPunctuation    *bool
@@ -138,16 +146,27 @@ type appGoogleSTTConfig struct {
 	interimResults       *bool
 	wordTimeOffsets      *bool
 	wordConfidence       *bool
+	speechStartTimeout   time.Duration
 	speechEndTimeout     time.Duration
 	minConfidence        *float64
 	voiceActivityEvents  *bool
 	alternativeLanguages []string
+	keywords             []adaptergoogle.GoogleSTTKeyword
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
 	sttOpts := []adaptergoogle.GoogleSTTOption{}
 	if cfg.model != "" {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTModel(cfg.model))
+	}
+	if cfg.location != "" {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTLocation(cfg.location))
+	}
+	if cfg.language != "" {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTLanguage(cfg.language))
+	}
+	if cfg.streaming != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTStreaming(*cfg.streaming))
 	}
 	if cfg.sampleRate != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSampleRate(int32(*cfg.sampleRate)))
@@ -173,6 +192,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	if cfg.wordConfidence != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTWordConfidence(*cfg.wordConfidence))
 	}
+	if cfg.speechStartTimeout > 0 {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpeechStartTimeout(cfg.speechStartTimeout))
+	}
 	if cfg.speechEndTimeout > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpeechEndTimeout(cfg.speechEndTimeout))
 	}
@@ -185,6 +207,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	if len(cfg.alternativeLanguages) > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAlternativeLanguages(cfg.alternativeLanguages...))
 	}
+	if len(cfg.keywords) > 0 {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTKeywords(cfg.keywords...))
+	}
 	return adaptergoogle.NewGoogleSTT(credentialsFile, sttOpts...)
 }
 
@@ -193,8 +218,14 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.language != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.language))
 	}
+	if cfg.location != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLocation(cfg.location))
+	}
 	if cfg.voice != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.voice))
+	}
+	if cfg.gender != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSGender(cfg.gender))
 	}
 	if cfg.cloneKey != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoiceCloneKey(cfg.cloneKey))
@@ -214,6 +245,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.sampleRate != nil {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSSampleRate(int32(*cfg.sampleRate)))
 	}
+	if cfg.audioEncoding != nil {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSAudioEncoding(*cfg.audioEncoding))
+	}
 	if cfg.effectsProfileID != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSEffectsProfileID(cfg.effectsProfileID))
 	}
@@ -228,6 +262,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	}
 	if cfg.markup != nil {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSMarkup(*cfg.markup))
+	}
+	if cfg.customPronunciations != nil {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSCustomPronunciations(cfg.customPronunciations))
 	}
 	return adaptergoogle.NewGoogleTTS(credentialsFile, ttsOpts...)
 }
@@ -436,6 +473,7 @@ type AppConfig struct {
 	STTSmartFormat                          *bool
 	STTNoDelay                              *bool
 	STTEndpointingMS                        *int
+	STTSpeechStartTimeoutMS                 *int
 	STTDiarization                          *bool
 	STTMultiSpeaker                         *bool
 	STTFillerWords                          *bool
@@ -476,6 +514,7 @@ type AppConfig struct {
 	STTBaseURL                              string
 	STTModelEndpoints                       []string
 	STTStreamingURL                         string
+	STTStreaming                            *bool
 	STTSampleRate                           *int
 	STTBufferSizeSeconds                    *float64
 	STTAudioChunkDurationMS                 *int
@@ -548,6 +587,7 @@ type AppConfig struct {
 	TTSFallbackProviders                    []string
 	TTSModel                                string
 	TTSVoice                                string
+	TTSGender                               string
 	TTSRefAudio                             string
 	TTSVoiceID                              string
 	TTSVoiceProvider                        string
@@ -868,7 +908,9 @@ func DefaultConfigFromEnv() AppConfig {
 		STTBaseURL:                              os.Getenv("RTP_AGENT_STT_BASE_URL"),
 		STTModelEndpoints:                       splitEnvList("RTP_AGENT_STT_MODEL_ENDPOINTS"),
 		STTStreamingURL:                         os.Getenv("RTP_AGENT_STT_STREAMING_URL"),
+		STTStreaming:                            getenvOptionalBool("RTP_AGENT_STT_STREAMING"),
 		STTSampleRate:                           getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
+		STTSpeechStartTimeoutMS:                 getenvOptionalInt("RTP_AGENT_STT_SPEECH_START_TIMEOUT_MS"),
 		STTBufferSizeSeconds:                    getenvOptionalFloat("RTP_AGENT_STT_BUFFER_SIZE_SECONDS"),
 		STTAudioChunkDurationMS:                 getenvOptionalInt("RTP_AGENT_STT_AUDIO_CHUNK_DURATION_MS"),
 		STTMinTurnSilence:                       getenvOptionalInt("RTP_AGENT_STT_MIN_TURN_SILENCE"),
@@ -940,6 +982,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSFallbackProviders:                    splitEnvList("RTP_AGENT_TTS_FALLBACK_PROVIDERS"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
+		TTSGender:                               os.Getenv("RTP_AGENT_TTS_GENDER"),
 		TTSRefAudio:                             os.Getenv("RTP_AGENT_TTS_REF_AUDIO"),
 		TTSVoiceID:                              os.Getenv("RTP_AGENT_TTS_VOICE_ID"),
 		TTSVoiceProvider:                        os.Getenv("RTP_AGENT_TTS_VOICE_PROVIDER"),
@@ -3998,6 +4041,9 @@ func cavosTTSFromConfig(cfg AppConfig) coretts.TTS {
 func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	googleCfg := appGoogleSTTConfig{
 		model:                cfg.STTModel,
+		location:             cfg.STTRegion,
+		language:             cfg.STTLanguage,
+		streaming:            cfg.STTStreaming,
 		sampleRate:           cfg.STTSampleRate,
 		punctuate:            cfg.STTPunctuate,
 		spokenPunctuation:    cfg.STTSpokenPunctuation,
@@ -4009,17 +4055,42 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		minConfidence:        cfg.STTMinConfidenceThreshold,
 		voiceActivityEvents:  cfg.STTVoiceActivityEvents,
 		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
+		keywords:             googleSTTKeywordsFromConfig(cfg.STTKeywords),
 	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
+	} else if cfg.STTEndpointingSeconds != nil {
+		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingSeconds * float64(time.Second))
+	}
+	if cfg.STTSpeechStartTimeoutMS != nil {
+		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond
 	}
 	return googleCfg
+}
+
+func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adaptergoogle.GoogleSTTKeyword {
+	if len(keywords) == 0 {
+		return nil
+	}
+	googleKeywords := make([]adaptergoogle.GoogleSTTKeyword, 0, len(keywords))
+	for _, keyword := range keywords {
+		if keyword.Keyword == "" {
+			continue
+		}
+		googleKeywords = append(googleKeywords, adaptergoogle.GoogleSTTKeyword{
+			Value: keyword.Keyword,
+			Boost: float32(keyword.Boost),
+		})
+	}
+	return googleKeywords
 }
 
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
 		language:   cfg.TTSLanguage,
+		location:   cfg.TTSRegion,
 		voice:      cfg.TTSVoice,
+		gender:     cfg.TTSGender,
 		cloneKey:   cfg.TTSVoiceID,
 		model:      cfg.TTSModel,
 		prompt:     cfg.TTSInstructions,
@@ -4027,9 +4098,14 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		streaming:  cfg.TTSStreaming,
 		ssml:       cfg.TTSEnableSSMLParsing,
 	}
-	if strings.EqualFold(cfg.TTSTextType, "markup") {
+	googleCfg.audioEncoding = googleTTSAudioEncodingFromConfig(cfg)
+	switch {
+	case strings.EqualFold(cfg.TTSTextType, "markup"):
 		markup := true
 		googleCfg.markup = &markup
+	case strings.EqualFold(cfg.TTSTextType, "ssml"):
+		ssml := true
+		googleCfg.ssml = &ssml
 	}
 	if cfg.TTSSpeakingRate != nil {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate
@@ -4043,7 +4119,35 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	if volumeGainDB := modelOptionFloat(cfg.TTSModelOptions, "volume_gain_db"); volumeGainDB != nil {
 		googleCfg.volumeGainDB = *volumeGainDB
 	}
+	googleCfg.customPronunciations = googleTTSCustomPronunciationsFromOptions(cfg.TTSModelOptions)
 	return googleCfg
+}
+
+func googleTTSAudioEncodingFromConfig(cfg AppConfig) *texttospeechpb.AudioEncoding {
+	encoding := strings.TrimSpace(cfg.TTSEncoding)
+	if encoding == "" {
+		encoding = modelOptionString(cfg.TTSModelOptions, "audio_encoding")
+	}
+	if encoding == "" {
+		encoding = modelOptionString(cfg.TTSModelOptions, "encoding")
+	}
+	if encoding == "" {
+		return nil
+	}
+	normalized := strings.ToUpper(strings.ReplaceAll(encoding, "-", "_"))
+	if normalized == "OGGOPUS" {
+		normalized = "OGG_OPUS"
+	}
+	if value, ok := texttospeechpb.AudioEncoding_value[normalized]; ok {
+		audioEncoding := texttospeechpb.AudioEncoding(value)
+		return &audioEncoding
+	}
+	return nil
+}
+
+func googleTTSCustomPronunciationsFromOptions(options map[string]any) *texttospeechpb.CustomPronunciations {
+	custom, _ := options["custom_pronunciations"].(*texttospeechpb.CustomPronunciations)
+	return custom
 }
 
 func liveKitTTSOptionsFromConfig(cfg AppConfig) ([]adapterlivekit.TTSOption, error) {
@@ -6759,8 +6863,11 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 	}
 	opts.DisableTTSTextTransforms = cfg.DisableTTSTextTransforms
 	opts.LLMParallelToolCalls = cfg.LLMParallelToolCalls
-	opts.LLMExtraParams = cfg.LLMExtraBody
+	opts.LLMExtraParams = llmExtraParamsFromConfig(cfg)
 	opts.LLMResponseFormat = cfg.LLMResponseFormat
+	if toolChoice := googleLLMToolChoiceFromConfig(cfg); toolChoice != nil {
+		opts.ToolChoice = toolChoice
+	}
 	if cfg.BackgroundAudioAmbient != "" || cfg.BackgroundAudioThinking != "" {
 		opts.BackgroundAudio = agent.NewBackgroundAudioPlayer(
 			backgroundAudioSource(cfg.BackgroundAudioAmbient),
@@ -6777,6 +6884,80 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 	}
 	opts.WordTokenizer = wordTokenizer
 	return opts, nil
+}
+
+func llmExtraParamsFromConfig(cfg AppConfig) map[string]any {
+	params := cloneAppAnyMap(cfg.LLMExtraBody)
+	if normalizeProvider(cfg.LLMProvider) == providerGoogle {
+		for _, key := range googleLLMExtraParamKeys {
+			value, ok := cfg.LLMModelOptions[key]
+			if !ok {
+				continue
+			}
+			if _, exists := params[key]; exists {
+				continue
+			}
+			if params == nil {
+				params = make(map[string]any)
+			}
+			params[key] = value
+		}
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+var googleLLMExtraParamKeys = []string{
+	"cached_content",
+	"temperature",
+	"top_p",
+	"top_k",
+	"presence_penalty",
+	"frequency_penalty",
+	"max_output_tokens",
+	"seed",
+	"response_mime_type",
+	"response_schema",
+	"response_json_schema",
+	"routing_config",
+	"model_selection_config",
+	"labels",
+	"model_armor_config",
+	"enable_enhanced_civic_answers",
+	"image_config",
+	"response_modalities",
+	"speech_config",
+	"audio_timestamp",
+	"service_tier",
+	"thinking_config",
+	"safety_settings",
+	"media_resolution",
+	"tool_config",
+	"retrieval_config",
+}
+
+func googleLLMToolChoiceFromConfig(cfg AppConfig) llm.ToolChoice {
+	if normalizeProvider(cfg.LLMProvider) != providerGoogle {
+		return nil
+	}
+	toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice")
+	if toolChoice == "" {
+		return nil
+	}
+	return llm.ToolChoice(toolChoice)
+}
+
+func cloneAppAnyMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	clone := make(map[string]any, len(values))
+	for key, value := range values {
+		clone[key] = value
+	}
+	return clone
 }
 
 func wordTokenizerFromConfig(cfg AppConfig) (tokenize.WordTokenizer, error) {
