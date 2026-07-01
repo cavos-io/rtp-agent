@@ -287,7 +287,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	})
 
 	if err != nil {
-		return nil, err
+		return nil, googleSTTStreamError(err)
 	}
 
 	return &stt.SpeechEvent{

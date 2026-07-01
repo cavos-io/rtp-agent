@@ -236,6 +236,40 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRecognizeReturnsAPITimeoutError(t *testing.T) {
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{recognizeErr: context.DeadlineExceeded})
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "")
+
+	if event != nil {
+		t.Fatalf("Recognize event = %#v, want nil", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGoogleSTTRecognizeReturnsAPIStatusError(t *testing.T) {
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{recognizeErr: status.Error(codes.PermissionDenied, "permission denied")})
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "")
+
+	if event != nil {
+		t.Fatalf("Recognize event = %#v, want nil", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.PermissionDenied) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.PermissionDenied)
+	}
+	if statusErr.Retryable {
+		t.Fatal("status retryable = true, want false for permission denied")
+	}
+}
+
 func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
 	client := &fakeGoogleSpeechClient{
 		recognizeResponse: &speechpb.RecognizeResponse{
