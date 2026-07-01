@@ -86,40 +86,46 @@ func (t *SpeechmaticsTTS) SampleRate() int  { return t.sampleRate }
 func (t *SpeechmaticsTTS) NumChannels() int { return 1 }
 
 func (t *SpeechmaticsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	req, err := buildSpeechmaticsTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Speechmatics TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &speechmaticsTTSChunkedStream{
-		stream:     resp.Body,
+		ctx:        ctx,
+		text:       text,
+		apiKey:     t.apiKey,
+		baseURL:    t.baseURL,
+		voice:      t.voice,
 		sampleRate: t.sampleRate,
 	}, nil
 }
 
 func buildSpeechmaticsTTSRequest(ctx context.Context, t *SpeechmaticsTTS, text string) (*http.Request, error) {
-	u, err := url.Parse(t.baseURL + "/generate/" + url.PathEscape(t.voice))
+	return buildSpeechmaticsTTSRequestFromOptions(ctx, speechmaticsTTSRequestOptions{
+		text:       text,
+		apiKey:     t.apiKey,
+		baseURL:    t.baseURL,
+		voice:      t.voice,
+		sampleRate: t.sampleRate,
+	})
+}
+
+type speechmaticsTTSRequestOptions struct {
+	text       string
+	apiKey     string
+	baseURL    string
+	voice      string
+	sampleRate int
+}
+
+func buildSpeechmaticsTTSRequestFromOptions(ctx context.Context, opts speechmaticsTTSRequestOptions) (*http.Request, error) {
+	u, err := url.Parse(opts.baseURL + "/generate/" + url.PathEscape(opts.voice))
 	if err != nil {
 		return nil, err
 	}
 	q := u.Query()
-	q.Set("output_format", fmt.Sprintf("pcm_%d", t.sampleRate))
+	q.Set("output_format", fmt.Sprintf("pcm_%d", opts.sampleRate))
 	q.Set("sm-sdk", speechmaticsTTSSDKParam)
 	q.Set("sm-app", speechmaticsTTSAppParam)
 	u.RawQuery = q.Encode()
 
-	body := map[string]string{"text": text}
+	body := map[string]string{"text": opts.text}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -129,7 +135,7 @@ func buildSpeechmaticsTTSRequest(ctx context.Context, t *SpeechmaticsTTS, text s
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	req.Header.Set("Authorization", "Bearer "+opts.apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	return req, nil
 }
@@ -148,7 +154,13 @@ func (t *SpeechmaticsTTS) Stream(ctx context.Context) (tts.SynthesizeStream, err
 
 type speechmaticsTTSChunkedStream struct {
 	stream     io.ReadCloser
+	ctx        context.Context
+	text       string
+	apiKey     string
+	baseURL    string
+	voice      string
 	sampleRate int
+	requested  bool
 	pending    []byte
 	finalReady bool
 	finalSent  bool
@@ -157,6 +169,12 @@ type speechmaticsTTSChunkedStream struct {
 
 func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureStream(); err != nil {
+		return nil, err
+	}
+	if s.stream == nil {
 		return nil, io.EOF
 	}
 	if s.finalReady {
@@ -203,6 +221,34 @@ func (s *speechmaticsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 	}
+}
+
+func (s *speechmaticsTTSChunkedStream) ensureStream() error {
+	if s.stream != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildSpeechmaticsTTSRequestFromOptions(s.ctx, speechmaticsTTSRequestOptions{
+		text:       s.text,
+		apiKey:     s.apiKey,
+		baseURL:    s.baseURL,
+		voice:      s.voice,
+		sampleRate: s.sampleRate,
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Speechmatics TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.stream = resp.Body
+	return nil
 }
 
 func (s *speechmaticsTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
