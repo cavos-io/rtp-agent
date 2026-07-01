@@ -600,9 +600,10 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 
 		if resp.UsageMetadata != nil {
 			chunk.Usage = &llm.CompletionUsage{
-				PromptTokens:     int(resp.UsageMetadata.PromptTokenCount),
-				CompletionTokens: int(resp.UsageMetadata.CandidatesTokenCount),
-				TotalTokens:      int(resp.UsageMetadata.TotalTokenCount),
+				PromptTokens:       int(resp.UsageMetadata.PromptTokenCount),
+				PromptCachedTokens: int(resp.UsageMetadata.CachedContentTokenCount),
+				CompletionTokens:   int(resp.UsageMetadata.CandidatesTokenCount),
+				TotalTokens:        int(resp.UsageMetadata.TotalTokenCount),
 			}
 		}
 

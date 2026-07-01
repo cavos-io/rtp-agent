@@ -554,6 +554,38 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForPromptFeedback(t *testing.T)
 	}
 }
 
+func TestGoogleLLMStreamReportsCachedPromptTokens(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:        8,
+			CachedContentTokenCount: 3,
+			CandidatesTokenCount:    5,
+			TotalTokenCount:         13,
+		},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Usage == nil {
+		t.Fatalf("chunk = %#v, want usage", chunk)
+	}
+	if chunk.Usage.PromptTokens != 8 || chunk.Usage.PromptCachedTokens != 3 || chunk.Usage.CompletionTokens != 5 || chunk.Usage.TotalTokens != 13 {
+		t.Fatalf("usage = %#v, want cached prompt tokens preserved", chunk.Usage)
+	}
+}
+
 func TestGoogleLLMStreamDelaysContinuingFunctionCall(t *testing.T) {
 	continuing := true
 	responses := []*genai.GenerateContentResponse{
