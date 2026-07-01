@@ -73,6 +73,21 @@ func TestGoogleRealtimeVertexDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeVertexLocationOptionMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("ignored",
+		WithGoogleRealtimeVertexAI(true),
+		WithGoogleRealtimeProject("voice-project"),
+		WithGoogleRealtimeLocation("asia-southeast1"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel vertex error = %v", err)
+	}
+
+	if model.location != "asia-southeast1" {
+		t.Fatalf("location = %q, want explicit Vertex location", model.location)
+	}
+}
+
 func TestGoogleRealtimeModelAPIMatchValidation(t *testing.T) {
 	_, err := NewRealtimeModel("test-key",
 		WithGoogleRealtimeVertexAI(true),

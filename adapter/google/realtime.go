@@ -79,6 +79,12 @@ func WithGoogleRealtimeProject(project string) GoogleRealtimeOption {
 	}
 }
 
+func WithGoogleRealtimeLocation(location string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.location = location
+	}
+}
+
 func WithGoogleRealtimeModalities(modalities []string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.modalities = append([]string(nil), modalities...)
