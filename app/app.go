@@ -4092,9 +4092,13 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		streaming:  cfg.TTSStreaming,
 		ssml:       cfg.TTSEnableSSMLParsing,
 	}
-	if strings.EqualFold(cfg.TTSTextType, "markup") {
+	switch {
+	case strings.EqualFold(cfg.TTSTextType, "markup"):
 		markup := true
 		googleCfg.markup = &markup
+	case strings.EqualFold(cfg.TTSTextType, "ssml"):
+		ssml := true
+		googleCfg.ssml = &ssml
 	}
 	if cfg.TTSSpeakingRate != nil {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate
