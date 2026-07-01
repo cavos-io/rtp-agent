@@ -121,6 +121,7 @@ type appGoogleTTSConfig struct {
 	pitch            float64
 	effectsProfileID string
 	volumeGainDB     float64
+	streaming        *bool
 }
 
 type appGoogleSTTConfig struct {
@@ -192,6 +193,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	}
 	if cfg.volumeGainDB != 0 {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVolumeGainDB(cfg.volumeGainDB))
+	}
+	if cfg.streaming != nil {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSStreaming(*cfg.streaming))
 	}
 	return adaptergoogle.NewGoogleTTS(credentialsFile, ttsOpts...)
 }
@@ -549,6 +553,7 @@ type AppConfig struct {
 	TTSLoudnessNormalization                *bool
 	TTSTextNormalization                    *bool
 	TTSDeliveryMode                         string
+	TTSStreaming                            *bool
 	TTSTokenizerProvider                    string
 	TTSTokenizerLanguage                    string
 	TTSTokenizerMinSentenceLen              *int
@@ -937,6 +942,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSLoudnessNormalization:                getenvOptionalBool("RTP_AGENT_TTS_LOUDNESS_NORMALIZATION"),
 		TTSTextNormalization:                    getenvOptionalBool("RTP_AGENT_TTS_TEXT_NORMALIZATION"),
 		TTSDeliveryMode:                         os.Getenv("RTP_AGENT_TTS_DELIVERY_MODE"),
+		TTSStreaming:                            getenvOptionalBool("RTP_AGENT_TTS_STREAMING"),
 		TTSTokenizerProvider:                    normalizedEnv("RTP_AGENT_TTS_TOKENIZER_PROVIDER"),
 		TTSTokenizerLanguage:                    os.Getenv("RTP_AGENT_TTS_TOKENIZER_LANGUAGE"),
 		TTSTokenizerMinSentenceLen:              getenvOptionalInt("RTP_AGENT_TTS_TOKENIZER_MIN_SENTENCE_LEN"),
@@ -3967,10 +3973,11 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
-		language: cfg.TTSLanguage,
-		voice:    cfg.TTSVoice,
-		model:    cfg.TTSModel,
-		prompt:   cfg.TTSInstructions,
+		language:  cfg.TTSLanguage,
+		voice:     cfg.TTSVoice,
+		model:     cfg.TTSModel,
+		prompt:    cfg.TTSInstructions,
+		streaming: cfg.TTSStreaming,
 	}
 	if cfg.TTSSpeakingRate != nil {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate
