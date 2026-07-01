@@ -2,6 +2,7 @@ package google
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -536,12 +537,8 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return s.nextDecodedAudio()
 	}
 
-	if !s.headerStripped && len(s.data) >= 44 {
-		// Google TTS LINEAR16 usually returns a WAV with a 44-byte header.
-		// Verify RIFF and WAVE tags.
-		if string(s.data[0:4]) == "RIFF" && string(s.data[8:12]) == "WAVE" {
-			s.data = s.data[44:]
-		}
+	if !s.headerStripped {
+		s.data = googleTTSStripWAVContainer(s.data)
 		s.headerStripped = true
 	}
 
@@ -629,6 +626,32 @@ func (s *googleTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 
 func googleTTSUsesCompressedDecoder(encoding texttospeechpb.AudioEncoding) bool {
 	return encoding == texttospeechpb.AudioEncoding_MP3 || encoding == texttospeechpb.AudioEncoding_OGG_OPUS
+}
+
+func googleTTSStripWAVContainer(data []byte) []byte {
+	if len(data) < 12 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return data
+	}
+	for pos := 12; pos+8 <= len(data); {
+		chunkID := string(data[pos : pos+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[pos+4 : pos+8]))
+		chunkStart := pos + 8
+		chunkEnd := chunkStart + chunkSize
+		if chunkSize < 0 || chunkEnd > len(data) {
+			break
+		}
+		if chunkID == "data" {
+			return data[chunkStart:chunkEnd]
+		}
+		pos = chunkEnd
+		if chunkSize%2 == 1 {
+			pos++
+		}
+	}
+	if len(data) >= 44 {
+		return data[44:]
+	}
+	return data[:0]
 }
 
 func googleTTSCompressedDecoder(encoding texttospeechpb.AudioEncoding, sampleRate int32) codecs.AudioStreamDecoder {

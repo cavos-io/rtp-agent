@@ -3,6 +3,7 @@ package google
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -1991,6 +1992,48 @@ func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func TestGoogleTTSSynthesizeStripsExtendedWAVHeaderLikeReference(t *testing.T) {
+	var payload bytes.Buffer
+	payload.WriteString("RIFF")
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(0))
+	payload.WriteString("WAVE")
+	payload.WriteString("fmt ")
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&payload, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&payload, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(24000))
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(48000))
+	_ = binary.Write(&payload, binary.LittleEndian, uint16(2))
+	_ = binary.Write(&payload, binary.LittleEndian, uint16(16))
+	payload.WriteString("JUNK")
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(4))
+	payload.Write([]byte{0xaa, 0xbb, 0xcc, 0xdd})
+	payload.WriteString("data")
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(4))
+	payload.Write([]byte{1, 2, 3, 4})
+	wav := payload.Bytes()
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: wav},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_LINEAR16))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("chunk data = %v, want WAV data chunk without extended header bytes", got)
 	}
 }
 
