@@ -1,8 +1,14 @@
 package google
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
+
+	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
+	"google.golang.org/genai"
 )
 
 func TestGoogleRealtimeDefaultsMatchReference(t *testing.T) {
@@ -73,6 +79,35 @@ func TestGoogleRealtimeVertexDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeVertexLocationOptionMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("ignored",
+		WithGoogleRealtimeVertexAI(true),
+		WithGoogleRealtimeProject("voice-project"),
+		WithGoogleRealtimeLocation("asia-southeast1"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel vertex error = %v", err)
+	}
+
+	if model.location != "asia-southeast1" {
+		t.Fatalf("location = %q, want explicit Vertex location", model.location)
+	}
+}
+
+func TestGoogleRealtimeVertexExplicitEmptyLocationMatchesReference(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+	_, err := NewRealtimeModel("ignored",
+		WithGoogleRealtimeVertexAI(true),
+		WithGoogleRealtimeProject("voice-project"),
+		WithGoogleRealtimeLocation(""),
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "Project is required for VertexAI") {
+		t.Fatalf("NewRealtimeModel error = %v, want reference Vertex empty location error", err)
+	}
+}
+
 func TestGoogleRealtimeModelAPIMatchValidation(t *testing.T) {
 	_, err := NewRealtimeModel("test-key",
 		WithGoogleRealtimeVertexAI(true),
@@ -93,11 +128,14 @@ func TestGoogleRealtimeModelAPIMatchValidation(t *testing.T) {
 
 func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeInstructions("stay brief"),
 		WithGoogleRealtimeModel("gemini-3.1-flash-live-preview"),
 		WithGoogleRealtimeVoice("Charon"),
+		WithGoogleRealtimeLanguage("es-US"),
 		WithGoogleRealtimeModalities([]string{"TEXT"}),
 		WithGoogleRealtimeTurnDetection(false),
 		WithGoogleRealtimeInputAudioTranscription(false),
+		WithGoogleRealtimeOutputAudioTranscription(false),
 	)
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -110,6 +148,9 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	if caps.UserTranscription {
 		t.Fatal("UserTranscription = true, want false when input transcription disabled")
 	}
+	if model.outputAudioTranscription {
+		t.Fatal("outputAudioTranscription = true, want false when output transcription disabled")
+	}
 	if caps.AudioOutput {
 		t.Fatal("AudioOutput = true, want false for TEXT-only modality")
 	}
@@ -119,4 +160,216 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	if model.voice != "Charon" {
 		t.Fatalf("voice = %q, want explicit reference voice", model.voice)
 	}
+	if model.language != "es-US" {
+		t.Fatalf("language = %q, want explicit reference language", model.language)
+	}
+	if model.instructions != "stay brief" {
+		t.Fatalf("instructions = %q, want explicit reference instructions", model.instructions)
+	}
+}
+
+func TestGoogleRealtimeUpdateOptionsMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key")
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	model.UpdateOptions(
+		WithGoogleRealtimeVoice("Kore"),
+		WithGoogleRealtimeTemperature(0.4),
+		WithGoogleRealtimeToolBehavior("BLOCKING"),
+		WithGoogleRealtimeToolResponseScheduling("WHEN_IDLE"),
+	)
+
+	if model.voice != "Kore" {
+		t.Fatalf("voice = %q, want updated voice", model.voice)
+	}
+	if !model.temperatureSet || model.temperature != 0.4 {
+		t.Fatalf("temperature = (%v, %v), want explicit 0.4", model.temperatureSet, model.temperature)
+	}
+	if model.toolBehavior != "BLOCKING" {
+		t.Fatalf("toolBehavior = %#v, want BLOCKING", model.toolBehavior)
+	}
+	if model.toolResponseScheduling != "WHEN_IDLE" {
+		t.Fatalf("toolResponseScheduling = %#v, want WHEN_IDLE", model.toolResponseScheduling)
+	}
+
+	model.UpdateOptions(WithGoogleRealtimeVoice(""))
+	if model.voice != "" {
+		t.Fatalf("voice after empty update = %q, want explicit empty voice", model.voice)
+	}
+}
+
+func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	if model.voice != "" {
+		t.Fatalf("voice = %q, want explicit empty voice", model.voice)
+	}
+}
+
+func TestGoogleRealtimeGenerationOptionsMatchReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeCandidateCount(2),
+		WithGoogleRealtimeMaxOutputTokens(96),
+		WithGoogleRealtimeTopP(0.7),
+		WithGoogleRealtimeTopK(32),
+		WithGoogleRealtimePresencePenalty(0.2),
+		WithGoogleRealtimeFrequencyPenalty(0.3),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	if model.candidateCount != 2 {
+		t.Fatalf("candidateCount = %d, want 2", model.candidateCount)
+	}
+	if !model.maxOutputTokensSet || model.maxOutputTokens != 96 {
+		t.Fatalf("maxOutputTokens = (%v, %d), want explicit 96", model.maxOutputTokensSet, model.maxOutputTokens)
+	}
+	if !model.topPSet || model.topP != 0.7 {
+		t.Fatalf("topP = (%v, %v), want explicit 0.7", model.topPSet, model.topP)
+	}
+	if !model.topKSet || model.topK != 32 {
+		t.Fatalf("topK = (%v, %d), want explicit 32", model.topKSet, model.topK)
+	}
+	if !model.presencePenaltySet || model.presencePenalty != 0.2 {
+		t.Fatalf("presencePenalty = (%v, %v), want explicit 0.2", model.presencePenaltySet, model.presencePenalty)
+	}
+	if !model.frequencyPenaltySet || model.frequencyPenalty != 0.3 {
+		t.Fatalf("frequencyPenalty = (%v, %v), want explicit 0.3", model.frequencyPenaltySet, model.frequencyPenalty)
+	}
+}
+
+func TestGoogleRealtimeSessionConnectsWithReferenceConfig(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeInstructions("stay concise"),
+		WithGoogleRealtimeVoice("Kore"),
+		WithGoogleRealtimeLanguage("en-US"),
+		WithGoogleRealtimeModalities([]string{"AUDIO", "TEXT"}),
+		WithGoogleRealtimeInputAudioTranscription(true),
+		WithGoogleRealtimeOutputAudioTranscription(true),
+		WithGoogleRealtimeTemperature(0.25),
+		WithGoogleRealtimeTopP(0.8),
+		WithGoogleRealtimeMaxOutputTokens(128),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if connector.model != "gemini-2.5-flash-native-audio-preview-12-2025" {
+		t.Fatalf("connected model = %q, want reference default model", connector.model)
+	}
+	config := connector.config
+	if config == nil {
+		t.Fatal("connect config = nil")
+	}
+	if len(config.ResponseModalities) != 2 || config.ResponseModalities[0] != genai.ModalityAudio || config.ResponseModalities[1] != genai.ModalityText {
+		t.Fatalf("response modalities = %#v, want AUDIO,TEXT", config.ResponseModalities)
+	}
+	if config.SystemInstruction == nil || len(config.SystemInstruction.Parts) != 1 || config.SystemInstruction.Parts[0].Text != "stay concise" {
+		t.Fatalf("system instruction = %#v, want reference instructions", config.SystemInstruction)
+	}
+	if config.SpeechConfig == nil || config.SpeechConfig.VoiceConfig == nil || config.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig == nil {
+		t.Fatalf("speech config = %#v, want voice config", config.SpeechConfig)
+	}
+	if config.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Kore" {
+		t.Fatalf("voice = %q, want Kore", config.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName)
+	}
+	if config.SpeechConfig.LanguageCode != "en-US" {
+		t.Fatalf("language = %q, want en-US", config.SpeechConfig.LanguageCode)
+	}
+	if config.InputAudioTranscription == nil || config.OutputAudioTranscription == nil {
+		t.Fatalf("transcription config = input %#v output %#v, want both enabled", config.InputAudioTranscription, config.OutputAudioTranscription)
+	}
+	if config.Temperature == nil || *config.Temperature != 0.25 {
+		t.Fatalf("temperature = %#v, want 0.25", config.Temperature)
+	}
+	if config.TopP == nil || *config.TopP != 0.8 {
+		t.Fatalf("topP = %#v, want 0.8", config.TopP)
+	}
+	if config.MaxOutputTokens != 128 {
+		t.Fatalf("max output tokens = %d, want 128", config.MaxOutputTokens)
+	}
+	var _ llm.RealtimeSession = session
+}
+
+func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.PushAudio(&audiomodel.AudioFrame{
+		Data:              bytes.Repeat([]byte{1, 2}, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	if err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs = %d, want one audio input", len(liveSession.inputs))
+	}
+	audio := liveSession.inputs[0].Audio
+	if audio == nil || len(audio.Data) != 1600 || audio.MIMEType != "audio/pcm;rate=16000" {
+		t.Fatalf("audio input = %#v, want reference PCM 16 kHz blob", audio)
+	}
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v", err)
+	}
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs after CommitAudio = %d, want no-op like reference", len(liveSession.inputs))
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !liveSession.closed {
+		t.Fatal("live session closed = false")
+	}
+}
+
+type fakeGoogleRealtimeConnector struct {
+	model   string
+	config  *genai.LiveConnectConfig
+	session *fakeGoogleRealtimeLiveSession
+}
+
+func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
+	c.model = model
+	c.config = config
+	return c.session, nil
+}
+
+type fakeGoogleRealtimeLiveSession struct {
+	inputs []genai.LiveRealtimeInput
+	closed bool
+}
+
+func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealtimeInput) error {
+	s.inputs = append(s.inputs, input)
+	return nil
+}
+
+func (s *fakeGoogleRealtimeLiveSession) Close() error {
+	s.closed = true
+	return nil
 }

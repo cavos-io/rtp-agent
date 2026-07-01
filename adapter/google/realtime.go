@@ -1,12 +1,18 @@
 package google
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
+	"github.com/cavos-io/rtp-agent/core/audio"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
+	"google.golang.org/genai"
 )
 
 const (
@@ -14,6 +20,8 @@ const (
 	defaultGoogleRealtimeVertexModel = "gemini-live-2.5-flash-native-audio"
 	defaultGoogleRealtimeVoice       = "Puck"
 	defaultGoogleRealtimeLocation    = "us-central1"
+	googleRealtimeInputSampleRate    = 16000
+	googleRealtimeInputChannels      = 1
 )
 
 var (
@@ -27,28 +35,82 @@ var (
 )
 
 type RealtimeModel struct {
-	apiKey                  string
-	model                   string
-	voice                   string
-	vertexAI                bool
-	project                 string
-	location                string
-	modalities              []string
-	turnDetection           bool
-	inputAudioTranscription bool
+	apiKey                    string
+	instructions              string
+	model                     string
+	voice                     string
+	language                  string
+	vertexAI                  bool
+	project                   string
+	location                  string
+	modalities                []string
+	turnDetection             bool
+	inputAudioTranscription   bool
+	outputAudioTranscription  bool
+	candidateCount            int
+	maxOutputTokens           int
+	maxOutputTokensSet        bool
+	topP                      float64
+	topPSet                   bool
+	topK                      int
+	topKSet                   bool
+	presencePenalty           float64
+	presencePenaltySet        bool
+	frequencyPenalty          float64
+	frequencyPenaltySet       bool
+	temperature               float64
+	temperatureSet            bool
+	toolBehavior              any
+	toolBehaviorSet           bool
+	toolResponseScheduling    any
+	toolResponseSchedulingSet bool
+	connector                 googleRealtimeConnector
 }
 
 type GoogleRealtimeOption func(*googleRealtimeOptions)
 
 type googleRealtimeOptions struct {
-	model                   string
-	voice                   string
-	vertexAI                *bool
-	project                 string
-	location                string
-	modalities              []string
-	turnDetection           *bool
-	inputAudioTranscription *bool
+	model                     string
+	instructions              string
+	voice                     string
+	voiceSet                  bool
+	language                  string
+	vertexAI                  *bool
+	project                   string
+	projectSet                bool
+	location                  string
+	locationSet               bool
+	modalities                []string
+	turnDetection             *bool
+	inputAudioTranscription   *bool
+	outputAudioTranscription  *bool
+	candidateCount            int
+	maxOutputTokens           int
+	maxOutputTokensSet        bool
+	topP                      float64
+	topPSet                   bool
+	topK                      int
+	topKSet                   bool
+	presencePenalty           float64
+	presencePenaltySet        bool
+	frequencyPenalty          float64
+	frequencyPenaltySet       bool
+	temperature               float64
+	temperatureSet            bool
+	toolBehavior              any
+	toolBehaviorSet           bool
+	toolResponseScheduling    any
+	toolResponseSchedulingSet bool
+	connector                 googleRealtimeConnector
+}
+
+type googleRealtimeConnector interface {
+	Connect(context.Context, string, *genai.LiveConnectConfig) (googleRealtimeLiveSession, error)
+}
+
+type googleRealtimeLiveSession interface {
+	SendRealtimeInput(genai.LiveRealtimeInput) error
+	Close() error
 }
 
 func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
@@ -59,11 +121,22 @@ func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
 	}
 }
 
+func WithGoogleRealtimeInstructions(instructions string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.instructions = instructions
+	}
+}
+
 func WithGoogleRealtimeVoice(voice string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
-		if voice != "" {
-			options.voice = voice
-		}
+		options.voice = voice
+		options.voiceSet = true
+	}
+}
+
+func WithGoogleRealtimeLanguage(language string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.language = language
 	}
 }
 
@@ -76,6 +149,14 @@ func WithGoogleRealtimeVertexAI(enabled bool) GoogleRealtimeOption {
 func WithGoogleRealtimeProject(project string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.project = project
+		options.projectSet = true
+	}
+}
+
+func WithGoogleRealtimeLocation(location string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.location = location
+		options.locationSet = true
 	}
 }
 
@@ -94,6 +175,80 @@ func WithGoogleRealtimeTurnDetection(enabled bool) GoogleRealtimeOption {
 func WithGoogleRealtimeInputAudioTranscription(enabled bool) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.inputAudioTranscription = &enabled
+	}
+}
+
+func WithGoogleRealtimeOutputAudioTranscription(enabled bool) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.outputAudioTranscription = &enabled
+	}
+}
+
+func WithGoogleRealtimeCandidateCount(count int) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.candidateCount = count
+	}
+}
+
+func WithGoogleRealtimeMaxOutputTokens(tokens int) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.maxOutputTokens = tokens
+		options.maxOutputTokensSet = true
+	}
+}
+
+func WithGoogleRealtimeTopP(topP float64) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.topP = topP
+		options.topPSet = true
+	}
+}
+
+func WithGoogleRealtimeTopK(topK int) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.topK = topK
+		options.topKSet = true
+	}
+}
+
+func WithGoogleRealtimePresencePenalty(penalty float64) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.presencePenalty = penalty
+		options.presencePenaltySet = true
+	}
+}
+
+func WithGoogleRealtimeFrequencyPenalty(penalty float64) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.frequencyPenalty = penalty
+		options.frequencyPenaltySet = true
+	}
+}
+
+func WithGoogleRealtimeTemperature(temperature float64) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.temperature = temperature
+		options.temperatureSet = true
+	}
+}
+
+func WithGoogleRealtimeToolBehavior(behavior any) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.toolBehavior = behavior
+		options.toolBehaviorSet = true
+	}
+}
+
+func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.toolResponseScheduling = scheduling
+		options.toolResponseSchedulingSet = true
+	}
+}
+
+func WithGoogleRealtimeConnector(connector googleRealtimeConnector) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.connector = connector
 	}
 }
 
@@ -121,18 +276,18 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
 	project := options.project
-	if project == "" {
+	if !options.projectSet {
 		project = os.Getenv("GOOGLE_CLOUD_PROJECT")
 	}
 	location := options.location
-	if location == "" {
+	if !options.locationSet {
 		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
 	}
 	if vertexAI {
-		if location == "" {
+		if location == "" && !options.locationSet {
 			location = defaultGoogleRealtimeLocation
 		}
-		if project == "" {
+		if project == "" || location == "" {
 			return nil, errors.New("Project is required for VertexAI via project option or GOOGLE_CLOUD_PROJECT environment variable")
 		}
 		apiKey = ""
@@ -144,7 +299,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		}
 	}
 	voice := options.voice
-	if voice == "" {
+	if !options.voiceSet {
 		voice = defaultGoogleRealtimeVoice
 	}
 	modalities := options.modalities
@@ -161,17 +316,71 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	if options.inputAudioTranscription != nil {
 		inputAudioTranscription = *options.inputAudioTranscription
 	}
+	outputAudioTranscription := true
+	if options.outputAudioTranscription != nil {
+		outputAudioTranscription = *options.outputAudioTranscription
+	}
+	candidateCount := options.candidateCount
+	if candidateCount == 0 {
+		candidateCount = 1
+	}
 	return &RealtimeModel{
-		apiKey:                  apiKey,
-		model:                   modelName,
-		voice:                   voice,
-		vertexAI:                vertexAI,
-		project:                 project,
-		location:                location,
-		modalities:              modalities,
-		turnDetection:           turnDetection,
-		inputAudioTranscription: inputAudioTranscription,
+		apiKey:                    apiKey,
+		instructions:              options.instructions,
+		model:                     modelName,
+		voice:                     voice,
+		language:                  options.language,
+		vertexAI:                  vertexAI,
+		project:                   project,
+		location:                  location,
+		modalities:                modalities,
+		turnDetection:             turnDetection,
+		inputAudioTranscription:   inputAudioTranscription,
+		outputAudioTranscription:  outputAudioTranscription,
+		candidateCount:            candidateCount,
+		maxOutputTokens:           options.maxOutputTokens,
+		maxOutputTokensSet:        options.maxOutputTokensSet,
+		topP:                      options.topP,
+		topPSet:                   options.topPSet,
+		topK:                      options.topK,
+		topKSet:                   options.topKSet,
+		presencePenalty:           options.presencePenalty,
+		presencePenaltySet:        options.presencePenaltySet,
+		frequencyPenalty:          options.frequencyPenalty,
+		frequencyPenaltySet:       options.frequencyPenaltySet,
+		temperature:               options.temperature,
+		temperatureSet:            options.temperatureSet,
+		toolBehavior:              options.toolBehavior,
+		toolBehaviorSet:           options.toolBehaviorSet,
+		toolResponseScheduling:    options.toolResponseScheduling,
+		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
+		connector:                 options.connector,
 	}, nil
+}
+
+func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
+	if m == nil {
+		return
+	}
+	options := googleRealtimeOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if options.voiceSet {
+		m.voice = options.voice
+	}
+	if options.temperatureSet {
+		m.temperature = options.temperature
+		m.temperatureSet = true
+	}
+	if options.toolBehaviorSet {
+		m.toolBehavior = options.toolBehavior
+		m.toolBehaviorSet = true
+	}
+	if options.toolResponseSchedulingSet {
+		m.toolResponseScheduling = options.toolResponseScheduling
+		m.toolResponseSchedulingSet = true
+	}
 }
 
 func googleRealtimeDefaultVertexAI() bool {
@@ -233,3 +442,191 @@ func googleRealtimeHasAudioModality(modalities []string) bool {
 	}
 	return false
 }
+
+func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
+	if m == nil {
+		return nil, errors.New("google realtime model is nil")
+	}
+	connector := m.connector
+	if connector == nil {
+		connector = googleRealtimeDefaultConnector{model: m}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	liveSession, err := connector.Connect(ctx, m.Model(), m.liveConnectConfig())
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return &googleRealtimeSession{
+		ctx:         ctx,
+		cancel:      cancel,
+		liveSession: liveSession,
+		eventCh:     make(chan llm.RealtimeEvent),
+		audioStream: audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+	}, nil
+}
+
+func (m *RealtimeModel) Close() error { return nil }
+
+func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
+	config := &genai.LiveConnectConfig{
+		ResponseModalities: googleRealtimeModalities(m.modalities),
+		SpeechConfig: &genai.SpeechConfig{
+			VoiceConfig: &genai.VoiceConfig{
+				PrebuiltVoiceConfig: &genai.PrebuiltVoiceConfig{VoiceName: m.voice},
+			},
+			LanguageCode: m.language,
+		},
+	}
+	if m.instructions != "" {
+		config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: m.instructions}}}
+	}
+	if m.inputAudioTranscription {
+		config.InputAudioTranscription = &genai.AudioTranscriptionConfig{}
+	}
+	if m.outputAudioTranscription {
+		config.OutputAudioTranscription = &genai.AudioTranscriptionConfig{}
+	}
+	if m.temperatureSet {
+		value := float32(m.temperature)
+		config.Temperature = &value
+	}
+	if m.topPSet {
+		value := float32(m.topP)
+		config.TopP = &value
+	}
+	if m.topKSet {
+		value := float32(m.topK)
+		config.TopK = &value
+	}
+	if m.maxOutputTokensSet {
+		config.MaxOutputTokens = int32(m.maxOutputTokens)
+	}
+	return config
+}
+
+func googleRealtimeModalities(modalities []string) []genai.Modality {
+	out := make([]genai.Modality, 0, len(modalities))
+	for _, modality := range modalities {
+		switch strings.ToUpper(modality) {
+		case "AUDIO":
+			out = append(out, genai.ModalityAudio)
+		case "TEXT":
+			out = append(out, genai.ModalityText)
+		}
+	}
+	return out
+}
+
+type googleRealtimeDefaultConnector struct {
+	model *RealtimeModel
+}
+
+func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
+	clientConfig := &genai.ClientConfig{
+		APIKey: c.model.apiKey,
+		HTTPOptions: genai.HTTPOptions{
+			APIVersion: "v1beta",
+		},
+	}
+	if c.model.vertexAI {
+		clientConfig.Backend = genai.BackendVertexAI
+		clientConfig.Project = c.model.project
+		clientConfig.Location = c.model.location
+	} else {
+		clientConfig.Backend = genai.BackendGeminiAPI
+	}
+	client, err := genai.NewClient(ctx, clientConfig)
+	if err != nil {
+		return nil, err
+	}
+	return client.Live.Connect(ctx, modelName, config)
+}
+
+type googleRealtimeSession struct {
+	ctx         context.Context
+	cancel      context.CancelFunc
+	liveSession googleRealtimeLiveSession
+	eventCh     chan llm.RealtimeEvent
+	audioStream *audio.AudioByteStream
+	closeOnce   sync.Once
+	closeErr    error
+	mu          sync.Mutex
+}
+
+func (s *googleRealtimeSession) UpdateInstructions(string) error {
+	return errors.New("google realtime session instruction update is not implemented")
+}
+func (s *googleRealtimeSession) UpdateChatContext(*llm.ChatContext) error {
+	return errors.New("google realtime session chat context update is not implemented")
+}
+func (s *googleRealtimeSession) UpdateTools([]llm.Tool) error {
+	return errors.New("google realtime session tool update is not implemented")
+}
+func (s *googleRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
+	return errors.New("google realtime session option update is not implemented")
+}
+func (s *googleRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error {
+	return errors.New("google realtime session reply generation is not implemented")
+}
+func (s *googleRealtimeSession) Say(string) error {
+	return errors.New("google realtime session text input is not implemented")
+}
+func (s *googleRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
+func (s *googleRealtimeSession) Interrupt() error {
+	return errors.New("google realtime session interrupt is not implemented")
+}
+func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
+
+func (s *googleRealtimeSession) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		close(s.eventCh)
+		if s.liveSession != nil {
+			s.closeErr = s.liveSession.Close()
+		}
+	})
+	return s.closeErr
+}
+
+func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
+	if s == nil || s.liveSession == nil || frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	resampled, err := audio.ResampleAudioFrame(frame, googleRealtimeInputSampleRate)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, chunk := range s.audioStream.Write(resampled.Data) {
+		if err := s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+			Audio: &genai.Blob{
+				Data:     chunk.Data,
+				MIMEType: "audio/pcm;rate=16000",
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *googleRealtimeSession) PushVideo(*images.VideoFrame) error {
+	return errors.New("google realtime session video input is not implemented")
+}
+func (s *googleRealtimeSession) CommitAudio() error { return nil }
+func (s *googleRealtimeSession) ClearAudio() error {
+	if s != nil && s.audioStream != nil {
+		s.audioStream.Clear()
+	}
+	return nil
+}
+
+var _ llm.RealtimeModel = (*RealtimeModel)(nil)
+var _ llm.RealtimeSession = (*googleRealtimeSession)(nil)
