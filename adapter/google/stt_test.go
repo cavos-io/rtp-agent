@@ -178,6 +178,34 @@ func TestGoogleRecognitionConfigUsesProviderOptions(t *testing.T) {
 	}
 }
 
+func TestGoogleRecognitionConfigUsesReferenceKeywordAdaptation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTKeywords(
+			GoogleSTTKeyword{Value: "Cavos", Boost: 12.5},
+			GoogleSTTKeyword{Value: "LiveKit", Boost: 9},
+		),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.Adaptation == nil || len(config.Adaptation.PhraseSets) != 1 {
+		t.Fatalf("adaptation = %#v, want one phrase set", config.Adaptation)
+	}
+	phraseSet := config.Adaptation.PhraseSets[0]
+	if phraseSet.Name != "keywords" {
+		t.Fatalf("phrase set name = %q, want keywords", phraseSet.Name)
+	}
+	if len(phraseSet.Phrases) != 2 {
+		t.Fatalf("phrases = %#v, want two keyword phrases", phraseSet.Phrases)
+	}
+	if got := phraseSet.Phrases[0]; got.Value != "Cavos" || got.Boost != 12.5 {
+		t.Fatalf("first phrase = %#v, want Cavos boost 12.5", got)
+	}
+	if got := phraseSet.Phrases[1]; got.Value != "LiveKit" || got.Boost != 9 {
+		t.Fatalf("second phrase = %#v, want LiveKit boost 9", got)
+	}
+}
+
 func TestNewGoogleSTTRejectsMissingCredentialsFile(t *testing.T) {
 	_, err := NewGoogleSTT("/definitely/missing/google-credentials.json")
 	if err == nil {

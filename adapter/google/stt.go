@@ -37,6 +37,7 @@ type GoogleSTT struct {
 	enableWordConfidence bool
 	speechStartTimeout   time.Duration
 	speechEndTimeout     time.Duration
+	keywords             []GoogleSTTKeyword
 }
 
 type googleSpeechClient interface {
@@ -45,6 +46,11 @@ type googleSpeechClient interface {
 }
 
 type GoogleSTTOption func(*GoogleSTT)
+
+type GoogleSTTKeyword struct {
+	Value string
+	Boost float32
+}
 
 func WithGoogleSTTModel(model string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
@@ -112,6 +118,18 @@ func WithGoogleSTTMinConfidenceThreshold(threshold float64) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if threshold >= 0 {
 			s.minConfidence = threshold
+		}
+	}
+}
+
+func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.keywords = nil
+		for _, keyword := range keywords {
+			if keyword.Value == "" {
+				continue
+			}
+			s.keywords = append(s.keywords, keyword)
 		}
 	}
 }
@@ -307,6 +325,32 @@ func googleRecognitionConfig(s *GoogleSTT, language string) *speechpb.Recognitio
 		EnableSpokenPunctuation:    wrapperspb.Bool(s.spokenPunctuation),
 		ProfanityFilter:            s.profanityFilter,
 		Model:                      s.model,
+		Adaptation:                 googleSpeechAdaptation(s.keywords),
+	}
+}
+
+func googleSpeechAdaptation(keywords []GoogleSTTKeyword) *speechpb.SpeechAdaptation {
+	if len(keywords) == 0 {
+		return nil
+	}
+	phrases := make([]*speechpb.PhraseSet_Phrase, 0, len(keywords))
+	for _, keyword := range keywords {
+		if keyword.Value == "" {
+			continue
+		}
+		phrases = append(phrases, &speechpb.PhraseSet_Phrase{
+			Value: keyword.Value,
+			Boost: keyword.Boost,
+		})
+	}
+	if len(phrases) == 0 {
+		return nil
+	}
+	return &speechpb.SpeechAdaptation{
+		PhraseSets: []*speechpb.PhraseSet{{
+			Name:    "keywords",
+			Phrases: phrases,
+		}},
 	}
 }
 
