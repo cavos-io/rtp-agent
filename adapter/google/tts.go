@@ -245,7 +245,7 @@ func googleTTSConfigFromOptions(opts ...GoogleTTSOption) googleTTSConfig {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.cloneKeySet && !cfg.modelSet && !cfg.promptSet {
+	if !cfg.modelSet && !cfg.promptSet && (cfg.cloneKeySet || (cfg.voiceSet && strings.Contains(strings.ToLower(cfg.voice), "chirp"))) {
 		cfg.model = "chirp_3"
 	}
 	return cfg
