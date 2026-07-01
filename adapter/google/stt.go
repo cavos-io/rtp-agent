@@ -62,9 +62,7 @@ type GoogleSTTKeyword struct {
 
 func WithGoogleSTTModel(model string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if model != "" {
-			s.model = model
-		}
+		s.model = model
 	}
 }
 
