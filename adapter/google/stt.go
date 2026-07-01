@@ -11,7 +11,6 @@ import (
 
 	speech "cloud.google.com/go/speech/apiv1"
 	"cloud.google.com/go/speech/apiv1/speechpb"
-	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -623,9 +622,111 @@ type googleSTTStream struct {
 	inputClosed                 bool
 	audioPushed                 bool
 	pushedSampleRate            uint32
+	inputAudio                  googleSTTInputAudioNormalizer
 	timingMu                    sync.Mutex
 	startTimeOffset             float64
 	startTime                   float64
+}
+
+type googleSTTInputAudioNormalizer struct {
+	sampleRate  uint32
+	numChannels uint32
+	targetRate  uint32
+	remainder   uint64
+	lastSample  []byte
+}
+
+func (n *googleSTTInputAudioNormalizer) normalize(frame *model.AudioFrame, targetRate uint32) (*model.AudioFrame, error) {
+	if frame == nil || targetRate == 0 || frame.SampleRate == targetRate {
+		n.reset()
+		return frame, nil
+	}
+	if frame.SampleRate == 0 {
+		return nil, errors.New("cannot resample audio with zero sample rate")
+	}
+	if frame.NumChannels == 0 {
+		return nil, errors.New("cannot resample audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, errors.New("cannot resample non-16-bit PCM audio")
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(frame.Data)) / frame.NumChannels / 2
+	}
+	expectedBytes := int(samplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, errors.New("audio frame data is shorter than declared sample count")
+	}
+	if n.sampleRate != frame.SampleRate || n.numChannels != frame.NumChannels || n.targetRate != targetRate {
+		n.sampleRate = frame.SampleRate
+		n.numChannels = frame.NumChannels
+		n.targetRate = targetRate
+		n.remainder = 0
+		n.lastSample = nil
+	}
+	if samplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        targetRate,
+			NumChannels:       frame.NumChannels,
+			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+
+	scaledSamples := uint64(samplesPerChannel)*uint64(targetRate) + n.remainder
+	outSamples := uint32(scaledSamples / uint64(frame.SampleRate))
+	n.remainder = scaledSamples % uint64(frame.SampleRate)
+	out := make([]byte, int(outSamples*frame.NumChannels*2))
+	channelCount := int(frame.NumChannels)
+	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
+		srcIdx := uint32(uint64(outIdx) * uint64(frame.SampleRate) / uint64(targetRate))
+		if srcIdx >= samplesPerChannel {
+			srcIdx = samplesPerChannel - 1
+		}
+		for ch := 0; ch < channelCount; ch++ {
+			inOffset := (int(srcIdx)*channelCount + ch) * 2
+			outOffset := (int(outIdx)*channelCount + ch) * 2
+			copy(out[outOffset:outOffset+2], frame.Data[inOffset:inOffset+2])
+		}
+	}
+	if n.remainder > 0 {
+		offset := int((samplesPerChannel - 1) * frame.NumChannels * 2)
+		n.lastSample = append(n.lastSample[:0], frame.Data[offset:offset+int(frame.NumChannels*2)]...)
+	} else {
+		n.lastSample = nil
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        targetRate,
+		NumChannels:       frame.NumChannels,
+		SamplesPerChannel: outSamples,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
+}
+
+func (n *googleSTTInputAudioNormalizer) flush() *model.AudioFrame {
+	if n == nil || n.remainder == 0 || len(n.lastSample) == 0 || n.targetRate == 0 || n.numChannels == 0 {
+		return nil
+	}
+	frame := &model.AudioFrame{
+		Data:              append([]byte(nil), n.lastSample...),
+		SampleRate:        n.targetRate,
+		NumChannels:       n.numChannels,
+		SamplesPerChannel: 1,
+	}
+	n.remainder = 0
+	n.lastSample = nil
+	return frame
+}
+
+func (n *googleSTTInputAudioNormalizer) reset() {
+	n.sampleRate = 0
+	n.numChannels = 0
+	n.targetRate = 0
+	n.remainder = 0
+	n.lastSample = nil
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -906,11 +1007,18 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 			return errors.New("the sample rate of the input frames must be consistent")
 		}
 		s.pushedSampleRate = frame.SampleRate
-		var err error
-		frame, err = coreaudio.ResampleAudioFrame(frame, uint32(s.owner.sampleRate))
+		normalized, err := s.inputAudio.normalize(frame, uint32(s.owner.sampleRate))
 		if err != nil {
 			return err
 		}
+		frame = normalized
+	}
+	return s.sendAudioFrameLocked(frame)
+}
+
+func (s *googleSTTStream) sendAudioFrameLocked(frame *model.AudioFrame) error {
+	if frame == nil || len(frame.Data) == 0 {
+		return nil
 	}
 	if err := s.stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
@@ -931,6 +1039,9 @@ func (s *googleSTTStream) Flush() error {
 	defer s.mu.Unlock()
 	if s.closed || s.inputClosed {
 		return io.ErrClosedPipe
+	}
+	if tail := s.inputAudio.flush(); tail != nil {
+		return s.sendAudioFrameLocked(tail)
 	}
 	return nil
 }

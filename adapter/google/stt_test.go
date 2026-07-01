@@ -601,6 +601,39 @@ func TestGoogleSTTStreamResamplesPushedAudioLikeReference(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamFlushesReferenceResamplerTail(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	frame := &model.AudioFrame{
+		Data:              []byte{7, 0},
+		SampleRate:        48000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+	if len(streamClient.sent) != 1 {
+		t.Fatalf("sent after PushFrame = %d, want only config before resampler tail flush", len(streamClient.sent))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent after Flush = %d, want config plus flushed resampler tail", len(streamClient.sent))
+	}
+	if got, want := streamClient.sent[1].GetAudioContent(), []byte{7, 0}; !bytes.Equal(got, want) {
+		t.Fatalf("flushed audio content = %#v, want reference resampler tail %#v", got, want)
+	}
+}
+
 func TestGoogleSTTStreamExplicitLanguageOverridesReferenceAlternatives(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(
