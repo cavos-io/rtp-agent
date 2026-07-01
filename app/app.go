@@ -137,6 +137,7 @@ type appGoogleSTTConfig struct {
 	detectLanguage       *bool
 	interimResults       *bool
 	wordTimeOffsets      *bool
+	wordConfidence       *bool
 	speechEndTimeout     time.Duration
 	minConfidence        *float64
 	voiceActivityEvents  *bool
@@ -168,6 +169,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if cfg.wordTimeOffsets != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTWordTimeOffsets(*cfg.wordTimeOffsets))
+	}
+	if cfg.wordConfidence != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTWordConfidence(*cfg.wordConfidence))
 	}
 	if cfg.speechEndTimeout > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpeechEndTimeout(cfg.speechEndTimeout))
@@ -427,6 +431,7 @@ type AppConfig struct {
 	STTTagAudioEvents                       *bool
 	STTIncludeTimestamps                    *bool
 	STTWordTimestamps                       *bool
+	STTWordConfidence                       *bool
 	STTInterimResults                       *bool
 	STTSmartFormat                          *bool
 	STTNoDelay                              *bool
@@ -818,6 +823,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTTagAudioEvents:                       getenvOptionalBool("RTP_AGENT_STT_TAG_AUDIO_EVENTS"),
 		STTIncludeTimestamps:                    getenvOptionalBool("RTP_AGENT_STT_INCLUDE_TIMESTAMPS"),
 		STTWordTimestamps:                       getenvOptionalBool("RTP_AGENT_STT_WORD_TIMESTAMPS"),
+		STTWordConfidence:                       getenvOptionalBool("RTP_AGENT_STT_WORD_CONFIDENCE"),
 		STTInterimResults:                       getenvOptionalBool("RTP_AGENT_STT_INTERIM_RESULTS"),
 		STTSmartFormat:                          getenvOptionalBool("RTP_AGENT_STT_SMART_FORMAT"),
 		STTNoDelay:                              getenvOptionalBool("RTP_AGENT_STT_NO_DELAY"),
@@ -3999,6 +4005,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		detectLanguage:       cfg.STTLanguageDetection,
 		interimResults:       cfg.STTInterimResults,
 		wordTimeOffsets:      cfg.STTWordTimestamps,
+		wordConfidence:       cfg.STTWordConfidence,
 		minConfidence:        cfg.STTMinConfidenceThreshold,
 		voiceActivityEvents:  cfg.STTVoiceActivityEvents,
 		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
