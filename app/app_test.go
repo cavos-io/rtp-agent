@@ -13711,6 +13711,27 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceV2Adaptation(t *testing.T) {
+	adaptation := &speechv2pb.SpeechAdaptation{
+		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{
+					Phrases: []*speechv2pb.PhraseSet_Phrase{{Value: "Acrux", Boost: 20}},
+				},
+			},
+		}},
+	}
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"adaptation": adaptation,
+		},
+	})
+
+	if googleCfg.adaptationV2 != adaptation {
+		t.Fatalf("adaptationV2 = %#v, want reference Google STT v2 adaptation", googleCfg.adaptationV2)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceEndpointingSensitivity(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{

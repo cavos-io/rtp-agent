@@ -154,6 +154,7 @@ type appGoogleSTTConfig struct {
 	alternativeLanguages   []string
 	keywords               []adaptergoogle.GoogleSTTKeyword
 	denoiserConfig         *speechv2pb.DenoiserConfig
+	adaptationV2           *speechv2pb.SpeechAdaptation
 	endpointingSensitivity string
 }
 
@@ -215,6 +216,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if cfg.denoiserConfig != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTDenoiserConfig(cfg.denoiserConfig))
+	}
+	if cfg.adaptationV2 != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAdaptationV2(cfg.adaptationV2))
 	}
 	if cfg.endpointingSensitivity != "" {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTEndpointingSensitivity(cfg.endpointingSensitivity))
@@ -4066,6 +4070,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		alternativeLanguages:   splitStringList(cfg.STTLanguageOptions),
 		keywords:               googleSTTKeywordsFromConfig(cfg.STTKeywords),
 		denoiserConfig:         googleSTTDenoiserConfigFromOptions(cfg.STTModelOptions),
+		adaptationV2:           googleSTTAdaptationV2FromOptions(cfg.STTModelOptions),
 		endpointingSensitivity: modelOptionString(cfg.STTModelOptions, "endpointing_sensitivity"),
 	}
 	if cfg.STTEndpointingMS != nil {
@@ -4103,6 +4108,19 @@ func googleSTTDenoiserConfigFromOptions(options map[string]any) *speechv2pb.Deno
 		config.SnrThreshold = float32(*snrThreshold)
 	}
 	return config
+}
+
+func googleSTTAdaptationV2FromOptions(options map[string]any) *speechv2pb.SpeechAdaptation {
+	if len(options) == 0 {
+		return nil
+	}
+	if adaptation, ok := options["adaptation"].(*speechv2pb.SpeechAdaptation); ok {
+		return adaptation
+	}
+	if adaptation, ok := options["speech_adaptation"].(*speechv2pb.SpeechAdaptation); ok {
+		return adaptation
+	}
+	return nil
 }
 
 func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adaptergoogle.GoogleSTTKeyword {
