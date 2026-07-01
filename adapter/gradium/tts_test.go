@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/llm"
 	coretts "github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
 )
@@ -80,6 +81,50 @@ func TestGradiumTTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "GRADIUM_API_KEY") {
 		t.Fatalf("Stream error = %q, want GRADIUM_API_KEY guidance", err)
+	}
+}
+
+func TestGradiumTTSSynthesizeDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("gradium tts dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewGradiumTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+
+	if stream != nil {
+		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	}
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestGradiumTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("gradium tts dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewGradiumTTS("test-key", "")
+	stream, err := provider.Stream(context.Background())
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 

@@ -407,13 +407,6 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 		return nil, io.ErrClosedPipe
 	}
 
-	// Send context initialization
-	initMsg := buildCartesiaStreamInitMessage(t)
-	if err := conn.WriteJSON(initMsg); err != nil {
-		conn.Close()
-		return nil, err
-	}
-
 	stream := &cartesiaTTSStream{
 		provider:   t,
 		conn:       conn,
@@ -484,13 +477,6 @@ func buildCartesiaStreamHeaders(t *CartesiaTTS) http.Header {
 	headers.Set("X-API-Key", t.apiKey)
 	headers.Set("User-Agent", cartesiaTTSUserAgent)
 	return headers
-}
-
-func buildCartesiaStreamInitMessage(t *CartesiaTTS) map[string]interface{} {
-	initMsg := buildCartesiaOptions(t, true)
-	initMsg["context_id"] = "default"
-	initMsg["transcript"] = " "
-	return initMsg
 }
 
 type cartesiaTTSStream struct {

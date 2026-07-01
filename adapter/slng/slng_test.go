@@ -511,6 +511,38 @@ func TestSLNGSTTUpdateOptionsReconnectsActiveStreamBeforeAudio(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTReconnectFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("slng stt redial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	stream := &sttStream{
+		ctx:                context.Background(),
+		provider:           NewSTT("test-key", WithSTTEndpoint("wss://slng.test/v1/stt/deepgram/nova:3")),
+		language:           "en",
+		sampleRate:         defaultSLNGSTTSampleRate,
+		bufferSizeSeconds:  0.01,
+		encoding:           "linear16",
+		reconnectRequested: true,
+	}
+
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, defaultSLNGSTTSampleRate/100*2),
+		SampleRate:        defaultSLNGSTTSampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(defaultSLNGSTTSampleRate / 100),
+	})
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("reconnect error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSLNGSTTInitPayloadUsesVADSpeechPadOption(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTVADSpeechPadMS(75))
 

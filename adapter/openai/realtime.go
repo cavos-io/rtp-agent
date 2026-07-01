@@ -2601,7 +2601,10 @@ func (s *realtimeSession) reconnectAfterDisconnect() error {
 
 	conn, err := s.model.dialRealtimeWebsocket(s.ctx, wsURL, header)
 	if err != nil {
-		return fmt.Errorf("failed to reconnect to OpenAI realtime: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect to OpenAI realtime: %v", err))
 	}
 
 	s.mu.Lock()

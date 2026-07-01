@@ -121,6 +121,38 @@ func TestLMNTTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 }
 
+func TestLMNTTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := 0
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: lmntRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	provider := NewLMNTTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want 0 before Next", requests)
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+}
+
 func TestLMNTTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -136,13 +168,14 @@ func TestLMNTTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewLMNTTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)

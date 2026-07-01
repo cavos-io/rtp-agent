@@ -362,7 +362,10 @@ func (s *gnaniTTSSynthesizeStream) Flush() error {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, buildGnaniTTSWebsocketURL(s.provider).String(), buildGnaniTTSWebsocketHeaders(s.provider))
 	if err != nil {
-		return fmt.Errorf("failed to dial gnani tts websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani tts websocket: %v", err))
 	}
 	request, err := buildGnaniTTSWebsocketRequest(s.provider, fullText)
 	if err != nil {

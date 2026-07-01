@@ -125,43 +125,57 @@ func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	if err := validateSpeechifyAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	req, err := buildSpeechifyTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Speechify TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("speechify tts returned non-audio data: %s", string(respBody))
-	}
-
 	return &speechifyTTSChunkedStream{
-		resp:       resp,
-		sampleRate: t.sampleRate,
+		ctx:                   ctx,
+		text:                  text,
+		apiKey:                t.apiKey,
+		baseURL:               t.baseURL,
+		voice:                 t.voice,
+		encoding:              t.encoding,
+		sampleRate:            t.sampleRate,
+		language:              t.language,
+		model:                 t.model,
+		loudnessNormalization: cloneBoolPtr(t.loudnessNormalization),
+		textNormalization:     cloneBoolPtr(t.textNormalization),
 	}, nil
 }
 
 func buildSpeechifyTTSRequest(ctx context.Context, t *SpeechifyTTS, text string) (*http.Request, error) {
+	return buildSpeechifyTTSRequestFromOptions(ctx, speechifyTTSRequestOptions{
+		text:                  text,
+		apiKey:                t.apiKey,
+		baseURL:               t.baseURL,
+		voice:                 t.voice,
+		encoding:              t.encoding,
+		language:              t.language,
+		model:                 t.model,
+		loudnessNormalization: cloneBoolPtr(t.loudnessNormalization),
+		textNormalization:     cloneBoolPtr(t.textNormalization),
+	})
+}
+
+type speechifyTTSRequestOptions struct {
+	text                  string
+	apiKey                string
+	baseURL               string
+	voice                 string
+	encoding              string
+	language              string
+	model                 string
+	loudnessNormalization *bool
+	textNormalization     *bool
+}
+
+func buildSpeechifyTTSRequestFromOptions(ctx context.Context, opts speechifyTTSRequestOptions) (*http.Request, error) {
 	body := map[string]interface{}{
-		"input":        text,
-		"voice_id":     t.voice,
-		"language":     optionalString(t.language),
-		"model":        optionalString(t.model),
-		"audio_format": speechifyAudioFormatFromEncoding(t.encoding),
+		"input":        opts.text,
+		"voice_id":     opts.voice,
+		"language":     optionalString(opts.language),
+		"model":        optionalString(opts.model),
+		"audio_format": speechifyAudioFormatFromEncoding(opts.encoding),
 		"options": map[string]interface{}{
-			"loudness_normalization": optionalBool(t.loudnessNormalization),
-			"text_normalization":     optionalBool(t.textNormalization),
+			"loudness_normalization": optionalBool(opts.loudnessNormalization),
+			"text_normalization":     optionalBool(opts.textNormalization),
 		},
 	}
 	jsonBody, err := json.Marshal(body)
@@ -169,14 +183,14 @@ func buildSpeechifyTTSRequest(ctx context.Context, t *SpeechifyTTS, text string)
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(t.baseURL, "/")+"/audio/stream", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(opts.baseURL, "/")+"/audio/stream", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", speechifyAuthorizationHeader(t.apiKey))
+	req.Header.Set("Authorization", speechifyAuthorizationHeader(opts.apiKey))
 	req.Header.Set("x-caller", "livekit")
-	if accept := speechifyAcceptHeader(t.encoding); accept != "" {
+	if accept := speechifyAcceptHeader(opts.encoding); accept != "" {
 		req.Header.Set("Accept", accept)
 	}
 	return req, nil
@@ -194,16 +208,33 @@ func (t *SpeechifyTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error)
 }
 
 type speechifyTTSChunkedStream struct {
-	resp       *http.Response
-	sampleRate int
-	emitted    bool
-	hasAudio   bool
-	finalSent  bool
-	closed     bool
+	resp                  *http.Response
+	ctx                   context.Context
+	text                  string
+	apiKey                string
+	baseURL               string
+	voice                 string
+	encoding              string
+	sampleRate            int
+	language              string
+	model                 string
+	loudnessNormalization *bool
+	textNormalization     *bool
+	requested             bool
+	emitted               bool
+	hasAudio              bool
+	finalSent             bool
+	closed                bool
 }
 
 func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.emitted {
@@ -232,6 +263,43 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return &tts.SynthesizedAudio{
 		Frame: frame,
 	}, nil
+}
+
+func (s *speechifyTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildSpeechifyTTSRequestFromOptions(s.ctx, speechifyTTSRequestOptions{
+		text:                  s.text,
+		apiKey:                s.apiKey,
+		baseURL:               s.baseURL,
+		voice:                 s.voice,
+		encoding:              s.encoding,
+		language:              s.language,
+		model:                 s.model,
+		loudnessNormalization: cloneBoolPtr(s.loudnessNormalization),
+		textNormalization:     cloneBoolPtr(s.textNormalization),
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Speechify TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return fmt.Errorf("speechify tts returned non-audio data: %s", string(respBody))
+	}
+	s.resp = resp
+	return nil
 }
 
 func (s *speechifyTTSChunkedStream) Close() error {
@@ -351,4 +419,12 @@ func optionalBool(value *bool) interface{} {
 		return nil
 	}
 	return *value
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }

@@ -187,6 +187,32 @@ func TestSmallestAISTTUpdateOptionsReconnectsActiveStreams(t *testing.T) {
 	assertSmallestAIQuery(t, query, "eou_timeout_ms", "250")
 }
 
+func TestSmallestAISTTReconnectFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &smallestAISTTStream{
+		dialWebsocket: func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+			return nil, nil, errors.New("smallestai stt redial failed")
+		},
+		apiKey:             "test-key",
+		baseURL:            defaultSmallestAISTTBaseURL,
+		model:              defaultSmallestAISTTModel,
+		language:           "en",
+		sampleRate:         defaultSmallestAISTTSampleRate,
+		encoding:           defaultSmallestAISTTEncoding,
+		ctx:                context.Background(),
+		state:              &smallestAISTTStreamState{},
+		events:             make(chan *stt.SpeechEvent, 1),
+		errCh:              make(chan error, 1),
+		done:               make(chan struct{}),
+		reconnectRequested: true,
+	}
+
+	err := stream.reconnect()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("reconnect error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestSmallestAISTTProviderCloseClosesActiveStreams(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &smallestAISTTStream{

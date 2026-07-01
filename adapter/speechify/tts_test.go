@@ -79,12 +79,13 @@ func TestSpeechifyTTSRejectsNonAudioResponse(t *testing.T) {
 	provider := NewSpeechifyTTS("test-key", "", WithSpeechifyTTSBaseURL("https://speechify.example/v1"))
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want non-audio response error")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if !strings.Contains(err.Error(), "non-audio") {
-		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
+		t.Fatalf("Next error = %q, want non-audio guidance", err)
 	}
 }
 
@@ -103,13 +104,14 @@ func TestSpeechifyTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewSpeechifyTTS("test-key", "", WithSpeechifyTTSBaseURL("https://speechify.example/v1"))
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -159,6 +161,38 @@ func TestSpeechifyTTSSynthesizeRequestUsesReferencePayload(t *testing.T) {
 	}
 	if options["text_normalization"] != nil {
 		t.Fatalf("text_normalization = %#v, want nil", options["text_normalization"])
+	}
+}
+
+func TestSpeechifyTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := 0
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/wav"}},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSpeechifyTTS("test-key", "", WithSpeechifyTTSBaseURL("https://speechify.example/v1"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want 0 before Next", requests)
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
 	}
 }
 

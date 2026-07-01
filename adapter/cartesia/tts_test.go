@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -75,7 +76,7 @@ func TestCartesiaTTSConstructorOptionsMatchReference(t *testing.T) {
 		t.Fatalf("AlignedTranscript = true, want false when word timestamps are disabled")
 	}
 
-	msg := buildCartesiaStreamInitMessage(provider)
+	msg := buildCartesiaOptions(provider, true)
 	if msg["language"] != "es" {
 		t.Fatalf("language = %#v, want es", msg["language"])
 	}
@@ -589,10 +590,10 @@ func TestCartesiaSynthesizeRequestUsesConfiguredBaseURL(t *testing.T) {
 	}
 }
 
-func TestCartesiaStreamInitMessageUsesReferenceOptions(t *testing.T) {
+func TestCartesiaStreamOptionsUseReferenceDefaults(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "")
 
-	msg := buildCartesiaStreamInitMessage(provider)
+	msg := buildCartesiaOptions(provider, true)
 
 	if msg["model_id"] != "sonic-3" {
 		t.Fatalf("model_id = %#v, want sonic-3", msg["model_id"])
@@ -602,6 +603,39 @@ func TestCartesiaStreamInitMessageUsesReferenceOptions(t *testing.T) {
 	}
 	if msg["add_timestamps"] != true {
 		t.Fatalf("add_timestamps = %#v, want true", msg["add_timestamps"])
+	}
+}
+
+func TestCartesiaTTSStreamDoesNotSendInitialTranscriptPacket(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaNoInitialMessageWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("server saw unexpected initial message: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket initial-message check")
 	}
 }
 
@@ -958,6 +992,9 @@ func TestCartesiaTTSUnexpectedNormalCloseReturnsAPIConnectionError(t *testing.T)
 		t.Fatalf("Stream error = %v", err)
 	}
 	defer stream.Close()
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
 	close(closeAfterHandshake)
 
 	select {
@@ -1003,6 +1040,9 @@ func TestCartesiaTTSStreamProviderErrorReturnsAPIConnectionError(t *testing.T) {
 		t.Fatalf("Stream error = %v", err)
 	}
 	defer stream.Close()
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
 
 	_, err = stream.Next()
 	var connectionErr *llm.APIConnectionError
@@ -1042,6 +1082,9 @@ func TestCartesiaTTSStreamMalformedMessageReturnsAPIConnectionError(t *testing.T
 		t.Fatalf("Stream error = %v", err)
 	}
 	defer stream.Close()
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
 
 	result := make(chan error, 1)
 	go func() {
@@ -1094,6 +1137,9 @@ func TestCartesiaTTSStreamMalformedAudioReturnsAPIConnectionError(t *testing.T) 
 		t.Fatalf("Stream error = %v", err)
 	}
 	defer stream.Close()
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
 
 	result := make(chan error, 1)
 	go func() {
@@ -1389,17 +1435,46 @@ func runCartesiaHoldOpenWebsocketServer(conn net.Conn, closed chan<- struct{}, e
 				return
 			}
 			defer ws.Close()
-			if _, _, err := ws.ReadMessage(); err != nil {
-				errCh <- err
-				return
-			}
 			_, _, err = ws.ReadMessage()
+			if err == nil {
+				_, _, err = ws.ReadMessage()
+			}
 			close(closed)
 			if err == nil {
 				errCh <- errors.New("expected websocket close")
 				return
 			}
 			errCh <- nil
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaNoInitialMessageWebsocketServer(conn net.Conn, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			_ = ws.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+			_, raw, err := ws.ReadMessage()
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				errCh <- nil
+				return
+			}
+			if err != nil {
+				errCh <- nil
+				return
+			}
+			errCh <- fmt.Errorf("unexpected initial websocket message %s", raw)
 		}),
 	}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
@@ -1418,10 +1493,6 @@ func runCartesiaReadEndInputThenDoneWebsocketServer(conn net.Conn, errCh chan<- 
 				return
 			}
 			defer ws.Close()
-			if _, _, err := ws.ReadMessage(); err != nil {
-				errCh <- err
-				return
-			}
 			if _, _, err := ws.ReadMessage(); err != nil {
 				errCh <- err
 				return
@@ -1482,10 +1553,6 @@ func runCartesiaReadEndInputThenWordTimestampsServer(conn net.Conn, errCh chan<-
 				errCh <- err
 				return
 			}
-			if _, _, err := ws.ReadMessage(); err != nil {
-				errCh <- err
-				return
-			}
 			if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"word_timestamps":{"words":["hello","world"],"start":[0.1,0.3],"end":[0.2,0.5]}}`)); err != nil {
 				errCh <- err
 				return
@@ -1509,7 +1576,7 @@ func runCartesiaReadTextEndInputThenWordTimestampsServer(conn net.Conn, errCh ch
 				return
 			}
 			defer ws.Close()
-			for range 3 {
+			for range 2 {
 				if _, _, err := ws.ReadMessage(); err != nil {
 					errCh <- err
 					return
