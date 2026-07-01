@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
 	awstranscribetypes "github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
@@ -152,6 +153,7 @@ type appGoogleSTTConfig struct {
 	voiceActivityEvents  *bool
 	alternativeLanguages []string
 	keywords             []adaptergoogle.GoogleSTTKeyword
+	denoiserConfig       *speechv2pb.DenoiserConfig
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
@@ -209,6 +211,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if len(cfg.keywords) > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTKeywords(cfg.keywords...))
+	}
+	if cfg.denoiserConfig != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTDenoiserConfig(cfg.denoiserConfig))
 	}
 	return adaptergoogle.NewGoogleSTT(credentialsFile, sttOpts...)
 }
@@ -4056,6 +4061,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		voiceActivityEvents:  cfg.STTVoiceActivityEvents,
 		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
 		keywords:             googleSTTKeywordsFromConfig(cfg.STTKeywords),
+		denoiserConfig:       googleSTTDenoiserConfigFromOptions(cfg.STTModelOptions),
 	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
@@ -4066,6 +4072,32 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond
 	}
 	return googleCfg
+}
+
+func googleSTTDenoiserConfigFromOptions(options map[string]any) *speechv2pb.DenoiserConfig {
+	if len(options) == 0 {
+		return nil
+	}
+	if denoiser, ok := options["denoiser_config"].(*speechv2pb.DenoiserConfig); ok {
+		return denoiser
+	}
+	configOptions := options
+	if nested, ok := options["denoiser_config"].(map[string]any); ok {
+		configOptions = nested
+	}
+	denoiseAudio := modelOptionBool(configOptions, "denoise_audio")
+	snrThreshold := modelOptionFloat(configOptions, "snr_threshold")
+	if denoiseAudio == nil && snrThreshold == nil {
+		return nil
+	}
+	config := &speechv2pb.DenoiserConfig{}
+	if denoiseAudio != nil {
+		config.DenoiseAudio = *denoiseAudio
+	}
+	if snrThreshold != nil {
+		config.SnrThreshold = float32(*snrThreshold)
+	}
+	return config
 }
 
 func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adaptergoogle.GoogleSTTKeyword {

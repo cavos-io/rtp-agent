@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
@@ -13676,6 +13677,37 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndSeconds(t *testing.T)
 
 	if googleCfg.speechEndTimeout != 750*time.Millisecond {
 		t.Fatalf("speechEndTimeout = %v, want 750ms", googleCfg.speechEndTimeout)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"denoiser_config": map[string]any{
+				"denoise_audio": true,
+				"snr_threshold": "8.5",
+			},
+		},
+	})
+
+	if googleCfg.denoiserConfig == nil {
+		t.Fatal("denoiserConfig = nil, want reference Google STT v2 denoiser config")
+	}
+	if got := googleCfg.denoiserConfig.DenoiseAudio; !got {
+		t.Fatalf("denoise audio = %v, want true", got)
+	}
+	if got := googleCfg.denoiserConfig.SnrThreshold; got != 8.5 {
+		t.Fatalf("snr threshold = %v, want 8.5", got)
+	}
+
+	explicit := &speechv2pb.DenoiserConfig{DenoiseAudio: true, SnrThreshold: 6.25}
+	googleCfg = googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"denoiser_config": explicit,
+		},
+	})
+	if googleCfg.denoiserConfig != explicit {
+		t.Fatalf("denoiserConfig = %#v, want explicit config pointer", googleCfg.denoiserConfig)
 	}
 }
 
