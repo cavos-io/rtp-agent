@@ -1101,22 +1101,10 @@ func TestGoogleSTTStreamNextReturnsAPIStatusError(t *testing.T) {
 }
 
 func TestGoogleSTTStreamTreatsReference409AsRetryable(t *testing.T) {
-	streamClient := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
-	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
-
-	stream, err := provider.Stream(context.Background(), "en-US")
-	if err != nil {
-		t.Fatalf("Stream returned error: %v", err)
-	}
-
-	event, err := stream.Next()
-
-	if event != nil {
-		t.Fatalf("Next event = %#v, want nil", event)
-	}
+	err := googleSTTStreamError(status.Error(codes.AlreadyExists, "stream conflict"))
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("mapped error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != int(codes.AlreadyExists) {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.AlreadyExists)
@@ -1166,6 +1154,47 @@ func TestGoogleSTTStreamRestartsAfterReference409WithAudio(t *testing.T) {
 	}
 	if len(secondStream.sent) != 2 || string(secondStream.sent[1].GetAudioContent()) != "second" {
 		t.Fatalf("second stream sent = %#v, want later audio on restarted stream", secondStream.sent)
+	}
+	close(restartedRecv)
+}
+
+func TestGoogleSTTStreamRestartsAfterReference409BeforeAudio(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
+	restartedRecv := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want pre-audio restart", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for pre-audio restart")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after pre-audio restart")
+	}
+	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("first"), SampleRate: 16000}); err != nil {
+		t.Fatalf("PushFrame after pre-audio restart returned error: %v", err)
+	}
+	if len(secondStream.sent) != 2 || string(secondStream.sent[1].GetAudioContent()) != "first" {
+		t.Fatalf("second stream sent = %#v, want audio on restarted stream", secondStream.sent)
 	}
 	close(restartedRecv)
 }

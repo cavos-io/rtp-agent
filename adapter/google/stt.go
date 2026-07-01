@@ -497,7 +497,7 @@ func (s *googleSTTStream) shouldRestartAfterConflict(err error) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return !s.closed && !s.inputClosed && s.audioPushed
+	return !s.closed && !s.inputClosed
 }
 
 func (s *googleSTTStream) restartStream(old speechpb.Speech_StreamingRecognizeClient) bool {
