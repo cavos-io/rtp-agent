@@ -31,6 +31,7 @@ type GoogleSTT struct {
 	streams                map[*googleSTTStream]struct{}
 	client                 googleSpeechClient
 	clientV2               googleSpeechV2Client
+	newClient              func(context.Context) (googleSpeechClient, error)
 	newClientV2            func(context.Context) (googleSpeechV2Client, error)
 	closed                 bool
 	model                  string
@@ -244,18 +245,22 @@ func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*Goo
 		}
 		provider.project = project
 	}
-	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
-	if err != nil {
-		return nil, err
-	}
-	if endpoint := googleSTTEndpoint(provider); endpoint != "" {
-		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
+	provider.newClient = func(ctx context.Context) (googleSpeechClient, error) {
+		clientOpts, err := googleSTTClientOptions(credentialsFile, provider)
+		if err != nil {
+			return nil, err
+		}
+		return speech.NewClient(ctx, clientOpts...)
 	}
 	provider.newClientV2 = func(ctx context.Context) (googleSpeechV2Client, error) {
+		clientOpts, err := googleSTTClientOptions(credentialsFile, provider)
+		if err != nil {
+			return nil, err
+		}
 		return speechv2.NewClient(ctx, clientOpts...)
 	}
 
-	client, err := speech.NewClient(ctx, clientOpts...)
+	client, err := provider.newClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -263,13 +268,26 @@ func NewGoogleSTT(credentialsFile string, providerOpts ...GoogleSTTOption) (*Goo
 	if googleSTTUsesV2(provider.model) {
 		clientV2, err := provider.ensureClientV2(ctx)
 		if err != nil {
-			_ = client.Close()
+			if closer, ok := client.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
 			return nil, err
 		}
 		provider.clientV2 = clientV2
 	}
 
 	return provider, nil
+}
+
+func googleSTTClientOptions(credentialsFile string, provider *GoogleSTT) ([]option.ClientOption, error) {
+	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
+	if err != nil {
+		return nil, err
+	}
+	if endpoint := googleSTTEndpoint(provider); endpoint != "" {
+		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
+	}
+	return clientOpts, nil
 }
 
 func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) *GoogleSTT {
@@ -348,8 +366,13 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
-	if oldLocation != s.location && s.newClientV2 != nil {
-		s.clientV2 = nil
+	if oldLocation != s.location {
+		if s.newClient != nil {
+			s.client = nil
+		}
+		if s.newClientV2 != nil {
+			s.clientV2 = nil
+		}
 	}
 	if languageChanged && googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages) {
 		s.alternativeLanguages = nil
@@ -553,10 +576,11 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 }
 
 func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language string, includeAlternativeLanguages bool) (speechpb.Speech_StreamingRecognizeClient, error) {
-	if s.client == nil {
-		return nil, googleSTTStreamError(errors.New("google STT v1 client is not configured"))
+	client, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, googleSTTStreamError(err)
 	}
-	stream, err := s.client.StreamingRecognize(ctx)
+	stream, err := client.StreamingRecognize(ctx)
 	if err != nil {
 		return nil, googleSTTStreamError(err)
 	}
@@ -574,6 +598,30 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 		return nil, googleSTTStreamError(err)
 	}
 	return stream, nil
+}
+
+func (s *GoogleSTT) ensureClient(ctx context.Context) (googleSpeechClient, error) {
+	s.mu.Lock()
+	client := s.client
+	newClient := s.newClient
+	s.mu.Unlock()
+	if client != nil {
+		return client, nil
+	}
+	if newClient == nil {
+		return nil, errors.New("google STT v1 client is not configured")
+	}
+	client, err := newClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if s.client == nil {
+		s.client = client
+	}
+	client = s.client
+	s.mu.Unlock()
+	return client, nil
 }
 
 func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language string, includeAlternativeLanguages bool) (speechv2pb.Speech_StreamingRecognizeClient, error) {
@@ -661,11 +709,15 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		}
 		return &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
-			Alternatives: googleSpeechDataFromRecognizeResultsV2(resp.GetResults(), language),
+			Alternatives: googleSpeechDataFromRecognizeResultsV2(resp.GetResults()),
 		}, nil
 	}
 
-	resp, err := s.client.Recognize(ctx, &speechpb.RecognizeRequest{
+	client, err := s.ensureClient(ctx)
+	if err != nil {
+		return nil, googleSTTStreamError(err)
+	}
+	resp, err := client.Recognize(ctx, &speechpb.RecognizeRequest{
 		Config: googleRecognitionConfigForFrames(s, language, !explicitLanguage, frames),
 		Audio: &speechpb.RecognitionAudio{
 			AudioSource: &speechpb.RecognitionAudio_Content{
@@ -680,7 +732,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	return &stt.SpeechEvent{
 		Type:         stt.SpeechEventFinalTranscript,
-		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results, language),
+		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results),
 	}, nil
 }
 
@@ -974,7 +1026,7 @@ func googleSpeechDataFromAlternativeOffset(alt *speechpb.SpeechRecognitionAltern
 	return data
 }
 
-func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionResult, language string) []stt.SpeechData {
+func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionResult) []stt.SpeechData {
 	if len(results) == 0 {
 		return []stt.SpeechData{}
 	}
@@ -1000,7 +1052,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		return []stt.SpeechData{}
 	}
 	data := stt.SpeechData{
-		Language:   googleRecognizeResultLanguage(results, language),
+		Language:   googleRecognizeResultLanguage(results),
 		Text:       text,
 		Confidence: confidence / float64(count),
 		Words:      googleTimedStrings(firstWords),
@@ -1009,7 +1061,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	return []stt.SpeechData{data}
 }
 
-func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognitionResult, language string) []stt.SpeechData {
+func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognitionResult) []stt.SpeechData {
 	if len(results) == 0 {
 		return []stt.SpeechData{}
 	}
@@ -1035,7 +1087,7 @@ func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognit
 		return []stt.SpeechData{}
 	}
 	data := stt.SpeechData{
-		Language:   googleRecognizeResultLanguageV2(results, language),
+		Language:   googleRecognizeResultLanguageV2(results),
 		Text:       text,
 		Confidence: confidence / float64(count),
 		Words:      googleTimedStringsOffsetV2(firstWords, 0),
@@ -1044,16 +1096,16 @@ func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognit
 	return []stt.SpeechData{data}
 }
 
-func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult, fallback string) string {
-	if len(results) == 0 || results[0].GetLanguageCode() == "" {
-		return fallback
+func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult) string {
+	if len(results) == 0 {
+		return ""
 	}
 	return results[0].GetLanguageCode()
 }
 
-func googleRecognizeResultLanguageV2(results []*speechv2pb.SpeechRecognitionResult, fallback string) string {
-	if len(results) == 0 || results[0].GetLanguageCode() == "" {
-		return fallback
+func googleRecognizeResultLanguageV2(results []*speechv2pb.SpeechRecognitionResult) string {
+	if len(results) == 0 {
+		return ""
 	}
 	return results[0].GetLanguageCode()
 }
@@ -1273,7 +1325,7 @@ func (s *googleSTTStream) readLoop() {
 
 		if resp.GetSpeechEventType() == speechpb.StreamingRecognizeResponse_SPEECH_EVENT_UNSPECIFIED {
 			if len(resp.Results) > 0 {
-				data, eventType, ok := googleSpeechDataFromStreamingResultsOffset(resp.Results, s.currentMinConfidence(), s.currentStartTimeOffset(), s.language)
+				data, eventType, ok := googleSpeechDataFromStreamingResultsOffset(resp.Results, s.currentMinConfidence(), s.currentStartTimeOffset())
 				if !ok {
 					continue
 				}
@@ -1317,12 +1369,27 @@ func (s *googleSTTStream) readLoopV2() {
 	defer close(s.events)
 	var speechStarted bool
 	var lastUsageEventTime float64
+	var usageStream speechv2pb.Speech_StreamingRecognizeClient
 	for {
 		stream := s.currentStreamV2()
+		if stream != usageStream {
+			lastUsageEventTime = 0
+			usageStream = stream
+		}
 		resp, err := stream.Recv()
 		if err != nil {
 			if s.currentStreamV2() != stream {
 				continue
+			}
+			if s.shouldRestartAfterConflict(err) {
+				restarted, restartErr := s.restartStreamV2WithError(stream)
+				if restarted {
+					lastUsageEventTime = 0
+					continue
+				}
+				if restartErr != nil {
+					err = restartErr
+				}
 			}
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
@@ -1342,7 +1409,7 @@ func (s *googleSTTStream) readLoopV2() {
 
 		if resp.GetSpeechEventType() == speechv2pb.StreamingRecognizeResponse_SPEECH_EVENT_TYPE_UNSPECIFIED {
 			if len(resp.Results) > 0 {
-				data, eventType, ok := googleSpeechDataFromStreamingResultsV2(resp.Results, s.currentMinConfidence(), s.currentStartTimeOffset(), s.language)
+				data, eventType, ok := googleSpeechDataFromStreamingResultsV2(resp.Results, s.currentMinConfidence(), s.currentStartTimeOffset())
 				if !ok {
 					continue
 				}
@@ -1623,11 +1690,11 @@ func googleStreamingRequestIDV2(resp *speechv2pb.StreamingRecognizeResponse) str
 	return resp.GetMetadata().GetRequestId()
 }
 
-func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRecognitionResult, minConfidence float64, startTimeOffset float64, language string) (stt.SpeechData, stt.SpeechEventType, bool) {
+func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRecognitionResult, minConfidence float64, startTimeOffset float64) (stt.SpeechData, stt.SpeechEventType, bool) {
 	if len(results) == 0 {
 		return stt.SpeechData{}, "", false
 	}
-	if data, handled, ok := googleFinalSpeechDataFromStreamingResults(results, startTimeOffset, language); handled {
+	if data, handled, ok := googleFinalSpeechDataFromStreamingResults(results, startTimeOffset); handled {
 		if !ok {
 			return stt.SpeechData{}, "", false
 		}
@@ -1660,7 +1727,7 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 		return stt.SpeechData{}, "", false
 	}
 	data := stt.SpeechData{
-		Language:   googleStreamingResultLanguage(results[0], language),
+		Language:   googleStreamingResultLanguage(results[0]),
 		Text:       text,
 		Confidence: confidence,
 		Words:      googleTimedStringsOffset(words, startTimeOffset),
@@ -1669,11 +1736,11 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 	return data, stt.SpeechEventInterimTranscript, true
 }
 
-func googleSpeechDataFromStreamingResultsV2(results []*speechv2pb.StreamingRecognitionResult, minConfidence float64, startTimeOffset float64, language string) (stt.SpeechData, stt.SpeechEventType, bool) {
+func googleSpeechDataFromStreamingResultsV2(results []*speechv2pb.StreamingRecognitionResult, minConfidence float64, startTimeOffset float64) (stt.SpeechData, stt.SpeechEventType, bool) {
 	if len(results) == 0 {
 		return stt.SpeechData{}, "", false
 	}
-	if data, handled, ok := googleFinalSpeechDataFromStreamingResultsV2(results, startTimeOffset, language); handled {
+	if data, handled, ok := googleFinalSpeechDataFromStreamingResultsV2(results, startTimeOffset); handled {
 		if !ok {
 			return stt.SpeechData{}, "", false
 		}
@@ -1706,7 +1773,7 @@ func googleSpeechDataFromStreamingResultsV2(results []*speechv2pb.StreamingRecog
 		return stt.SpeechData{}, "", false
 	}
 	data := stt.SpeechData{
-		Language:   googleStreamingResultLanguageV2(results[0], language),
+		Language:   googleStreamingResultLanguageV2(results[0]),
 		Text:       text,
 		Confidence: confidence,
 		Words:      googleTimedStringsOffsetV2(words, startTimeOffset),
@@ -1715,7 +1782,7 @@ func googleSpeechDataFromStreamingResultsV2(results []*speechv2pb.StreamingRecog
 	return data, stt.SpeechEventInterimTranscript, true
 }
 
-func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, startTimeOffset float64, language string) (stt.SpeechData, bool, bool) {
+func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingRecognitionResult, startTimeOffset float64) (stt.SpeechData, bool, bool) {
 	for _, result := range results {
 		if !result.GetIsFinal() || len(result.GetAlternatives()) == 0 {
 			continue
@@ -1726,7 +1793,7 @@ func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingReco
 			return stt.SpeechData{}, true, false
 		}
 		data := stt.SpeechData{
-			Language:   googleStreamingResultLanguage(result, language),
+			Language:   googleStreamingResultLanguage(result),
 			Text:       alt.GetTranscript(),
 			Confidence: float64(alt.GetConfidence()),
 			Words:      googleTimedStringsOffset(words, startTimeOffset),
@@ -1737,7 +1804,7 @@ func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingReco
 	return stt.SpeechData{}, false, false
 }
 
-func googleFinalSpeechDataFromStreamingResultsV2(results []*speechv2pb.StreamingRecognitionResult, startTimeOffset float64, language string) (stt.SpeechData, bool, bool) {
+func googleFinalSpeechDataFromStreamingResultsV2(results []*speechv2pb.StreamingRecognitionResult, startTimeOffset float64) (stt.SpeechData, bool, bool) {
 	for _, result := range results {
 		if !result.GetIsFinal() || len(result.GetAlternatives()) == 0 {
 			continue
@@ -1748,7 +1815,7 @@ func googleFinalSpeechDataFromStreamingResultsV2(results []*speechv2pb.Streaming
 			return stt.SpeechData{}, true, false
 		}
 		data := stt.SpeechData{
-			Language:   googleStreamingResultLanguageV2(result, language),
+			Language:   googleStreamingResultLanguageV2(result),
 			Text:       alt.GetTranscript(),
 			Confidence: float64(alt.GetConfidence()),
 			Words:      googleTimedStringsOffsetV2(words, startTimeOffset),
@@ -1759,16 +1826,16 @@ func googleFinalSpeechDataFromStreamingResultsV2(results []*speechv2pb.Streaming
 	return stt.SpeechData{}, false, false
 }
 
-func googleStreamingResultLanguage(result *speechpb.StreamingRecognitionResult, fallback string) string {
-	if result == nil || result.GetLanguageCode() == "" {
-		return fallback
+func googleStreamingResultLanguage(result *speechpb.StreamingRecognitionResult) string {
+	if result == nil {
+		return ""
 	}
 	return result.GetLanguageCode()
 }
 
-func googleStreamingResultLanguageV2(result *speechv2pb.StreamingRecognitionResult, fallback string) string {
-	if result == nil || result.GetLanguageCode() == "" {
-		return fallback
+func googleStreamingResultLanguageV2(result *speechv2pb.StreamingRecognitionResult) string {
+	if result == nil {
+		return ""
 	}
 	return result.GetLanguageCode()
 }
