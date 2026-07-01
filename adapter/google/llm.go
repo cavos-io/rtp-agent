@@ -238,6 +238,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["response_json_schema"]; ok {
 		config.ResponseJsonSchema = value
 	}
+	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
+		config.ResponseModalities = value
+	}
 	if value, ok := googleServiceTierParam(params["service_tier"]); ok {
 		config.ServiceTier = value
 	}

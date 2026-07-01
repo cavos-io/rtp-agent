@@ -543,6 +543,21 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceRetrievalConfigExtra(t 
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_modalities": []any{"AUDIO", "TEXT"},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	want := []string{"AUDIO", "TEXT"}
+	if !reflect.DeepEqual(config.ResponseModalities, want) {
+		t.Fatalf("ResponseModalities = %#v, want %#v", config.ResponseModalities, want)
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false
