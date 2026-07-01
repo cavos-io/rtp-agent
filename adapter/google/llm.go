@@ -284,6 +284,12 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleInt32Param(params["candidate_count"]); ok {
 		config.CandidateCount = value
 	}
+	if value, ok := googleBoolParam(params["response_logprobs"]); ok {
+		config.ResponseLogprobs = value
+	}
+	if value, ok := googleInt32Param(params["logprobs"]); ok {
+		config.Logprobs = &value
+	}
 	if value, ok := googleFloat32Param(params["presence_penalty"]); ok {
 		config.PresencePenalty = &value
 	}

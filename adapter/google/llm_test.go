@@ -577,6 +577,24 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceCandidateCountExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceLogprobsExtras(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"response_logprobs": true,
+			"logprobs":          3,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !config.ResponseLogprobs {
+		t.Fatal("ResponseLogprobs = false, want true")
+	}
+	if config.Logprobs == nil || *config.Logprobs != 3 {
+		t.Fatalf("Logprobs = %#v, want 3", config.Logprobs)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
