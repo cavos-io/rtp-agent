@@ -141,6 +141,7 @@ type appGoogleSTTConfig struct {
 	interimResults       *bool
 	wordTimeOffsets      *bool
 	wordConfidence       *bool
+	speechStartTimeout   time.Duration
 	speechEndTimeout     time.Duration
 	minConfidence        *float64
 	voiceActivityEvents  *bool
@@ -178,6 +179,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if cfg.wordConfidence != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTWordConfidence(*cfg.wordConfidence))
+	}
+	if cfg.speechStartTimeout > 0 {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpeechStartTimeout(cfg.speechStartTimeout))
 	}
 	if cfg.speechEndTimeout > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTSpeechEndTimeout(cfg.speechEndTimeout))
@@ -448,6 +452,7 @@ type AppConfig struct {
 	STTSmartFormat                          *bool
 	STTNoDelay                              *bool
 	STTEndpointingMS                        *int
+	STTSpeechStartTimeoutMS                 *int
 	STTDiarization                          *bool
 	STTMultiSpeaker                         *bool
 	STTFillerWords                          *bool
@@ -882,6 +887,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTModelEndpoints:                       splitEnvList("RTP_AGENT_STT_MODEL_ENDPOINTS"),
 		STTStreamingURL:                         os.Getenv("RTP_AGENT_STT_STREAMING_URL"),
 		STTSampleRate:                           getenvOptionalInt("RTP_AGENT_STT_SAMPLE_RATE"),
+		STTSpeechStartTimeoutMS:                 getenvOptionalInt("RTP_AGENT_STT_SPEECH_START_TIMEOUT_MS"),
 		STTBufferSizeSeconds:                    getenvOptionalFloat("RTP_AGENT_STT_BUFFER_SIZE_SECONDS"),
 		STTAudioChunkDurationMS:                 getenvOptionalInt("RTP_AGENT_STT_AUDIO_CHUNK_DURATION_MS"),
 		STTMinTurnSilence:                       getenvOptionalInt("RTP_AGENT_STT_MIN_TURN_SILENCE"),
@@ -4027,6 +4033,9 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
+	}
+	if cfg.STTSpeechStartTimeoutMS != nil {
+		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond
 	}
 	return googleCfg
 }
