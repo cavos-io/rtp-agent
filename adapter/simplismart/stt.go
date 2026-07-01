@@ -203,7 +203,10 @@ func (s *SimplismartSTT) Stream(ctx context.Context, language string) (stt.Recog
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSimplismartSTTStreamURL(s), buildSimplismartSTTHeaders(s))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial simplismart stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial simplismart stt websocket: %v", err))
 	}
 	config, err := buildSimplismartSTTInitialConfig(resolveSimplismartSTTLanguage(s, language))
 	if err != nil {

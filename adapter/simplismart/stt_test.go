@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -101,6 +102,28 @@ func TestSimplismartSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SIMPLISMART_API_KEY") {
 		t.Fatalf("Stream error = %q, want SIMPLISMART_API_KEY guidance", err)
+	}
+}
+
+func TestSimplismartSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("simplismart stt dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSimplismartSTT("test-key", WithSimplismartSTTStreaming(true))
+	stream, err := provider.Stream(context.Background(), "en")
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
