@@ -61,7 +61,7 @@ func googleModelRequiresThoughtSignatures(model string) bool {
 
 func (l *GoogleLLM) Model() string { return l.model }
 func (l *GoogleLLM) Provider() string {
-	return "google"
+	return "Gemini"
 }
 
 func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {

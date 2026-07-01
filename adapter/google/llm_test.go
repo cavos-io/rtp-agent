@@ -90,6 +90,14 @@ func TestNewGoogleLLMRequiresAPIKey(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMProviderMatchesReference(t *testing.T) {
+	model := &GoogleLLM{}
+
+	if got := model.Provider(); got != "Gemini" {
+		t.Fatalf("Provider() = %q, want Gemini", got)
+	}
+}
+
 func TestBuildGoogleContentsGroupsToolCallsWithResponses(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"
