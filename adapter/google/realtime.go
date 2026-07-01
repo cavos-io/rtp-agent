@@ -111,6 +111,7 @@ type googleRealtimeConnector interface {
 type googleRealtimeLiveSession interface {
 	SendRealtimeInput(genai.LiveRealtimeInput) error
 	SendClientContent(genai.LiveClientContentInput) error
+	Receive() (*genai.LiveServerMessage, error)
 	Close() error
 }
 
@@ -458,13 +459,15 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		cancel()
 		return nil, err
 	}
-	return &googleRealtimeSession{
+	session := &googleRealtimeSession{
 		ctx:         ctx,
 		cancel:      cancel,
 		liveSession: liveSession,
 		eventCh:     make(chan llm.RealtimeEvent),
 		audioStream: audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
-	}, nil
+	}
+	go session.receiveLoop()
+	return session, nil
 }
 
 func (m *RealtimeModel) Close() error { return nil }
@@ -605,6 +608,52 @@ func (s *googleRealtimeSession) Interrupt() error {
 	})
 }
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
+
+func (s *googleRealtimeSession) receiveLoop() {
+	for {
+		if s == nil || s.liveSession == nil || s.isClosed() {
+			return
+		}
+		message, err := s.liveSession.Receive()
+		if err != nil {
+			return
+		}
+		s.handleServerMessage(message)
+	}
+}
+
+func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) {
+	if message == nil || message.ServerContent == nil || message.ServerContent.ModelTurn == nil {
+		return
+	}
+	for _, part := range message.ServerContent.ModelTurn.Parts {
+		if part == nil || part.Thought {
+			continue
+		}
+		if part.Text != "" {
+			s.emitEvent(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeText,
+				Text: part.Text,
+			})
+		}
+		if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+			s.emitEvent(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeAudio,
+				Data: part.InlineData.Data,
+			})
+		}
+	}
+}
+
+func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
+	if s == nil || s.isClosed() {
+		return
+	}
+	select {
+	case s.eventCh <- event:
+	case <-s.ctx.Done():
+	}
+}
 
 func (s *googleRealtimeSession) Close() error {
 	if s == nil {

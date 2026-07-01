@@ -5,6 +5,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
@@ -508,6 +509,51 @@ func TestGoogleRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	audioData := []byte{1, 2, 3, 4}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{
+				Parts: []*genai.Part{
+					{Text: "hello"},
+					{InlineData: &genai.Blob{Data: audioData, MIMEType: "audio/pcm;rate=24000"}},
+				},
+			},
+		},
+	}
+
+	textEvent := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "hello" {
+		t.Fatalf("text event = %#v, want reference text delta", textEvent)
+	}
+	audioEvent := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if audioEvent.Type != llm.RealtimeEventTypeAudio || !bytes.Equal(audioEvent.Data, audioData) {
+		t.Fatalf("audio event = %#v, want reference audio delta", audioEvent)
+	}
+}
+
+func nextGoogleRealtimeTestEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent) llm.RealtimeEvent {
+	t.Helper()
+	select {
+	case event := <-eventCh:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime event")
+	}
+	return llm.RealtimeEvent{}
+}
+
 type fakeGoogleRealtimeConnector struct {
 	model   string
 	config  *genai.LiveConnectConfig
@@ -523,6 +569,7 @@ func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string,
 type fakeGoogleRealtimeLiveSession struct {
 	inputs         []genai.LiveRealtimeInput
 	clientContents []genai.LiveClientContentInput
+	serverMessages chan *genai.LiveServerMessage
 	closed         bool
 }
 
@@ -534,6 +581,17 @@ func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealti
 func (s *fakeGoogleRealtimeLiveSession) SendClientContent(input genai.LiveClientContentInput) error {
 	s.clientContents = append(s.clientContents, input)
 	return nil
+}
+
+func (s *fakeGoogleRealtimeLiveSession) Receive() (*genai.LiveServerMessage, error) {
+	if s.serverMessages == nil {
+		return nil, context.Canceled
+	}
+	message, ok := <-s.serverMessages
+	if !ok {
+		return nil, context.Canceled
+	}
+	return message, nil
 }
 
 func (s *fakeGoogleRealtimeLiveSession) Close() error {
