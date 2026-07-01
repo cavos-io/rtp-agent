@@ -406,6 +406,9 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	if t.ssml {
+		return nil, errors.New("SSML support is not available for streaming synthesis")
+	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &googleTTSSynthesizeStream{
 		cancel: cancel,

@@ -135,6 +135,19 @@ func TestGoogleTTSStreamMarkupInputMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamRejectsSSMLLikeReference(t *testing.T) {
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{}, WithGoogleTTSSSML(true))
+
+	stream, err := provider.Stream(context.Background())
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "SSML support is not available for streaming synthesis") {
+		t.Fatalf("Stream error = %v, want reference SSML streaming error", err)
+	}
+}
+
 func TestGoogleTTSStreamSendsCompletedSentenceBeforeFlushLikeReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client)
