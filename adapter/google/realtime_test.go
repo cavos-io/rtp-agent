@@ -347,6 +347,63 @@ func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "answer briefly"})
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client content count = %d, want one turn-complete request", len(liveSession.clientContents))
+	}
+	content := liveSession.clientContents[0]
+	if content.TurnComplete == nil || !*content.TurnComplete {
+		t.Fatalf("turn complete = %#v, want true", content.TurnComplete)
+	}
+	if len(content.Turns) != 2 {
+		t.Fatalf("turn count = %d, want instructions plus placeholder user turn", len(content.Turns))
+	}
+	if content.Turns[0].Role != "model" || len(content.Turns[0].Parts) != 1 || content.Turns[0].Parts[0].Text != "answer briefly" {
+		t.Fatalf("instruction turn = %#v, want model instruction text", content.Turns[0])
+	}
+	if content.Turns[1].Role != "user" || len(content.Turns[1].Parts) != 1 || content.Turns[1].Parts[0].Text != "." {
+		t.Fatalf("placeholder turn = %#v, want user dot", content.Turns[1])
+	}
+}
+
+func TestGoogleRealtimeSessionInterruptSendsReferenceActivityStart(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs = %d, want activity start input", len(liveSession.inputs))
+	}
+	if liveSession.inputs[0].ActivityStart == nil {
+		t.Fatalf("activity start = nil, input %#v", liveSession.inputs[0])
+	}
+}
+
 type fakeGoogleRealtimeConnector struct {
 	model   string
 	config  *genai.LiveConnectConfig
@@ -360,12 +417,18 @@ func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string,
 }
 
 type fakeGoogleRealtimeLiveSession struct {
-	inputs []genai.LiveRealtimeInput
-	closed bool
+	inputs         []genai.LiveRealtimeInput
+	clientContents []genai.LiveClientContentInput
+	closed         bool
 }
 
 func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealtimeInput) error {
 	s.inputs = append(s.inputs, input)
+	return nil
+}
+
+func (s *fakeGoogleRealtimeLiveSession) SendClientContent(input genai.LiveClientContentInput) error {
+	s.clientContents = append(s.clientContents, input)
 	return nil
 }
 

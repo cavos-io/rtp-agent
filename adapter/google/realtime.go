@@ -110,6 +110,7 @@ type googleRealtimeConnector interface {
 
 type googleRealtimeLiveSession interface {
 	SendRealtimeInput(genai.LiveRealtimeInput) error
+	SendClientContent(genai.LiveClientContentInput) error
 	Close() error
 }
 
@@ -566,15 +567,38 @@ func (s *googleRealtimeSession) UpdateTools([]llm.Tool) error {
 func (s *googleRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return errors.New("google realtime session option update is not implemented")
 }
-func (s *googleRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error {
-	return errors.New("google realtime session reply generation is not implemented")
+func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if s == nil || s.liveSession == nil {
+		return nil
+	}
+	turns := make([]*genai.Content, 0, 2)
+	if options.Instructions != "" {
+		turns = append(turns, &genai.Content{
+			Role:  "model",
+			Parts: []*genai.Part{{Text: options.Instructions}},
+		})
+	}
+	turns = append(turns, &genai.Content{
+		Role:  "user",
+		Parts: []*genai.Part{{Text: "."}},
+	})
+	turnComplete := true
+	return s.liveSession.SendClientContent(genai.LiveClientContentInput{
+		Turns:        turns,
+		TurnComplete: &turnComplete,
+	})
 }
 func (s *googleRealtimeSession) Say(string) error {
 	return errors.New("google realtime session text input is not implemented")
 }
 func (s *googleRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *googleRealtimeSession) Interrupt() error {
-	return errors.New("google realtime session interrupt is not implemented")
+	if s == nil || s.liveSession == nil {
+		return nil
+	}
+	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+		ActivityStart: &genai.ActivityStart{},
+	})
 }
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
 
