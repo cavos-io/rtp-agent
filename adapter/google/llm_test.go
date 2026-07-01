@@ -144,6 +144,30 @@ func TestBuildGoogleContentsPreservesMultipleMatchedToolOutputs(t *testing.T) {
 	assertGoogleFunctionResponsePart(t, contents[1].Parts, 1, "call_lookup", "lookup", "second")
 }
 
+func TestBuildGoogleContentsInjectsReferenceThoughtSignatures(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-turn", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+
+	contents, _ := buildGoogleContentsWithThoughtSignatures(ctx, map[string][]byte{
+		"call_lookup": []byte("signature"),
+	})
+
+	if len(contents) == 0 || len(contents[0].Parts) < 2 {
+		t.Fatalf("contents = %#v, want model function_call part", contents)
+	}
+	call := contents[0].Parts[1].FunctionCall
+	if call == nil || call.ID != "call_lookup" {
+		t.Fatalf("function call part = %#v, want call_lookup", contents[0].Parts[1])
+	}
+	if got := contents[0].Parts[1].ThoughtSignature; string(got) != "signature" {
+		t.Fatalf("thought signature = %q, want signature", got)
+	}
+}
+
 func TestBuildGoogleContentsFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
@@ -421,6 +445,46 @@ func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
 	}
 	if call.Arguments != `{"query":"weather"}` {
 		t.Fatalf("Arguments = %q, want compact JSON args", call.Arguments)
+	}
+}
+
+func TestGoogleLLMStreamStoresReferenceThoughtSignatures(t *testing.T) {
+	read := false
+	signatures := map[string][]byte{}
+	stream := &googleLLMStream{
+		thoughtSignatures: signatures,
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "provider-call-123",
+								Name: "lookup",
+								Args: map[string]any{"query": "weather"},
+							},
+							ThoughtSignature: []byte("signature"),
+						}},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one tool call", chunk)
+	}
+	if got := signatures["provider-call-123"]; string(got) != "signature" {
+		t.Fatalf("stored signature = %q, want signature", got)
 	}
 }
 
