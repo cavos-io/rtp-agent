@@ -148,6 +148,7 @@ type appGoogleSTTConfig struct {
 	minConfidence        *float64
 	voiceActivityEvents  *bool
 	alternativeLanguages []string
+	keywords             []adaptergoogle.GoogleSTTKeyword
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
@@ -202,6 +203,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if len(cfg.alternativeLanguages) > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAlternativeLanguages(cfg.alternativeLanguages...))
+	}
+	if len(cfg.keywords) > 0 {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTKeywords(cfg.keywords...))
 	}
 	return adaptergoogle.NewGoogleSTT(credentialsFile, sttOpts...)
 }
@@ -4042,6 +4046,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		minConfidence:        cfg.STTMinConfidenceThreshold,
 		voiceActivityEvents:  cfg.STTVoiceActivityEvents,
 		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
+		keywords:             googleSTTKeywordsFromConfig(cfg.STTKeywords),
 	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
@@ -4050,6 +4055,23 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond
 	}
 	return googleCfg
+}
+
+func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adaptergoogle.GoogleSTTKeyword {
+	if len(keywords) == 0 {
+		return nil
+	}
+	googleKeywords := make([]adaptergoogle.GoogleSTTKeyword, 0, len(keywords))
+	for _, keyword := range keywords {
+		if keyword.Keyword == "" {
+			continue
+		}
+		googleKeywords = append(googleKeywords, adaptergoogle.GoogleSTTKeyword{
+			Value: keyword.Keyword,
+			Boost: float32(keyword.Boost),
+		})
+	}
+	return googleKeywords
 }
 
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {

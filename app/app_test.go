@@ -13512,6 +13512,7 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "250")
 	t.Setenv("RTP_AGENT_STT_MIN_CONFIDENCE_THRESHOLD", "0.72")
 	t.Setenv("RTP_AGENT_STT_VOICE_ACTIVITY_EVENTS", "true")
+	t.Setenv("RTP_AGENT_STT_KEYWORDS", "Cavos:12.5,LiveKit:9")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -13561,6 +13562,9 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	}
 	if !reflect.DeepEqual(googleCfg.alternativeLanguages, []string{"es-ES", "fr-FR"}) {
 		t.Fatalf("alternativeLanguages = %#v, want [es-ES fr-FR]", googleCfg.alternativeLanguages)
+	}
+	if !reflect.DeepEqual(googleCfg.keywords, []adaptergoogle.GoogleSTTKeyword{{Value: "Cavos", Boost: 12.5}, {Value: "LiveKit", Boost: 9}}) {
+		t.Fatalf("keywords = %#v, want Cavos and LiveKit boosts", googleCfg.keywords)
 	}
 }
 
