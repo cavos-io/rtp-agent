@@ -318,8 +318,11 @@ func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
 	if math.Abs(got.Confidence-0.7) > 0.000001 {
 		t.Fatalf("confidence = %v, want averaged confidence 0.7", got.Confidence)
 	}
-	if len(got.Words) != 2 || got.Words[0].Text != "hello" || got.Words[1].Text != "world" {
-		t.Fatalf("words = %#v, want all result word details in transcript order", got.Words)
+	if len(got.Words) != 1 || got.Words[0].Text != "hello" {
+		t.Fatalf("words = %#v, want reference first-result word details only", got.Words)
+	}
+	if math.Abs(got.Words[0].StartTime-0.1) > 0.000001 || math.Abs(got.Words[0].EndTime-0.3) > 0.000001 {
+		t.Fatalf("first word timing = %v-%v, want first result word timing", got.Words[0].StartTime, got.Words[0].EndTime)
 	}
 	if math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.7) > 0.000001 {
 		t.Fatalf("timing = %v-%v, want first word start through last word end", got.StartTime, got.EndTime)

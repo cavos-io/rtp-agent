@@ -353,7 +353,8 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	var text string
 	var confidence float64
 	var count int
-	var words []*speechpb.WordInfo
+	var firstWords []*speechpb.WordInfo
+	var timingWords []*speechpb.WordInfo
 	for _, result := range results {
 		if len(result.GetAlternatives()) == 0 {
 			continue
@@ -361,7 +362,10 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		alt := result.GetAlternatives()[0]
 		text += alt.GetTranscript()
 		confidence += float64(alt.GetConfidence())
-		words = append(words, alt.GetWords()...)
+		if count == 0 {
+			firstWords = alt.GetWords()
+		}
+		timingWords = append(timingWords, alt.GetWords()...)
 		count++
 	}
 	if count == 0 {
@@ -371,9 +375,9 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		Language:   googleRecognizeResultLanguage(results, language),
 		Text:       text,
 		Confidence: confidence / float64(count),
-		Words:      googleTimedStrings(words),
+		Words:      googleTimedStrings(firstWords),
 	}
-	googleApplySpeechDataTiming(&data, words, 0)
+	googleApplySpeechDataTiming(&data, timingWords, 0)
 	return []stt.SpeechData{data}
 }
 
