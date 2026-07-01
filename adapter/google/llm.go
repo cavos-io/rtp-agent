@@ -72,7 +72,10 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 
 	contents, systemInstructions := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
 
-	config := buildGoogleGenerateContentConfig(options, systemInstructions)
+	config := buildGoogleGenerateContentConfigForModel(l.model, options, systemInstructions)
+	if err := validateGoogleThinkingConfigForModel(config, l.model); err != nil {
+		return nil, err
+	}
 
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
 
@@ -110,6 +113,10 @@ func (l *GoogleLLM) thoughtSignaturesForStream() map[string][]byte {
 }
 
 func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructions string) *genai.GenerateContentConfig {
+	return buildGoogleGenerateContentConfigForModel("", options, systemInstructions)
+}
+
+func buildGoogleGenerateContentConfigForModel(model string, options *llm.ChatOptions, systemInstructions string) *genai.GenerateContentConfig {
 	config := &genai.GenerateContentConfig{}
 	if systemInstructions != "" {
 		config.SystemInstruction = genai.NewContentFromText(systemInstructions, genai.RoleUser)
@@ -130,6 +137,7 @@ func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructio
 	}
 
 	applyGoogleExtraParams(config, options.ExtraParams)
+	normalizeGoogleThinkingConfigForModel(config, model)
 	applyGoogleResponseFormat(config, options.ResponseFormat)
 	if config.CachedContent != "" {
 		config.SystemInstruction = nil
@@ -138,6 +146,44 @@ func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructio
 	}
 
 	return config
+}
+
+func normalizeGoogleThinkingConfigForModel(config *genai.GenerateContentConfig, model string) {
+	if config == nil || config.ThinkingConfig == nil || !googleIsGemini3Model(model) {
+		if config != nil && config.ThinkingConfig != nil && config.ThinkingConfig.ThinkingBudget != nil {
+			config.ThinkingConfig.ThinkingLevel = ""
+		}
+		return
+	}
+	level := config.ThinkingConfig.ThinkingLevel
+	if level == "" {
+		if googleIsGemini3FlashModel(model) {
+			level = genai.ThinkingLevel("MINIMAL")
+		} else {
+			level = genai.ThinkingLevel("LOW")
+		}
+	}
+	config.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: level}
+}
+
+func validateGoogleThinkingConfigForModel(config *genai.GenerateContentConfig, model string) error {
+	if config == nil || config.ThinkingConfig == nil || googleIsGemini3Model(model) {
+		return nil
+	}
+	if config.ThinkingConfig.ThinkingLevel != "" && config.ThinkingConfig.ThinkingBudget == nil {
+		return fmt.Errorf("model %s does not support thinking_level; please use thinking_budget instead for Gemini 2.5 and earlier models", model)
+	}
+	return nil
+}
+
+func googleIsGemini3Model(model string) bool {
+	model = strings.ToLower(model)
+	return strings.Contains(model, "gemini-3") || strings.HasPrefix(model, "gemini-3")
+}
+
+func googleIsGemini3FlashModel(model string) bool {
+	model = strings.ToLower(model)
+	return strings.Contains(model, "gemini-3-flash") || strings.HasPrefix(model, "gemini-3-flash")
 }
 
 func buildGoogleFunctionDeclaration(t llm.Tool) *genai.FunctionDeclaration {
@@ -207,6 +253,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	}
 	if value, ok := params["cached_content"].(string); ok {
 		config.CachedContent = value
+	}
+	if value, ok := googleHTTPOptionsParam(params["http_options"]); ok {
+		config.HTTPOptions = value
 	}
 	if value, ok := googleFloat32Param(params["temperature"]); ok {
 		config.Temperature = &value
@@ -285,6 +334,17 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 			config.ToolConfig = &genai.ToolConfig{}
 		}
 		config.ToolConfig.RetrievalConfig = value
+	}
+}
+
+func googleHTTPOptionsParam(value any) (*genai.HTTPOptions, bool) {
+	switch typed := value.(type) {
+	case *genai.HTTPOptions:
+		return typed, typed != nil
+	case genai.HTTPOptions:
+		return &typed, true
+	default:
+		return nil, false
 	}
 }
 
@@ -572,6 +632,7 @@ type googleLLMStream struct {
 	thoughtMu         *sync.RWMutex
 	thoughtSignatures map[string][]byte
 	pending           []*llm.ChatChunk
+	pendingErr        error
 	finishReason      genai.FinishReason
 }
 
@@ -829,6 +890,11 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			s.pending = s.pending[1:]
 			return chunk, nil
 		}
+		if s.pendingErr != nil {
+			err := s.pendingErr
+			s.pendingErr = nil
+			return nil, err
+		}
 
 		resp, err, ok := s.next()
 		if s.closed.Load() {
@@ -876,7 +942,14 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 				s.finishReason = cand.FinishReason
 			}
 			if googleBlockedFinishReason(cand.FinishReason) {
-				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, requestID, nil, false)
+				err := llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, requestID, nil, false)
+				if len(s.pending) > 0 {
+					s.pendingErr = err
+					chunk := s.pending[0]
+					s.pending = s.pending[1:]
+					return chunk, nil
+				}
+				return nil, err
 			}
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {

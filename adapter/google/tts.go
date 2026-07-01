@@ -79,10 +79,8 @@ type googleTTSConfig struct {
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if language != "" {
-			cfg.language = language
-			cfg.languageSet = true
-		}
+		cfg.language = language
+		cfg.languageSet = true
 	}
 }
 
@@ -104,10 +102,8 @@ func WithGoogleTTSGender(gender string) GoogleTTSOption {
 
 func WithGoogleTTSVoice(voice string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if voice != "" {
-			cfg.voice = voice
-			cfg.voiceSet = true
-		}
+		cfg.voice = voice
+		cfg.voiceSet = true
 	}
 }
 
@@ -122,10 +118,8 @@ func WithGoogleTTSVoiceCloneKey(key string) GoogleTTSOption {
 
 func WithGoogleTTSModel(model string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if model != "" {
-			cfg.model = model
-			cfg.modelSet = true
-		}
+		cfg.model = model
+		cfg.modelSet = true
 	}
 }
 

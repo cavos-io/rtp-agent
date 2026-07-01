@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -374,6 +375,25 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceToolConfigExtra(t *test
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceHTTPOptionsExtra(t *testing.T) {
+	timeout := 2 * time.Second
+	httpOptions := &genai.HTTPOptions{
+		Headers: http.Header{"x-test": []string{"yes"}},
+		Timeout: &timeout,
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"http_options": httpOptions,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.HTTPOptions != httpOptions {
+		t.Fatalf("HTTPOptions = %#v, want %#v", config.HTTPOptions, httpOptions)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigDropsToolsWithCachedContentLikeReference(t *testing.T) {
 	options := &llm.ChatOptions{
 		Tools:      []llm.Tool{googleRequestTestTool{}},
@@ -516,6 +536,50 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *
 	}
 	if !config.ThinkingConfig.IncludeThoughts {
 		t.Fatal("IncludeThoughts = false, want true")
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigDropsBudgetForGemini3LikeReference(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"thinking_config": map[string]any{
+				"thinking_budget":  256,
+				"include_thoughts": true,
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfigForModel("gemini-3-flash", options, "")
+
+	if config.ThinkingConfig == nil {
+		t.Fatal("ThinkingConfig = nil, want Gemini 3 reference thinking_level")
+	}
+	if config.ThinkingConfig.ThinkingBudget != nil {
+		t.Fatalf("ThinkingBudget = %#v, want nil for Gemini 3 reference", config.ThinkingConfig.ThinkingBudget)
+	}
+	if config.ThinkingConfig.IncludeThoughts {
+		t.Fatal("IncludeThoughts = true, want false because Gemini 3 reference sends thinking_level only")
+	}
+	if config.ThinkingConfig.ThinkingLevel != genai.ThinkingLevel("MINIMAL") {
+		t.Fatalf("ThinkingLevel = %q, want MINIMAL for Gemini 3 Flash default", config.ThinkingConfig.ThinkingLevel)
+	}
+}
+
+func TestGoogleLLMChatRejectsGemini25ThinkingLevelLikeReference(t *testing.T) {
+	model := &GoogleLLM{model: "gemini-2.5-flash"}
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+
+	_, err := model.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
+		"thinking_config": map[string]any{
+			"thinking_level": "low",
+		},
+	}))
+	if err == nil {
+		t.Fatal("Chat error = nil, want Gemini 2.5 thinking_level validation error")
+	}
+	if !strings.Contains(err.Error(), "does not support thinking_level") {
+		t.Fatalf("Chat error = %v, want reference thinking_level validation", err)
 	}
 }
 
@@ -1351,6 +1415,58 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testi
 	}
 	if statusErr.RequestID == "" {
 		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
+	}
+}
+
+func TestGoogleLLMStreamEmitsUsageBeforeBlockedFinishError(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:     4,
+			CandidatesTokenCount: 2,
+			TotalTokenCount:      6,
+		},
+		Candidates: []*genai.Candidate{{
+			FinishReason: genai.FinishReasonSafety,
+		}},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next error = %v", err)
+	}
+	if usage == nil || usage.Usage == nil {
+		t.Fatalf("usage chunk = %#v, want usage before blocked error", usage)
+	}
+	if usage.Usage.PromptTokens != 4 || usage.Usage.CompletionTokens != 2 || usage.Usage.TotalTokens != 6 {
+		t.Fatalf("usage = %+v, want reference token counts before block", usage.Usage)
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("blocked chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("blocked error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "generation blocked by gemini: SAFETY" {
+		t.Fatalf("blocked message = %q, want reference blocked finish", statusErr.Message)
+	}
+	if statusErr.Retryable {
+		t.Fatal("blocked retryable = true, want false")
+	}
+	if statusErr.RequestID != usage.ID {
+		t.Fatalf("blocked request id = %q, want usage id %q", statusErr.RequestID, usage.ID)
 	}
 }
 
