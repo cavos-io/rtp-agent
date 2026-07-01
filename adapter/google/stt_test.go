@@ -124,6 +124,25 @@ func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamUsesConfiguredReferenceLanguage(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTLanguage("id-ID"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	config := streamClient.sent[0].GetStreamingConfig().GetConfig()
+	if config.GetLanguageCode() != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", config.GetLanguageCode())
+	}
+}
+
 func TestGoogleSpeechDataFromAlternativeToleratesMissingWordTimes(t *testing.T) {
 	alt := &speechpb.SpeechRecognitionAlternative{
 		Transcript: "hello",

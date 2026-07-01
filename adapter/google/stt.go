@@ -28,6 +28,7 @@ type GoogleSTT struct {
 	client               googleSpeechClient
 	closed               bool
 	model                string
+	language             string
 	streaming            bool
 	detectLanguage       bool
 	interimResults       bool
@@ -63,6 +64,14 @@ func WithGoogleSTTModel(model string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if model != "" {
 			s.model = model
+		}
+	}
+}
+
+func WithGoogleSTTLanguage(language string) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		if language != "" {
+			s.language = language
 		}
 	}
 }
@@ -218,6 +227,7 @@ func newGoogleSTTWithClient(client googleSpeechClient, opts ...GoogleSTTOption) 
 		streams:              make(map[*googleSTTStream]struct{}),
 		client:               client,
 		model:                "latest_long",
+		language:             "en-US",
 		streaming:            true,
 		detectLanguage:       true,
 		interimResults:       true,
@@ -305,7 +315,7 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	}
 	explicitLanguage := language != ""
 	if language == "" {
-		language = "en-US"
+		language = s.language
 	}
 
 	stream, err := s.newStreamingRecognizeStream(ctx, language, !explicitLanguage)
@@ -363,7 +373,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 	explicitLanguage := language != ""
 	if language == "" {
-		language = "en-US"
+		language = s.language
 	}
 
 	var buf bytes.Buffer
