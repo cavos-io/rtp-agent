@@ -445,17 +445,15 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 	var text string
 	var confidence float64
 	var count int
-	var firstAlt *speechpb.SpeechRecognitionAlternative
+	var words []*speechpb.WordInfo
 	for _, result := range results {
 		if len(result.GetAlternatives()) == 0 {
 			continue
 		}
 		alt := result.GetAlternatives()[0]
-		if firstAlt == nil {
-			firstAlt = alt
-		}
 		text += alt.GetTranscript()
 		confidence += float64(alt.GetConfidence())
+		words = append(words, alt.GetWords()...)
 		count++
 	}
 	if count == 0 || text == "" {
@@ -469,9 +467,9 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 		Language:   language,
 		Text:       text,
 		Confidence: confidence,
-		Words:      googleTimedStringsOffset(firstAlt.GetWords(), startTimeOffset),
+		Words:      googleTimedStringsOffset(words, startTimeOffset),
 	}
-	googleApplySpeechDataTiming(&data, firstAlt.GetWords(), startTimeOffset)
+	googleApplySpeechDataTiming(&data, words, startTimeOffset)
 	return data, stt.SpeechEventInterimTranscript, true
 }
 

@@ -350,12 +350,24 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
 						Transcript: "hello ",
 						Confidence: 0.8,
+						Words: []*speechpb.WordInfo{{
+							Word:       "hello",
+							StartTime:  durationpb.New(100 * 1000 * 1000),
+							EndTime:    durationpb.New(300 * 1000 * 1000),
+							Confidence: 0.81,
+						}},
 					}},
 				},
 				{
 					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
 						Transcript: "world",
 						Confidence: 0.6,
+						Words: []*speechpb.WordInfo{{
+							Word:       "world",
+							StartTime:  durationpb.New(400 * 1000 * 1000),
+							EndTime:    durationpb.New(700 * 1000 * 1000),
+							Confidence: 0.61,
+						}},
 					}},
 				},
 			},
@@ -381,6 +393,12 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	}
 	if math.Abs(got.Confidence-0.7) > 0.000001 {
 		t.Fatalf("confidence = %v, want averaged confidence 0.7", got.Confidence)
+	}
+	if len(got.Words) != 2 || got.Words[0].Text != "hello" || got.Words[1].Text != "world" {
+		t.Fatalf("words = %#v, want all interim result words in order", got.Words)
+	}
+	if math.Abs(got.StartTime-0.1) > 0.000001 || math.Abs(got.EndTime-0.7) > 0.000001 {
+		t.Fatalf("timing = %v-%v, want full interim result span", got.StartTime, got.EndTime)
 	}
 
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
