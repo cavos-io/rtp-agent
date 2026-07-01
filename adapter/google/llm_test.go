@@ -168,6 +168,14 @@ func TestBuildGoogleContentsInjectsReferenceThoughtSignatures(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMReferenceModelsRequireThoughtSignatures(t *testing.T) {
+	for _, model := range []string{"gemini-2.5-flash", "gemini-3-pro", "models/gemini-3-flash"} {
+		if !googleModelRequiresThoughtSignatures(model) {
+			t.Fatalf("googleModelRequiresThoughtSignatures(%q) = false, want true", model)
+		}
+	}
+}
+
 func TestBuildGoogleContentsFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

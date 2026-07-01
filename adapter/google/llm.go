@@ -54,7 +54,8 @@ func resolveGoogleAPIKey(apiKey string) string {
 }
 
 func googleModelRequiresThoughtSignatures(model string) bool {
-	return strings.HasPrefix(model, "gemini-2.5")
+	model = strings.ToLower(model)
+	return strings.Contains(model, "gemini-3") || strings.Contains(model, "gemini-2.5")
 }
 
 func (l *GoogleLLM) Model() string { return l.model }
