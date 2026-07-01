@@ -13404,6 +13404,7 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	t.Setenv("RTP_AGENT_TTS_SPEAKING_RATE", "1.25")
 	t.Setenv("RTP_AGENT_TTS_PITCH", "3")
 	t.Setenv("RTP_AGENT_TTS_STREAMING", "false")
+	t.Setenv("RTP_AGENT_TTS_ENABLE_SSML_PARSING", "true")
 	t.Setenv("RTP_AGENT_TTS_MODEL_OPTIONS", "effects_profile_id=telephony-class-application,volume_gain_db=-2.5")
 
 	app, err := NewApp(DefaultConfigFromEnv())
@@ -13430,6 +13431,9 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 	if googleCfg.streaming == nil || *googleCfg.streaming {
 		t.Fatalf("streaming = %v, want explicit false", googleCfg.streaming)
+	}
+	if googleCfg.ssml == nil || !*googleCfg.ssml {
+		t.Fatalf("ssml = %v, want explicit true", googleCfg.ssml)
 	}
 	if googleCfg.effectsProfileID != "telephony-class-application" {
 		t.Fatalf("effects profile = %q, want telephony-class-application", googleCfg.effectsProfileID)
