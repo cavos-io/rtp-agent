@@ -6834,8 +6834,11 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 	}
 	opts.DisableTTSTextTransforms = cfg.DisableTTSTextTransforms
 	opts.LLMParallelToolCalls = cfg.LLMParallelToolCalls
-	opts.LLMExtraParams = cfg.LLMExtraBody
+	opts.LLMExtraParams = llmExtraParamsFromConfig(cfg)
 	opts.LLMResponseFormat = cfg.LLMResponseFormat
+	if toolChoice := googleLLMToolChoiceFromConfig(cfg); toolChoice != nil {
+		opts.ToolChoice = toolChoice
+	}
 	if cfg.BackgroundAudioAmbient != "" || cfg.BackgroundAudioThinking != "" {
 		opts.BackgroundAudio = agent.NewBackgroundAudioPlayer(
 			backgroundAudioSource(cfg.BackgroundAudioAmbient),
@@ -6852,6 +6855,80 @@ func agentSessionOptionsFromConfig(cfg AppConfig) (agent.AgentSessionOptions, er
 	}
 	opts.WordTokenizer = wordTokenizer
 	return opts, nil
+}
+
+func llmExtraParamsFromConfig(cfg AppConfig) map[string]any {
+	params := cloneAppAnyMap(cfg.LLMExtraBody)
+	if normalizeProvider(cfg.LLMProvider) == providerGoogle {
+		for _, key := range googleLLMExtraParamKeys {
+			value, ok := cfg.LLMModelOptions[key]
+			if !ok {
+				continue
+			}
+			if _, exists := params[key]; exists {
+				continue
+			}
+			if params == nil {
+				params = make(map[string]any)
+			}
+			params[key] = value
+		}
+	}
+	if len(params) == 0 {
+		return nil
+	}
+	return params
+}
+
+var googleLLMExtraParamKeys = []string{
+	"cached_content",
+	"temperature",
+	"top_p",
+	"top_k",
+	"presence_penalty",
+	"frequency_penalty",
+	"max_output_tokens",
+	"seed",
+	"response_mime_type",
+	"response_schema",
+	"response_json_schema",
+	"routing_config",
+	"model_selection_config",
+	"labels",
+	"model_armor_config",
+	"enable_enhanced_civic_answers",
+	"image_config",
+	"response_modalities",
+	"speech_config",
+	"audio_timestamp",
+	"service_tier",
+	"thinking_config",
+	"safety_settings",
+	"media_resolution",
+	"tool_config",
+	"retrieval_config",
+}
+
+func googleLLMToolChoiceFromConfig(cfg AppConfig) llm.ToolChoice {
+	if normalizeProvider(cfg.LLMProvider) != providerGoogle {
+		return nil
+	}
+	toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice")
+	if toolChoice == "" {
+		return nil
+	}
+	return llm.ToolChoice(toolChoice)
+}
+
+func cloneAppAnyMap(values map[string]any) map[string]any {
+	if len(values) == 0 {
+		return nil
+	}
+	clone := make(map[string]any, len(values))
+	for key, value := range values {
+		clone[key] = value
+	}
+	return clone
 }
 
 func wordTokenizerFromConfig(cfg AppConfig) (tokenize.WordTokenizer, error) {

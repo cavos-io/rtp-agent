@@ -13384,6 +13384,46 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T) {
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=none,service_tier=priority")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	params := app.Session.Options.LLMExtraParams
+	if params["temperature"] != 0.2 {
+		t.Fatalf("temperature = %#v, want 0.2", params["temperature"])
+	}
+	if params["top_p"] != 0.8 {
+		t.Fatalf("top_p = %#v, want 0.8", params["top_p"])
+	}
+	if got := numericTestValue(params["max_output_tokens"]); got != 128 {
+		t.Fatalf("max_output_tokens = %#v, want 128", params["max_output_tokens"])
+	}
+	if params["service_tier"] != "priority" {
+		t.Fatalf("service_tier = %#v, want priority", params["service_tier"])
+	}
+	if app.Session.Options.ToolChoice != llm.ToolChoice("none") {
+		t.Fatalf("ToolChoice = %#v, want none", app.Session.Options.ToolChoice)
+	}
+}
+
+func numericTestValue(value any) float64 {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	case float64:
+		return typed
+	default:
+		return 0
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	original := appNewGoogleTTS
 	defer func() { appNewGoogleTTS = original }()
