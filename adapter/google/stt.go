@@ -18,7 +18,6 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -267,7 +266,9 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 
 	for _, stream := range streams {
 		stream.updateConfig(minConfidence, language, languageChanged)
-		stream.reconnectForUpdatedConfig()
+		if err := stream.reconnectForUpdatedConfig(); err != nil {
+			stream.failWithError(err)
+		}
 	}
 }
 
@@ -367,8 +368,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
 				Config:                    googleRecognitionConfigWithAlternatives(s, language, includeAlternativeLanguages),
 				InterimResults:            s.interimResults,
-				EnableVoiceActivityEvents: s.voiceActivityEvents || s.speechStartTimeout > 0 || s.speechEndTimeout > 0,
-				VoiceActivityTimeout:      googleVoiceActivityTimeout(s),
+				EnableVoiceActivityEvents: s.voiceActivityEvents,
 			},
 		},
 	})
@@ -499,20 +499,6 @@ func googleEnableWordTimeOffsets(s *GoogleSTT) bool {
 		return false
 	}
 	return s.enableWordTimeOffset
-}
-
-func googleVoiceActivityTimeout(s *GoogleSTT) *speechpb.StreamingRecognitionConfig_VoiceActivityTimeout {
-	if s.speechStartTimeout <= 0 && s.speechEndTimeout <= 0 {
-		return nil
-	}
-	timeout := &speechpb.StreamingRecognitionConfig_VoiceActivityTimeout{}
-	if s.speechStartTimeout > 0 {
-		timeout.SpeechStartTimeout = durationpb.New(s.speechStartTimeout)
-	}
-	if s.speechEndTimeout > 0 {
-		timeout.SpeechEndTimeout = durationpb.New(s.speechEndTimeout)
-	}
-	return timeout
 }
 
 func googleSpeechDataFromAlternative(alt *speechpb.SpeechRecognitionAlternative) stt.SpeechData {
@@ -728,9 +714,14 @@ func (n *googleSTTInputAudioNormalizer) reset() {
 func (s *googleSTTStream) readLoop() {
 	defer close(s.events)
 	var lastUsageEventTime float64
+	var usageStream speechpb.Speech_StreamingRecognizeClient
 	var speechStarted bool
 	for {
 		stream := s.currentStream()
+		if stream != usageStream {
+			lastUsageEventTime = 0
+			usageStream = stream
+		}
 		resp, err := stream.Recv()
 		if err != nil {
 			if s.currentStream() != stream {
@@ -821,11 +812,6 @@ func (s *googleSTTStream) shouldRestartAfterMaxSession(stream speechpb.Speech_St
 	return !s.closed && !s.inputClosed && s.stream == stream && !s.sessionConnectedAt.IsZero() && time.Since(s.sessionConnectedAt) > googleSTTMaxSessionDuration
 }
 
-func (s *googleSTTStream) restartStream(old speechpb.Speech_StreamingRecognizeClient) bool {
-	restarted, _ := s.restartStreamWithError(old)
-	return restarted
-}
-
 func (s *googleSTTStream) restartStreamWithError(old speechpb.Speech_StreamingRecognizeClient) (bool, error) {
 	_ = old.CloseSend()
 	stream, err := s.owner.newStreamingRecognizeStream(s.ctx, s.language, s.includeAlternativeLanguages)
@@ -845,8 +831,27 @@ func (s *googleSTTStream) restartStreamWithError(old speechpb.Speech_StreamingRe
 	return true, nil
 }
 
-func (s *googleSTTStream) reconnectForUpdatedConfig() bool {
-	return s.restartStream(s.currentStream())
+func (s *googleSTTStream) reconnectForUpdatedConfig() error {
+	_, err := s.restartStreamWithError(s.currentStream())
+	return err
+}
+
+func (s *googleSTTStream) failWithError(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.inputClosed = true
+	stream := s.stream
+	s.mu.Unlock()
+
+	s.errCh <- googleSTTStreamError(err)
+	_ = stream.CloseSend()
+	s.unregister()
 }
 
 func (s *googleSTTStream) terminate() {

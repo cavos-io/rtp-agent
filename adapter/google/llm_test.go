@@ -397,8 +397,36 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceHTTPOptionsExtra(t *tes
 
 	config := buildGoogleGenerateContentConfig(options, "")
 
-	if config.HTTPOptions != httpOptions {
-		t.Fatalf("HTTPOptions = %#v, want %#v", config.HTTPOptions, httpOptions)
+	if config.HTTPOptions == httpOptions {
+		t.Fatalf("HTTPOptions reused caller pointer, want reference copy")
+	}
+	if config.HTTPOptions == nil || config.HTTPOptions.Timeout == nil || *config.HTTPOptions.Timeout != timeout {
+		t.Fatalf("HTTPOptions timeout = %#v, want %v", config.HTTPOptions, timeout)
+	}
+	if got := config.HTTPOptions.Headers["x-test"]; len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("HTTPOptions header = %q, want yes", got)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigAppliesReferenceConnectTimeout(t *testing.T) {
+	timeout := 3 * time.Second
+	httpOptions := &genai.HTTPOptions{
+		Headers: http.Header{"x-test": []string{"yes"}},
+	}
+	options := &llm.ChatOptions{
+		ConnectOptions: &llm.APIConnectOptions{Timeout: timeout},
+		ExtraParams: map[string]any{
+			"http_options": httpOptions,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.HTTPOptions == nil || config.HTTPOptions.Timeout == nil || *config.HTTPOptions.Timeout != timeout {
+		t.Fatalf("HTTPOptions timeout = %#v, want connect timeout %v", config.HTTPOptions, timeout)
+	}
+	if httpOptions.Timeout != nil {
+		t.Fatalf("caller HTTPOptions timeout = %v, want unchanged nil like reference copy", *httpOptions.Timeout)
 	}
 }
 
@@ -1020,6 +1048,23 @@ func TestGoogleLLMStreamCloseUnblocksPendingNext(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("Next did not unblock after Close")
+	}
+}
+
+func TestGoogleLLMStreamTreatsReference499AsEOF(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, genai.APIError{Code: 499, Message: "client closed", Status: "CLIENT_CLOSED"}, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil", chunk)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want io.EOF for reference client-closed 499", err)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
@@ -383,6 +384,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	cfg.cloneKeySet = false
 	if cfg.languageSet || cfg.genderSet || cfg.voiceSet || cfg.cloneKeySet || cfg.modelSet {
 		t.voice = googleTTSUpdatedVoiceParams(cfg)
 	}
@@ -395,23 +397,8 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	if cfg.rateSet {
 		t.audio.SpeakingRate = cfg.speakingRate
 	}
-	if cfg.pitchSet {
-		t.audio.Pitch = cfg.pitch
-	}
-	if cfg.effectsSet {
-		t.audio.EffectsProfileId = append([]string(nil), cfg.effects...)
-	}
 	if cfg.volumeSet {
 		t.audio.VolumeGainDb = cfg.volumeGainDB
-	}
-	if cfg.sampleSet {
-		t.audio.SampleRateHertz = cfg.sampleRate
-	}
-	if cfg.encodingSet {
-		t.audio.AudioEncoding = cfg.encoding
-	}
-	if cfg.customSet {
-		t.custom = cfg.custom
 	}
 }
 
@@ -422,22 +409,22 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	if t.ssml && t.markup {
 		return nil, errors.New("SSML support is not available for markup input")
 	}
+	audio := googleCloneAudioConfig(t.audio)
 	req := &texttospeechpb.SynthesizeSpeechRequest{
 		Input:       googleTTSSynthesisInput(text, t.prompt, t.custom, t.ssml, t.markup),
 		Voice:       t.voice,
-		AudioConfig: t.audio,
+		AudioConfig: audio,
 	}
-
-	resp, err := t.client.SynthesizeSpeech(ctx, req)
-	if err != nil {
-		return nil, googleTTSSynthesisError(err)
-	}
+	streamCtx, cancel := context.WithCancel(ctx)
 
 	return &googleTTSChunkedStream{
-		data:       resp.AudioContent,
-		encoding:   t.audio.GetAudioEncoding(),
+		ctx:        streamCtx,
+		cancel:     cancel,
+		client:     t.client,
+		request:    req,
+		encoding:   audio.GetAudioEncoding(),
 		inputText:  text,
-		sampleRate: t.audio.GetSampleRateHertz(),
+		sampleRate: audio.GetSampleRateHertz(),
 	}, nil
 }
 
@@ -517,6 +504,12 @@ func googleCloneAudioConfig(config *texttospeechpb.AudioConfig) *texttospeechpb.
 }
 
 type googleTTSChunkedStream struct {
+	ctx            context.Context
+	cancel         context.CancelFunc
+	client         googleTTSClient
+	request        *texttospeechpb.SynthesizeSpeechRequest
+	requested      bool
+	closed         atomic.Bool
 	data           []byte
 	offset         int
 	encoding       texttospeechpb.AudioEncoding
@@ -530,6 +523,15 @@ type googleTTSChunkedStream struct {
 }
 
 func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed.Load() {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.closed.Load() {
+		return nil, io.EOF
+	}
 	if googleTTSUsesCompressedDecoder(s.encoding) {
 		return s.nextDecodedAudio()
 	}
@@ -573,6 +575,28 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			SamplesPerChannel: uint32(len(chunk) / 2),
 		},
 	}, nil
+}
+
+func (s *googleTTSChunkedStream) ensureResponse() error {
+	if s.requested || s.client == nil || s.request == nil || s.finalSent {
+		return nil
+	}
+	s.requested = true
+	resp, err := s.client.SynthesizeSpeech(s.ctx, s.request)
+	if err != nil {
+		s.finalSent = true
+		if s.closed.Load() {
+			return io.EOF
+		}
+		return googleTTSSynthesisError(err)
+	}
+	if s.closed.Load() {
+		return io.EOF
+	}
+	if resp != nil {
+		s.data = resp.AudioContent
+	}
+	return nil
 }
 
 func (s *googleTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, error) {
@@ -626,7 +650,10 @@ func (s *googleTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *googleTTSChunkedStream) Close() error {
-	s.finalSent = true
+	s.closed.Store(true)
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.decoder != nil {
 		return s.decoder.Close()
 	}
@@ -672,6 +699,9 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
+		return nil
+	}
+	if s.flushed > 0 {
 		return nil
 	}
 	if _, err := s.buffer.WriteString(text); err != nil {

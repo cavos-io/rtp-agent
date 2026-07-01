@@ -1273,7 +1273,38 @@ func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
 	}
 }
 
-func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T) {
+func TestGoogleSTTUpdateOptionsReportsReferenceReconnectError(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
+		streamErrs:   []error{nil, status.Error(codes.Unavailable, "restart failed")},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil reconnect error", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want reconnect APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+}
+
+func TestGoogleSTTUpdateOptionsReconnectsActiveStreamButOmitsV1SpeechTimeouts(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
 	secondRelease := make(chan struct{})
@@ -1295,6 +1326,12 @@ func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T
 	}
 
 	provider.UpdateOptions(WithGoogleSTTSpeechEndTimeout(750 * time.Millisecond))
+	provider.mu.Lock()
+	storedEndTimeout := provider.speechEndTimeout
+	provider.mu.Unlock()
+	if storedEndTimeout != 750*time.Millisecond {
+		t.Fatalf("stored speech end timeout = %v, want 750ms before v1 omission", storedEndTimeout)
+	}
 
 	select {
 	case calls := <-client.streamCallCh:
@@ -1310,15 +1347,18 @@ func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T
 	if len(secondStream.sent) != 1 {
 		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
 	}
-	timeout := secondStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout()
-	if timeout == nil || timeout.GetSpeechEndTimeout().AsDuration() != 750*time.Millisecond {
-		t.Fatalf("second stream voice timeout = %#v, want speech_end_timeout 750ms", timeout)
+	config := secondStream.sent[0].GetStreamingConfig()
+	if config.GetEnableVoiceActivityEvents() {
+		t.Fatal("enable voice activity events = true, want false for reference v1 speech timeout update")
+	}
+	if timeout := config.GetVoiceActivityTimeout(); timeout != nil {
+		t.Fatalf("second stream voice timeout = %#v, want nil for reference v1", timeout)
 	}
 	close(firstRelease)
 	close(secondRelease)
 }
 
-func TestGoogleSTTUpdateOptionsClearsActiveStreamSpeechTimeouts(t *testing.T) {
+func TestGoogleSTTUpdateOptionsKeepsV1SpeechTimeoutsOmittedAfterClear(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
 	secondRelease := make(chan struct{})
@@ -1335,11 +1375,18 @@ func TestGoogleSTTUpdateOptionsClearsActiveStreamSpeechTimeouts(t *testing.T) {
 	}
 	defer stream.Close()
 	<-client.streamCallCh
-	if firstStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout().GetSpeechEndTimeout().AsDuration() != 750*time.Millisecond {
-		t.Fatalf("first stream voice timeout = %#v, want speech_end_timeout 750ms", firstStream.sent)
+	if timeout := firstStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout(); timeout != nil {
+		t.Fatalf("first stream voice timeout = %#v, want nil for reference v1", timeout)
 	}
 
 	provider.UpdateOptions(WithGoogleSTTSpeechEndTimeout(0), WithGoogleSTTSpeechStartTimeout(0))
+	provider.mu.Lock()
+	storedStartTimeout := provider.speechStartTimeout
+	storedEndTimeout := provider.speechEndTimeout
+	provider.mu.Unlock()
+	if storedStartTimeout != 0 || storedEndTimeout != 0 {
+		t.Fatalf("stored speech timeouts = start %v end %v, want cleared before v1 omission", storedStartTimeout, storedEndTimeout)
+	}
 
 	select {
 	case calls := <-client.streamCallCh:
@@ -1641,7 +1688,7 @@ func TestGoogleSTTStreamEmitsProviderActivityEndAfterFinalTranscript(t *testing.
 	}
 }
 
-func TestGoogleSTTStreamConfigUsesReferenceSpeechTimeouts(t *testing.T) {
+func TestGoogleSTTStreamConfigOmitsReferenceV1SpeechTimeouts(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(
 		&fakeGoogleSpeechClient{stream: streamClient},
@@ -1659,18 +1706,18 @@ func TestGoogleSTTStreamConfigUsesReferenceSpeechTimeouts(t *testing.T) {
 	if config == nil {
 		t.Fatal("streaming config = nil")
 	}
-	if !config.GetEnableVoiceActivityEvents() {
-		t.Fatal("enable voice activity events = false, want true when speech timeout configured")
+	provider.mu.Lock()
+	storedStartTimeout := provider.speechStartTimeout
+	storedEndTimeout := provider.speechEndTimeout
+	provider.mu.Unlock()
+	if storedStartTimeout != 1500*time.Millisecond || storedEndTimeout != 750*time.Millisecond {
+		t.Fatalf("stored speech timeouts = start %v end %v, want configured before v1 omission", storedStartTimeout, storedEndTimeout)
 	}
-	timeout := config.GetVoiceActivityTimeout()
-	if timeout == nil {
-		t.Fatal("voice activity timeout = nil")
+	if config.GetEnableVoiceActivityEvents() {
+		t.Fatal("enable voice activity events = true, want false because reference v1 does not auto-enable for speech timeouts")
 	}
-	if got := timeout.GetSpeechStartTimeout().AsDuration(); got != 1500*time.Millisecond {
-		t.Fatalf("speech start timeout = %v, want 1.5s", got)
-	}
-	if got := timeout.GetSpeechEndTimeout().AsDuration(); got != 750*time.Millisecond {
-		t.Fatalf("speech end timeout = %v, want 750ms", got)
+	if timeout := config.GetVoiceActivityTimeout(); timeout != nil {
+		t.Fatalf("voice activity timeout = %#v, want nil for reference v1", timeout)
 	}
 }
 
@@ -1753,6 +1800,68 @@ func TestGoogleSTTStreamEmitsReferenceRecognitionUsage(t *testing.T) {
 	}
 	if second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.6 {
 		t.Fatalf("second usage = %+v, want billed delta 0.6s", second.RecognitionUsage)
+	}
+}
+
+func TestGoogleSTTStreamResetsReferenceUsageAfterReconnect(t *testing.T) {
+	releaseFirst := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			TotalBilledTime: durationpb.New(time.Second),
+			RequestId:       111,
+		}},
+		recvBlock: releaseFirst,
+	}
+	secondStream := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			TotalBilledTime: durationpb.New(500 * time.Millisecond),
+			RequestId:       222,
+		}},
+	}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if first.Type != stt.SpeechEventRecognitionUsage || first.RecognitionUsage == nil || first.RecognitionUsage.AudioDuration != 1.0 {
+		t.Fatalf("first usage = %#v, want 1s recognition_usage", first)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnect")
+	}
+	close(releaseFirst)
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if second.Type != stt.SpeechEventRecognitionUsage {
+		t.Fatalf("second event type = %v, want recognition_usage", second.Type)
+	}
+	if second.RequestID != "222" {
+		t.Fatalf("second request id = %q, want 222", second.RequestID)
+	}
+	if second.RecognitionUsage == nil || second.RecognitionUsage.AudioDuration != 0.5 {
+		t.Fatalf("second usage = %+v, want fresh 0.5s after reconnect", second.RecognitionUsage)
 	}
 }
 

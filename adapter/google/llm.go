@@ -72,10 +72,14 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	if err := validateGoogleChatExtraParams(options.ExtraParams); err != nil {
 		return nil, err
 	}
+	connectOptions, err := options.EffectiveConnectOptions()
+	if err != nil {
+		return nil, err
+	}
 
 	contents, systemInstructions := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
 
-	config := buildGoogleGenerateContentConfigForModel(l.model, options, systemInstructions)
+	config := buildGoogleGenerateContentConfigForModelWithConnectOptions(l.model, options, systemInstructions, connectOptions)
 	if err := validateGoogleThinkingConfigForModel(config, l.model); err != nil {
 		return nil, err
 	}
@@ -137,6 +141,14 @@ func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructio
 }
 
 func buildGoogleGenerateContentConfigForModel(model string, options *llm.ChatOptions, systemInstructions string) *genai.GenerateContentConfig {
+	connectOptions, _ := options.EffectiveConnectOptions()
+	return buildGoogleGenerateContentConfigForModelWithConnectOptions(model, options, systemInstructions, connectOptions)
+}
+
+func buildGoogleGenerateContentConfigForModelWithConnectOptions(model string, options *llm.ChatOptions, systemInstructions string, connectOptions llm.APIConnectOptions) *genai.GenerateContentConfig {
+	if options == nil {
+		options = &llm.ChatOptions{}
+	}
 	config := &genai.GenerateContentConfig{}
 	if systemInstructions != "" {
 		config.SystemInstruction = genai.NewContentFromText(systemInstructions, genai.RoleUser)
@@ -157,6 +169,7 @@ func buildGoogleGenerateContentConfigForModel(model string, options *llm.ChatOpt
 	}
 
 	applyGoogleExtraParams(config, options.ExtraParams)
+	applyGoogleConnectOptions(config, connectOptions)
 	normalizeGoogleThinkingConfigForModel(config, model)
 	applyGoogleResponseFormat(config, options.ResponseFormat)
 	_, cachedContentSet := options.ExtraParams["cached_content"]
@@ -167,6 +180,19 @@ func buildGoogleGenerateContentConfigForModel(model string, options *llm.ChatOpt
 	}
 
 	return config
+}
+
+func applyGoogleConnectOptions(config *genai.GenerateContentConfig, options llm.APIConnectOptions) {
+	if config == nil {
+		return
+	}
+	if config.HTTPOptions == nil {
+		config.HTTPOptions = &genai.HTTPOptions{}
+	}
+	if config.HTTPOptions.Timeout == nil {
+		timeout := options.Timeout
+		config.HTTPOptions.Timeout = &timeout
+	}
 }
 
 func normalizeGoogleThinkingConfigForModel(config *genai.GenerateContentConfig, model string) {
@@ -384,12 +410,29 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 func googleHTTPOptionsParam(value any) (*genai.HTTPOptions, bool) {
 	switch typed := value.(type) {
 	case *genai.HTTPOptions:
-		return typed, typed != nil
+		return googleCloneHTTPOptions(typed), typed != nil
 	case genai.HTTPOptions:
-		return &typed, true
+		return googleCloneHTTPOptions(&typed), true
 	default:
 		return nil, false
 	}
+}
+
+func googleCloneHTTPOptions(options *genai.HTTPOptions) *genai.HTTPOptions {
+	if options == nil {
+		return nil
+	}
+	clone := *options
+	if options.Headers != nil {
+		clone.Headers = options.Headers.Clone()
+	}
+	if options.ExtraBody != nil {
+		clone.ExtraBody = make(map[string]any, len(options.ExtraBody))
+		for key, value := range options.ExtraBody {
+			clone.ExtraBody[key] = value
+		}
+	}
+	return &clone
 }
 
 func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[string]any) {
@@ -1055,6 +1098,9 @@ func googleLLMStreamError(err error, retryable bool, requestID string) error {
 	}
 	var apiErr genai.APIError
 	if errors.As(err, &apiErr) {
+		if apiErr.Code == 499 {
+			return io.EOF
+		}
 		message := "gemini llm: api error"
 		if apiErr.Code >= 400 && apiErr.Code < 500 {
 			message = "gemini llm: client error"
