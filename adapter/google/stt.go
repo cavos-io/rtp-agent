@@ -871,7 +871,11 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 		return stt.SpeechData{}, "", false
 	}
 	if data, ok := googleFinalSpeechDataFromStreamingResults(results, startTimeOffset, language); ok {
-		return data, stt.SpeechEventFinalTranscript, true
+		eventType := stt.SpeechEventInterimTranscript
+		if results[0].GetIsFinal() {
+			eventType = stt.SpeechEventFinalTranscript
+		}
+		return data, eventType, true
 	}
 	var text string
 	var confidence float64

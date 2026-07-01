@@ -824,6 +824,56 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamUsesFirstReferenceResultFinality(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{
+				{
+					LanguageCode: "en-AU",
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "still ",
+						Confidence: 0.9,
+					}},
+				},
+				{
+					IsFinal:      true,
+					LanguageCode: "en-AU",
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "done",
+						Confidence: 0.8,
+						Words: []*speechpb.WordInfo{{
+							Word:      "done",
+							StartTime: durationpb.New(300 * 1000 * 1000),
+							EndTime:   durationpb.New(600 * 1000 * 1000),
+						}},
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want interim transcript from first result finality", event)
+	}
+	got := event.Alternatives[0]
+	if got.Text != "done" {
+		t.Fatalf("text = %q, want later final result text", got.Text)
+	}
+	if got.StartTime != 0.3 || got.EndTime != 0.6 {
+		t.Fatalf("timing = %v-%v, want later final result timing", got.StartTime, got.EndTime)
+	}
+}
+
 func TestGoogleSTTStreamUsesFirstReferenceFinalResult(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
