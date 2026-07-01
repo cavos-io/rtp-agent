@@ -434,11 +434,15 @@ func (s *fireworksStream) updateOptions(endpoint string, headers http.Header, di
 	s.flushRecognitionUsage()
 	newConn, _, err := dialer(s.ctx, endpoint, headers)
 	if err != nil {
+		var reconnectErr error = context.Canceled
+		if !errors.Is(err, context.Canceled) {
+			reconnectErr = llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect fireworks stt websocket: %v", err))
+		}
 		s.mu.Lock()
 		if !s.closed {
 			s.reconnecting = false
 			select {
-			case s.errCh <- fmt.Errorf("failed to reconnect fireworks stt websocket: %w", err):
+			case s.errCh <- reconnectErr:
 			default:
 			}
 		}

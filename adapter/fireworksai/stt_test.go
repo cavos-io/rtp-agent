@@ -406,6 +406,31 @@ func TestFireworksSTTUpdateOptionsEndsSpeechBeforeReconnect(t *testing.T) {
 	}
 }
 
+func TestFireworksSTTReconnectFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &fireworksStream{
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+		ctx:    context.Background(),
+		cancel: func() {},
+		state:  &fireworksStreamState{},
+	}
+	dialer := func(context.Context, string, http.Header) (*websocket.Conn, *http.Response, error) {
+		return nil, nil, errors.New("fireworks stt redial failed")
+	}
+
+	stream.updateOptions("ws://fireworks.test/v1", nil, dialer, "en")
+
+	select {
+	case err := <-stream.errCh:
+		var connErr *llm.APIConnectionError
+		if !errors.As(err, &connErr) {
+			t.Fatalf("reconnect error = %T %v, want APIConnectionError", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reconnect error")
+	}
+}
+
 func TestFireworksSTTUpdateOptionsEmitsReferenceUsageAfterSpeechEnd(t *testing.T) {
 	errCh := make(chan error, 1)
 	stream := &fireworksStream{
