@@ -73,6 +73,9 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	contents, systemInstructions := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
 
 	config := buildGoogleGenerateContentConfigForModel(l.model, options, systemInstructions)
+	if err := validateGoogleThinkingConfigForModel(config, l.model); err != nil {
+		return nil, err
+	}
 
 	stream := l.client.Models.GenerateContentStream(ctx, l.model, contents, config)
 
@@ -147,6 +150,9 @@ func buildGoogleGenerateContentConfigForModel(model string, options *llm.ChatOpt
 
 func normalizeGoogleThinkingConfigForModel(config *genai.GenerateContentConfig, model string) {
 	if config == nil || config.ThinkingConfig == nil || !googleIsGemini3Model(model) {
+		if config != nil && config.ThinkingConfig != nil && config.ThinkingConfig.ThinkingBudget != nil {
+			config.ThinkingConfig.ThinkingLevel = ""
+		}
 		return
 	}
 	level := config.ThinkingConfig.ThinkingLevel
@@ -158,6 +164,16 @@ func normalizeGoogleThinkingConfigForModel(config *genai.GenerateContentConfig, 
 		}
 	}
 	config.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: level}
+}
+
+func validateGoogleThinkingConfigForModel(config *genai.GenerateContentConfig, model string) error {
+	if config == nil || config.ThinkingConfig == nil || googleIsGemini3Model(model) {
+		return nil
+	}
+	if config.ThinkingConfig.ThinkingLevel != "" && config.ThinkingConfig.ThinkingBudget == nil {
+		return fmt.Errorf("model %s does not support thinking_level; please use thinking_budget instead for Gemini 2.5 and earlier models", model)
+	}
+	return nil
 }
 
 func googleIsGemini3Model(model string) bool {

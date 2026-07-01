@@ -545,6 +545,24 @@ func TestBuildGoogleGenerateContentConfigDropsBudgetForGemini3LikeReference(t *t
 	}
 }
 
+func TestGoogleLLMChatRejectsGemini25ThinkingLevelLikeReference(t *testing.T) {
+	model := &GoogleLLM{model: "gemini-2.5-flash"}
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+
+	_, err := model.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
+		"thinking_config": map[string]any{
+			"thinking_level": "low",
+		},
+	}))
+	if err == nil {
+		t.Fatal("Chat error = nil, want Gemini 2.5 thinking_level validation error")
+	}
+	if !strings.Contains(err.Error(), "does not support thinking_level") {
+		t.Fatalf("Chat error = %v, want reference thinking_level validation", err)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *testing.T) {
 	safety := []*genai.SafetySetting{{
 		Category:  genai.HarmCategoryHarassment,
