@@ -173,6 +173,22 @@ func TestGoogleRealtimeUpdateOptionsMatchesReference(t *testing.T) {
 	if model.toolResponseScheduling != "WHEN_IDLE" {
 		t.Fatalf("toolResponseScheduling = %#v, want WHEN_IDLE", model.toolResponseScheduling)
 	}
+
+	model.UpdateOptions(WithGoogleRealtimeVoice(""))
+	if model.voice != "" {
+		t.Fatalf("voice after empty update = %q, want explicit empty voice", model.voice)
+	}
+}
+
+func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	if model.voice != "" {
+		t.Fatalf("voice = %q, want explicit empty voice", model.voice)
+	}
 }
 
 func TestGoogleRealtimeGenerationOptionsMatchReference(t *testing.T) {

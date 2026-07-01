@@ -64,6 +64,7 @@ type googleRealtimeOptions struct {
 	model                     string
 	instructions              string
 	voice                     string
+	voiceSet                  bool
 	language                  string
 	vertexAI                  *bool
 	project                   string
@@ -107,9 +108,8 @@ func WithGoogleRealtimeInstructions(instructions string) GoogleRealtimeOption {
 
 func WithGoogleRealtimeVoice(voice string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
-		if voice != "" {
-			options.voice = voice
-		}
+		options.voice = voice
+		options.voiceSet = true
 	}
 }
 
@@ -270,7 +270,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		}
 	}
 	voice := options.voice
-	if voice == "" {
+	if !options.voiceSet {
 		voice = defaultGoogleRealtimeVoice
 	}
 	modalities := options.modalities
@@ -336,7 +336,7 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	if options.voice != "" {
+	if options.voiceSet {
 		m.voice = options.voice
 	}
 	if options.temperatureSet {
