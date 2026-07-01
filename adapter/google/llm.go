@@ -244,6 +244,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleModelSelectionConfigParam(params["model_selection_config"]); ok {
 		config.ModelSelectionConfig = value
 	}
+	if value, ok := googleLabelsParam(params["labels"]); ok {
+		config.Labels = value
+	}
 	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
 		config.ResponseModalities = value
 	}
@@ -358,6 +361,14 @@ func googleRoutingConfigParam(value any) (*genai.GenerationConfigRoutingConfig, 
 func googleModelSelectionConfigParam(value any) (*genai.ModelSelectionConfig, bool) {
 	config, ok := value.(*genai.ModelSelectionConfig)
 	return config, ok && config != nil
+}
+
+func googleLabelsParam(value any) (map[string]string, bool) {
+	labels, ok := value.(map[string]string)
+	if !ok || len(labels) == 0 {
+		return nil, false
+	}
+	return labels, true
 }
 
 func googleServiceTierParam(value any) (genai.ServiceTier, bool) {

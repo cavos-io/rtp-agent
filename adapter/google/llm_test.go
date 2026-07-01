@@ -579,6 +579,24 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceModelSelectionConfigExt
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceLabelsExtra(t *testing.T) {
+	labels := map[string]string{
+		"agent": "voice",
+		"turn":  "live",
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"labels": labels,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if !reflect.DeepEqual(config.Labels, labels) {
+		t.Fatalf("Labels = %#v, want %#v", config.Labels, labels)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
