@@ -481,6 +481,59 @@ func TestGoogleLLMStreamEmitsPartsAsOrderedDeltas(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamTagsChunksWithReferenceRequestID(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:     3,
+					CandidatesTokenCount: 2,
+					TotalTokenCount:      5,
+				},
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{
+							{Text: "checking"},
+							{
+								FunctionCall: &genai.FunctionCall{
+									ID:   "call_lookup",
+									Name: "lookup",
+									Args: map[string]any{"query": "weather"},
+								},
+							},
+						},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	usageChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	textChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text Next() error = %v", err)
+	}
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("tool Next() error = %v", err)
+	}
+
+	if usageChunk.ID == "" {
+		t.Fatal("usage chunk ID = empty, want reference request id")
+	}
+	if textChunk.ID != usageChunk.ID || toolChunk.ID != usageChunk.ID {
+		t.Fatalf("chunk IDs = usage %q text %q tool %q, want same request id", usageChunk.ID, textChunk.ID, toolChunk.ID)
+	}
+}
+
 func TestGoogleLLMStreamSkipsEmptyProviderDeltas(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{
 		{},

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"google.golang.org/genai"
 )
 
@@ -305,6 +306,7 @@ type googleLLMStream struct {
 	stop              func()
 	closed            bool
 	responseGenerated bool
+	requestID         string
 	pending           []*llm.ChatChunk
 }
 
@@ -545,6 +547,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 	if s.closed {
 		return nil, io.EOF
 	}
+	requestID := s.id()
 
 	for {
 		if len(s.pending) > 0 {
@@ -580,6 +583,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 
 		if resp.UsageMetadata != nil {
 			s.pending = append(s.pending, &llm.ChatChunk{
+				ID: requestID,
 				Usage: &llm.CompletionUsage{
 					PromptTokens:       int(resp.UsageMetadata.PromptTokenCount),
 					PromptCachedTokens: int(resp.UsageMetadata.CachedContentTokenCount),
@@ -597,6 +601,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
 					if chunk := googleChatChunkFromPart(part); chunk != nil {
+						chunk.ID = requestID
 						if googleChatChunkHasOutput(chunk) {
 							s.responseGenerated = true
 						}
@@ -612,6 +617,13 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			return chunk, nil
 		}
 	}
+}
+
+func (s *googleLLMStream) id() string {
+	if s.requestID == "" {
+		s.requestID = cavosmath.ShortUUID("")
+	}
+	return s.requestID
 }
 
 func googleLLMStreamError(err error, retryable bool) error {
