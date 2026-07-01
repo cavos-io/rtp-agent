@@ -543,7 +543,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	var confidence float64
 	var count int
 	var firstWords []*speechpb.WordInfo
-	var timingWords []*speechpb.WordInfo
+	var lastWords []*speechpb.WordInfo
 	for _, result := range results {
 		if len(result.GetAlternatives()) == 0 {
 			continue
@@ -554,7 +554,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		if count == 0 {
 			firstWords = alt.GetWords()
 		}
-		timingWords = append(timingWords, alt.GetWords()...)
+		lastWords = alt.GetWords()
 		count++
 	}
 	if count == 0 {
@@ -566,7 +566,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		Confidence: confidence / float64(count),
 		Words:      googleTimedStrings(firstWords),
 	}
-	googleApplySpeechDataTiming(&data, timingWords, 0)
+	googleApplyRecognizeSpeechDataTiming(&data, firstWords, lastWords)
 	return []stt.SpeechData{data}
 }
 
@@ -575,6 +575,14 @@ func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult, 
 		return fallback
 	}
 	return results[0].GetLanguageCode()
+}
+
+func googleApplyRecognizeSpeechDataTiming(data *stt.SpeechData, firstWords []*speechpb.WordInfo, lastWords []*speechpb.WordInfo) {
+	if data == nil || len(firstWords) == 0 || len(lastWords) == 0 {
+		return
+	}
+	data.StartTime = firstWords[0].GetStartTime().AsDuration().Seconds()
+	data.EndTime = lastWords[len(lastWords)-1].GetEndTime().AsDuration().Seconds()
 }
 
 func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {

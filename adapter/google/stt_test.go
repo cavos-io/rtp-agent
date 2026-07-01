@@ -390,6 +390,46 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRecognizeUsesReferenceTimingWhenLastResultHasNoWords(t *testing.T) {
+	results := []*speechpb.SpeechRecognitionResult{
+		{
+			LanguageCode: "en-US",
+			Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+				Transcript: "hello ",
+				Confidence: 0.9,
+				Words: []*speechpb.WordInfo{{
+					Word:      "hello",
+					StartTime: durationpb.New(100 * time.Millisecond),
+					EndTime:   durationpb.New(500 * time.Millisecond),
+				}},
+			}},
+		},
+		{
+			LanguageCode: "en-US",
+			Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+				Transcript: "world",
+				Confidence: 0.8,
+			}},
+		},
+	}
+
+	alternatives := googleSpeechDataFromRecognizeResults(results, "en-US")
+
+	if len(alternatives) != 1 {
+		t.Fatalf("alternatives = %#v, want one final speech data", alternatives)
+	}
+	got := alternatives[0]
+	if got.Text != "hello world" {
+		t.Fatalf("text = %q, want hello world", got.Text)
+	}
+	if got.StartTime != 0 || got.EndTime != 0 {
+		t.Fatalf("timing = %v-%v, want zero timing like reference when last result has no words", got.StartTime, got.EndTime)
+	}
+	if len(got.Words) != 1 || got.Words[0].Text != "hello" {
+		t.Fatalf("words = %#v, want first result words preserved", got.Words)
+	}
+}
+
 func TestGoogleSTTRecognizeUsesReferenceFrameAudioFormat(t *testing.T) {
 	client := &fakeGoogleSpeechClient{recognizeResponse: &speechpb.RecognizeResponse{}}
 	provider := newGoogleSTTWithClient(client)
