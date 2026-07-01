@@ -927,6 +927,51 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: secondRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+	if len(firstStream.sent) != 1 || firstStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout() != nil {
+		t.Fatalf("first stream config = %#v, want no voice activity timeout", firstStream.sent)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTSpeechEndTimeout(750 * time.Millisecond))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after speech timeout update")
+	}
+	if len(secondStream.sent) != 1 {
+		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
+	}
+	timeout := secondStream.sent[0].GetStreamingConfig().GetVoiceActivityTimeout()
+	if timeout == nil || timeout.GetSpeechEndTimeout().AsDuration() != 750*time.Millisecond {
+		t.Fatalf("second stream voice timeout = %#v, want speech_end_timeout 750ms", timeout)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTStreamConfidenceThresholdUsesAllReferenceResults(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{

@@ -262,10 +262,13 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 
 func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 	s.mu.Lock()
+	oldSpeechStartTimeout := s.speechStartTimeout
+	oldSpeechEndTimeout := s.speechEndTimeout
 	for _, opt := range opts {
 		opt(s)
 	}
 	minConfidence := s.minConfidence
+	reconnectStreams := oldSpeechStartTimeout != s.speechStartTimeout || oldSpeechEndTimeout != s.speechEndTimeout
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -274,6 +277,9 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 
 	for _, stream := range streams {
 		stream.updateMinConfidence(minConfidence)
+		if reconnectStreams {
+			stream.reconnectForUpdatedConfig()
+		}
 	}
 }
 
@@ -633,6 +639,9 @@ func (s *googleSTTStream) readLoop() {
 		stream := s.currentStream()
 		resp, err := stream.Recv()
 		if err != nil {
+			if s.currentStream() != stream {
+				continue
+			}
 			if s.shouldRestartAfterConflict(err) {
 				if s.restartStream(stream) {
 					lastUsageEventTime = 0
@@ -706,6 +715,10 @@ func (s *googleSTTStream) restartStream(old speechpb.Speech_StreamingRecognizeCl
 	s.audioPushed = false
 	s.mu.Unlock()
 	return true
+}
+
+func (s *googleSTTStream) reconnectForUpdatedConfig() bool {
+	return s.restartStream(s.currentStream())
 }
 
 func (s *googleSTTStream) terminate() {
