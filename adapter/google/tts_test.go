@@ -646,6 +646,28 @@ func TestGoogleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamCloseSuppressesProviderCloseError(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{closeErr: errors.New("close failed")}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	googleStream := stream.(*googleTTSSynthesizeStream)
+	googleStream.mu.Lock()
+	googleStream.streams = []texttospeech.TextToSpeech_StreamingSynthesizeClient{streamClient}
+	googleStream.active = streamClient
+	googleStream.mu.Unlock()
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v, want nil cleanup error", err)
+	}
+	if !streamClient.closed {
+		t.Fatal("stream client closed = false after Close")
+	}
+}
+
 func TestGoogleTTSRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	streamClient := &fakeGoogleTTSStream{}
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
@@ -956,6 +978,7 @@ type fakeGoogleTTSStream struct {
 	responses          []*texttospeech.StreamingSynthesizeResponse
 	recvErr            error
 	closed             bool
+	closeErr           error
 	sendErrAfterConfig error
 }
 
@@ -983,7 +1006,7 @@ func (s *fakeGoogleTTSStream) Header() (metadata.MD, error) { return nil, nil }
 func (s *fakeGoogleTTSStream) Trailer() metadata.MD         { return nil }
 func (s *fakeGoogleTTSStream) CloseSend() error {
 	s.closed = true
-	return nil
+	return s.closeErr
 }
 func (s *fakeGoogleTTSStream) Context() context.Context { return context.Background() }
 func (s *fakeGoogleTTSStream) SendMsg(m any) error      { return nil }

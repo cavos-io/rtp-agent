@@ -586,13 +586,10 @@ func (s *googleTTSSynthesizeStream) Close() error {
 	s.cond.Broadcast()
 	s.mu.Unlock()
 	s.unregister()
-	var closeErr error
 	for _, stream := range streams {
-		if err := stream.CloseSend(); err != nil && closeErr == nil {
-			closeErr = err
-		}
+		_ = stream.CloseSend()
 	}
-	return closeErr
+	return nil
 }
 
 func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
