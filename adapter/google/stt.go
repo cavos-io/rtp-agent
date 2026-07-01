@@ -516,6 +516,7 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 	var text string
 	var confidence float64
 	var count int
+	resultCount := len(results)
 	var words []*speechpb.WordInfo
 	for _, result := range results {
 		if len(result.GetAlternatives()) == 0 {
@@ -530,7 +531,7 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 	if count == 0 || text == "" {
 		return stt.SpeechData{}, "", false
 	}
-	confidence = confidence / float64(count)
+	confidence = confidence / float64(resultCount)
 	if confidence < minConfidence {
 		return stt.SpeechData{}, "", false
 	}

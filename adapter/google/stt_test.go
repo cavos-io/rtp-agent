@@ -654,6 +654,35 @@ func TestGoogleSTTConfiguredMinConfidenceThresholdFiltersInterimTranscript(t *te
 	}
 }
 
+func TestGoogleSTTStreamConfidenceThresholdUsesAllReferenceResults(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{
+				{},
+				{
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "maybe",
+						Confidence: 0.8,
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithClient(
+		&fakeGoogleSpeechClient{stream: streamClient},
+		WithGoogleSTTMinConfidenceThreshold(0.5),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	if event, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next event = %#v, error = %v; want EOF because reference averages confidence across all results", event, err)
+	}
+}
+
 func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{
