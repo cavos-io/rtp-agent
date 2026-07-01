@@ -824,7 +824,10 @@ func (s *sttStream) reconnectLocked() error {
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, buildSTTWebsocketHeaders(&attempt))
 	if err != nil {
-		return fmt.Errorf("failed to reconnect slng stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect slng stt websocket: %v", err))
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, buildSTTInitPayload(&attempt)); err != nil {
 		_ = conn.Close()
