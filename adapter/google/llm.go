@@ -281,6 +281,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["stop_sequences"]; ok {
 		config.StopSequences = googleStringList(value)
 	}
+	if value, ok := googleInt32Param(params["candidate_count"]); ok {
+		config.CandidateCount = value
+	}
 	if value, ok := googleFloat32Param(params["presence_penalty"]); ok {
 		config.PresencePenalty = &value
 	}

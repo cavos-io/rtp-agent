@@ -555,6 +555,20 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceStopSequencesExtra(t *t
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceCandidateCountExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"candidate_count": 2,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.CandidateCount != 2 {
+		t.Fatalf("CandidateCount = %d, want 2", config.CandidateCount)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceThinkingConfigExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
