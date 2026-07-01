@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -239,7 +240,10 @@ func (t *SmallestAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildSmallestAITTSWebsocketURL(t), buildSmallestAITTSWebsocketHeaders(t))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial smallestai tts websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial smallestai tts websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &smallestaiTTSSynthesizeStream{
