@@ -241,7 +241,10 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial rime tts websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial rime tts websocket: %v", err))
 	}
 	if t.isClosed() {
 		conn.Close()
