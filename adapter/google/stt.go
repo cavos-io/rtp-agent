@@ -337,6 +337,15 @@ func (s *GoogleSTT) isClosed() bool {
 	return s.closed
 }
 
+func (s *GoogleSTT) usesV2() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return googleSTTUsesV2(s.model)
+}
+
 func (s *GoogleSTT) registerStream(stream *googleSTTStream) bool {
 	if s == nil || stream == nil {
 		return false
@@ -1095,6 +1104,26 @@ func (s *googleSTTStream) restartStreamWithError(old speechpb.Speech_StreamingRe
 	return true, nil
 }
 
+func (s *googleSTTStream) restartFromV2ToV1WithError(old speechv2pb.Speech_StreamingRecognizeClient) (bool, error) {
+	_ = old.CloseSend()
+	stream, err := s.owner.newStreamingRecognizeStream(s.ctx, s.language, s.includeAlternativeLanguages)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	if s.closed || s.inputClosed || s.streamV2 != old {
+		s.mu.Unlock()
+		_ = stream.CloseSend()
+		return false, nil
+	}
+	s.stream = stream
+	s.streamV2 = nil
+	s.sessionConnectedAt = time.Now()
+	s.audioPushed = false
+	s.mu.Unlock()
+	return true, nil
+}
+
 func (s *googleSTTStream) restartStreamV2WithError(old speechv2pb.Speech_StreamingRecognizeClient) (bool, error) {
 	_ = old.CloseSend()
 	stream, err := s.owner.newStreamingRecognizeStreamV2(s.ctx, s.language, s.includeAlternativeLanguages)
@@ -1114,9 +1143,39 @@ func (s *googleSTTStream) restartStreamV2WithError(old speechv2pb.Speech_Streami
 	return true, nil
 }
 
+func (s *googleSTTStream) restartFromV1ToV2WithError(old speechpb.Speech_StreamingRecognizeClient) (bool, error) {
+	_ = old.CloseSend()
+	stream, err := s.owner.newStreamingRecognizeStreamV2(s.ctx, s.language, s.includeAlternativeLanguages)
+	if err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	if s.closed || s.inputClosed || s.stream != old {
+		s.mu.Unlock()
+		_ = stream.CloseSend()
+		return false, nil
+	}
+	s.stream = nil
+	s.streamV2 = stream
+	s.sessionConnectedAt = time.Now()
+	s.audioPushed = false
+	s.mu.Unlock()
+	return true, nil
+}
+
 func (s *googleSTTStream) reconnectForUpdatedConfig() error {
-	if s.usesV2() {
+	wantV2 := s.owner != nil && s.owner.usesV2()
+	haveV2 := s.usesV2()
+	if wantV2 && haveV2 {
 		_, err := s.restartStreamV2WithError(s.currentStreamV2())
+		return err
+	}
+	if wantV2 {
+		_, err := s.restartFromV1ToV2WithError(s.currentStream())
+		return err
+	}
+	if haveV2 {
+		_, err := s.restartFromV2ToV1WithError(s.currentStreamV2())
 		return err
 	}
 	_, err := s.restartStreamWithError(s.currentStream())

@@ -1653,6 +1653,66 @@ func TestGoogleSTTUpdateOptionsAppliesEmptyActiveStreamModel(t *testing.T) {
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsSwitchesActiveStreamToReferenceV2(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	v1Client := &fakeGoogleSpeechClient{
+		stream:       firstStream,
+		streamCallCh: make(chan int, 1),
+	}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRelease}
+	v2Client := &fakeGoogleV2SpeechClient{
+		stream:       secondStream,
+		streamCallCh: make(chan int, 1),
+	}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation("us-central1"),
+		WithGoogleSTTModel("latest_long"),
+	)
+	provider.clientV2 = v2Client
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-v1Client.streamCallCh
+	if got := firstStream.sent[0].GetStreamingConfig().GetConfig().GetModel(); got != "latest_long" {
+		t.Fatalf("first stream model = %q, want latest_long", got)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTModel("chirp_3"))
+
+	select {
+	case calls := <-v2Client.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("v2 stream calls = %d, want one v2 reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for v2 reconnect after model update")
+	}
+	if !firstStream.closed {
+		t.Fatal("first v1 stream closed = false after model update")
+	}
+	if v1Client.streamCalls != 1 {
+		t.Fatalf("v1 stream calls = %d, want no second v1 stream after v2 model update", v1Client.streamCalls)
+	}
+	if len(secondStream.sent) != 1 {
+		t.Fatalf("second stream sent = %#v, want v2 config", secondStream.sent)
+	}
+	req := secondStream.sent[0]
+	if got := req.GetRecognizer(); got != "projects/voice-project/locations/us-central1/recognizers/_" {
+		t.Fatalf("v2 recognizer = %q, want reference implicit recognizer", got)
+	}
+	if got := req.GetStreamingConfig().GetConfig().GetModel(); got != "chirp_3" {
+		t.Fatalf("v2 model = %q, want chirp_3", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTStreamConfidenceThresholdUsesAllReferenceResults(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
@@ -2810,13 +2870,17 @@ func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.Re
 }
 
 type fakeGoogleV2SpeechClient struct {
-	stream      speechv2pb.Speech_StreamingRecognizeClient
-	streamCalls int
-	streamErr   error
+	stream       speechv2pb.Speech_StreamingRecognizeClient
+	streamCallCh chan int
+	streamCalls  int
+	streamErr    error
 }
 
 func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechv2pb.Speech_StreamingRecognizeClient, error) {
 	c.streamCalls++
+	if c.streamCallCh != nil {
+		c.streamCallCh <- c.streamCalls
+	}
 	return c.stream, c.streamErr
 }
 
@@ -2824,6 +2888,7 @@ type fakeGoogleV2StreamingRecognizeClient struct {
 	sent      []*speechv2pb.StreamingRecognizeRequest
 	responses []*speechv2pb.StreamingRecognizeResponse
 	recvIndex int
+	recvBlock chan struct{}
 	closed    bool
 	closeErr  error
 }
@@ -2835,6 +2900,10 @@ func (c *fakeGoogleV2StreamingRecognizeClient) Send(req *speechv2pb.StreamingRec
 
 func (c *fakeGoogleV2StreamingRecognizeClient) Recv() (*speechv2pb.StreamingRecognizeResponse, error) {
 	if c.recvIndex >= len(c.responses) {
+		if c.recvBlock != nil {
+			<-c.recvBlock
+			c.recvBlock = nil
+		}
 		return nil, io.EOF
 	}
 	resp := c.responses[c.recvIndex]
