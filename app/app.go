@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
 	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	awspollytypes "github.com/aws/aws-sdk-go-v2/service/polly/types"
@@ -154,6 +155,7 @@ type appGoogleSTTConfig struct {
 	alternativeLanguages   []string
 	keywords               []adaptergoogle.GoogleSTTKeyword
 	denoiserConfig         *speechv2pb.DenoiserConfig
+	adaptation             *speechpb.SpeechAdaptation
 	adaptationV2           *speechv2pb.SpeechAdaptation
 	endpointingSensitivity string
 }
@@ -216,6 +218,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if cfg.denoiserConfig != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTDenoiserConfig(cfg.denoiserConfig))
+	}
+	if cfg.adaptation != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAdaptation(cfg.adaptation))
 	}
 	if cfg.adaptationV2 != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAdaptationV2(cfg.adaptationV2))
@@ -4070,6 +4075,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		alternativeLanguages:   splitStringList(cfg.STTLanguageOptions),
 		keywords:               googleSTTKeywordsFromConfig(cfg.STTKeywords),
 		denoiserConfig:         googleSTTDenoiserConfigFromOptions(cfg.STTModelOptions),
+		adaptation:             googleSTTAdaptationFromOptions(cfg.STTModelOptions),
 		adaptationV2:           googleSTTAdaptationV2FromOptions(cfg.STTModelOptions),
 		endpointingSensitivity: modelOptionString(cfg.STTModelOptions, "endpointing_sensitivity"),
 	}
@@ -4108,6 +4114,19 @@ func googleSTTDenoiserConfigFromOptions(options map[string]any) *speechv2pb.Deno
 		config.SnrThreshold = float32(*snrThreshold)
 	}
 	return config
+}
+
+func googleSTTAdaptationFromOptions(options map[string]any) *speechpb.SpeechAdaptation {
+	if len(options) == 0 {
+		return nil
+	}
+	if adaptation, ok := options["adaptation"].(*speechpb.SpeechAdaptation); ok {
+		return adaptation
+	}
+	if adaptation, ok := options["speech_adaptation"].(*speechpb.SpeechAdaptation); ok {
+		return adaptation
+	}
+	return nil
 }
 
 func googleSTTAdaptationV2FromOptions(options map[string]any) *speechv2pb.SpeechAdaptation {

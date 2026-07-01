@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
 	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
 	"github.com/cavos-io/rtp-agent/adapter/anam"
@@ -13729,6 +13730,27 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceV2Adaptation(t *testing.T) {
 
 	if googleCfg.adaptationV2 != adaptation {
 		t.Fatalf("adaptationV2 = %#v, want reference Google STT v2 adaptation", googleCfg.adaptationV2)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceV1Adaptation(t *testing.T) {
+	adaptation := &speechpb.SpeechAdaptation{
+		PhraseSets: []*speechpb.PhraseSet{{
+			Name: "domain",
+			Phrases: []*speechpb.PhraseSet_Phrase{{
+				Value: "Acrux",
+				Boost: 20,
+			}},
+		}},
+	}
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"adaptation": adaptation,
+		},
+	})
+
+	if googleCfg.adaptation != adaptation {
+		t.Fatalf("adaptation = %#v, want reference Google STT v1 adaptation", googleCfg.adaptation)
 	}
 }
 
