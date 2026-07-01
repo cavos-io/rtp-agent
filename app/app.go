@@ -115,6 +115,7 @@ var appNewAgoraDataPublisher = workeragora.NewSDKDataPublisher
 type appGoogleTTSConfig struct {
 	language         string
 	voice            string
+	gender           string
 	cloneKey         string
 	model            string
 	prompt           string
@@ -195,6 +196,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	}
 	if cfg.voice != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.voice))
+	}
+	if cfg.gender != "" {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSGender(cfg.gender))
 	}
 	if cfg.cloneKey != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoiceCloneKey(cfg.cloneKey))
@@ -548,6 +552,7 @@ type AppConfig struct {
 	TTSFallbackProviders                    []string
 	TTSModel                                string
 	TTSVoice                                string
+	TTSGender                               string
 	TTSRefAudio                             string
 	TTSVoiceID                              string
 	TTSVoiceProvider                        string
@@ -940,6 +945,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSFallbackProviders:                    splitEnvList("RTP_AGENT_TTS_FALLBACK_PROVIDERS"),
 		TTSModel:                                os.Getenv("RTP_AGENT_TTS_MODEL"),
 		TTSVoice:                                os.Getenv("RTP_AGENT_TTS_VOICE"),
+		TTSGender:                               os.Getenv("RTP_AGENT_TTS_GENDER"),
 		TTSRefAudio:                             os.Getenv("RTP_AGENT_TTS_REF_AUDIO"),
 		TTSVoiceID:                              os.Getenv("RTP_AGENT_TTS_VOICE_ID"),
 		TTSVoiceProvider:                        os.Getenv("RTP_AGENT_TTS_VOICE_PROVIDER"),
@@ -4020,6 +4026,7 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
 		language:   cfg.TTSLanguage,
 		voice:      cfg.TTSVoice,
+		gender:     cfg.TTSGender,
 		cloneKey:   cfg.TTSVoiceID,
 		model:      cfg.TTSModel,
 		prompt:     cfg.TTSInstructions,
