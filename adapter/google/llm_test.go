@@ -514,6 +514,20 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceMediaResolutionExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"media_resolution": "MEDIA_RESOLUTION_HIGH",
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.MediaResolution != genai.MediaResolutionHigh {
+		t.Fatalf("MediaResolution = %q, want high", config.MediaResolution)
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false

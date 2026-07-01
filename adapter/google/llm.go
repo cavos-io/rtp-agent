@@ -247,6 +247,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleSafetySettingsParam(params["safety_settings"]); ok {
 		config.SafetySettings = value
 	}
+	if value, ok := googleMediaResolutionParam(params["media_resolution"]); ok {
+		config.MediaResolution = value
+	}
 }
 
 func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[string]any) {
@@ -394,6 +397,20 @@ func googleSafetySettingsParam(value any) ([]*genai.SafetySetting, bool) {
 		return result, true
 	default:
 		return nil, false
+	}
+}
+
+func googleMediaResolutionParam(value any) (genai.MediaResolution, bool) {
+	switch resolution := value.(type) {
+	case genai.MediaResolution:
+		return resolution, resolution != ""
+	case string:
+		if resolution == "" {
+			return "", false
+		}
+		return genai.MediaResolution(resolution), true
+	default:
+		return "", false
 	}
 }
 
