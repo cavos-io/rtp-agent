@@ -626,6 +626,23 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigPreservesEmptySafetySettings(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"safety_settings": []*genai.SafetySetting{},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.SafetySettings == nil {
+		t.Fatal("SafetySettings = nil, want explicit empty list")
+	}
+	if len(config.SafetySettings) != 0 {
+		t.Fatalf("SafetySettings = %#v, want empty list", config.SafetySettings)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceMediaResolutionExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{

@@ -522,14 +522,10 @@ func googleThinkingLevelParam(value any) (genai.ThinkingLevel, bool) {
 func googleSafetySettingsParam(value any) ([]*genai.SafetySetting, bool) {
 	switch settings := value.(type) {
 	case []*genai.SafetySetting:
-		if len(settings) == 0 {
-			return nil, false
-		}
-		return append([]*genai.SafetySetting(nil), settings...), true
+		result := make([]*genai.SafetySetting, len(settings))
+		copy(result, settings)
+		return result, true
 	case []genai.SafetySetting:
-		if len(settings) == 0 {
-			return nil, false
-		}
 		result := make([]*genai.SafetySetting, 0, len(settings))
 		for i := range settings {
 			setting := settings[i]
