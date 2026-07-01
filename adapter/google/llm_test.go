@@ -459,6 +459,20 @@ func TestBuildGoogleGenerateContentConfigMapsResponseFormatToReferenceSchema(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceServiceTierExtra(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"service_tier": "priority",
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ServiceTier != genai.ServiceTierPriority {
+		t.Fatalf("ServiceTier = %q, want priority", config.ServiceTier)
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false

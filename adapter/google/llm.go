@@ -238,6 +238,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := params["response_json_schema"]; ok {
 		config.ResponseJsonSchema = value
 	}
+	if value, ok := googleServiceTierParam(params["service_tier"]); ok {
+		config.ServiceTier = value
+	}
 }
 
 func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[string]any) {
@@ -310,6 +313,20 @@ func googleResponseFormatSchema(format map[string]any) (*genai.Schema, bool) {
 		return nil, false
 	}
 	return googleResponseSchemaParam(format)
+}
+
+func googleServiceTierParam(value any) (genai.ServiceTier, bool) {
+	switch tier := value.(type) {
+	case genai.ServiceTier:
+		return tier, tier != ""
+	case string:
+		if tier == "" {
+			return "", false
+		}
+		return genai.ServiceTier(tier), true
+	default:
+		return "", false
+	}
 }
 
 func buildGoogleToolConfig(tools []llm.Tool, choice llm.ToolChoice) *genai.ToolConfig {
