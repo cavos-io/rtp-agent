@@ -69,6 +69,9 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	for _, opt := range opts {
 		opt(options)
 	}
+	if err := validateGoogleChatExtraParams(options.ExtraParams); err != nil {
+		return nil, err
+	}
 
 	contents, systemInstructions := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
 
@@ -87,6 +90,23 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		thoughtMu:         &l.thoughtMu,
 		thoughtSignatures: l.thoughtSignaturesForStream(),
 	}, nil
+}
+
+func validateGoogleChatExtraParams(params map[string]any) error {
+	thinkingConfig, ok := params["thinking_config"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	budget, ok := thinkingConfig["thinking_budget"]
+	if !ok || budget == nil {
+		return nil
+	}
+	switch budget.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32:
+		return nil
+	default:
+		return errors.New("thinking_budget inside thinking_config must be an integer")
+	}
 }
 
 func (l *GoogleLLM) snapshotThoughtSignatures() map[string][]byte {

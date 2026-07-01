@@ -662,6 +662,29 @@ func TestGoogleLLMChatRejectsGemini25ThinkingLevelLikeReference(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMChatRejectsNonIntegerThinkingBudgetLikeReference(t *testing.T) {
+	model := &GoogleLLM{model: "gemini-2.5-flash"}
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("Chat panicked with %v, want reference thinking_budget validation error", recovered)
+		}
+	}()
+
+	_, err := model.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
+		"thinking_config": map[string]any{
+			"thinking_budget": 1.5,
+		},
+	}))
+	if err == nil {
+		t.Fatal("Chat error = nil, want non-integer thinking_budget validation error")
+	}
+	if !strings.Contains(err.Error(), "thinking_budget inside thinking_config must be an integer") {
+		t.Fatalf("Chat error = %v, want reference thinking_budget validation", err)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *testing.T) {
 	safety := []*genai.SafetySetting{{
 		Category:  genai.HarmCategoryHarassment,
