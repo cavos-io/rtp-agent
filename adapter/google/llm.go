@@ -9,14 +9,18 @@ import (
 	"iter"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"google.golang.org/genai"
 )
 
 type GoogleLLM struct {
-	client *genai.Client
-	model  string
+	client            *genai.Client
+	model             string
+	thoughtMu         sync.RWMutex
+	thoughtSignatures map[string][]byte
 }
 
 func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
@@ -36,8 +40,9 @@ func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
 		return nil, err
 	}
 	return &GoogleLLM{
-		client: client,
-		model:  model,
+		client:            client,
+		model:             model,
+		thoughtSignatures: make(map[string][]byte),
 	}, nil
 }
 
@@ -46,6 +51,10 @@ func resolveGoogleAPIKey(apiKey string) string {
 		return apiKey
 	}
 	return os.Getenv("GOOGLE_API_KEY")
+}
+
+func googleModelRequiresThoughtSignatures(model string) bool {
+	return strings.HasPrefix(model, "gemini-2.5")
 }
 
 func (l *GoogleLLM) Model() string { return l.model }
@@ -59,7 +68,7 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		opt(options)
 	}
 
-	contents, systemInstructions := buildGoogleContents(chatCtx)
+	contents, systemInstructions := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
 
 	config := buildGoogleGenerateContentConfig(options, systemInstructions)
 
@@ -68,9 +77,34 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 	next, stop := iter.Pull2(stream)
 
 	return &googleLLMStream{
-		next: next,
-		stop: stop,
+		next:              next,
+		stop:              stop,
+		thoughtMu:         &l.thoughtMu,
+		thoughtSignatures: l.thoughtSignaturesForStream(),
 	}, nil
+}
+
+func (l *GoogleLLM) snapshotThoughtSignatures() map[string][]byte {
+	if !googleModelRequiresThoughtSignatures(l.model) {
+		return nil
+	}
+	l.thoughtMu.RLock()
+	defer l.thoughtMu.RUnlock()
+	if len(l.thoughtSignatures) == 0 {
+		return nil
+	}
+	signatures := make(map[string][]byte, len(l.thoughtSignatures))
+	for callID, signature := range l.thoughtSignatures {
+		signatures[callID] = append([]byte(nil), signature...)
+	}
+	return signatures
+}
+
+func (l *GoogleLLM) thoughtSignaturesForStream() map[string][]byte {
+	if !googleModelRequiresThoughtSignatures(l.model) {
+		return nil
+	}
+	return l.thoughtSignatures
 }
 
 func buildGoogleGenerateContentConfig(options *llm.ChatOptions, systemInstructions string) *genai.GenerateContentConfig {
@@ -305,10 +339,18 @@ type googleLLMStream struct {
 	stop              func()
 	closed            bool
 	responseGenerated bool
+	chunkEmitted      bool
+	requestID         string
+	thoughtMu         *sync.RWMutex
+	thoughtSignatures map[string][]byte
 	pending           []*llm.ChatChunk
 }
 
 func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
+	return buildGoogleContentsWithThoughtSignatures(chatCtx, nil)
+}
+
+func buildGoogleContentsWithThoughtSignatures(chatCtx *llm.ChatContext, thoughtSignatures map[string][]byte) ([]*genai.Content, string) {
 	contents := make([]*genai.Content, 0, len(chatCtx.Items))
 	var systemInstructions string
 	var currentRole genai.Role
@@ -350,7 +392,7 @@ func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
 					appendParts(role, messageParts...)
 				}
 			case *llm.FunctionCall:
-				appendParts(genai.Role(genai.RoleModel), googleFunctionCallPart(msg))
+				appendParts(genai.Role(genai.RoleModel), googleFunctionCallPart(msg, thoughtSignatures))
 			case *llm.FunctionCallOutput:
 				appendParts(genai.Role(genai.RoleUser), googleFunctionResponsePart(msg))
 			}
@@ -395,11 +437,16 @@ func googleImagePart(image *llm.ImageContent) *genai.Part {
 	return genai.NewPartFromURI(img.ExternalURL, mimeType)
 }
 
-func googleFunctionCallPart(fc *llm.FunctionCall) *genai.Part {
+func googleFunctionCallPart(fc *llm.FunctionCall, thoughtSignatures map[string][]byte) *genai.Part {
 	args := make(map[string]any)
 	_ = json.Unmarshal([]byte(fc.Arguments), &args)
 	part := genai.NewPartFromFunctionCall(fc.Name, args)
 	part.FunctionCall.ID = fc.CallID
+	if thoughtSignatures != nil {
+		if signature, ok := thoughtSignatures[fc.CallID]; ok {
+			part.ThoughtSignature = append([]byte(nil), signature...)
+		}
+	}
 	return part
 }
 
@@ -545,6 +592,8 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 	if s.closed {
 		return nil, io.EOF
 	}
+	requestID := s.id()
+	finishReason := genai.FinishReasonUnspecified
 
 	for {
 		if len(s.pending) > 0 {
@@ -556,18 +605,18 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		resp, err, ok := s.next()
 		if !ok {
 			if !s.responseGenerated {
-				return nil, llm.NewAPIStatusError("no response generated", -1, "", nil)
+				return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(finishReason))
 			}
 			return nil, io.EOF
 		}
 		if err != nil {
 			if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
 				if !s.responseGenerated {
-					return nil, llm.NewAPIStatusError("no response generated", -1, "", nil)
+					return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(finishReason))
 				}
 				return nil, io.EOF
 			}
-			return nil, googleLLMStreamError(err, !s.responseGenerated)
+			return nil, googleLLMStreamError(err, !s.chunkEmitted, requestID)
 		}
 
 		if resp.PromptFeedback != nil {
@@ -575,11 +624,12 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			if marshalErr != nil {
 				return nil, marshalErr
 			}
-			return nil, llm.NewAPIStatusErrorWithRetryable(string(message), -1, "", nil, false)
+			return nil, llm.NewAPIStatusErrorWithRetryable(string(message), -1, requestID, nil, false)
 		}
 
 		if resp.UsageMetadata != nil {
 			s.pending = append(s.pending, &llm.ChatChunk{
+				ID: requestID,
 				Usage: &llm.CompletionUsage{
 					PromptTokens:       int(resp.UsageMetadata.PromptTokenCount),
 					PromptCachedTokens: int(resp.UsageMetadata.CachedContentTokenCount),
@@ -591,15 +641,19 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
+			if cand.FinishReason != genai.FinishReasonUnspecified {
+				finishReason = cand.FinishReason
+			}
 			if googleBlockedFinishReason(cand.FinishReason) {
-				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, "", nil, false)
+				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, requestID, nil, false)
 			}
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
+					s.responseGenerated = true
 					if chunk := googleChatChunkFromPart(part); chunk != nil {
-						if googleChatChunkHasOutput(chunk) {
-							s.responseGenerated = true
-						}
+						chunk.ID = requestID
+						s.storeThoughtSignature(part, chunk)
+						s.chunkEmitted = true
 						s.pending = append(s.pending, chunk)
 					}
 				}
@@ -614,7 +668,40 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 	}
 }
 
-func googleLLMStreamError(err error, retryable bool) error {
+func (s *googleLLMStream) storeThoughtSignature(part *genai.Part, chunk *llm.ChatChunk) {
+	if part == nil || len(part.ThoughtSignature) == 0 || s.thoughtSignatures == nil || chunk == nil || chunk.Delta == nil {
+		return
+	}
+	for _, call := range chunk.Delta.ToolCalls {
+		if call.CallID == "" {
+			continue
+		}
+		signature := append([]byte(nil), part.ThoughtSignature...)
+		if s.thoughtMu != nil {
+			s.thoughtMu.Lock()
+			s.thoughtSignatures[call.CallID] = signature
+			s.thoughtMu.Unlock()
+			continue
+		}
+		s.thoughtSignatures[call.CallID] = signature
+	}
+}
+
+func googleLLMFinishReasonBody(reason genai.FinishReason) any {
+	if reason == "" || reason == genai.FinishReasonUnspecified {
+		return nil
+	}
+	return fmt.Sprintf("finish reason: %s", reason)
+}
+
+func (s *googleLLMStream) id() string {
+	if s.requestID == "" {
+		s.requestID = cavosmath.ShortUUID("")
+	}
+	return s.requestID
+}
+
+func googleLLMStreamError(err error, retryable bool, requestID string) error {
 	if err == nil {
 		return nil
 	}
@@ -627,7 +714,7 @@ func googleLLMStreamError(err error, retryable bool) error {
 		} else if apiErr.Code >= 500 && apiErr.Code < 600 {
 			message = "gemini llm: server error"
 		}
-		return llm.NewAPIStatusErrorWithRetryable(message, apiErr.Code, "", strings.TrimSpace(apiErr.Message+" "+apiErr.Status), retryable)
+		return llm.NewAPIStatusErrorWithRetryable(message, apiErr.Code, requestID, strings.TrimSpace(apiErr.Message+" "+apiErr.Status), retryable)
 	}
 	return llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("gemini llm: error generating content %s", err), retryable)
 }
@@ -645,7 +732,7 @@ func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {
 		chunk.Delta.Content = part.Text
 		return chunk
 	}
-	if part.FunctionCall == nil || googleFunctionCallWillContinue(part.FunctionCall) {
+	if part.FunctionCall == nil {
 		return nil
 	}
 	args, _ := json.Marshal(part.FunctionCall.Args)
@@ -680,23 +767,6 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 		return call.ID
 	}
 	return "call_" + call.Name
-}
-
-func googleFunctionCallWillContinue(call *genai.FunctionCall) bool {
-	return call != nil && call.WillContinue != nil && *call.WillContinue
-}
-
-func googleChatChunkHasOutput(chunk *llm.ChatChunk) bool {
-	if chunk == nil {
-		return false
-	}
-	if chunk.Usage != nil {
-		return true
-	}
-	if chunk.Delta == nil {
-		return false
-	}
-	return chunk.Delta.Content != "" || len(chunk.Delta.ToolCalls) > 0
 }
 
 func (s *googleLLMStream) Close() error {

@@ -144,6 +144,30 @@ func TestBuildGoogleContentsPreservesMultipleMatchedToolOutputs(t *testing.T) {
 	assertGoogleFunctionResponsePart(t, contents[1].Parts, 1, "call_lookup", "lookup", "second")
 }
 
+func TestBuildGoogleContentsInjectsReferenceThoughtSignatures(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-turn", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+
+	contents, _ := buildGoogleContentsWithThoughtSignatures(ctx, map[string][]byte{
+		"call_lookup": []byte("signature"),
+	})
+
+	if len(contents) == 0 || len(contents[0].Parts) < 2 {
+		t.Fatalf("contents = %#v, want model function_call part", contents)
+	}
+	call := contents[0].Parts[1].FunctionCall
+	if call == nil || call.ID != "call_lookup" {
+		t.Fatalf("function call part = %#v, want call_lookup", contents[0].Parts[1])
+	}
+	if got := contents[0].Parts[1].ThoughtSignature; string(got) != "signature" {
+		t.Fatalf("thought signature = %q, want signature", got)
+	}
+}
+
 func TestBuildGoogleContentsFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
@@ -424,6 +448,46 @@ func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamStoresReferenceThoughtSignatures(t *testing.T) {
+	read := false
+	signatures := map[string][]byte{}
+	stream := &googleLLMStream{
+		thoughtSignatures: signatures,
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "provider-call-123",
+								Name: "lookup",
+								Args: map[string]any{"query": "weather"},
+							},
+							ThoughtSignature: []byte("signature"),
+						}},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("chunk = %#v, want one tool call", chunk)
+	}
+	if got := signatures["provider-call-123"]; string(got) != "signature" {
+		t.Fatalf("stored signature = %q, want signature", got)
+	}
+}
+
 func TestGoogleLLMStreamEmitsPartsAsOrderedDeltas(t *testing.T) {
 	read := false
 	stream := &googleLLMStream{
@@ -478,6 +542,59 @@ func TestGoogleLLMStreamEmitsPartsAsOrderedDeltas(t *testing.T) {
 	call := toolChunk.Delta.ToolCalls[0]
 	if call.CallID != "call_lookup" || call.Name != "lookup" || call.Arguments != `{"query":"weather"}` {
 		t.Fatalf("tool call = %#v, want lookup weather", call)
+	}
+}
+
+func TestGoogleLLMStreamTagsChunksWithReferenceRequestID(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:     3,
+					CandidatesTokenCount: 2,
+					TotalTokenCount:      5,
+				},
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{
+							{Text: "checking"},
+							{
+								FunctionCall: &genai.FunctionCall{
+									ID:   "call_lookup",
+									Name: "lookup",
+									Args: map[string]any{"query": "weather"},
+								},
+							},
+						},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	usageChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	textChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text Next() error = %v", err)
+	}
+	toolChunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("tool Next() error = %v", err)
+	}
+
+	if usageChunk.ID == "" {
+		t.Fatal("usage chunk ID = empty, want reference request id")
+	}
+	if textChunk.ID != usageChunk.ID || toolChunk.ID != usageChunk.ID {
+		t.Fatalf("chunk IDs = usage %q text %q tool %q, want same request id", usageChunk.ID, textChunk.ID, toolChunk.ID)
 	}
 }
 
@@ -540,6 +657,9 @@ func TestGoogleLLMStreamReturnsAPIStatusErrorWhenNoResponseGenerated(t *testing.
 	if !statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = false, want true before any response output")
 	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
+	}
 }
 
 func TestGoogleLLMStreamReturnsAPIStatusErrorWhenPageDoneWithoutOutput(t *testing.T) {
@@ -560,6 +680,110 @@ func TestGoogleLLMStreamReturnsAPIStatusErrorWhenPageDoneWithoutOutput(t *testin
 	}
 	if statusErr.Message != "no response generated" {
 		t.Fatalf("APIStatusError message = %q, want no response generated", statusErr.Message)
+	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
+	}
+}
+
+func TestGoogleLLMStreamReportsNoResponseFinishReasonLikeReference(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		Candidates: []*genai.Candidate{{
+			FinishReason: genai.FinishReasonStop,
+		}},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "no response generated" {
+		t.Fatalf("APIStatusError message = %q, want no response generated", statusErr.Message)
+	}
+	if statusErr.Body != "finish reason: STOP" {
+		t.Fatalf("APIStatusError body = %#v, want finish reason", statusErr.Body)
+	}
+}
+
+func TestGoogleLLMStreamTreatsEmptyProviderPartAsGeneratedLikeReference(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{}},
+			},
+		}},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF without false no-response error", err)
+	}
+}
+
+func TestGoogleLLMStreamKeepsRetryableErrorAfterEmptyPartLikeReference(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{}},
+			},
+		}},
+	}}
+	readError := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) > 0 {
+				resp := responses[0]
+				responses = responses[1:]
+				return resp, nil, true
+			}
+			if !readError {
+				readError = true
+				return nil, genai.APIError{Code: 500, Message: "server broke", Status: "INTERNAL"}, true
+			}
+			return nil, nil, false
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = false, want true before any emitted chat chunk")
 	}
 }
 
@@ -594,6 +818,9 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testi
 	}
 	if statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = true, want false for blocked generation")
+	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
 	}
 }
 
@@ -630,6 +857,9 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForPromptFeedback(t *testing.T)
 	if statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = true, want false for prompt feedback")
 	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
+	}
 }
 
 func TestGoogleLLMStreamMapsProviderAPIError(t *testing.T) {
@@ -659,6 +889,9 @@ func TestGoogleLLMStreamMapsProviderAPIError(t *testing.T) {
 	}
 	if !statusErr.Retryable {
 		t.Fatal("APIStatusError retryable = false, want true for 429 client error")
+	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
 	}
 }
 
@@ -718,7 +951,7 @@ func TestGoogleLLMStreamReportsCachedPromptTokens(t *testing.T) {
 	}
 }
 
-func TestGoogleLLMStreamDelaysContinuingFunctionCall(t *testing.T) {
+func TestGoogleLLMStreamEmitsContinuingFunctionCallLikeReference(t *testing.T) {
 	continuing := true
 	responses := []*genai.GenerateContentResponse{
 		{
@@ -765,14 +998,26 @@ func TestGoogleLLMStreamDelaysContinuingFunctionCall(t *testing.T) {
 		t.Fatalf("Next() error = %v", err)
 	}
 	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
-		t.Fatalf("chunk = %#v, want final tool call chunk", chunk)
+		t.Fatalf("chunk = %#v, want continuing tool call chunk", chunk)
 	}
 	call := chunk.Delta.ToolCalls[0]
+	if call.Arguments != `{"query":"wea"}` {
+		t.Fatalf("Arguments = %q, want continuing arguments", call.Arguments)
+	}
+
+	chunk, err = stream.Next()
+	if err != nil {
+		t.Fatalf("second Next() error = %v", err)
+	}
+	if chunk == nil || chunk.Delta == nil || len(chunk.Delta.ToolCalls) != 1 {
+		t.Fatalf("second chunk = %#v, want final tool call chunk", chunk)
+	}
+	call = chunk.Delta.ToolCalls[0]
 	if call.Arguments != `{"query":"weather"}` {
-		t.Fatalf("Arguments = %q, want final arguments", call.Arguments)
+		t.Fatalf("second Arguments = %q, want final arguments", call.Arguments)
 	}
 	if len(responses) != 0 {
-		t.Fatalf("remaining responses = %d, want continuing function call skipped", len(responses))
+		t.Fatalf("remaining responses = %d, want all function-call parts emitted", len(responses))
 	}
 }
 

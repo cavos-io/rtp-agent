@@ -424,6 +424,7 @@ type googleSTTStream struct {
 	events           chan *stt.SpeechEvent
 	errCh            chan error
 	closed           bool
+	inputClosed      bool
 	pushedSampleRate uint32
 	timingMu         sync.Mutex
 	startTimeOffset  float64
@@ -439,6 +440,7 @@ func (s *googleSTTStream) readLoop() {
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
 			}
+			s.terminate()
 			return
 		}
 
@@ -469,6 +471,18 @@ func (s *googleSTTStream) readLoop() {
 			lastUsageEventTime += audioDuration
 		}
 	}
+}
+
+func (s *googleSTTStream) terminate() {
+	s.mu.Lock()
+	if s.inputClosed {
+		s.mu.Unlock()
+		return
+	}
+	s.inputClosed = true
+	s.mu.Unlock()
+	_ = s.stream.CloseSend()
+	s.unregister()
 }
 
 func googleSTTStreamError(err error) error {
@@ -625,7 +639,7 @@ func (s *googleSTTStream) currentStartTimeOffset() float64 {
 func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.inputClosed {
 		return io.ErrClosedPipe
 	}
 	if frame != nil && frame.SampleRate != 0 {
@@ -650,7 +664,7 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 func (s *googleSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
+	if s.closed || s.inputClosed {
 		return io.ErrClosedPipe
 	}
 	return nil
@@ -663,6 +677,7 @@ func (s *googleSTTStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	s.inputClosed = true
 	_ = s.stream.CloseSend()
 	s.unregister()
 	return nil
