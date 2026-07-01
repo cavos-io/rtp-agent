@@ -134,39 +134,56 @@ func (t *LMNTTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	if err := validateLMNTAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	req, err := buildLMNTTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("LMNT TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &lmntTTSChunkedStream{
-		resp:       resp,
-		format:     t.format,
-		sampleRate: t.sampleRate,
+		ctx:         ctx,
+		text:        text,
+		apiKey:      t.apiKey,
+		voice:       t.voice,
+		model:       t.model,
+		language:    t.language,
+		format:      t.format,
+		sampleRate:  t.sampleRate,
+		temperature: t.temperature,
+		topP:        t.topP,
 	}, nil
 }
 
 func buildLMNTTTSRequest(ctx context.Context, t *LMNTTTS, text string) (*http.Request, error) {
+	return buildLMNTTTSRequestFromOptions(ctx, lmntTTSRequestOptions{
+		text:        text,
+		apiKey:      t.apiKey,
+		voice:       t.voice,
+		model:       t.model,
+		language:    t.language,
+		format:      t.format,
+		sampleRate:  t.sampleRate,
+		temperature: t.temperature,
+		topP:        t.topP,
+	})
+}
+
+type lmntTTSRequestOptions struct {
+	text        string
+	apiKey      string
+	voice       string
+	model       string
+	language    string
+	format      string
+	sampleRate  int
+	temperature float64
+	topP        float64
+}
+
+func buildLMNTTTSRequestFromOptions(ctx context.Context, opts lmntTTSRequestOptions) (*http.Request, error) {
 	body := map[string]interface{}{
-		"text":        text,
-		"voice":       t.voice,
-		"language":    t.language,
-		"sample_rate": t.sampleRate,
-		"model":       t.model,
-		"format":      t.format,
-		"temperature": t.temperature,
-		"top_p":       t.topP,
+		"text":        opts.text,
+		"voice":       opts.voice,
+		"language":    opts.language,
+		"sample_rate": opts.sampleRate,
+		"model":       opts.model,
+		"format":      opts.format,
+		"temperature": opts.temperature,
+		"top_p":       opts.topP,
 	}
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -178,7 +195,7 @@ func buildLMNTTTSRequest(ctx context.Context, t *LMNTTTS, text string) (*http.Re
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", t.apiKey)
+	req.Header.Set("X-API-Key", opts.apiKey)
 	return req, nil
 }
 
@@ -195,16 +212,32 @@ func (t *LMNTTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 type lmntTTSChunkedStream struct {
 	resp         *http.Response
+	ctx          context.Context
+	text         string
+	apiKey       string
+	voice        string
+	model        string
+	language     string
 	format       string
 	sampleRate   int
+	temperature  float64
+	topP         float64
 	decoder      codecs.AudioStreamDecoder
+	requested    bool
 	started      bool
+	closed       bool
 	hasAudio     bool
 	pendingFinal bool
 	finalSent    bool
 }
 
 func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
@@ -246,6 +279,38 @@ func (s *lmntTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
+func (s *lmntTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildLMNTTTSRequestFromOptions(s.ctx, lmntTTSRequestOptions{
+		text:        s.text,
+		apiKey:      s.apiKey,
+		voice:       s.voice,
+		model:       s.model,
+		language:    s.language,
+		format:      s.format,
+		sampleRate:  s.sampleRate,
+		temperature: s.temperature,
+		topP:        s.topP,
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("LMNT TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -284,6 +349,7 @@ func (s *lmntTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *lmntTTSChunkedStream) Close() error {
+	s.closed = true
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}
