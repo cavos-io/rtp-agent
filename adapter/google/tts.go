@@ -28,6 +28,7 @@ type GoogleTTS struct {
 	model   string
 	prompt  *string
 	audio   *texttospeechpb.AudioConfig
+	custom  *texttospeechpb.CustomPronunciations
 }
 
 type googleTTSClient interface {
@@ -56,6 +57,8 @@ type googleTTSConfig struct {
 	volumeSet    bool
 	sampleRate   int32
 	sampleSet    bool
+	custom       *texttospeechpb.CustomPronunciations
+	customSet    bool
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
@@ -131,6 +134,13 @@ func WithGoogleTTSSampleRate(sampleRate int32) GoogleTTSOption {
 	}
 }
 
+func WithGoogleTTSCustomPronunciations(custom *texttospeechpb.CustomPronunciations) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.custom = custom
+		cfg.customSet = true
+	}
+}
+
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
@@ -166,6 +176,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		voice:   googleTTSVoiceParams(cfg),
 		model:   cfg.model,
 		prompt:  cfg.prompt,
+		custom:  cfg.custom,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
 			SampleRateHertz:  cfg.sampleRate,
@@ -254,6 +265,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		effects:      append([]string(nil), t.audio.GetEffectsProfileId()...),
 		volumeGainDB: t.audio.GetVolumeGainDb(),
 		sampleRate:   t.audio.GetSampleRateHertz(),
+		custom:       t.custom,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -282,6 +294,9 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	if cfg.sampleSet {
 		t.audio.SampleRateHertz = cfg.sampleRate
 	}
+	if cfg.customSet {
+		t.custom = cfg.custom
+	}
 }
 
 func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -290,8 +305,9 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 	req := &texttospeechpb.SynthesizeSpeechRequest{
 		Input: &texttospeechpb.SynthesisInput{
-			InputSource: &texttospeechpb.SynthesisInput_Text{Text: text},
-			Prompt:      t.prompt,
+			InputSource:          &texttospeechpb.SynthesisInput_Text{Text: text},
+			Prompt:               t.prompt,
+			CustomPronunciations: t.custom,
 		},
 		Voice:       t.voice,
 		AudioConfig: t.audio,
@@ -344,6 +360,7 @@ func (t *GoogleTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		voice:  t.voice,
 		prompt: t.prompt,
 		audio:  googleCloneAudioConfig(t.audio),
+		custom: t.custom,
 	}
 	stream.cond = sync.NewCond(&stream.mu)
 	if !t.registerStream(stream) {
@@ -439,6 +456,7 @@ type googleTTSSynthesizeStream struct {
 	voice      *texttospeechpb.VoiceSelectionParams
 	prompt     *string
 	audio      *texttospeechpb.AudioConfig
+	custom     *texttospeechpb.CustomPronunciations
 	buffer     strings.Builder
 	closed     bool
 	inputEnded bool
@@ -576,6 +594,7 @@ func (s *googleTTSSynthesizeStream) ensureActiveStreamLocked() (texttospeechpb.T
 					SampleRateHertz: s.audio.GetSampleRateHertz(),
 					SpeakingRate:    s.audio.GetSpeakingRate(),
 				},
+				CustomPronunciations: s.custom,
 			},
 		},
 	}); err != nil {

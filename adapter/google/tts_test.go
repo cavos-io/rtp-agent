@@ -609,6 +609,50 @@ func TestGoogleTTSPromptMatchesReferenceRequests(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSCustomPronunciationsMatchReferenceRequests(t *testing.T) {
+	phrase := "Cavos"
+	pronunciation := "keIvAs"
+	encoding := texttospeech.CustomPronunciationParams_PHONETIC_ENCODING_X_SAMPA
+	custom := &texttospeech.CustomPronunciations{
+		Pronunciations: []*texttospeech.CustomPronunciationParams{{
+			Phrase:           &phrase,
+			PhoneticEncoding: &encoding,
+			Pronunciation:    &pronunciation,
+		}},
+	}
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSCustomPronunciations(custom))
+
+	chunked, err := provider.Synthesize(context.Background(), "Say Cavos")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetInput().GetCustomPronunciations(); got != custom {
+		t.Fatalf("synthesize custom pronunciations = %#v, want configured value", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Say Cavos"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	if got := client.stream.sent[0].GetStreamingConfig().GetCustomPronunciations(); got != custom {
+		t.Fatalf("stream custom pronunciations = %#v, want configured value", got)
+	}
+}
+
 func TestGoogleTTSStreamClosesAfterInputSendFailure(t *testing.T) {
 	wantErr := errors.New("send failed")
 	streamClient := &fakeGoogleTTSStream{sendErrAfterConfig: wantErr}
