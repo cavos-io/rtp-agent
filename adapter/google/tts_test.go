@@ -562,6 +562,26 @@ func TestGoogleTTSVoiceCloneKeyMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSSMLInputMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSSML(true))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if got := client.request.GetInput().GetSsml(); got != "<speak>hello</speak>" {
+		t.Fatalf("ssml input = %q, want reference speak wrapper", got)
+	}
+	if got := client.request.GetInput().GetText(); got != "" {
+		t.Fatalf("text input = %q, want empty when SSML is enabled", got)
+	}
+}
+
 func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

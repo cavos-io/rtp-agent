@@ -29,6 +29,7 @@ type GoogleTTS struct {
 	prompt  *string
 	audio   *texttospeechpb.AudioConfig
 	custom  *texttospeechpb.CustomPronunciations
+	ssml    bool
 }
 
 type googleTTSClient interface {
@@ -63,6 +64,7 @@ type googleTTSConfig struct {
 	sampleSet    bool
 	custom       *texttospeechpb.CustomPronunciations
 	customSet    bool
+	enableSSML   bool
 }
 
 func WithGoogleTTSLanguage(language string) GoogleTTSOption {
@@ -161,6 +163,12 @@ func WithGoogleTTSCustomPronunciations(custom *texttospeechpb.CustomPronunciatio
 	}
 }
 
+func WithGoogleTTSSSML(enabled bool) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		cfg.enableSSML = enabled
+	}
+}
+
 // NewGoogleTTS creates a new TTS client using Application Default Credentials,
 // or by providing a path to a credentials JSON file.
 func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTTS, error) {
@@ -201,6 +209,7 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 		model:   cfg.model,
 		prompt:  cfg.prompt,
 		custom:  cfg.custom,
+		ssml:    cfg.enableSSML,
 		audio: &texttospeechpb.AudioConfig{
 			AudioEncoding:    texttospeechpb.AudioEncoding_PCM,
 			SampleRateHertz:  cfg.sampleRate,
@@ -330,11 +339,7 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		return nil, io.ErrClosedPipe
 	}
 	req := &texttospeechpb.SynthesizeSpeechRequest{
-		Input: &texttospeechpb.SynthesisInput{
-			InputSource:          &texttospeechpb.SynthesisInput_Text{Text: text},
-			Prompt:               t.prompt,
-			CustomPronunciations: t.custom,
-		},
+		Input:       googleTTSSynthesisInput(text, t.prompt, t.custom, t.ssml),
 		Voice:       t.voice,
 		AudioConfig: t.audio,
 	}
@@ -349,6 +354,19 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		inputText:  text,
 		sampleRate: t.audio.GetSampleRateHertz(),
 	}, nil
+}
+
+func googleTTSSynthesisInput(text string, prompt *string, custom *texttospeechpb.CustomPronunciations, ssml bool) *texttospeechpb.SynthesisInput {
+	input := &texttospeechpb.SynthesisInput{
+		Prompt:               prompt,
+		CustomPronunciations: custom,
+	}
+	if ssml {
+		input.InputSource = &texttospeechpb.SynthesisInput_Ssml{Ssml: "<speak>" + text + "</speak>"}
+	} else {
+		input.InputSource = &texttospeechpb.SynthesisInput_Text{Text: text}
+	}
+	return input
 }
 
 func googleTTSSynthesisError(err error) error {
