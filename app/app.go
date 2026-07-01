@@ -139,6 +139,7 @@ type appGoogleSTTConfig struct {
 	wordTimeOffsets      *bool
 	speechEndTimeout     time.Duration
 	minConfidence        *float64
+	voiceActivityEvents  *bool
 	alternativeLanguages []string
 }
 
@@ -173,6 +174,9 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	}
 	if cfg.minConfidence != nil {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTMinConfidenceThreshold(*cfg.minConfidence))
+	}
+	if cfg.voiceActivityEvents != nil {
+		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTVoiceActivityEvents(*cfg.voiceActivityEvents))
 	}
 	if len(cfg.alternativeLanguages) > 0 {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTAlternativeLanguages(cfg.alternativeLanguages...))
@@ -474,6 +478,7 @@ type AppConfig struct {
 	STTMaxTurnSilence                       *int
 	STTEndOfTurnConfidenceThreshold         *float64
 	STTMinConfidenceThreshold               *float64
+	STTVoiceActivityEvents                  *bool
 	STTFormatTurns                          *bool
 	STTLanguageDetection                    *bool
 	STTContinuousPartials                   *bool
@@ -864,6 +869,7 @@ func DefaultConfigFromEnv() AppConfig {
 		STTMaxTurnSilence:                       getenvOptionalInt("RTP_AGENT_STT_MAX_TURN_SILENCE"),
 		STTEndOfTurnConfidenceThreshold:         getenvOptionalFloat("RTP_AGENT_STT_END_OF_TURN_CONFIDENCE_THRESHOLD"),
 		STTMinConfidenceThreshold:               getenvOptionalFloat("RTP_AGENT_STT_MIN_CONFIDENCE_THRESHOLD"),
+		STTVoiceActivityEvents:                  getenvOptionalBool("RTP_AGENT_STT_VOICE_ACTIVITY_EVENTS"),
 		STTFormatTurns:                          getenvOptionalBool("RTP_AGENT_STT_FORMAT_TURNS"),
 		STTLanguageDetection:                    getenvOptionalBool("RTP_AGENT_STT_LANGUAGE_DETECTION"),
 		STTContinuousPartials:                   getenvOptionalBool("RTP_AGENT_STT_CONTINUOUS_PARTIALS"),
@@ -3994,6 +4000,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		interimResults:       cfg.STTInterimResults,
 		wordTimeOffsets:      cfg.STTWordTimestamps,
 		minConfidence:        cfg.STTMinConfidenceThreshold,
+		voiceActivityEvents:  cfg.STTVoiceActivityEvents,
 		alternativeLanguages: splitStringList(cfg.STTLanguageOptions),
 	}
 	if cfg.STTEndpointingMS != nil {
