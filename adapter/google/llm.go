@@ -604,11 +604,9 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
+					s.responseGenerated = true
 					if chunk := googleChatChunkFromPart(part); chunk != nil {
 						chunk.ID = requestID
-						if googleChatChunkHasOutput(chunk) {
-							s.responseGenerated = true
-						}
 						s.pending = append(s.pending, chunk)
 					}
 				}
@@ -624,7 +622,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 }
 
 func googleLLMFinishReasonBody(reason genai.FinishReason) any {
-	if reason == genai.FinishReasonUnspecified {
+	if reason == "" || reason == genai.FinishReasonUnspecified {
 		return nil
 	}
 	return fmt.Sprintf("finish reason: %s", reason)
@@ -703,19 +701,6 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 		return call.ID
 	}
 	return "call_" + call.Name
-}
-
-func googleChatChunkHasOutput(chunk *llm.ChatChunk) bool {
-	if chunk == nil {
-		return false
-	}
-	if chunk.Usage != nil {
-		return true
-	}
-	if chunk.Delta == nil {
-		return false
-	}
-	return chunk.Delta.Content != "" || len(chunk.Delta.ToolCalls) > 0
 }
 
 func (s *googleLLMStream) Close() error {

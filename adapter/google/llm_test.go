@@ -656,6 +656,35 @@ func TestGoogleLLMStreamReportsNoResponseFinishReasonLikeReference(t *testing.T)
 	}
 }
 
+func TestGoogleLLMStreamTreatsEmptyProviderPartAsGeneratedLikeReference(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		Candidates: []*genai.Candidate{{
+			Content: &genai.Content{
+				Parts: []*genai.Part{{}},
+			},
+		}},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF without false no-response error", err)
+	}
+}
+
 func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		Candidates: []*genai.Candidate{{
