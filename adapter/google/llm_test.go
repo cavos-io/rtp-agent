@@ -528,6 +528,21 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceMediaResolutionExtra(t 
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceRetrievalConfigExtra(t *testing.T) {
+	retrieval := &genai.RetrievalConfig{LanguageCode: "id-ID"}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"retrieval_config": retrieval,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ToolConfig == nil || config.ToolConfig.RetrievalConfig != retrieval {
+		t.Fatalf("tool config = %#v, want retrieval config", config.ToolConfig)
+	}
+}
+
 func TestGoogleLLMStreamNextAfterCloseReturnsEOFWithoutReading(t *testing.T) {
 	readAfterClose := false
 	stopped := false

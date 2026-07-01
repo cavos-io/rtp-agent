@@ -250,6 +250,12 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleMediaResolutionParam(params["media_resolution"]); ok {
 		config.MediaResolution = value
 	}
+	if value, ok := googleRetrievalConfigParam(params["retrieval_config"]); ok {
+		if config.ToolConfig == nil {
+			config.ToolConfig = &genai.ToolConfig{}
+		}
+		config.ToolConfig.RetrievalConfig = value
+	}
 }
 
 func applyGoogleResponseFormat(config *genai.GenerateContentConfig, format map[string]any) {
@@ -411,6 +417,17 @@ func googleMediaResolutionParam(value any) (genai.MediaResolution, bool) {
 		return genai.MediaResolution(resolution), true
 	default:
 		return "", false
+	}
+}
+
+func googleRetrievalConfigParam(value any) (*genai.RetrievalConfig, bool) {
+	switch config := value.(type) {
+	case *genai.RetrievalConfig:
+		return config, config != nil
+	case genai.RetrievalConfig:
+		return &config, true
+	default:
+		return nil, false
 	}
 }
 
