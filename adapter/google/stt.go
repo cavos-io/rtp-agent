@@ -910,7 +910,7 @@ func googleFinalSpeechDataFromStreamingResults(results []*speechpb.StreamingReco
 		}
 		alt := result.GetAlternatives()[0]
 		words := alt.GetWords()
-		if alt.GetTranscript() == "" && len(words) == 0 {
+		if alt.GetTranscript() == "" {
 			continue
 		}
 		data := stt.SpeechData{
