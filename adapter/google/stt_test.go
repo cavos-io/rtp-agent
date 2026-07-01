@@ -752,6 +752,43 @@ func TestGoogleSTTStreamMapsReferenceVoiceActivityEvents(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamEmitsEndOfSpeechAfterFinalTranscript(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal: true,
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "done",
+					Confidence: 0.9,
+				}},
+			}},
+		}},
+	}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if final.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("first event type = %v, want final transcript", final.Type)
+	}
+
+	end, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if end.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("second event type = %v, want end of speech", end.Type)
+	}
+}
+
 func TestGoogleSTTStreamConfigUsesReferenceSpeechTimeouts(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(

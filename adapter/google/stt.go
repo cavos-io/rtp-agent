@@ -469,6 +469,9 @@ func (s *googleSTTStream) readLoop() {
 					Type:         eventType,
 					Alternatives: []stt.SpeechData{data},
 				}
+				if eventType == stt.SpeechEventFinalTranscript {
+					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+				}
 			}
 		}
 
