@@ -232,6 +232,9 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 
 func (t *GoogleTTS) Label() string { return "google.TTS" }
 func (t *GoogleTTS) Capabilities() tts.TTSCapabilities {
+	if t != nil && t.ssml {
+		return tts.TTSCapabilities{Streaming: false, AlignedTranscript: false}
+	}
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
 func (t *GoogleTTS) SampleRate() int  { return int(t.audio.GetSampleRateHertz()) }
