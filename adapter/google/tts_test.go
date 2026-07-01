@@ -541,6 +541,27 @@ func TestGoogleTTSGenderOptionMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSVoiceCloneKeyMatchesReference(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSVoiceCloneKey("clone-key"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	voice := client.request.GetVoice()
+	if voice.GetVoiceClone().GetVoiceCloningKey() != "clone-key" {
+		t.Fatalf("voice clone = %+v, want configured clone key", voice.GetVoiceClone())
+	}
+	if voice.GetName() != "" {
+		t.Fatalf("voice name = %q, want empty when voice clone is configured", voice.GetName())
+	}
+}
+
 func TestGoogleTTSUpdateOptionsMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

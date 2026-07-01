@@ -45,6 +45,8 @@ type googleTTSConfig struct {
 	genderSet    bool
 	voice        string
 	voiceSet     bool
+	cloneKey     string
+	cloneKeySet  bool
 	model        string
 	modelSet     bool
 	prompt       *string
@@ -84,6 +86,15 @@ func WithGoogleTTSVoice(voice string) GoogleTTSOption {
 		if voice != "" {
 			cfg.voice = voice
 			cfg.voiceSet = true
+		}
+	}
+}
+
+func WithGoogleTTSVoiceCloneKey(key string) GoogleTTSOption {
+	return func(cfg *googleTTSConfig) {
+		if key != "" {
+			cfg.cloneKey = key
+			cfg.cloneKeySet = true
 		}
 	}
 }
@@ -179,6 +190,9 @@ func newGoogleTTSWithClient(client googleTTSClient, opts ...GoogleTTSOption) *Go
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	if cfg.cloneKeySet && !cfg.modelSet && !cfg.promptSet {
+		cfg.model = "chirp_3"
+	}
 
 	return &GoogleTTS{
 		streams: make(map[*googleTTSSynthesizeStream]struct{}),
@@ -269,6 +283,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 		language:     t.voice.GetLanguageCode(),
 		voice:        t.voice.GetName(),
 		gender:       t.voice.GetSsmlGender(),
+		cloneKey:     t.voice.GetVoiceClone().GetVoiceCloningKey(),
 		model:        t.Model(),
 		prompt:       t.prompt,
 		speakingRate: t.audio.GetSpeakingRate(),
@@ -281,7 +296,7 @@ func (t *GoogleTTS) UpdateOptions(opts ...GoogleTTSOption) {
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.languageSet || cfg.genderSet || cfg.voiceSet || cfg.modelSet {
+	if cfg.languageSet || cfg.genderSet || cfg.voiceSet || cfg.cloneKeySet || cfg.modelSet {
 		t.voice = googleTTSVoiceParams(cfg)
 	}
 	if cfg.modelSet {
@@ -741,6 +756,10 @@ func googleTTSVoiceParams(cfg googleTTSConfig) *texttospeechpb.VoiceSelectionPar
 		LanguageCode: cfg.language,
 		Name:         cfg.voice,
 		SsmlGender:   cfg.gender,
+	}
+	if cfg.cloneKey != "" {
+		voice.Name = ""
+		voice.VoiceClone = &texttospeechpb.VoiceCloneParams{VoiceCloningKey: cfg.cloneKey}
 	}
 	if cfg.model != "chirp_3" {
 		voice.ModelName = cfg.model
