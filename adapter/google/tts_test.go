@@ -306,6 +306,58 @@ func TestGoogleTTSSynthesizeRequestUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSUsesConfiguredSampleRate(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6, 7, 8}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSampleRate(16000))
+
+	if got := provider.SampleRate(); got != 16000 {
+		t.Fatalf("SampleRate = %d, want 16000", got)
+	}
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	if got := client.request.GetAudioConfig().GetSampleRateHertz(); got != 16000 {
+		t.Fatalf("synthesize sample rate = %d, want 16000", got)
+	}
+	audio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("chunked Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("chunked frame sample rate = %d, want 16000", audio.Frame.SampleRate)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetSampleRateHertz(); got != 16000 {
+		t.Fatalf("stream config sample rate = %d, want 16000", got)
+	}
+	streamAudio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("stream Next returned error: %v", err)
+	}
+	if streamAudio.Frame.SampleRate != 16000 {
+		t.Fatalf("stream frame sample rate = %d, want 16000", streamAudio.Frame.SampleRate)
+	}
+}
+
 func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
