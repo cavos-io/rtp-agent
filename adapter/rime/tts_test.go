@@ -141,13 +141,14 @@ func TestRimeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -269,15 +270,52 @@ func TestRimeTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 
 	provider := NewRimeTTS("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if stream != nil {
-		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Synthesize error = nil, want APIConnectionError")
+		t.Fatal("Next error = nil, want APIConnectionError")
 	}
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	requests := 0
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want 0 until stream is consumed", requests)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next() audio = %#v, want provider audio", audio)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
 	}
 }
 
@@ -398,12 +436,13 @@ func TestRimeTTSRejectsNonAudioResponse(t *testing.T) {
 	)
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want non-audio response error")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if !strings.Contains(err.Error(), "non-audio") {
-		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
+		t.Fatalf("Next error = %q, want non-audio guidance", err)
 	}
 }
 
