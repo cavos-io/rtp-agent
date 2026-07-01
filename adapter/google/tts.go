@@ -619,6 +619,13 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
 		if err != nil {
+			_ = stream.CloseSend()
+			s.mu.Lock()
+			if len(s.streams) > 0 && s.streams[0] == stream {
+				s.streams = s.streams[1:]
+			}
+			s.markClosedLocked()
+			s.mu.Unlock()
 			return nil, googleTTSSynthesisError(err)
 		}
 		data := resp.GetAudioContent()
