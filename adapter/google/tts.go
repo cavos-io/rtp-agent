@@ -1,6 +1,7 @@
 package google
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -566,7 +567,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	return &tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
-			Data:              chunk,
+			Data:              bytes.Clone(chunk),
 			SampleRate:        uint32(sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(len(chunk) / 2),
@@ -1043,7 +1044,7 @@ func googleTTSStreamingAudioFrame(data []byte, encoding texttospeechpb.AudioEnco
 		return codecs.DecodeOpusAudio(data, int(sampleRate), 1)
 	}
 	return &model.AudioFrame{
-		Data:              data,
+		Data:              bytes.Clone(data),
 		SampleRate:        uint32(sampleRate),
 		NumChannels:       1,
 		SamplesPerChannel: uint32(len(data) / 2),

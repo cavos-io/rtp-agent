@@ -119,6 +119,39 @@ func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamClonesReferenceAudioFrames(t *testing.T) {
+	providerAudio := []byte{1, 2, 3, 4}
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{
+				AudioContent: providerAudio,
+			}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	providerAudio[0] = 9
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio data after provider mutation = %v, want cloned frame data", got)
+	}
+}
+
 func TestGoogleTTSStreamMarkupInputMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{stream: &fakeGoogleTTSStream{}}
 	provider := newGoogleTTSWithClient(client, WithGoogleTTSMarkup(true))
@@ -1992,6 +2025,29 @@ func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func TestGoogleTTSSynthesizeClonesReferenceAudioFrames(t *testing.T) {
+	providerAudio := []byte{1, 2, 3, 4}
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: providerAudio},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	providerAudio[0] = 9
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio data after provider mutation = %v, want cloned frame data", got)
 	}
 }
 
