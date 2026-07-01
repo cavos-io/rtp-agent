@@ -623,25 +623,33 @@ func (s *googleRealtimeSession) receiveLoop() {
 }
 
 func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) {
-	if message == nil || message.ServerContent == nil || message.ServerContent.ModelTurn == nil {
+	if message == nil || message.ServerContent == nil {
 		return
 	}
-	for _, part := range message.ServerContent.ModelTurn.Parts {
-		if part == nil || part.Thought {
-			continue
+	if message.ServerContent.ModelTurn != nil {
+		for _, part := range message.ServerContent.ModelTurn.Parts {
+			if part == nil || part.Thought {
+				continue
+			}
+			if part.Text != "" {
+				s.emitEvent(llm.RealtimeEvent{
+					Type: llm.RealtimeEventTypeText,
+					Text: part.Text,
+				})
+			}
+			if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+				s.emitEvent(llm.RealtimeEvent{
+					Type: llm.RealtimeEventTypeAudio,
+					Data: part.InlineData.Data,
+				})
+			}
 		}
-		if part.Text != "" {
-			s.emitEvent(llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeText,
-				Text: part.Text,
-			})
-		}
-		if part.InlineData != nil && len(part.InlineData.Data) > 0 {
-			s.emitEvent(llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeAudio,
-				Data: part.InlineData.Data,
-			})
-		}
+	}
+	if message.ServerContent.OutputTranscription != nil && message.ServerContent.OutputTranscription.Text != "" {
+		s.emitEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeText,
+			Text: message.ServerContent.OutputTranscription.Text,
+		})
 	}
 }
 
