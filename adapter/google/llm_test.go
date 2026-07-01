@@ -662,6 +662,30 @@ func TestGoogleLLMStreamMapsProviderAPIError(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamMapsUnexpectedProviderError(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, errors.New("dial failed"), true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "gemini llm: error generating content dial failed" {
+		t.Fatalf("APIConnectionError message = %q, want provider wrapper", connectionErr.Message)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("APIConnectionError retryable = false, want true before response output")
+	}
+}
+
 func TestGoogleLLMStreamReportsCachedPromptTokens(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{

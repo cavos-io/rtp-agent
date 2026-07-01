@@ -629,7 +629,7 @@ func googleLLMStreamError(err error, retryable bool) error {
 		}
 		return llm.NewAPIStatusErrorWithRetryable(message, apiErr.Code, "", strings.TrimSpace(apiErr.Message+" "+apiErr.Status), retryable)
 	}
-	return err
+	return llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("gemini llm: error generating content %s", err), retryable)
 }
 
 func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {
