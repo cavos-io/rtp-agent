@@ -720,6 +720,49 @@ func TestGoogleLLMStreamReportsNoResponseFinishReasonLikeReference(t *testing.T)
 	}
 }
 
+func TestGoogleLLMStreamKeepsNoResponseFinishReasonAfterUsageChunk(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount: 1,
+			TotalTokenCount:  1,
+		},
+		Candidates: []*genai.Candidate{{
+			FinishReason: genai.FinishReasonStop,
+		}},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next error = %v", err)
+	}
+	if usage == nil || usage.Usage == nil {
+		t.Fatalf("usage chunk = %#v, want usage before no-response error", usage)
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Body != "finish reason: STOP" {
+		t.Fatalf("APIStatusError body = %#v, want persisted finish reason", statusErr.Body)
+	}
+}
+
 func TestGoogleLLMStreamTreatsEmptyProviderPartAsGeneratedLikeReference(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		Candidates: []*genai.Candidate{{

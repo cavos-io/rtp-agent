@@ -344,6 +344,7 @@ type googleLLMStream struct {
 	thoughtMu         *sync.RWMutex
 	thoughtSignatures map[string][]byte
 	pending           []*llm.ChatChunk
+	finishReason      genai.FinishReason
 }
 
 func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
@@ -593,7 +594,6 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		return nil, io.EOF
 	}
 	requestID := s.id()
-	finishReason := genai.FinishReasonUnspecified
 
 	for {
 		if len(s.pending) > 0 {
@@ -605,14 +605,14 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		resp, err, ok := s.next()
 		if !ok {
 			if !s.responseGenerated {
-				return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(finishReason))
+				return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(s.finishReason))
 			}
 			return nil, io.EOF
 		}
 		if err != nil {
 			if errors.Is(err, genai.ErrPageDone) || errors.Is(err, io.EOF) {
 				if !s.responseGenerated {
-					return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(finishReason))
+					return nil, llm.NewAPIStatusError("no response generated", -1, requestID, googleLLMFinishReasonBody(s.finishReason))
 				}
 				return nil, io.EOF
 			}
@@ -642,7 +642,7 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 		if len(resp.Candidates) > 0 {
 			cand := resp.Candidates[0]
 			if cand.FinishReason != genai.FinishReasonUnspecified {
-				finishReason = cand.FinishReason
+				s.finishReason = cand.FinishReason
 			}
 			if googleBlockedFinishReason(cand.FinishReason) {
 				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, requestID, nil, false)
