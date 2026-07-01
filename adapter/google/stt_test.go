@@ -1921,6 +1921,69 @@ func TestGoogleSTTUpdateOptionsSwitchesActiveStreamToReferenceV2(t *testing.T) {
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsReplacesReferenceAdaptationOnVersionSwitch(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	v1Client := &fakeGoogleSpeechClient{
+		stream:       firstStream,
+		streamCallCh: make(chan int, 1),
+	}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRelease}
+	v2Client := &fakeGoogleV2SpeechClient{
+		stream:       secondStream,
+		streamCallCh: make(chan int, 1),
+	}
+	v2Adaptation := &speechv2pb.SpeechAdaptation{
+		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{
+					Phrases: []*speechv2pb.PhraseSet_Phrase{{Value: "Cavos"}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation("us-central1"),
+		WithGoogleSTTModel("latest_long"),
+		WithGoogleSTTAdaptation(&speechpb.SpeechAdaptation{}),
+	)
+	provider.clientV2 = v2Client
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-v1Client.streamCallCh
+
+	if err := provider.UpdateOptions(WithGoogleSTTModel("chirp_3"), WithGoogleSTTAdaptationV2(v2Adaptation)); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+
+	select {
+	case calls := <-v2Client.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("v2 stream calls = %d, want one v2 reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for v2 reconnect after adaptation replacement")
+	}
+	if provider.adaptation != nil {
+		t.Fatalf("v1 adaptation = %#v, want cleared after v2 adaptation update", provider.adaptation)
+	}
+	if provider.adaptationV2 != v2Adaptation {
+		t.Fatalf("v2 adaptation = %#v, want replacement adaptation", provider.adaptationV2)
+	}
+	got := secondStream.sent[0].GetStreamingConfig().GetConfig().GetAdaptation()
+	if got != v2Adaptation {
+		t.Fatalf("v2 streaming adaptation = %#v, want replacement adaptation", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTUpdateOptionsCreatesReferenceV2ClientOnVersionSwitch(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}

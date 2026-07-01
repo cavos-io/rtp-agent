@@ -194,11 +194,13 @@ func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
 func WithGoogleSTTAdaptation(adaptation *speechpb.SpeechAdaptation) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		s.adaptation = adaptation
+		s.adaptationV2 = nil
 	}
 }
 
 func WithGoogleSTTAdaptationV2(adaptation *speechv2pb.SpeechAdaptation) GoogleSTTOption {
 	return func(s *GoogleSTT) {
+		s.adaptation = nil
 		s.adaptationV2 = adaptation
 	}
 }
