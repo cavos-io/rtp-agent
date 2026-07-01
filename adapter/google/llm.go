@@ -632,6 +632,7 @@ type googleLLMStream struct {
 	thoughtMu         *sync.RWMutex
 	thoughtSignatures map[string][]byte
 	pending           []*llm.ChatChunk
+	pendingErr        error
 	finishReason      genai.FinishReason
 }
 
@@ -889,6 +890,11 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			s.pending = s.pending[1:]
 			return chunk, nil
 		}
+		if s.pendingErr != nil {
+			err := s.pendingErr
+			s.pendingErr = nil
+			return nil, err
+		}
 
 		resp, err, ok := s.next()
 		if s.closed.Load() {
@@ -936,7 +942,14 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 				s.finishReason = cand.FinishReason
 			}
 			if googleBlockedFinishReason(cand.FinishReason) {
-				return nil, llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, requestID, nil, false)
+				err := llm.NewAPIStatusErrorWithRetryable(fmt.Sprintf("generation blocked by gemini: %s", cand.FinishReason), -1, requestID, nil, false)
+				if len(s.pending) > 0 {
+					s.pendingErr = err
+					chunk := s.pending[0]
+					s.pending = s.pending[1:]
+					return chunk, nil
+				}
+				return nil, err
 			}
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {

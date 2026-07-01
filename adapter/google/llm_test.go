@@ -1418,6 +1418,58 @@ func TestGoogleLLMStreamReturnsNonRetryableStatusForBlockedFinishReason(t *testi
 	}
 }
 
+func TestGoogleLLMStreamEmitsUsageBeforeBlockedFinishError(t *testing.T) {
+	responses := []*genai.GenerateContentResponse{{
+		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+			PromptTokenCount:     4,
+			CandidatesTokenCount: 2,
+			TotalTokenCount:      6,
+		},
+		Candidates: []*genai.Candidate{{
+			FinishReason: genai.FinishReasonSafety,
+		}},
+	}}
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if len(responses) == 0 {
+				return nil, nil, false
+			}
+			resp := responses[0]
+			responses = responses[1:]
+			return resp, nil, true
+		},
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next error = %v", err)
+	}
+	if usage == nil || usage.Usage == nil {
+		t.Fatalf("usage chunk = %#v, want usage before blocked error", usage)
+	}
+	if usage.Usage.PromptTokens != 4 || usage.Usage.CompletionTokens != 2 || usage.Usage.TotalTokens != 6 {
+		t.Fatalf("usage = %+v, want reference token counts before block", usage.Usage)
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("blocked chunk = %#v, want nil", chunk)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("blocked error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "generation blocked by gemini: SAFETY" {
+		t.Fatalf("blocked message = %q, want reference blocked finish", statusErr.Message)
+	}
+	if statusErr.Retryable {
+		t.Fatal("blocked retryable = true, want false")
+	}
+	if statusErr.RequestID != usage.ID {
+		t.Fatalf("blocked request id = %q, want usage id %q", statusErr.RequestID, usage.ID)
+	}
+}
+
 func TestGoogleLLMStreamReturnsNonRetryableStatusForPromptFeedback(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		PromptFeedback: &genai.GenerateContentResponsePromptFeedback{
