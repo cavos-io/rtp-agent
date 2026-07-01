@@ -114,6 +114,12 @@ func WithGoogleSTTWordConfidence(enabled bool) GoogleSTTOption {
 	}
 }
 
+func WithGoogleSTTWordTimeOffsets(enabled bool) GoogleSTTOption {
+	return func(s *GoogleSTT) {
+		s.enableWordTimeOffset = enabled
+	}
+}
+
 func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 	return func(s *GoogleSTT) {
 		if sampleRate > 0 {

@@ -141,6 +141,18 @@ func TestGoogleSTTChirp3CapabilitiesDisableWordAlignment(t *testing.T) {
 	}
 }
 
+func TestGoogleRecognitionConfigDisablesReferenceWordTimeOffsetsWhenConfigured(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTWordTimeOffsets(false))
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.EnableWordTimeOffsets {
+		t.Fatal("word time offsets enabled = true, want false from reference option")
+	}
+	if got := provider.Capabilities().AlignedTranscript; got != "" {
+		t.Fatalf("AlignedTranscript = %q, want empty when word offsets disabled", got)
+	}
+}
+
 func TestGoogleRecognitionConfigChirp3DisablesWordTimeOffsets(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
 	config := googleRecognitionConfig(provider, "en-US")
