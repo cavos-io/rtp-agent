@@ -68,7 +68,9 @@ type googleRealtimeOptions struct {
 	language                  string
 	vertexAI                  *bool
 	project                   string
+	projectSet                bool
 	location                  string
+	locationSet               bool
 	modalities                []string
 	turnDetection             *bool
 	inputAudioTranscription   *bool
@@ -128,12 +130,14 @@ func WithGoogleRealtimeVertexAI(enabled bool) GoogleRealtimeOption {
 func WithGoogleRealtimeProject(project string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.project = project
+		options.projectSet = true
 	}
 }
 
 func WithGoogleRealtimeLocation(location string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.location = location
+		options.locationSet = true
 	}
 }
 
@@ -247,18 +251,18 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
 	project := options.project
-	if project == "" {
+	if !options.projectSet {
 		project = os.Getenv("GOOGLE_CLOUD_PROJECT")
 	}
 	location := options.location
-	if location == "" {
+	if !options.locationSet {
 		location = os.Getenv("GOOGLE_CLOUD_LOCATION")
 	}
 	if vertexAI {
-		if location == "" {
+		if location == "" && !options.locationSet {
 			location = defaultGoogleRealtimeLocation
 		}
-		if project == "" {
+		if project == "" || location == "" {
 			return nil, errors.New("Project is required for VertexAI via project option or GOOGLE_CLOUD_PROJECT environment variable")
 		}
 		apiKey = ""

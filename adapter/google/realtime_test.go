@@ -88,6 +88,20 @@ func TestGoogleRealtimeVertexLocationOptionMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeVertexExplicitEmptyLocationMatchesReference(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+
+	_, err := NewRealtimeModel("ignored",
+		WithGoogleRealtimeVertexAI(true),
+		WithGoogleRealtimeProject("voice-project"),
+		WithGoogleRealtimeLocation(""),
+	)
+
+	if err == nil || !strings.Contains(err.Error(), "Project is required for VertexAI") {
+		t.Fatalf("NewRealtimeModel error = %v, want reference Vertex empty location error", err)
+	}
+}
+
 func TestGoogleRealtimeModelAPIMatchValidation(t *testing.T) {
 	_, err := NewRealtimeModel("test-key",
 		WithGoogleRealtimeVertexAI(true),
