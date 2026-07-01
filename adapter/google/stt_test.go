@@ -462,6 +462,34 @@ func TestNewGoogleSTTRejectsReferenceAdaptationVersionMismatch(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsRejectsReferenceAdaptationVersionMismatch(t *testing.T) {
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{},
+		WithGoogleSTTModel("latest_long"),
+		WithGoogleSTTAdaptation(&speechpb.SpeechAdaptation{}),
+	)
+
+	err := provider.UpdateOptions(WithGoogleSTTModel("chirp_3"))
+	if err == nil || !strings.Contains(err.Error(), "adaptation must be cloud_speech_v2.SpeechAdaptation for v2 models") {
+		t.Fatalf("v2 update mismatch error = %v, want reference v2 adaptation type error", err)
+	}
+	if provider.model != "latest_long" {
+		t.Fatalf("model after rejected v2 update = %q, want latest_long", provider.model)
+	}
+
+	provider = newGoogleSTTWithV2Client(&fakeGoogleV2SpeechClient{},
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTAdaptationV2(&speechv2pb.SpeechAdaptation{}),
+	)
+
+	err = provider.UpdateOptions(WithGoogleSTTModel("latest_long"))
+	if err == nil || !strings.Contains(err.Error(), "adaptation must be resource_v1.SpeechAdaptation for v1 models") {
+		t.Fatalf("v1 update mismatch error = %v, want reference v1 adaptation type error", err)
+	}
+	if provider.model != "chirp_3" {
+		t.Fatalf("model after rejected v1 update = %q, want chirp_3", provider.model)
+	}
+}
+
 func TestGoogleSTTLabel(t *testing.T) {
 	provider := &GoogleSTT{}
 	if got := provider.Label(); got != "google.STT" {

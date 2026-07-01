@@ -328,14 +328,20 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: s.streaming, InterimResults: true, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
 }
 
-func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
+func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	s.mu.Lock()
+	previous := googleSTTCaptureConfig(s)
 	oldLanguage := s.language
 	oldAlternativeLanguages := append([]string(nil), s.alternativeLanguages...)
 	for _, opt := range opts {
 		opt(s)
 	}
 	googleSTTSanitizeEndpointing(s)
+	if err := googleSTTValidateAdaptation(s); err != nil {
+		previous.restore(s)
+		s.mu.Unlock()
+		return err
+	}
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
@@ -354,6 +360,87 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 			stream.failWithError(err)
 		}
 	}
+	return nil
+}
+
+type googleSTTConfigState struct {
+	model                string
+	language             string
+	streaming            bool
+	detectLanguage       bool
+	interimResults       bool
+	punctuate            bool
+	spokenPunctuation    bool
+	profanityFilter      bool
+	voiceActivityEvents  bool
+	sampleRate           int32
+	minConfidence        float64
+	wordTimeOffset       bool
+	wordConfidence       bool
+	speechStartTimeout   time.Duration
+	speechEndTimeout     time.Duration
+	location             string
+	project              string
+	endpointing          string
+	keywords             []GoogleSTTKeyword
+	adaptation           *speechpb.SpeechAdaptation
+	adaptationV2         *speechv2pb.SpeechAdaptation
+	denoiserConfig       *speechv2pb.DenoiserConfig
+	alternativeLanguages []string
+}
+
+func googleSTTCaptureConfig(s *GoogleSTT) googleSTTConfigState {
+	return googleSTTConfigState{
+		model:                s.model,
+		language:             s.language,
+		streaming:            s.streaming,
+		detectLanguage:       s.detectLanguage,
+		interimResults:       s.interimResults,
+		punctuate:            s.punctuate,
+		spokenPunctuation:    s.spokenPunctuation,
+		profanityFilter:      s.profanityFilter,
+		voiceActivityEvents:  s.voiceActivityEvents,
+		sampleRate:           s.sampleRate,
+		minConfidence:        s.minConfidence,
+		wordTimeOffset:       s.enableWordTimeOffset,
+		wordConfidence:       s.enableWordConfidence,
+		speechStartTimeout:   s.speechStartTimeout,
+		speechEndTimeout:     s.speechEndTimeout,
+		location:             s.location,
+		project:              s.project,
+		endpointing:          s.endpointingSensitivity,
+		keywords:             append([]GoogleSTTKeyword(nil), s.keywords...),
+		adaptation:           s.adaptation,
+		adaptationV2:         s.adaptationV2,
+		denoiserConfig:       s.denoiserConfig,
+		alternativeLanguages: append([]string(nil), s.alternativeLanguages...),
+	}
+}
+
+func (c googleSTTConfigState) restore(s *GoogleSTT) {
+	s.model = c.model
+	s.language = c.language
+	s.streaming = c.streaming
+	s.detectLanguage = c.detectLanguage
+	s.interimResults = c.interimResults
+	s.punctuate = c.punctuate
+	s.spokenPunctuation = c.spokenPunctuation
+	s.profanityFilter = c.profanityFilter
+	s.voiceActivityEvents = c.voiceActivityEvents
+	s.sampleRate = c.sampleRate
+	s.minConfidence = c.minConfidence
+	s.enableWordTimeOffset = c.wordTimeOffset
+	s.enableWordConfidence = c.wordConfidence
+	s.speechStartTimeout = c.speechStartTimeout
+	s.speechEndTimeout = c.speechEndTimeout
+	s.location = c.location
+	s.project = c.project
+	s.endpointingSensitivity = c.endpointing
+	s.keywords = append([]GoogleSTTKeyword(nil), c.keywords...)
+	s.adaptation = c.adaptation
+	s.adaptationV2 = c.adaptationV2
+	s.denoiserConfig = c.denoiserConfig
+	s.alternativeLanguages = append([]string(nil), c.alternativeLanguages...)
 }
 
 func (s *GoogleSTT) Close() error {
