@@ -547,7 +547,10 @@ func (s *cartesiaSTTStream) reconnectIfNeeded() error {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildCartesiaSTTStreamURLForLanguage(provider, language), buildCartesiaSTTHeaders(provider))
 	if err != nil {
-		return fmt.Errorf("failed to reconnect cartesia stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect cartesia stt websocket: %v", err))
 	}
 
 	s.mu.Lock()

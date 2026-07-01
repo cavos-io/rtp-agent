@@ -240,6 +240,30 @@ func TestCartesiaSTTUpdateOptionsReconnectsLegacyActiveStream(t *testing.T) {
 	}
 }
 
+func TestCartesiaSTTReconnectFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("cartesia stt redial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	stream := &cartesiaSTTStream{
+		provider:      NewCartesiaSTT("test-key"),
+		ctx:           context.Background(),
+		state:         &cartesiaSTTStreamState{language: "fr", mode: "legacy"},
+		reconnectNext: true,
+	}
+
+	err := stream.reconnectIfNeeded()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("reconnect error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestCartesiaSTTStreamLanguageOverrideDoesNotPersistLikeReference(t *testing.T) {
 	closed := make(chan struct{})
 	closeAfterHandshake := make(chan struct{})
