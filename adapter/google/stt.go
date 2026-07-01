@@ -382,7 +382,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	}
 
 	resp, err := s.client.Recognize(ctx, &speechpb.RecognizeRequest{
-		Config: googleRecognitionConfigWithAlternatives(s, language, !explicitLanguage),
+		Config: googleRecognitionConfigForFrames(s, language, !explicitLanguage, frames),
 		Audio: &speechpb.RecognitionAudio{
 			AudioSource: &speechpb.RecognitionAudio_Content{
 				Content: buf.Bytes(),
@@ -419,6 +419,29 @@ func googleRecognitionConfigWithAlternatives(s *GoogleSTT, language string, incl
 		Model:                      s.model,
 		Adaptation:                 googleSpeechAdaptation(s),
 	}
+}
+
+func googleRecognitionConfigForFrames(s *GoogleSTT, language string, includeAlternativeLanguages bool, frames []*model.AudioFrame) *speechpb.RecognitionConfig {
+	config := googleRecognitionConfigWithAlternatives(s, language, includeAlternativeLanguages)
+	haveSampleRate := false
+	haveChannels := false
+	for _, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		if frame.SampleRate > 0 && !haveSampleRate {
+			config.SampleRateHertz = int32(frame.SampleRate)
+			haveSampleRate = true
+		}
+		if frame.NumChannels > 0 && !haveChannels {
+			config.AudioChannelCount = int32(frame.NumChannels)
+			haveChannels = true
+		}
+		if haveSampleRate && haveChannels {
+			break
+		}
+	}
+	return config
 }
 
 func googleAlternativeLanguageCodes(s *GoogleSTT, include bool) []string {

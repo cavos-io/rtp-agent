@@ -379,6 +379,27 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRecognizeUsesReferenceFrameAudioFormat(t *testing.T) {
+	client := &fakeGoogleSpeechClient{recognizeResponse: &speechpb.RecognizeResponse{}}
+	provider := newGoogleSTTWithClient(client)
+
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{
+		{Data: []byte("one"), SampleRate: 48000, NumChannels: 2},
+		{Data: []byte("two"), SampleRate: 48000, NumChannels: 2},
+	}, "")
+	if err != nil {
+		t.Fatalf("Recognize returned error: %v", err)
+	}
+
+	config := client.recognizeRequest.GetConfig()
+	if config.GetSampleRateHertz() != 48000 {
+		t.Fatalf("sample rate = %d, want reference frame sample rate 48000", config.GetSampleRateHertz())
+	}
+	if config.GetAudioChannelCount() != 2 {
+		t.Fatalf("audio channel count = %d, want reference frame channel count 2", config.GetAudioChannelCount())
+	}
+}
+
 func TestGoogleSTTRecognizeReturnsAPITimeoutError(t *testing.T) {
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{recognizeErr: context.DeadlineExceeded})
 
