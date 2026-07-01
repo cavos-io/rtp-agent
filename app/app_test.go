@@ -13497,6 +13497,7 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_STT_INTERIM_RESULTS", "false")
 	t.Setenv("RTP_AGENT_STT_WORD_TIMESTAMPS", "false")
 	t.Setenv("RTP_AGENT_STT_ENDPOINTING_MS", "250")
+	t.Setenv("RTP_AGENT_STT_MIN_CONFIDENCE_THRESHOLD", "0.72")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -13522,6 +13523,9 @@ func TestDefaultConfigFromEnvSelectsGoogleSTTOptions(t *testing.T) {
 	}
 	if googleCfg.speechEndTimeout != 250*time.Millisecond {
 		t.Fatalf("speechEndTimeout = %v, want 250ms", googleCfg.speechEndTimeout)
+	}
+	if googleCfg.minConfidence == nil || *googleCfg.minConfidence != 0.72 {
+		t.Fatalf("minConfidence = %#v, want 0.72", googleCfg.minConfidence)
 	}
 	if !reflect.DeepEqual(googleCfg.alternativeLanguages, []string{"es-ES", "fr-FR"}) {
 		t.Fatalf("alternativeLanguages = %#v, want [es-ES fr-FR]", googleCfg.alternativeLanguages)
