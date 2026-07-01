@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -110,7 +111,10 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildGnaniSTTWebsocketURL(s).String(), buildGnaniSTTWebsocketHeaders(s, language))
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial gnani stt websocket: %w", err)
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani stt websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &gnaniSTTStream{

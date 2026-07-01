@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -89,6 +90,28 @@ func TestGnaniSTTRequiresAPIKeyBeforeRequest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "GNANI_API_KEY") {
 		t.Fatalf("Stream error = %q, want GNANI_API_KEY guidance", err)
+	}
+}
+
+func TestGnaniSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("gnani stt dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSTT("test-key")
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil on dial failure", stream)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
