@@ -1273,6 +1273,37 @@ func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsReportsReferenceReconnectError(t *testing.T) {
+	firstStream := &fakeGoogleStreamingRecognizeClient{}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
+		streamErrs:   []error{nil, status.Error(codes.Unavailable, "restart failed")},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil reconnect error", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want reconnect APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != int(codes.Unavailable) {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
+	}
+}
+
 func TestGoogleSTTUpdateOptionsReconnectsActiveStreamSpeechTimeouts(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}

@@ -267,7 +267,9 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 
 	for _, stream := range streams {
 		stream.updateConfig(minConfidence, language, languageChanged)
-		stream.reconnectForUpdatedConfig()
+		if err := stream.reconnectForUpdatedConfig(); err != nil {
+			stream.failWithError(err)
+		}
 	}
 }
 
@@ -821,11 +823,6 @@ func (s *googleSTTStream) shouldRestartAfterMaxSession(stream speechpb.Speech_St
 	return !s.closed && !s.inputClosed && s.stream == stream && !s.sessionConnectedAt.IsZero() && time.Since(s.sessionConnectedAt) > googleSTTMaxSessionDuration
 }
 
-func (s *googleSTTStream) restartStream(old speechpb.Speech_StreamingRecognizeClient) bool {
-	restarted, _ := s.restartStreamWithError(old)
-	return restarted
-}
-
 func (s *googleSTTStream) restartStreamWithError(old speechpb.Speech_StreamingRecognizeClient) (bool, error) {
 	_ = old.CloseSend()
 	stream, err := s.owner.newStreamingRecognizeStream(s.ctx, s.language, s.includeAlternativeLanguages)
@@ -845,8 +842,27 @@ func (s *googleSTTStream) restartStreamWithError(old speechpb.Speech_StreamingRe
 	return true, nil
 }
 
-func (s *googleSTTStream) reconnectForUpdatedConfig() bool {
-	return s.restartStream(s.currentStream())
+func (s *googleSTTStream) reconnectForUpdatedConfig() error {
+	_, err := s.restartStreamWithError(s.currentStream())
+	return err
+}
+
+func (s *googleSTTStream) failWithError(err error) {
+	if err == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.inputClosed = true
+	stream := s.stream
+	s.mu.Unlock()
+
+	s.errCh <- googleSTTStreamError(err)
+	_ = stream.CloseSend()
+	s.unregister()
 }
 
 func (s *googleSTTStream) terminate() {
