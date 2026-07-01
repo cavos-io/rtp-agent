@@ -13521,6 +13521,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testin
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceAudioEncoding(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSEncoding: "mp3",
+	})
+
+	if googleCfg.audioEncoding == nil || *googleCfg.audioEncoding != texttospeechpb.AudioEncoding_MP3 {
+		t.Fatalf("audioEncoding = %v, want MP3", googleCfg.audioEncoding)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleTTSMarkup(t *testing.T) {
 	original := appNewGoogleTTS
 	defer func() { appNewGoogleTTS = original }()

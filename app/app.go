@@ -124,6 +124,7 @@ type appGoogleTTSConfig struct {
 	speakingRate         float64
 	pitch                float64
 	sampleRate           *int
+	audioEncoding        *texttospeechpb.AudioEncoding
 	effectsProfileID     string
 	volumeGainDB         float64
 	streaming            *bool
@@ -243,6 +244,9 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	}
 	if cfg.sampleRate != nil {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSSampleRate(int32(*cfg.sampleRate)))
+	}
+	if cfg.audioEncoding != nil {
+		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSAudioEncoding(*cfg.audioEncoding))
 	}
 	if cfg.effectsProfileID != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSEffectsProfileID(cfg.effectsProfileID))
@@ -4092,6 +4096,7 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		streaming:  cfg.TTSStreaming,
 		ssml:       cfg.TTSEnableSSMLParsing,
 	}
+	googleCfg.audioEncoding = googleTTSAudioEncodingFromConfig(cfg)
 	switch {
 	case strings.EqualFold(cfg.TTSTextType, "markup"):
 		markup := true
@@ -4114,6 +4119,28 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	}
 	googleCfg.customPronunciations = googleTTSCustomPronunciationsFromOptions(cfg.TTSModelOptions)
 	return googleCfg
+}
+
+func googleTTSAudioEncodingFromConfig(cfg AppConfig) *texttospeechpb.AudioEncoding {
+	encoding := strings.TrimSpace(cfg.TTSEncoding)
+	if encoding == "" {
+		encoding = modelOptionString(cfg.TTSModelOptions, "audio_encoding")
+	}
+	if encoding == "" {
+		encoding = modelOptionString(cfg.TTSModelOptions, "encoding")
+	}
+	if encoding == "" {
+		return nil
+	}
+	normalized := strings.ToUpper(strings.ReplaceAll(encoding, "-", "_"))
+	if normalized == "OGGOPUS" {
+		normalized = "OGG_OPUS"
+	}
+	if value, ok := texttospeechpb.AudioEncoding_value[normalized]; ok {
+		audioEncoding := texttospeechpb.AudioEncoding(value)
+		return &audioEncoding
+	}
+	return nil
 }
 
 func googleTTSCustomPronunciationsFromOptions(options map[string]any) *texttospeechpb.CustomPronunciations {
