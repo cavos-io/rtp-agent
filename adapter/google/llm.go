@@ -253,6 +253,9 @@ func applyGoogleExtraParams(config *genai.GenerateContentConfig, params map[stri
 	if value, ok := googleBoolParam(params["enable_enhanced_civic_answers"]); ok {
 		config.EnableEnhancedCivicAnswers = &value
 	}
+	if value, ok := googleImageConfigParam(params["image_config"]); ok {
+		config.ImageConfig = value
+	}
 	if value := googleStringList(params["response_modalities"]); len(value) > 0 {
 		config.ResponseModalities = value
 	}
@@ -379,6 +382,11 @@ func googleLabelsParam(value any) (map[string]string, bool) {
 
 func googleModelArmorConfigParam(value any) (*genai.ModelArmorConfig, bool) {
 	config, ok := value.(*genai.ModelArmorConfig)
+	return config, ok && config != nil
+}
+
+func googleImageConfigParam(value any) (*genai.ImageConfig, bool) {
+	config, ok := value.(*genai.ImageConfig)
 	return config, ok && config != nil
 }
 

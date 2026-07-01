@@ -629,6 +629,24 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceEnhancedCivicAnswersExt
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigAppliesReferenceImageConfigExtra(t *testing.T) {
+	imageConfig := &genai.ImageConfig{
+		AspectRatio: "16:9",
+		ImageSize:   "2K",
+	}
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"image_config": imageConfig,
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ImageConfig != imageConfig {
+		t.Fatalf("ImageConfig = %#v, want %#v", config.ImageConfig, imageConfig)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
