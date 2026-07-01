@@ -248,6 +248,9 @@ func googleTTSConfigFromOptions(opts ...GoogleTTSOption) googleTTSConfig {
 	if !cfg.modelSet && !cfg.promptSet && (cfg.cloneKeySet || (cfg.voiceSet && strings.Contains(strings.ToLower(cfg.voice), "chirp"))) {
 		cfg.model = "chirp_3"
 	}
+	if cfg.model == "chirp_3" && !cfg.voiceSet && !cfg.cloneKeySet {
+		cfg.voice = "en-US-Chirp3-HD-Charon"
+	}
 	return cfg
 }
 
