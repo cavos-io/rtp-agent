@@ -3,6 +3,7 @@ package google
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -115,6 +116,126 @@ func TestGoogleTTSStreamSendsReferenceConfigAndInput(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 24000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
 		t.Fatalf("frame = %+v, want 24 kHz mono samples", audio.Frame)
+	}
+}
+
+func TestGoogleTTSStreamClonesReferenceAudioFrames(t *testing.T) {
+	providerAudio := []byte{1, 2, 3, 4}
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{
+				AudioContent: providerAudio,
+			}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	providerAudio[0] = 9
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio data after provider mutation = %v, want cloned frame data", got)
+	}
+}
+
+func TestGoogleTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{
+				{AudioContent: []byte{1}},
+				{AudioContent: []byte{2, 3, 4}},
+			},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio data = %v, want odd byte buffered into next PCM sample", got)
+	}
+	if got := audio.Frame.SamplesPerChannel; got != 2 {
+		t.Fatalf("samples per channel = %d, want 2 complete PCM16 samples", got)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+}
+
+func TestGoogleTTSStreamBuffersReferenceProgressivePCMFrame(t *testing.T) {
+	first := bytes.Repeat([]byte{1, 2}, 200)
+	second := bytes.Repeat([]byte{3, 4}, 280)
+	want := append(append([]byte(nil), first...), second...)
+	client := &fakeGoogleTTSClient{
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{
+				{AudioContent: first},
+				{AudioContent: second},
+			},
+		},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, want) {
+		t.Fatalf("audio data length = %d, want buffered 20ms frame length %d", len(got), len(want))
+	}
+	if got := audio.Frame.SamplesPerChannel; got != 480 {
+		t.Fatalf("samples per channel = %d, want reference 20ms frame", got)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
 	}
 }
 
@@ -1991,6 +2112,148 @@ func TestGoogleTTSSynthesizeStripsWAVHeaderAndChunksAudio(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
+	}
+}
+
+func TestGoogleTTSSynthesizeClonesReferenceAudioFrames(t *testing.T) {
+	providerAudio := []byte{1, 2, 3, 4}
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: providerAudio},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	providerAudio[0] = 9
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio data after provider mutation = %v, want cloned frame data", got)
+	}
+}
+
+func TestGoogleTTSSynthesizeDropsReferenceTrailingPartialPCMSample(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3}},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2}) {
+		t.Fatalf("audio data = %v, want only complete PCM16 samples", got)
+	}
+	if got := audio.Frame.SamplesPerChannel; got != 1 {
+		t.Fatalf("samples per channel = %d, want 1 complete PCM16 sample", got)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+}
+
+func TestGoogleTTSSynthesizeBuffersReferenceProgressivePCMFrames(t *testing.T) {
+	firstFrame := bytes.Repeat([]byte{1, 2}, 480)
+	secondFrame := bytes.Repeat([]byte{3, 4}, 960)
+	response := append(append([]byte(nil), firstFrame...), secondFrame...)
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: response},
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next returned error: %v", err)
+	}
+	if got := first.Frame.Data; !bytes.Equal(got, firstFrame) {
+		t.Fatalf("first frame length = %d, want reference 20ms frame length %d", len(got), len(firstFrame))
+	}
+	if got := first.Frame.SamplesPerChannel; got != 480 {
+		t.Fatalf("first samples per channel = %d, want reference 20ms frame", got)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next returned error: %v", err)
+	}
+	if got := second.Frame.Data; !bytes.Equal(got, secondFrame) {
+		t.Fatalf("second frame length = %d, want reference 40ms frame length %d", len(got), len(secondFrame))
+	}
+	if got := second.Frame.SamplesPerChannel; got != 960 {
+		t.Fatalf("second samples per channel = %d, want reference 40ms frame", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next returned error: %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final Next = %+v, want final marker", final)
+	}
+}
+
+func TestGoogleTTSSynthesizeStripsExtendedWAVHeaderLikeReference(t *testing.T) {
+	var payload bytes.Buffer
+	payload.WriteString("RIFF")
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(0))
+	payload.WriteString("WAVE")
+	payload.WriteString("fmt ")
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&payload, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&payload, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(24000))
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(48000))
+	_ = binary.Write(&payload, binary.LittleEndian, uint16(2))
+	_ = binary.Write(&payload, binary.LittleEndian, uint16(16))
+	payload.WriteString("JUNK")
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(4))
+	payload.Write([]byte{0xaa, 0xbb, 0xcc, 0xdd})
+	payload.WriteString("data")
+	_ = binary.Write(&payload, binary.LittleEndian, uint32(4))
+	payload.Write([]byte{1, 2, 3, 4})
+	wav := payload.Bytes()
+	binary.LittleEndian.PutUint32(wav[4:8], uint32(len(wav)-8))
+
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: wav},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_LINEAR16))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if got := chunk.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("chunk data = %v, want WAV data chunk without extended header bytes", got)
 	}
 }
 

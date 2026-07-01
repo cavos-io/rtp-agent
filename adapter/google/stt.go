@@ -252,12 +252,16 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) {
 	s.mu.Lock()
 	oldLanguage := s.language
+	oldAlternativeLanguages := append([]string(nil), s.alternativeLanguages...)
 	for _, opt := range opts {
 		opt(s)
 	}
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
+	if languageChanged && googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages) {
+		s.alternativeLanguages = nil
+	}
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -463,6 +467,18 @@ func googleAlternativeLanguageCodes(s *GoogleSTT, include bool) []string {
 	return append([]string(nil), s.alternativeLanguages...)
 }
 
+func googleStringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
 	if s == nil {
 		return nil
@@ -527,7 +543,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	var confidence float64
 	var count int
 	var firstWords []*speechpb.WordInfo
-	var timingWords []*speechpb.WordInfo
+	var lastWords []*speechpb.WordInfo
 	for _, result := range results {
 		if len(result.GetAlternatives()) == 0 {
 			continue
@@ -538,7 +554,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		if count == 0 {
 			firstWords = alt.GetWords()
 		}
-		timingWords = append(timingWords, alt.GetWords()...)
+		lastWords = alt.GetWords()
 		count++
 	}
 	if count == 0 {
@@ -550,7 +566,7 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 		Confidence: confidence / float64(count),
 		Words:      googleTimedStrings(firstWords),
 	}
-	googleApplySpeechDataTiming(&data, timingWords, 0)
+	googleApplyRecognizeSpeechDataTiming(&data, firstWords, lastWords)
 	return []stt.SpeechData{data}
 }
 
@@ -559,6 +575,14 @@ func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult, 
 		return fallback
 	}
 	return results[0].GetLanguageCode()
+}
+
+func googleApplyRecognizeSpeechDataTiming(data *stt.SpeechData, firstWords []*speechpb.WordInfo, lastWords []*speechpb.WordInfo) {
+	if data == nil || len(firstWords) == 0 || len(lastWords) == 0 {
+		return
+	}
+	data.StartTime = firstWords[0].GetStartTime().AsDuration().Seconds()
+	data.EndTime = lastWords[len(lastWords)-1].GetEndTime().AsDuration().Seconds()
 }
 
 func googleTimedStrings(words []*speechpb.WordInfo) []stt.TimedString {
@@ -1070,7 +1094,7 @@ func (s *googleSTTStream) sendAudioFrameLocked(frame *model.AudioFrame) error {
 	}
 	if err := s.stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
-			AudioContent: frame.Data,
+			AudioContent: bytes.Clone(frame.Data),
 		},
 	}); err != nil {
 		s.closed = true
