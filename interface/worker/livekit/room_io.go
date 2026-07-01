@@ -2121,7 +2121,7 @@ func (rio *RoomIO) releaseAudioSubscriptionFallback(ch chan struct{}) {
 	})
 }
 
-func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {
+func roomIOResampleMonoForOpus(frame *model.AudioFrame) (*model.AudioFrame, error) {
 	if frame == nil {
 		return nil, nil
 	}
@@ -2156,7 +2156,25 @@ func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error
 	if len(encodeFrame.Data) < expectedBytes {
 		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
 	}
-	data := encodeFrame.Data[:expectedBytes]
+	return &model.AudioFrame{
+		Data:              encodeFrame.Data[:expectedBytes],
+		SampleRate:        roomIOOpusClockRate,
+		NumChannels:       1,
+		SamplesPerChannel: samplesPerChannel,
+	}, nil
+}
+
+func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error) {
+	mono, err := roomIOResampleMonoForOpus(frame)
+	if err != nil {
+		return nil, err
+	}
+	if mono == nil {
+		return nil, nil
+	}
+	const bytesPerSample = 2
+	data := mono.Data
+	samplesPerChannel := mono.SamplesPerChannel
 	if samplesPerChannel == 0 {
 		return nil, nil
 	}
@@ -2172,7 +2190,7 @@ func roomIOOpusEncodeFrames(frame *model.AudioFrame) ([]*model.AudioFrame, error
 		frames = append(frames, &model.AudioFrame{
 			Data:              chunkData,
 			SampleRate:        roomIOOpusClockRate,
-			NumChannels:       encodeFrame.NumChannels,
+			NumChannels:       1,
 			SamplesPerChannel: paddedSamples,
 		})
 		sampleOffset += chunkSamples
