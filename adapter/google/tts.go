@@ -3,6 +3,7 @@ package google
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -303,6 +304,7 @@ func (t *GoogleTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 
 	return &googleTTSChunkedStream{
 		data:       resp.AudioContent,
+		inputText:  text,
 		sampleRate: t.audio.GetSampleRateHertz(),
 	}, nil
 }
@@ -362,6 +364,8 @@ type googleTTSChunkedStream struct {
 	offset         int
 	headerStripped bool
 	finalSent      bool
+	emittedAudio   bool
+	inputText      string
 	sampleRate     int32
 }
 
@@ -376,6 +380,10 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 
 	if s.offset >= len(s.data) {
+		if strings.TrimSpace(s.inputText) != "" && !s.emittedAudio && !s.finalSent {
+			s.finalSent = true
+			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.inputText), nil, true)
+		}
 		return s.emitFinal()
 	}
 
@@ -387,6 +395,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	chunk := s.data[s.offset:end]
 	s.offset = end
+	s.emittedAudio = true
 	sampleRate := s.sampleRate
 	if sampleRate == 0 {
 		sampleRate = 24000

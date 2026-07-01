@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -985,12 +986,20 @@ func TestGoogleTTSSynthesizeStripsHeaderOnlyWAV(t *testing.T) {
 	}
 	defer stream.Close()
 
-	final, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next returned error = %v, want final marker", err)
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil no-audio error", audio)
 	}
-	if final == nil || !final.IsFinal || final.Frame != nil {
-		t.Fatalf("Next = %+v, want final marker without header audio", final)
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if !apiErr.Retryable {
+		t.Fatal("APIError retryable = false, want true")
+	}
+	if !strings.Contains(apiErr.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("APIError = %q, want reference no-audio message", apiErr.Error())
 	}
 }
 
