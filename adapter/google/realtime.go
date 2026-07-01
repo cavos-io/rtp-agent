@@ -28,6 +28,7 @@ var (
 
 type RealtimeModel struct {
 	apiKey                    string
+	instructions              string
 	model                     string
 	voice                     string
 	language                  string
@@ -50,6 +51,7 @@ type GoogleRealtimeOption func(*googleRealtimeOptions)
 
 type googleRealtimeOptions struct {
 	model                     string
+	instructions              string
 	voice                     string
 	language                  string
 	vertexAI                  *bool
@@ -72,6 +74,12 @@ func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
 		if model != "" {
 			options.model = model
 		}
+	}
+}
+
+func WithGoogleRealtimeInstructions(instructions string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.instructions = instructions
 	}
 }
 
@@ -222,6 +230,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	}
 	return &RealtimeModel{
 		apiKey:                    apiKey,
+		instructions:              options.instructions,
 		model:                     modelName,
 		voice:                     voice,
 		language:                  options.language,

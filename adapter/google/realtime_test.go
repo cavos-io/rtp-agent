@@ -108,6 +108,7 @@ func TestGoogleRealtimeModelAPIMatchValidation(t *testing.T) {
 
 func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeInstructions("stay brief"),
 		WithGoogleRealtimeModel("gemini-3.1-flash-live-preview"),
 		WithGoogleRealtimeVoice("Charon"),
 		WithGoogleRealtimeLanguage("es-US"),
@@ -141,6 +142,9 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	}
 	if model.language != "es-US" {
 		t.Fatalf("language = %q, want explicit reference language", model.language)
+	}
+	if model.instructions != "stay brief" {
+		t.Fatalf("instructions = %q, want explicit reference instructions", model.instructions)
 	}
 }
 
