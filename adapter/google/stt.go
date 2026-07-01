@@ -334,6 +334,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	s.mu.Lock()
 	previous := googleSTTCaptureConfig(s)
 	oldLanguage := s.language
+	oldLocation := s.location
 	oldAlternativeLanguages := append([]string(nil), s.alternativeLanguages...)
 	for _, opt := range opts {
 		opt(s)
@@ -347,6 +348,9 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
+	if oldLocation != s.location && s.newClientV2 != nil {
+		s.clientV2 = nil
+	}
 	if languageChanged && googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages) {
 		s.alternativeLanguages = nil
 	}

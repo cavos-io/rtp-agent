@@ -2038,6 +2038,63 @@ func TestGoogleSTTUpdateOptionsCreatesReferenceV2ClientOnVersionSwitch(t *testin
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsRecreatesReferenceV2ClientOnLocationChange(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: firstRelease}
+	oldExtraStream := &fakeGoogleV2StreamingRecognizeClient{}
+	oldClient := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, oldExtraStream},
+		streamCallCh: make(chan int, 2),
+	}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: secondRelease}
+	newClient := &fakeGoogleV2SpeechClient{
+		stream:       secondStream,
+		streamCallCh: make(chan int, 1),
+	}
+	provider := newGoogleSTTWithV2Client(
+		oldClient,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+	createCalls := 0
+	provider.newClientV2 = func(context.Context) (googleSpeechV2Client, error) {
+		createCalls++
+		return newClient, nil
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-oldClient.streamCallCh
+
+	if err := provider.UpdateOptions(WithGoogleSTTLocation("us-central1")); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+
+	select {
+	case calls := <-newClient.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("new client stream calls = %d, want one reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for new v2 client reconnect after location update")
+	}
+	if createCalls != 1 {
+		t.Fatalf("v2 client create calls = %d, want one after location update", createCalls)
+	}
+	if oldClient.streamCalls != 1 {
+		t.Fatalf("old client stream calls = %d, want no reconnect on stale client", oldClient.streamCalls)
+	}
+	if got := secondStream.sent[0].GetRecognizer(); got != "projects/voice-project/locations/us-central1/recognizers/_" {
+		t.Fatalf("reconnected recognizer = %q, want updated location", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTStreamConfidenceThresholdUsesAllReferenceResults(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
