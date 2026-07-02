@@ -245,6 +245,27 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionPushAudioSendErrorReturnsAPIConnectionError(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	stream.sendErr = errors.New("bedrock send failed")
+
+	err = session.PushAudio(&model.AudioFrame{Data: []byte{1, 2, 3}, SampleRate: 16000, NumChannels: 1})
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("PushAudio error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Nova Sonic realtime send failed") {
+		t.Fatalf("PushAudio error = %q, want realtime send context", err.Error())
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioAfterCloseIsIgnored(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

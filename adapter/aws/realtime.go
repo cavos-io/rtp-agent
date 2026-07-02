@@ -292,9 +292,12 @@ func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) err
 	if s.stream == nil {
 		return errors.New("AWS Nova Sonic realtime stream is not initialized")
 	}
-	return s.stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
+	if err := s.stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
 		Value: awstypes.BidirectionalInputPayloadPart{Bytes: []byte(event)},
-	})
+	}); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime send failed: %v", err))
+	}
+	return nil
 }
 
 func (s *awsRealtimeSession) readResponses() {
