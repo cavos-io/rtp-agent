@@ -155,6 +155,40 @@ func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamCarriesReferenceRequestID(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	stream := &awsTTSChunkedStream{
+		stream:    io.NopCloser(bytes.NewReader(mp3Data)),
+		requestID: "polly-request-1",
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.RequestID != "polly-request-1" {
+		t.Fatalf("audio RequestID = %q, want Polly request id", audio.RequestID)
+	}
+	for range 5000 {
+		audio, err = stream.Next()
+		if err != nil {
+			t.Fatalf("Next returned error before final marker: %v", err)
+		}
+		if audio.IsFinal {
+			if audio.RequestID != "polly-request-1" {
+				t.Fatalf("final RequestID = %q, want Polly request id", audio.RequestID)
+			}
+			return
+		}
+	}
+	t.Fatal("stream did not emit final marker")
+}
+
 func TestAWSTTSChunkedStreamYieldsAudioBeforeResponseEOF(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -231,7 +265,8 @@ func TestAWSTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 
 func TestAWSTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.T) {
 	stream := &awsTTSChunkedStream{
-		stream: io.NopCloser(bytes.NewReader(nil)),
+		stream:    io.NopCloser(bytes.NewReader(nil)),
+		requestID: "polly-request-empty",
 	}
 	defer stream.Close()
 
@@ -241,6 +276,9 @@ func TestAWSTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *testing.
 	}
 	if audio == nil || !audio.IsFinal || audio.Frame != nil {
 		t.Fatalf("Next = %+v, want final marker", audio)
+	}
+	if audio.RequestID != "polly-request-empty" {
+		t.Fatalf("final RequestID = %q, want Polly request id", audio.RequestID)
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("second Next error = %v, want EOF", err)

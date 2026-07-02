@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/polly"
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
@@ -136,9 +137,11 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 		return nil, llm.NewAPIConnectionError(err.Error())
 	}
 
+	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
 	stream := &awsTTSChunkedStream{
-		stream:   out.AudioStream,
-		provider: t,
+		stream:    out.AudioStream,
+		requestID: requestID,
+		provider:  t,
 	}
 	if !t.registerStream(stream) {
 		stream.Close()
@@ -230,6 +233,7 @@ type awsTTSChunkedStream struct {
 	stream       io.ReadCloser
 	decoder      codecs.AudioStreamDecoder
 	readErr      chan error
+	requestID    string
 	started      bool
 	hasAudio     bool
 	emittedAudio bool
@@ -252,7 +256,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if len(first) == 0 && firstErr == io.EOF {
 			_ = s.decoder.Close()
 			s.finalSent = true
-			return &tts.SynthesizedAudio{IsFinal: true}, nil
+			return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 		}
 		if len(first) == 0 && firstErr != nil {
 			_ = s.Close()
@@ -270,7 +274,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			if s.hasAudio && !s.finalSent {
 				s.finalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 			}
 			return nil, io.EOF
 		}
@@ -285,7 +289,8 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	s.emittedAudio = true
 	return &tts.SynthesizedAudio{
-		Frame: frame,
+		RequestID: s.requestID,
+		Frame:     frame,
 	}, nil
 }
 
