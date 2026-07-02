@@ -111,6 +111,32 @@ func TestAWSRealtimeSessionPushAudioAfterCloseIsIgnored(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionUpdateChatContextAfterCloseIsIgnored(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	sentCount := len(stream.sent)
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.ChatMessage{
+		ID:      "user-after-close",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "still there?"}},
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext after Close error = %v, want nil", err)
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("UpdateChatContext after Close sent %d events, want none", len(stream.sent)-sentCount)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

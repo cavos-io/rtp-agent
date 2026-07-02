@@ -433,6 +433,12 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if chatCtx == nil {
 		return nil
 	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil
+	}
 	for _, item := range chatCtx.Items {
 		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleUser {
 			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
