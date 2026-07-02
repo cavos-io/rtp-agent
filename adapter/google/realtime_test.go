@@ -878,6 +878,42 @@ func TestGoogleRealtimeSessionInterruptedEmitsReferenceSpeechStarted(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionInterruptedTurnCompleteMatchesReferenceOrder(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			Interrupted:  true,
+			TurnComplete: true,
+		},
+	}
+
+	expectGoogleRealtimeGeneration(t, session.EventCh())
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta
+	started := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if started.Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("interrupted turn-complete first event = %#v, want speech_started", started)
+	}
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped || stopped.SpeechStopped == nil {
+		t.Fatalf("interrupted turn-complete second event = %#v, want speech_stopped", stopped)
+	}
+}
+
 func TestGoogleRealtimeSessionTurnCompleteEmitsReferenceSpeechStopped(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

@@ -719,15 +719,15 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		s.inputID = ""
 		s.inputText = ""
 	}
+	if message.ServerContent.Interrupted {
+		s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+	}
 	if message.ServerContent.TurnComplete {
 		s.emitEvent(llm.RealtimeEvent{
 			Type:          llm.RealtimeEventTypeSpeechStopped,
 			SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
 		})
 		s.closeGeneration()
-	}
-	if message.ServerContent.Interrupted {
-		s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 	}
 }
 
