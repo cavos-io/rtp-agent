@@ -107,14 +107,17 @@ func buildAWSToolConfig(options *llm.ChatOptions) *types.ToolConfiguration {
 	toolSpecs := make([]types.Tool, 0, len(options.Tools))
 	for _, t := range options.Tools {
 		doc := document.NewLazyDocument(llm.ToolParameters(t))
-		toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
-			Value: types.ToolSpecification{
-				Name:        aws.String(t.Name()),
-				Description: aws.String(t.Description()),
-				InputSchema: &types.ToolInputSchemaMemberJson{
-					Value: doc,
-				},
+		spec := types.ToolSpecification{
+			Name: aws.String(t.Name()),
+			InputSchema: &types.ToolInputSchemaMemberJson{
+				Value: doc,
 			},
+		}
+		if description := t.Description(); description != "" {
+			spec.Description = aws.String(description)
+		}
+		toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
+			Value: spec,
 		})
 	}
 

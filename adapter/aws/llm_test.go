@@ -31,6 +31,12 @@ func (awsRequestTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
 
+type awsEmptyDescriptionTool struct {
+	awsRequestTestTool
+}
+
+func (awsEmptyDescriptionTool) Description() string { return "" }
+
 func TestAWSLLMDefaultsMatchReference(t *testing.T) {
 	provider := &AWSLLM{model: defaultAWSLLMModel}
 
@@ -356,6 +362,23 @@ func TestBuildAWSToolConfigDropsToolsForNoneChoice(t *testing.T) {
 
 	if config != nil {
 		t.Fatalf("tool config = %#v, want nil", config)
+	}
+}
+
+func TestBuildAWSToolConfigOmitsReferenceEmptyDescription(t *testing.T) {
+	config := buildAWSToolConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{awsEmptyDescriptionTool{}},
+	})
+
+	if config == nil || len(config.Tools) != 1 {
+		t.Fatalf("tool config = %#v, want one tool", config)
+	}
+	tool, ok := config.Tools[0].(*awstypes.ToolMemberToolSpec)
+	if !ok {
+		t.Fatalf("tool = %T, want ToolSpec", config.Tools[0])
+	}
+	if tool.Value.Description != nil {
+		t.Fatalf("tool description = %#v, want nil for empty reference description", tool.Value.Description)
 	}
 }
 
