@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -191,16 +192,30 @@ func (c *awsRealtimeSDKClient) InvokeModelWithBidirectionalStream(ctx context.Co
 }
 
 type awsRealtimeSession struct {
-	model   *AWSRealtimeModel
-	client  awsRealtimeClient
-	builder *awsRealtimeEventBuilder
-	stream  awsRealtimeStream
-	eventCh chan llm.RealtimeEvent
-	turns   *awsRealtimeTurnTracker
-	pending map[string]struct{}
-	sent    map[string]struct{}
-	mu      sync.Mutex
-	closed  bool
+	model        *AWSRealtimeModel
+	client       awsRealtimeClient
+	builder      *awsRealtimeEventBuilder
+	stream       awsRealtimeStream
+	eventCh      chan llm.RealtimeEvent
+	turns        *awsRealtimeTurnTracker
+	generation   *awsRealtimeGeneration
+	instructions string
+	tools        []llm.Tool
+	pending      map[string]struct{}
+	sent         map[string]struct{}
+	mu           sync.Mutex
+	closed       bool
+}
+
+type awsRealtimeGeneration struct {
+	responseID   string
+	messageCh    chan llm.MessageGeneration
+	functionCh   chan *llm.FunctionCall
+	textCh       chan string
+	audioCh      chan *model.AudioFrame
+	modalitiesCh chan []string
+	contentTypes map[string]string
+	closeOnce    sync.Once
 }
 
 func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
@@ -212,14 +227,7 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 		pending: make(map[string]struct{}),
 		sent:    make(map[string]struct{}),
 	}
-	session.turns = newAWSRealtimeTurnTracker(session.emit, func() {
-		session.emit(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeGenerationCreated,
-			Generation: &llm.GenerationCreatedEvent{
-				ResponseID: uuid.NewString(),
-			},
-		})
-	})
+	session.turns = newAWSRealtimeTurnTracker(session.emit, session.emitGenerationCreated)
 	return session
 }
 
@@ -231,10 +239,18 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		return err
 	}
 	s.stream = stream
+	s.mu.Lock()
+	systemPrompt := s.instructions
+	tools := append([]llm.Tool(nil), s.tools...)
+	s.mu.Unlock()
+	if systemPrompt == "" {
+		systemPrompt = defaultAWSRealtimeSystemPrompt
+	}
 	initEvents, historyEvents, err := s.builder.createPromptStartBlock(awsRealtimePromptStartOptions{
 		voiceID:                s.model.voice,
 		outputSampleRate:       defaultAWSRealtimeOutputSampleRate,
-		systemContent:          defaultAWSRealtimeSystemPrompt,
+		systemContent:          systemPrompt,
+		tools:                  tools,
 		maxTokens:              defaultAWSRealtimeMaxTokens,
 		topP:                   defaultAWSRealtimeTopP,
 		temperature:            defaultAWSRealtimeTemperature,
@@ -290,9 +306,13 @@ func (s *awsRealtimeSession) readResponses() {
 }
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
+	if awsRealtimeNestedMap(payload, "event", "completionStart") != nil {
+		s.emitGenerationCreated()
+	}
 	if s.turns != nil {
 		s.turns.feed(payload)
 	}
+	s.trackGenerationContentStart(payload)
 	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
@@ -302,13 +322,22 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			})
 			return
 		}
-		s.emit(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeAudio,
-			Data: data,
-		})
+		if s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data) {
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeAudio,
+				Data: data,
+			})
+		}
 	}
 	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
+		if textContent == awsRealtimeBargeInContent {
+			if !s.hasPendingTools() {
+				s.closeGeneration()
+			}
+			return
+		}
 		if awsRealtimeNestedString(payload, "event", "textOutput", "role") == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
+			s.sendGenerationText(awsRealtimeNestedString(payload, "event", "textOutput", "contentId"), textContent)
 			s.emit(llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeText,
 				Text: textContent,
@@ -316,21 +345,182 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		}
 	}
 	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
+		if !s.sendGenerationFunction(&llm.FunctionCall{
+			CallID:    toolUseID,
+			Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
+			Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
+		}) {
+			return
+		}
 		s.mu.Lock()
 		s.pending[toolUseID] = struct{}{}
 		s.mu.Unlock()
-		s.emit(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeFunctionCall,
-			Function: &llm.FunctionToolCall{
-				CallID:    toolUseID,
-				Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
-				Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
-			},
-		})
 	}
 	if usage := awsRealtimeNestedMap(payload, "event", "usageEvent"); usage != nil {
 		s.emitUsageMetrics(usage)
 	}
+	if awsRealtimeNestedMap(payload, "event", "completionEnd") != nil {
+		s.closeGeneration()
+	}
+	if awsRealtimeNestedString(payload, "event", "contentEnd", "type") == "AUDIO" &&
+		awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
+		s.closeGeneration()
+	}
+}
+
+func (s *awsRealtimeSession) hasPendingTools() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pending) > 0
+}
+
+func (s *awsRealtimeSession) emitGenerationCreated() {
+	generation := s.ensureGeneration()
+	s.emit(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:  generation.messageCh,
+			FunctionCh: generation.functionCh,
+			ResponseID: generation.responseID,
+		},
+	})
+}
+
+func (s *awsRealtimeSession) ensureGeneration() *awsRealtimeGeneration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.generation != nil {
+		return s.generation
+	}
+	generation := &awsRealtimeGeneration{
+		responseID:   uuid.NewString(),
+		messageCh:    make(chan llm.MessageGeneration, 1),
+		functionCh:   make(chan *llm.FunctionCall, 8),
+		textCh:       make(chan string, 16),
+		audioCh:      make(chan *model.AudioFrame, 16),
+		modalitiesCh: make(chan []string, 1),
+		contentTypes: make(map[string]string),
+	}
+	generation.modalitiesCh <- []string{"audio", "text"}
+	generation.messageCh <- llm.MessageGeneration{
+		MessageID:    generation.responseID,
+		TextCh:       generation.textCh,
+		AudioCh:      generation.audioCh,
+		ModalitiesCh: generation.modalitiesCh,
+	}
+	s.generation = generation
+	return generation
+}
+
+func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any) {
+	contentID := awsRealtimeNestedString(payload, "event", "contentStart", "contentId")
+	if contentID == "" {
+		return
+	}
+	contentType := awsRealtimeNestedString(payload, "event", "contentStart", "type")
+	additionalFields := awsRealtimeNestedString(payload, "event", "contentStart", "additionalModelFields")
+	var streamType string
+	switch {
+	case contentType == "AUDIO":
+		streamType = "ASSISTANT_AUDIO"
+	case awsRealtimeNestedString(payload, "event", "contentStart", "role") == "ASSISTANT" &&
+		contentType == "TEXT" && strings.Contains(additionalFields, "SPECULATIVE"):
+		streamType = "ASSISTANT_TEXT"
+	case awsRealtimeNestedString(payload, "event", "contentStart", "role") == "ASSISTANT" &&
+		contentType == "TEXT" && strings.Contains(additionalFields, "FINAL"):
+		streamType = "ASSISTANT_FINAL"
+	default:
+		return
+	}
+	var generation *awsRealtimeGeneration
+	if streamType == "ASSISTANT_TEXT" {
+		generation = s.ensureGeneration()
+	} else {
+		s.mu.Lock()
+		generation = s.generation
+		s.mu.Unlock()
+	}
+	if generation == nil {
+		return
+	}
+	s.mu.Lock()
+	generation.contentTypes[contentID] = streamType
+	s.mu.Unlock()
+}
+
+func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) bool {
+	s.mu.Lock()
+	generation := s.generation
+	streamType := ""
+	if generation != nil {
+		streamType = generation.contentTypes[contentID]
+	}
+	s.mu.Unlock()
+	if generation == nil || streamType != "ASSISTANT_AUDIO" {
+		return false
+	}
+	frame := &model.AudioFrame{
+		Data:              data,
+		SampleRate:        defaultAWSRealtimeOutputSampleRate,
+		NumChannels:       defaultAWSRealtimeChannels,
+		SamplesPerChannel: uint32(len(data) / 2),
+	}
+	select {
+	case generation.audioCh <- frame:
+	default:
+	}
+	return true
+}
+
+func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
+	s.mu.Lock()
+	generation := s.generation
+	streamType := ""
+	if generation != nil {
+		streamType = generation.contentTypes[contentID]
+	}
+	s.mu.Unlock()
+	if generation == nil || streamType != "ASSISTANT_TEXT" {
+		return
+	}
+	select {
+	case generation.textCh <- text:
+	default:
+	}
+}
+
+func (s *awsRealtimeSession) sendGenerationFunction(call *llm.FunctionCall) bool {
+	s.mu.Lock()
+	generation := s.generation
+	s.mu.Unlock()
+	if generation == nil {
+		return false
+	}
+	select {
+	case generation.functionCh <- call:
+	default:
+	}
+	s.closeGeneration()
+	return true
+}
+
+func (s *awsRealtimeSession) closeGeneration() {
+	s.mu.Lock()
+	generation := s.generation
+	if generation != nil {
+		s.generation = nil
+	}
+	s.mu.Unlock()
+	if generation == nil {
+		return
+	}
+	generation.closeOnce.Do(func() {
+		close(generation.textCh)
+		close(generation.audioCh)
+		close(generation.modalitiesCh)
+		close(generation.messageCh)
+		close(generation.functionCh)
+	})
 }
 
 func normalizeAWSRealtimeToolArguments(content string) string {
@@ -428,9 +618,20 @@ func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
 	}
 }
 
-func (s *awsRealtimeSession) UpdateInstructions(string) error { return nil }
+func (s *awsRealtimeSession) UpdateInstructions(instructions string) error {
+	s.mu.Lock()
+	s.instructions = instructions
+	s.mu.Unlock()
+	return nil
+}
 func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if chatCtx == nil {
+		return nil
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
 		return nil
 	}
 	for _, item := range chatCtx.Items {
@@ -460,12 +661,28 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 				return err
 			}
 			content = string(data)
+		} else {
+			content = normalizeAWSRealtimeToolResult(content)
 		}
 		if err := s.sendToolResult(context.Background(), output.CallID, content); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func normalizeAWSRealtimeToolResult(content string) string {
+	var parsed any
+	if err := json.Unmarshal([]byte(content), &parsed); err == nil {
+		if _, ok := parsed.(string); !ok {
+			return content
+		}
+	}
+	data, err := json.Marshal(map[string]string{"tool_result": content})
+	if err != nil {
+		return content
+	}
+	return string(data)
 }
 
 func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *llm.ChatMessage) error {
@@ -506,12 +723,27 @@ func (s *awsRealtimeSession) sendToolResult(ctx context.Context, toolUseID strin
 	}
 	return nil
 }
-func (s *awsRealtimeSession) UpdateTools([]llm.Tool) error { return nil }
+func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
+	s.mu.Lock()
+	s.tools = append([]llm.Tool(nil), tools...)
+	s.mu.Unlock()
+	return nil
+}
 func (s *awsRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return nil
 }
-func (s *awsRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error { return nil }
-func (s *awsRealtimeSession) Say(string) error                                     { return awsRealtimeUnsupported("say") }
+func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if options.Instructions == "" || s.model == nil || s.model.modalities != defaultAWSRealtimeModalities {
+		return nil
+	}
+	msg := &llm.ChatMessage{
+		ID:      uuid.NewString(),
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: options.Instructions}},
+	}
+	return s.sendInteractiveUserText(context.Background(), msg)
+}
+func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("say") }
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return awsRealtimeUnsupported("truncate")
 }
@@ -527,6 +759,7 @@ func (s *awsRealtimeSession) Close() error {
 	stream := s.stream
 	s.mu.Unlock()
 
+	s.closeGeneration()
 	if stream != nil {
 		closeEvents, err := s.builder.createPromptEndBlock()
 		if err != nil {
@@ -549,6 +782,12 @@ func (s *awsRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.event
 
 func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
 		return nil
 	}
 	normalized, err := normalizeAWSRealtimeInputFrame(frame)
