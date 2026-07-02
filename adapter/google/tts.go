@@ -624,6 +624,9 @@ func (s *googleTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 
 	frame, err := s.decoder.Next()
 	if err != nil {
+		if s.closed.Load() {
+			return nil, io.EOF
+		}
 		if strings.Contains(err.Error(), "decoder closed") {
 			if s.emittedAudio {
 				return s.emitFinal()

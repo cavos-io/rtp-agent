@@ -1847,6 +1847,49 @@ func TestGoogleTTSChunkedStreamCloseSuppressesDecoderCloseError(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSChunkedStreamCloseDuringDecoderReadReturnsEOF(t *testing.T) {
+	decoder := &fakeGoogleTTSAudioStreamDecoder{
+		nextStarted: make(chan struct{}),
+		nextRelease: make(chan struct{}),
+		nextErr:     errors.New("decoder closed"),
+	}
+	stream := &googleTTSChunkedStream{
+		decoder:        decoder,
+		decoderStarted: true,
+		encoding:       texttospeech.AudioEncoding_MP3,
+		emittedAudio:   true,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			errCh <- fmt.Errorf("Next returned audio after Close: %#v", audio)
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-decoder.nextStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("decoder Next did not start")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	close(decoder.nextRelease)
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want EOF", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next did not unblock after Close")
+	}
+}
+
 func TestGoogleTTSSynthesizeCloseCancelsInFlightReferenceRequest(t *testing.T) {
 	entered := make(chan struct{})
 	client := &fakeGoogleTTSClient{
@@ -2499,12 +2542,25 @@ func (s *fakeGoogleTTSStream) RecvMsg(m any) error { return nil }
 type fakeGoogleTTSAudioStreamDecoder struct {
 	closeCalls     int
 	closeErr       error
+	nextStarted    chan struct{}
+	nextRelease    chan struct{}
+	nextErr        error
 	secondCloseErr error
 }
 
 func (d *fakeGoogleTTSAudioStreamDecoder) Push([]byte) {}
 func (d *fakeGoogleTTSAudioStreamDecoder) EndInput()   {}
 func (d *fakeGoogleTTSAudioStreamDecoder) Next() (*model.AudioFrame, error) {
+	if d.nextStarted != nil {
+		close(d.nextStarted)
+		d.nextStarted = nil
+	}
+	if d.nextRelease != nil {
+		<-d.nextRelease
+	}
+	if d.nextErr != nil {
+		return nil, d.nextErr
+	}
 	return nil, io.EOF
 }
 func (d *fakeGoogleTTSAudioStreamDecoder) Close() error {
