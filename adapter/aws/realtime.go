@@ -325,7 +325,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	for _, event := range append(initEvents, historyEvents...) {
 		if err := s.sendRawEvent(ctx, event); err != nil {
 			s.closeStartupStream()
-			return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
+			return awsRealtimeStartupSendError(err)
 		}
 	}
 	s.markChatContextUserMessagesSent(chatCtx)
@@ -335,10 +335,21 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	}
 	if err := s.sendRawEvent(ctx, audioStart); err != nil {
 		s.closeStartupStream()
-		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
+		return awsRealtimeStartupSendError(err)
 	}
 	go s.readResponses()
 	return nil
+}
+
+func awsRealtimeStartupSendError(err error) error {
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		return timeoutErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
 }
 
 func (s *awsRealtimeSession) closeStartupStream() {
@@ -362,6 +373,9 @@ func sendAWSRealtimeRawEvent(ctx context.Context, stream awsRealtimeStream, even
 	if err := stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
 		Value: awstypes.BidirectionalInputPayloadPart{Bytes: []byte(event)},
 	}); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime send failed: %v", err))
 	}
 	return nil

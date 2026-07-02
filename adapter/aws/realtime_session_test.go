@@ -128,6 +128,25 @@ func TestAWSRealtimeSessionStartSendErrorClosesStream(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionStartSendDeadlineReturnsAPITimeoutError(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	stream.sendErr = context.DeadlineExceeded
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+
+	session, err := provider.Session()
+
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Session error = %T %v, want APITimeoutError", err, err)
+	}
+	if !stream.closed {
+		t.Fatal("stream closed = false, want true after timeout startup send")
+	}
+}
+
 func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
