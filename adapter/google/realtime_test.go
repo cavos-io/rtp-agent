@@ -204,6 +204,20 @@ func TestGoogleRealtimeUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionIgnoresReferenceToolChoiceUpdate(t *testing.T) {
+	session := &googleRealtimeSession{}
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{}); err != nil {
+		t.Fatalf("empty UpdateOptions error = %v, want nil", err)
+	}
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		ToolChoice:    "auto",
+		ToolChoiceSet: true,
+	}); err != nil {
+		t.Fatalf("tool_choice UpdateOptions error = %v, want reference warning-only no-op", err)
+	}
+}
+
 func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
 	if err != nil {

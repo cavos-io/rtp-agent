@@ -761,9 +761,25 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 func (s *googleRealtimeSession) UpdateTools([]llm.Tool) error {
 	return errors.New("google realtime session tool update is not implemented")
 }
-func (s *googleRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
+func (s *googleRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
+	if googleRealtimeSessionOptionsNoop(options) {
+		return nil
+	}
 	return errors.New("google realtime session option update is not implemented")
 }
+
+func googleRealtimeSessionOptionsNoop(options llm.RealtimeSessionOptions) bool {
+	return !options.VoiceSet &&
+		!options.SpeedSet &&
+		!options.MaxResponseOutputTokensSet &&
+		!options.TruncationSet &&
+		!options.TracingSet &&
+		!options.ReasoningSet &&
+		!options.TurnDetectionSet &&
+		!options.InputAudioTranscriptionSet &&
+		!options.InputAudioNoiseReductionSet
+}
+
 func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	if s == nil || s.liveSession == nil || s.isClosed() {
 		return nil
