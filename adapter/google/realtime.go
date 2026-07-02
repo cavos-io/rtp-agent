@@ -420,6 +420,9 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 	if options.toolResponseSchedulingSet {
 		m.toolResponseScheduling = options.toolResponseScheduling
 		m.toolResponseSchedulingSet = true
+		for session := range m.sessions {
+			sessions[session] = struct{}{}
+		}
 	}
 	m.mu.Unlock()
 	for session := range sessions {
@@ -428,6 +431,9 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 		}
 		if options.temperatureSet {
 			_ = session.reconnectWithTemperature(options.temperature)
+		}
+		if options.toolResponseSchedulingSet {
+			session.updateToolResponseScheduling(options.toolResponseScheduling)
 		}
 	}
 }
@@ -806,7 +812,7 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 			}
 		}
 	}
-	responses := googleRealtimeToolResponses(appendCtx, s.vertexAI, s.toolResponseScheduling)
+	responses := googleRealtimeToolResponses(appendCtx, s.vertexAI, s.currentToolResponseScheduling())
 	if len(responses) == 0 {
 		return nil
 	}
@@ -924,6 +930,24 @@ func (s *googleRealtimeSession) reconnectWithTemperature(temperature float64) er
 	s.mu.Unlock()
 	go s.receiveLoop(nextSession)
 	return nil
+}
+
+func (s *googleRealtimeSession) updateToolResponseScheduling(scheduling any) {
+	if s == nil || s.isClosed() {
+		return
+	}
+	s.mu.Lock()
+	s.toolResponseScheduling = scheduling
+	s.mu.Unlock()
+}
+
+func (s *googleRealtimeSession) currentToolResponseScheduling() any {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.toolResponseScheduling
 }
 
 func googleRealtimeCloneLiveConfig(config *genai.LiveConnectConfig) *genai.LiveConnectConfig {

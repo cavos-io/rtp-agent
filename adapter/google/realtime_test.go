@@ -311,6 +311,43 @@ func TestGoogleRealtimeModelTemperatureUpdatePropagatesReferenceActiveSession(t 
 	}
 }
 
+func TestGoogleRealtimeModelToolResponseSchedulingUpdatePropagatesReferenceActiveSession(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeToolResponseScheduling(genai.FunctionResponseSchedulingWhenIdle),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	model.UpdateOptions(WithGoogleRealtimeToolResponseScheduling(genai.FunctionResponseSchedulingInterrupt))
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.FunctionCall{ID: "call-item", CallID: "call_lookup", Name: "lookup", Arguments: `{}`},
+		&llm.FunctionCallOutput{ID: "output-item", CallID: "call_lookup", Name: "lookup", Output: "done"},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+	if len(liveSession.toolResponses) != 1 {
+		t.Fatalf("tool responses = %d, want one", len(liveSession.toolResponses))
+	}
+	responses := liveSession.toolResponses[0].FunctionResponses
+	if len(responses) != 1 {
+		t.Fatalf("function responses = %d, want one", len(responses))
+	}
+	if got := responses[0].Scheduling; got != genai.FunctionResponseSchedulingInterrupt {
+		t.Fatalf("function response scheduling = %q, want INTERRUPT after model update", got)
+	}
+}
+
 func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
 	if err != nil {
