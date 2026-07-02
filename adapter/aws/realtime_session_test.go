@@ -523,6 +523,43 @@ func TestAWSRealtimeSessionClearAudioDropsBufferedInputTail(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionCommitAudioFlushesBufferedInputTail(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	sentCount := len(stream.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("CommitAudio error = %v", err)
+	}
+
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events after CommitAudio = %d, want flushed tail", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 256*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
+	}
+	sentAfterCommit := len(stream.sent)
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentAfterCommit:]); got != 0 {
+		t.Fatalf("audioInput events after Close = %d, want no duplicate committed tail", got)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioPreservesResampleDurationAcrossFrames(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

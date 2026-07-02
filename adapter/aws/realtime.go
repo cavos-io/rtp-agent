@@ -1090,7 +1090,16 @@ func awsRealtimeInputSampleAt(frame *model.AudioFrame, sampleIndex uint64, frame
 func (s *awsRealtimeSession) PushVideo(*images.VideoFrame) error {
 	return awsRealtimeUnsupported("push_video")
 }
-func (s *awsRealtimeSession) CommitAudio() error { return nil }
+func (s *awsRealtimeSession) CommitAudio() error {
+	s.mu.Lock()
+	closed := s.closed
+	stream := s.stream
+	s.mu.Unlock()
+	if closed || stream == nil {
+		return nil
+	}
+	return s.flushBufferedAudioInput(context.Background(), stream)
+}
 func (s *awsRealtimeSession) ClearAudio() error {
 	s.audioBStream.Clear()
 	s.audioNorm.reset()
