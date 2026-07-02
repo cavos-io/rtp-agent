@@ -402,12 +402,10 @@ func awsSpeechDataFromAlternativeOffset(alt types.Alternative, startTimeOffset f
 }
 
 func awsAlternativeConfidence(items []types.Item) float64 {
-	for _, item := range items {
-		if item.Type == types.ItemTypePronunciation {
-			return aws.ToFloat64(item.Confidence)
-		}
+	if len(items) == 0 {
+		return 0
 	}
-	return 0
+	return aws.ToFloat64(items[0].Confidence)
 }
 
 func awsTimedStringsOffset(items []types.Item, startTimeOffset float64) []stt.TimedString {

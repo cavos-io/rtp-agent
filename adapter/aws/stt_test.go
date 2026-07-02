@@ -106,6 +106,29 @@ func TestAWSSpeechDataFromAlternativePreservesPunctuationItems(t *testing.T) {
 	}
 }
 
+func TestAWSSpeechDataFromAlternativeUsesReferenceFirstItemConfidence(t *testing.T) {
+	data := awsSpeechDataFromAlternative(types.Alternative{
+		Transcript: awsconfig.String(", hello"),
+		Items: []types.Item{
+			{
+				Type:    types.ItemTypePunctuation,
+				Content: awsconfig.String(","),
+			},
+			{
+				Type:       types.ItemTypePronunciation,
+				Content:    awsconfig.String("hello"),
+				StartTime:  0.1,
+				EndTime:    0.3,
+				Confidence: awsconfig.Float64(0.94),
+			},
+		},
+	})
+
+	if data.Confidence != 0 {
+		t.Fatalf("confidence = %v, want first item confidence zero from punctuation", data.Confidence)
+	}
+}
+
 func TestAWSSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 	provider := &AWSSTT{}
 
