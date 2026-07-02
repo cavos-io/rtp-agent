@@ -1117,7 +1117,7 @@ func TestAWSRealtimeSessionClosesReferenceGenerationOnBargeIn(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeSessionInterruptClosesReferenceGeneration(t *testing.T) {
+func TestAWSRealtimeSessionInterruptIsReferenceNoop(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -1134,33 +1134,46 @@ func TestAWSRealtimeSessionInterruptClosesReferenceGeneration(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for message generation")
 	}
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","role":"ASSISTANT","contentId":"audio-1"}}}`)
 
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
+
+	audioBytes := []byte{1, 2, 3, 4}
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-1","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	audioEvent := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	if string(audioEvent.Data) != string(audioBytes) {
+		t.Fatalf("audio event data = %v, want %v", audioEvent.Data, audioBytes)
+	}
 	select {
-	case _, ok := <-msg.TextCh:
-		if ok {
-			t.Fatal("TextCh still open, want closed on interrupt")
+	case audio, ok := <-msg.AudioCh:
+		if !ok {
+			t.Fatal("AudioCh closed on interrupt, want provider-managed barge-in")
+		}
+		if string(audio.Data) != string(audioBytes) {
+			t.Fatalf("message audio data = %v, want %v", audio.Data, audioBytes)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for TextCh close")
+		t.Fatal("timed out waiting for AudioCh data")
 	}
+
+	stream.emitJSON(`{"event":{"completionEnd":{"completionId":"completion-1"}}}`)
 	select {
 	case _, ok := <-msg.AudioCh:
 		if ok {
-			t.Fatal("AudioCh still open, want closed on interrupt")
+			t.Fatal("AudioCh still open, want closed after provider completionEnd")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for AudioCh close")
+		t.Fatal("timed out waiting for AudioCh close after completionEnd")
 	}
 	select {
 	case _, ok := <-created.Generation.FunctionCh:
 		if ok {
-			t.Fatal("FunctionCh still open, want closed on interrupt")
+			t.Fatal("FunctionCh still open, want closed after provider completionEnd")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for FunctionCh close")
+		t.Fatal("timed out waiting for FunctionCh close after completionEnd")
 	}
 }
 

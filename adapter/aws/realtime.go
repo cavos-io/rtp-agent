@@ -979,7 +979,6 @@ func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return nil
 }
 func (s *awsRealtimeSession) Interrupt() error {
-	s.closeGeneration()
 	return nil
 }
 
