@@ -433,7 +433,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
-				return nil, err
+				return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM stream failed: %v", err))
 			}
 			return nil, io.EOF
 		}

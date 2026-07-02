@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -187,6 +188,31 @@ func TestAWSLLMStreamMapsReferenceCacheReadUsage(t *testing.T) {
 	}
 	if chunk.Usage.PromptCachedTokens != 5 {
 		t.Fatalf("prompt cached tokens = %d, want cacheReadInputTokens", chunk.Usage.PromptCachedTokens)
+	}
+}
+
+func TestAWSLLMStreamErrorReturnsAPIConnectionError(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.err = errors.New("bedrock stream reset")
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Bedrock LLM stream failed") {
+		t.Fatalf("Next error = %q, want AWS Bedrock stream context", err.Error())
 	}
 }
 
