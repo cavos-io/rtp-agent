@@ -1722,6 +1722,58 @@ func TestGoogleTTSStreamCloseUnblocksPendingNext(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamCloseDropsLateReceiveAudioLikeReference(t *testing.T) {
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleTTSStream{
+		recvBlock: recvBlock,
+		responses: []*texttospeech.StreamingSynthesizeResponse{{
+			AudioContent: bytes.Repeat([]byte{1, 2}, 480),
+		}},
+	}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			errCh <- errors.New("Next returned late audio after Close")
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Next returned before Close: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	close(recvBlock)
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want EOF", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next did not unblock after Close")
+	}
+}
+
 func TestGoogleTTSStreamIgnoresInputAfterCloseLikeReference(t *testing.T) {
 	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{})
 

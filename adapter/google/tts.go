@@ -956,7 +956,7 @@ func (s *googleTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 
 		resp, err := stream.Recv()
-		if err != nil && s.isClosed() {
+		if s.isClosed() {
 			return nil, io.EOF
 		}
 		if err == io.EOF {
