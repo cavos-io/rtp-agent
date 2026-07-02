@@ -193,6 +193,7 @@ type awsRealtimeSession struct {
 	stream  awsRealtimeStream
 	eventCh chan llm.RealtimeEvent
 	turns   *awsRealtimeTurnTracker
+	pending map[string]struct{}
 	mu      sync.Mutex
 	closed  bool
 }
@@ -203,6 +204,7 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 		client:  client,
 		builder: newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString()),
 		eventCh: make(chan llm.RealtimeEvent, 16),
+		pending: make(map[string]struct{}),
 	}
 	session.turns = newAWSRealtimeTurnTracker(session.emit, func() {
 		session.emit(llm.RealtimeEvent{
@@ -308,6 +310,9 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		}
 	}
 	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
+		s.mu.Lock()
+		s.pending[toolUseID] = struct{}{}
+		s.mu.Unlock()
 		s.emit(llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeFunctionCall,
 			Function: &llm.FunctionToolCall{
@@ -352,7 +357,49 @@ func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
 }
 
 func (s *awsRealtimeSession) UpdateInstructions(string) error { return nil }
-func (s *awsRealtimeSession) UpdateChatContext(*llm.ChatContext) error {
+func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
+	if chatCtx == nil {
+		return nil
+	}
+	for _, item := range chatCtx.Items {
+		output, ok := item.(*llm.FunctionCallOutput)
+		if !ok {
+			continue
+		}
+		s.mu.Lock()
+		_, pending := s.pending[output.CallID]
+		if pending {
+			delete(s.pending, output.CallID)
+		}
+		s.mu.Unlock()
+		if !pending {
+			continue
+		}
+		content := output.Output
+		if output.IsError {
+			data, err := json.Marshal(map[string]string{"error": output.Output})
+			if err != nil {
+				return err
+			}
+			content = string(data)
+		}
+		if err := s.sendToolResult(context.Background(), output.CallID, content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *awsRealtimeSession) sendToolResult(ctx context.Context, toolUseID string, result string) error {
+	events, err := s.builder.createToolContentBlock(uuid.NewString(), toolUseID, result)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if err := s.sendRawEvent(ctx, event); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func (s *awsRealtimeSession) UpdateTools([]llm.Tool) error { return nil }

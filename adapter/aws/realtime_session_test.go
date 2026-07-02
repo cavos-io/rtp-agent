@@ -131,6 +131,75 @@ func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionUpdateChatContextSendsReferenceToolResult(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","toolName":"lookup","content":"{\"query\":\"weather\"}"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		CallID: "tool-1",
+		Name:   "lookup",
+		Output: `{"forecast":"sunny"}`,
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	toolEvents := stream.sent[len(stream.sent)-3:]
+	start := mustAWSRealtimeJSONEvent(t, toolEvents[0])
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "TOOL" {
+		t.Fatalf("tool contentStart type = %q, want TOOL", got)
+	}
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "toolResultInputConfiguration", "toolUseId"); got != "tool-1" {
+		t.Fatalf("toolUseId = %q, want tool-1", got)
+	}
+	result := mustAWSRealtimeJSONEvent(t, toolEvents[1])
+	if got := awsRealtimeNestedString(result, "event", "toolResult", "content"); got != `{"forecast":"sunny"}` {
+		t.Fatalf("tool result content = %q, want output", got)
+	}
+	end := mustAWSRealtimeJSONEvent(t, toolEvents[2])
+	if got := awsRealtimeNestedString(end, "event", "contentEnd", "contentName"); got == "" {
+		t.Fatal("tool contentEnd contentName empty")
+	}
+}
+
+func TestAWSRealtimeSessionWrapsReferenceToolErrorResult(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-err","toolName":"lookup","content":"{}"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		CallID:  "tool-err",
+		Name:    "lookup",
+		Output:  "boom",
+		IsError: true,
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	result := mustAWSRealtimeJSONEvent(t, stream.sent[len(stream.sent)-2])
+	if got := awsRealtimeNestedString(result, "event", "toolResult", "content"); got != `{"error":"boom"}` {
+		t.Fatalf("tool error content = %q, want JSON error", got)
+	}
+}
+
 func assertAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
 	t.Helper()
 	select {
