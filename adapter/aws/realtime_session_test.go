@@ -499,6 +499,30 @@ func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionClearAudioDropsBufferedInputTail(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	sentCount := len(stream.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	if err := session.ClearAudio(); err != nil {
+		t.Fatalf("ClearAudio error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after ClearAudio+Close = %d, want buffered tail dropped", got)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioPreservesResampleDurationAcrossFrames(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

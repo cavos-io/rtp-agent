@@ -1091,7 +1091,11 @@ func (s *awsRealtimeSession) PushVideo(*images.VideoFrame) error {
 	return awsRealtimeUnsupported("push_video")
 }
 func (s *awsRealtimeSession) CommitAudio() error { return nil }
-func (s *awsRealtimeSession) ClearAudio() error  { return nil }
+func (s *awsRealtimeSession) ClearAudio() error {
+	s.audioBStream.Clear()
+	s.audioNorm.reset()
+	return nil
+}
 
 func awsRealtimeUnsupported(operation string) error {
 	return fmt.Errorf("%s is not supported by the AWS Nova Sonic realtime model", operation)
