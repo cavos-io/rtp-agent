@@ -180,6 +180,31 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamChunksCarryReferenceRequestID(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberText{Value: "hello"},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+		requestID: "aws-request-1",
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want text chunk", err)
+	}
+	if chunk.ID != "aws-request-1" {
+		t.Fatalf("chunk ID = %q, want reference request ID", chunk.ID)
+	}
+}
+
 func TestAWSLLMStreamMapsReferenceCacheReadUsage(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{

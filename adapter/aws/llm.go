@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -98,8 +99,10 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
 	}
 
+	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
 	return &awsLLMStream{
-		stream: out.GetStream(),
+		stream:    out.GetStream(),
+		requestID: requestID,
 	}, nil
 }
 
@@ -161,6 +164,7 @@ func buildAWSToolChoice(choice llm.ToolChoice) types.ToolChoice {
 
 type awsLLMStream struct {
 	stream     *bedrockruntime.ConverseStreamEventStream
+	requestID  string
 	closed     bool
 	toolCallID string
 	toolName   string
@@ -446,6 +450,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
 			if textDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
 				return &llm.ChatChunk{
+					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
 						Role:    llm.ChatRoleAssistant,
 						Content: textDelta.Value,
@@ -466,6 +471,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		case *types.ConverseStreamOutputMemberContentBlockStop:
 			if s.toolCallID != "" {
 				chunk := &llm.ChatChunk{
+					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
 						Role: llm.ChatRoleAssistant,
 						ToolCalls: []llm.FunctionToolCall{{
@@ -482,6 +488,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		case *types.ConverseStreamOutputMemberMetadata:
 			if v.Value.Usage != nil {
 				return &llm.ChatChunk{
+					ID: s.requestID,
 					Usage: &llm.CompletionUsage{
 						PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
 						CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
