@@ -311,12 +311,13 @@ func TestBuildAWSMessagesIncludesInlineImageBlocks(t *testing.T) {
 	if len(messages[0].Content) != 2 {
 		t.Fatalf("len(content) = %d, want 2: %#v", len(messages[0].Content), messages[0].Content)
 	}
+	assertTextBlock(t, messages[0].Content, 0, "describe")
 	imageBlock, ok := messages[0].Content[1].(*awstypes.ContentBlockMemberImage)
 	if !ok {
 		t.Fatalf("image content = %#v, want ContentBlockMemberImage", messages[0].Content[1])
 	}
-	if imageBlock.Value.Format != awstypes.ImageFormatWebp {
-		t.Fatalf("image format = %q, want webp", imageBlock.Value.Format)
+	if imageBlock.Value.Format != awstypes.ImageFormatJpeg {
+		t.Fatalf("image format = %q, want jpeg like reference AWS formatter", imageBlock.Value.Format)
 	}
 	source, ok := imageBlock.Value.Source.(*awstypes.ImageSourceMemberBytes)
 	if !ok || !reflect.DeepEqual(source.Value, []byte("webp-bytes")) {

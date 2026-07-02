@@ -272,22 +272,9 @@ func awsImageBlock(image *llm.ImageContent) types.ContentBlock {
 	}
 	return &types.ContentBlockMemberImage{
 		Value: types.ImageBlock{
-			Format: awsImageFormat(img.MIMEType),
+			Format: types.ImageFormatJpeg,
 			Source: &types.ImageSourceMemberBytes{Value: img.DataBytes},
 		},
-	}
-}
-
-func awsImageFormat(mimeType string) types.ImageFormat {
-	switch mimeType {
-	case "image/png":
-		return types.ImageFormatPng
-	case "image/gif":
-		return types.ImageFormatGif
-	case "image/webp":
-		return types.ImageFormatWebp
-	default:
-		return types.ImageFormatJpeg
 	}
 }
 
