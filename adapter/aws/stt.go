@@ -319,7 +319,7 @@ func (s *awsSTTStream) readLoop() {
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
 				if err != io.EOF {
-					s.errCh <- err
+					s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream failed: %v", err))
 				}
 			}
 			return
