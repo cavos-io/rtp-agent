@@ -829,6 +829,50 @@ func TestAWSRealtimeSessionUpdateChatContextSendsReferenceToolResult(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-retry","toolName":"lookup","content":"{}"}}}`)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		CallID: "tool-retry",
+		Name:   "lookup",
+		Output: `{"ok":true}`,
+	})
+	stream.sendErr = errors.New("bedrock send failed")
+	if err := session.UpdateChatContext(ctx); err == nil {
+		t.Fatal("UpdateChatContext error = nil, want send failure")
+	}
+	stream.sendErr = nil
+	sentCount := len(stream.sent)
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext retry error = %v", err)
+	}
+	if len(stream.sent) != sentCount+3 {
+		t.Fatalf("retry sent %d events, want 3 tool result events", len(stream.sent)-sentCount)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[sentCount+1]), "event", "toolResult", "content"); got != `{"ok":true}` {
+		t.Fatalf("retry tool result content = %q, want output", got)
+	}
+}
+
 func TestAWSRealtimeSessionWrapsReferencePlainToolResult(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

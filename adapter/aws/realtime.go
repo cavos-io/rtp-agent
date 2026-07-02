@@ -669,9 +669,6 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 		s.mu.Lock()
 		_, pending := s.pending[output.CallID]
-		if pending {
-			delete(s.pending, output.CallID)
-		}
 		s.mu.Unlock()
 		if !pending {
 			continue
@@ -689,6 +686,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		if err := s.sendToolResult(context.Background(), output.CallID, content); err != nil {
 			return err
 		}
+		s.mu.Lock()
+		delete(s.pending, output.CallID)
+		s.mu.Unlock()
 	}
 	return nil
 }
