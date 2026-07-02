@@ -74,8 +74,13 @@ type RealtimeModel struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	proactivity               bool
+	proactivitySet            bool
+	affectiveDialog           bool
+	affectiveDialogSet        bool
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
+	apiVersion                string
 	connector                 googleRealtimeConnector
 	sessions                  map[*googleRealtimeSession]struct{}
 }
@@ -114,6 +119,10 @@ type googleRealtimeOptions struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	proactivity               bool
+	proactivitySet            bool
+	affectiveDialog           bool
+	affectiveDialogSet        bool
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
@@ -264,6 +273,20 @@ func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOpti
 	}
 }
 
+func WithGoogleRealtimeProactivity(enabled bool) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.proactivity = enabled
+		options.proactivitySet = true
+	}
+}
+
+func WithGoogleRealtimeAffectiveDialog(enabled bool) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.affectiveDialog = enabled
+		options.affectiveDialogSet = true
+	}
+}
+
 func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.realtimeInputConfig = config
@@ -357,6 +380,10 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	if candidateCount == 0 {
 		candidateCount = 1
 	}
+	apiVersion := "v1beta"
+	if !vertexAI && ((options.proactivitySet && options.proactivity) || (options.affectiveDialogSet && options.affectiveDialog)) {
+		apiVersion = "v1alpha"
+	}
 	return &RealtimeModel{
 		apiKey:                    apiKey,
 		instructions:              options.instructions,
@@ -387,8 +414,13 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		toolBehaviorSet:           options.toolBehaviorSet,
 		toolResponseScheduling:    options.toolResponseScheduling,
 		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
+		proactivity:               options.proactivity,
+		proactivitySet:            options.proactivitySet,
+		affectiveDialog:           options.affectiveDialog,
+		affectiveDialogSet:        options.affectiveDialogSet,
 		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
+		apiVersion:                apiVersion,
 		connector:                 options.connector,
 	}, nil
 }
@@ -589,6 +621,7 @@ func (m *RealtimeModel) Close() error { return nil }
 
 func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	config := &genai.LiveConnectConfig{
+		HTTPOptions:        &genai.HTTPOptions{APIVersion: m.apiVersion},
 		ResponseModalities: googleRealtimeModalities(m.modalities),
 		SpeechConfig: &genai.SpeechConfig{
 			VoiceConfig: &genai.VoiceConfig{
@@ -606,6 +639,14 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	}
 	if m.outputAudioTranscription {
 		config.OutputAudioTranscription = &genai.AudioTranscriptionConfig{}
+	}
+	if m.proactivitySet {
+		value := m.proactivity
+		config.Proactivity = &genai.ProactivityConfig{ProactiveAudio: &value}
+	}
+	if m.affectiveDialogSet {
+		value := m.affectiveDialog
+		config.EnableAffectiveDialog = &value
 	}
 	if m.realtimeInputConfig != nil {
 		config.RealtimeInputConfig = m.realtimeInputConfig
@@ -698,10 +739,14 @@ type googleRealtimeDefaultConnector struct {
 }
 
 func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
+	apiVersion := "v1beta"
+	if c.model != nil && c.model.apiVersion != "" {
+		apiVersion = c.model.apiVersion
+	}
 	clientConfig := &genai.ClientConfig{
 		APIKey: c.model.apiKey,
 		HTTPOptions: genai.HTTPOptions{
-			APIVersion: "v1beta",
+			APIVersion: apiVersion,
 		},
 	}
 	if c.model.vertexAI {

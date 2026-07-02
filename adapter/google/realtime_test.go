@@ -554,6 +554,34 @@ func TestGoogleRealtimeSessionConnectsWithReferenceConfig(t *testing.T) {
 	var _ llm.RealtimeSession = session
 }
 
+func TestGoogleRealtimeSessionProactivityConfigMatchesReference(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeProactivity(true),
+		WithGoogleRealtimeAffectiveDialog(true),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.Proactivity == nil || config.Proactivity.ProactiveAudio == nil || !*config.Proactivity.ProactiveAudio {
+		t.Fatalf("proactivity config = %#v, want proactive_audio true", config)
+	}
+	if config.EnableAffectiveDialog == nil || !*config.EnableAffectiveDialog {
+		t.Fatalf("enable_affective_dialog = %#v, want true", config.EnableAffectiveDialog)
+	}
+	if config.HTTPOptions == nil || config.HTTPOptions.APIVersion != "v1alpha" {
+		t.Fatalf("api version = %#v, want v1alpha for Gemini proactivity/affective config", config.HTTPOptions)
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",
