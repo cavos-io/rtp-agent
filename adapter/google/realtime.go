@@ -1166,6 +1166,7 @@ func (s *googleRealtimeSession) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closed = true
+		s.closeGeneration()
 		s.mu.Unlock()
 		if s.cancel != nil {
 			s.cancel()

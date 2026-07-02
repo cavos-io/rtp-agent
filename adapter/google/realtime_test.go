@@ -976,6 +976,37 @@ func TestGoogleRealtimeSessionCloseSuppressesLiveSessionCloseError(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionCloseClosesActiveGeneration(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			OutputTranscription: &genai.Transcription{Text: "partial"},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "partial" {
+		t.Fatalf("text delta = %q, want partial", text)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+}
+
 func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
