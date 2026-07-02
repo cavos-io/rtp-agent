@@ -2,6 +2,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -222,6 +223,9 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	input := buildAWSStartStreamTranscriptionInput(s, language)
 	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream start failed: %v", err))
 	}
 
@@ -320,6 +324,10 @@ func (s *awsSTTStream) readLoop() {
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
 				if err != io.EOF && !isHarmlessAWSSTTStreamCloseError(err) {
+					if errors.Is(err, context.DeadlineExceeded) {
+						s.errCh <- llm.NewAPITimeoutError(err.Error())
+						return
+					}
 					s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream failed: %v", err))
 				}
 			}
@@ -480,6 +488,9 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 			AudioChunk: frame.Data,
 		},
 	}); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
 	}
 	return nil
@@ -494,6 +505,9 @@ func (s *awsSTTStream) Flush() error {
 			AudioChunk: []byte{},
 		},
 	}); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
 	}
 	return nil
@@ -509,7 +523,8 @@ func (s *awsSTTStream) Close() error {
 			AudioChunk: []byte{},
 		},
 	})
-	return s.stream.Close()
+	_ = s.stream.Close()
+	return nil
 }
 
 func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {

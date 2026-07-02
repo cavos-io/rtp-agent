@@ -33,6 +33,9 @@ type awsRealtimePromptStartOptions struct {
 	maxTokens              int
 	topP                   float64
 	temperature            float64
+	maxTokensSet           bool
+	topPSet                bool
+	temperatureSet         bool
 	endpointingSensitivity string
 }
 
@@ -78,17 +81,19 @@ func normalizeAWSRealtimePromptStartOptions(options awsRealtimePromptStartOption
 	if options.outputSampleRate == 0 {
 		options.outputSampleRate = defaultAWSRealtimeOutputSampleRate
 	}
-	if options.maxTokens == 0 {
+	if options.maxTokens == 0 && !options.maxTokensSet {
 		options.maxTokens = defaultAWSRealtimeMaxTokens
 	}
-	if options.topP == 0 {
+	if options.topP == 0 && !options.topPSet {
 		options.topP = defaultAWSRealtimeTopP
 	}
-	if options.temperature == 0 {
+	if options.temperature == 0 && !options.temperatureSet {
 		options.temperature = defaultAWSRealtimeTemperature
 	}
-	if len(options.tools) > 0 {
+	if len(options.tools) > 0 && !options.topPSet {
 		options.topP = 1.0
+	}
+	if len(options.tools) > 0 && !options.temperatureSet {
 		options.temperature = 1.0
 	}
 	if options.endpointingSensitivity == "" {

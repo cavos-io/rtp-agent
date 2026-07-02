@@ -32,16 +32,37 @@ const (
 	defaultAWSRealtimeModalities    = "mixed"
 	awsRealtimeAudioModalities      = "audio"
 	awsRealtimeProvider             = "Amazon"
-	defaultAWSRealtimeSystemPrompt  = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. Keep your responses natural and concise for voice interaction."
+	defaultAWSRealtimeSystemPrompt  = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
+		"You love helping people and having natural conversations. " +
+		"Be warm, conversational, and engaging. " +
+		"Keep your responses natural and concise for voice interaction. " +
+		"Do not repeat yourself. " +
+		"If you are not sure what the user means, ask them to confirm or clarify. " +
+		"If after asking for clarification you still do not understand, be honest and tell them you do not understand. " +
+		"Do not make up information or make assumptions. If you do not know the answer, say so. " +
+		"When making tool calls, inform the user that you are using a tool to generate the response. " +
+		"Avoid formatted lists or numbering and keep your output as a spoken transcript. " +
+		"\n\n" +
+		"CRITICAL LANGUAGE MIRRORING RULES:\n" +
+		"- Always reply in the language the user speaks. DO NOT mix with English unless the user does.\n" +
+		"- If the user talks in English, reply in English.\n" +
+		"- Please respond in the language the user is talking to you in. If you have a question or suggestion, ask it in the language the user is talking in.\n" +
+		"- Ensure that our communication remains in the same language as the user."
 )
 
 type AWSRealtimeModel struct {
-	model         string
-	region        string
-	voice         string
-	modalities    string
-	turnDetection string
-	client        awsRealtimeClient
+	model          string
+	region         string
+	voice          string
+	modalities     string
+	turnDetection  string
+	maxTokens      int
+	topP           float64
+	temperature    float64
+	maxTokensSet   bool
+	topPSet        bool
+	temperatureSet bool
+	client         awsRealtimeClient
 }
 
 type AWSRealtimeOption func(*AWSRealtimeModel)
@@ -105,6 +126,27 @@ func WithAWSRealtimeTurnDetection(turnDetection string) AWSRealtimeOption {
 		if turnDetection != "" {
 			provider.turnDetection = turnDetection
 		}
+	}
+}
+
+func WithAWSRealtimeMaxTokens(maxTokens int) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.maxTokens = maxTokens
+		provider.maxTokensSet = true
+	}
+}
+
+func WithAWSRealtimeTopP(topP float64) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.topP = topP
+		provider.topPSet = true
+	}
+}
+
+func WithAWSRealtimeTemperature(temperature float64) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.temperature = temperature
+		provider.temperatureSet = true
 	}
 }
 
@@ -249,6 +291,9 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		ModelId: aws.String(s.model.model),
 	})
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream start failed: %v", err))
 	}
 	s.stream = stream
@@ -266,9 +311,12 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		systemContent:          systemPrompt,
 		chatCtx:                chatCtx,
 		tools:                  tools,
-		maxTokens:              defaultAWSRealtimeMaxTokens,
-		topP:                   defaultAWSRealtimeTopP,
-		temperature:            defaultAWSRealtimeTemperature,
+		maxTokens:              s.model.maxTokens,
+		topP:                   s.model.topP,
+		temperature:            s.model.temperature,
+		maxTokensSet:           s.model.maxTokensSet,
+		topPSet:                s.model.topPSet,
+		temperatureSet:         s.model.temperatureSet,
 		endpointingSensitivity: s.model.turnDetection,
 	})
 	if err != nil {
@@ -277,7 +325,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	for _, event := range append(initEvents, historyEvents...) {
 		if err := s.sendRawEvent(ctx, event); err != nil {
 			s.closeStartupStream()
-			return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
+			return awsRealtimeStartupSendError(err)
 		}
 	}
 	s.markChatContextUserMessagesSent(chatCtx)
@@ -287,10 +335,21 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	}
 	if err := s.sendRawEvent(ctx, audioStart); err != nil {
 		s.closeStartupStream()
-		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
+		return awsRealtimeStartupSendError(err)
 	}
 	go s.readResponses()
 	return nil
+}
+
+func awsRealtimeStartupSendError(err error) error {
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		return timeoutErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
 }
 
 func (s *awsRealtimeSession) closeStartupStream() {
@@ -314,6 +373,9 @@ func sendAWSRealtimeRawEvent(ctx context.Context, stream awsRealtimeStream, even
 	if err := stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
 		Value: awstypes.BidirectionalInputPayloadPart{Bytes: []byte(event)},
 	}); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime send failed: %v", err))
 	}
 	return nil
@@ -339,17 +401,22 @@ func (s *awsRealtimeSession) readResponses() {
 		}
 		s.handleResponseEvent(payload)
 	}
+	s.closeGeneration()
 	if err := stream.Err(); err != nil {
+		var apiErr error = llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err))
+		if errors.Is(err, context.DeadlineExceeded) {
+			apiErr = llm.NewAPITimeoutError(err.Error())
+		}
 		s.emit(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err)),
+			Error: apiErr,
 		})
 	}
 }
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
-	if awsRealtimeNestedMap(payload, "event", "completionStart") != nil {
-		s.emitGenerationCreated()
+	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
+		s.emitGenerationCreatedWithResponseID(awsRealtimeMapString(completionStart, "completionId"))
 	}
 	if s.turns != nil {
 		s.turns.feed(payload)
@@ -417,7 +484,11 @@ func (s *awsRealtimeSession) hasPendingTools() bool {
 }
 
 func (s *awsRealtimeSession) emitGenerationCreated() {
-	generation := s.ensureGeneration()
+	s.emitGenerationCreatedWithResponseID("")
+}
+
+func (s *awsRealtimeSession) emitGenerationCreatedWithResponseID(responseID string) {
+	generation := s.ensureGeneration(responseID)
 	s.emit(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
@@ -428,14 +499,17 @@ func (s *awsRealtimeSession) emitGenerationCreated() {
 	})
 }
 
-func (s *awsRealtimeSession) ensureGeneration() *awsRealtimeGeneration {
+func (s *awsRealtimeSession) ensureGeneration(responseID string) *awsRealtimeGeneration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != nil {
 		return s.generation
 	}
+	if responseID == "" {
+		responseID = uuid.NewString()
+	}
 	generation := &awsRealtimeGeneration{
-		responseID:   uuid.NewString(),
+		responseID:   responseID,
 		messageCh:    make(chan llm.MessageGeneration, 1),
 		functionCh:   make(chan *llm.FunctionCall, 8),
 		textCh:       make(chan string, 16),
@@ -476,7 +550,7 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	}
 	var generation *awsRealtimeGeneration
 	if streamType == "ASSISTANT_TEXT" {
-		generation = s.ensureGeneration()
+		generation = s.ensureGeneration("")
 	} else {
 		s.mu.Lock()
 		generation = s.generation
@@ -864,13 +938,20 @@ func (s *awsRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return nil
 }
 func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
-	if options.Instructions == "" || s.model == nil || s.model.modalities != defaultAWSRealtimeModalities {
+	if s.model == nil {
 		return nil
 	}
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
+		return nil
+	}
+	if s.model.modalities != defaultAWSRealtimeModalities {
+		s.emitEmptyGenerationCreated(true)
+		return nil
+	}
+	if options.Instructions == "" {
 		return nil
 	}
 	msg := &llm.ChatMessage{
@@ -880,6 +961,22 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 	}
 	return s.sendInteractiveUserText(context.Background(), msg)
 }
+
+func (s *awsRealtimeSession) emitEmptyGenerationCreated(userInitiated bool) {
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	close(messageCh)
+	close(functionCh)
+	s.emit(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     messageCh,
+			FunctionCh:    functionCh,
+			UserInitiated: userInitiated,
+		},
+	})
+}
+
 func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("say") }
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return nil
@@ -1088,10 +1185,23 @@ func awsRealtimeInputSampleAt(frame *model.AudioFrame, sampleIndex uint64, frame
 }
 
 func (s *awsRealtimeSession) PushVideo(*images.VideoFrame) error {
-	return awsRealtimeUnsupported("push_video")
+	return nil
 }
-func (s *awsRealtimeSession) CommitAudio() error { return nil }
-func (s *awsRealtimeSession) ClearAudio() error  { return nil }
+func (s *awsRealtimeSession) CommitAudio() error {
+	s.mu.Lock()
+	closed := s.closed
+	stream := s.stream
+	s.mu.Unlock()
+	if closed || stream == nil {
+		return nil
+	}
+	return s.flushBufferedAudioInput(context.Background(), stream)
+}
+func (s *awsRealtimeSession) ClearAudio() error {
+	s.audioBStream.Clear()
+	s.audioNorm.reset()
+	return nil
+}
 
 func awsRealtimeUnsupported(operation string) error {
 	return fmt.Errorf("%s is not supported by the AWS Nova Sonic realtime model", operation)

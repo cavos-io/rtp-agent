@@ -426,6 +426,24 @@ func TestAWSSTTStreamReturnsClientError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
+	client := &fakeAWSSTTClient{err: context.DeadlineExceeded}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil on timeout", stream)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSSTTRecognizeReportsUnsupportedOfflineMode(t *testing.T) {
 	provider := &AWSSTT{}
 
@@ -782,6 +800,28 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamCloseSuppressesReferenceWriterCloseError(t *testing.T) {
+	writer := &fakeAWSSTTWriter{closeErr: errors.New("transcribe close failed")}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = newFakeAWSSTTReader()
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for reference cleanup suppression", err)
+	}
+	if !writer.closed {
+		t.Fatal("writer closed = false, want close attempted")
+	}
+	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
+		t.Fatalf("close chunks = %#v, want one empty sentinel before close", writer.chunks)
+	}
+}
+
 func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	writer := &fakeAWSSTTWriter{err: errors.New("transcribe write failed")}
 	providerStream := &awsSTTStream{
@@ -806,6 +846,29 @@ func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	err = providerStream.Flush()
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestAWSSTTStreamWriteDeadlineReturnsAPITimeoutError(t *testing.T) {
+	writer := &fakeAWSSTTWriter{err: context.DeadlineExceeded}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = newFakeAWSSTTReader()
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("pcm")})
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("PushFrame error = %T %v, want APITimeoutError", err, err)
+	}
+
+	err = providerStream.Flush()
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Flush error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -863,6 +926,33 @@ func TestAWSSTTProviderStreamErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AWS Transcribe stream failed") {
 		t.Fatalf("Next error = %q, want stream failure context", err.Error())
+	}
+}
+
+func TestAWSSTTProviderStreamDeadlineReturnsAPITimeoutError(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	reader.err = context.DeadlineExceeded
+	close(reader.events)
+	writer := &fakeAWSSTTWriter{}
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+	go providerStream.readLoop()
+
+	event, err := providerStream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -986,6 +1076,7 @@ type fakeAWSSTTWriter struct {
 	chunkWasNil []bool
 	closed      bool
 	err         error
+	closeErr    error
 }
 
 func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) error {
@@ -1004,7 +1095,7 @@ func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) erro
 
 func (w *fakeAWSSTTWriter) Close() error {
 	w.closed = true
-	return nil
+	return w.closeErr
 }
 
 func (w *fakeAWSSTTWriter) Err() error {

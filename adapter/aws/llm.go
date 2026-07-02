@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -76,6 +77,14 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	for _, opt := range opts {
 		opt(options)
 	}
+	connectOptions, err := options.EffectiveConnectOptions()
+	if err != nil {
+		return nil, err
+	}
+	var cancel context.CancelFunc
+	if connectOptions.Timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
+	}
 
 	messages, systemText := buildAWSMessages(chatCtx)
 
@@ -96,6 +105,12 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	out, err := l.client.ConverseStream(ctx, req)
 	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError("")
+		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
 	}
 
@@ -103,6 +118,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	return &awsLLMStream{
 		stream:    out.GetStream(),
 		requestID: requestID,
+		cancel:    cancel,
 	}, nil
 }
 
@@ -165,6 +181,7 @@ func buildAWSToolChoice(choice llm.ToolChoice) types.ToolChoice {
 type awsLLMStream struct {
 	stream       *bedrockruntime.ConverseStreamEventStream
 	requestID    string
+	cancel       context.CancelFunc
 	closed       bool
 	emittedChunk bool
 	toolCallID   string
@@ -442,8 +459,13 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
+				s.closeContext()
+				if errors.Is(err, context.DeadlineExceeded) {
+					return nil, llm.NewAPITimeoutErrorWithRetryable("", !s.emittedChunk)
+				}
 				return nil, llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("AWS Bedrock LLM stream failed: %v", err), !s.emittedChunk)
 			}
+			s.closeContext()
 			return nil, io.EOF
 		}
 
@@ -508,6 +530,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *awsLLMStream) Close() error {
+	s.closeContext()
 	if s.stream == nil {
 		s.closed = true
 		return nil
@@ -515,4 +538,11 @@ func (s *awsLLMStream) Close() error {
 	s.stream.Close()
 	s.closed = true
 	return nil
+}
+
+func (s *awsLLMStream) closeContext() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 }

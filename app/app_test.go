@@ -14301,6 +14301,8 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "aws")
 	t.Setenv("RTP_AGENT_REALTIME_MODEL", "amazon.nova-sonic-v1:0")
+	t.Setenv("RTP_AGENT_REALTIME_VOICE", "matthew")
+	t.Setenv("RTP_AGENT_REALTIME_TURN_DETECTION", "HIGH")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -14321,6 +14323,12 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	}
 	if got := model.Region(); got != "us-west-2" {
 		t.Fatalf("Realtime region = %q, want us-west-2", got)
+	}
+	if got := model.Voice(); got != "matthew" {
+		t.Fatalf("Realtime voice = %q, want matthew", got)
+	}
+	if got := model.TurnDetection(); got != "HIGH" {
+		t.Fatalf("Realtime turn detection = %q, want HIGH", got)
 	}
 	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
 		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
