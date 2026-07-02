@@ -1088,7 +1088,7 @@ func awsRealtimeInputSampleAt(frame *model.AudioFrame, sampleIndex uint64, frame
 }
 
 func (s *awsRealtimeSession) PushVideo(*images.VideoFrame) error {
-	return awsRealtimeUnsupported("push_video")
+	return nil
 }
 func (s *awsRealtimeSession) CommitAudio() error {
 	s.mu.Lock()

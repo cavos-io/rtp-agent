@@ -924,6 +924,14 @@ func TestAWSRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionPushVideoIsReferenceNoop(t *testing.T) {
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
+
+	if err := session.PushVideo(nil); err != nil {
+		t.Fatalf("PushVideo error = %v, want nil reference warning-only no-op", err)
+	}
+}
+
 func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
