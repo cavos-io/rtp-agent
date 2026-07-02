@@ -897,6 +897,50 @@ func TestGoogleRealtimeSessionUpdateChatContextSendsReferenceToolResponse(t *tes
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateToolsReconnectsReferenceSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeToolBehavior(genai.BehaviorNonBlocking),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{googleRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if !firstSession.closed {
+		t.Fatal("first live session not closed after tool update")
+	}
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 || len(tools[0].FunctionDeclarations) != 1 {
+		t.Fatalf("tools = %#v, want one function declaration", tools)
+	}
+	declaration := tools[0].FunctionDeclarations[0]
+	if declaration.Name != "lookup" {
+		t.Fatalf("tool name = %q, want lookup", declaration.Name)
+	}
+	if declaration.Behavior != genai.BehaviorNonBlocking {
+		t.Fatalf("tool behavior = %q, want NON_BLOCKING", declaration.Behavior)
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
