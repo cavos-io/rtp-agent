@@ -307,6 +307,35 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			})
 		}
 	}
+	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
+		s.emit(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeFunctionCall,
+			Function: &llm.FunctionToolCall{
+				CallID:    toolUseID,
+				Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
+				Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
+			},
+		})
+	}
+}
+
+func normalizeAWSRealtimeToolArguments(content string) string {
+	if content == "" {
+		return content
+	}
+	var outer any
+	if err := json.Unmarshal([]byte(content), &outer); err != nil {
+		return content
+	}
+	innerString, ok := outer.(string)
+	if !ok {
+		return content
+	}
+	var inner map[string]any
+	if err := json.Unmarshal([]byte(innerString), &inner); err != nil {
+		return content
+	}
+	return innerString
 }
 
 func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {

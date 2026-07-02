@@ -108,6 +108,29 @@ func TestAWSRealtimeSessionMapsReferenceResponseEvents(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","toolName":"lookup","content":"{\"query\":\"weather\"}"}}}`)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
+	if event.Function == nil {
+		t.Fatal("Function = nil, want tool call")
+	}
+	if event.Function.CallID != "tool-1" || event.Function.Name != "lookup" {
+		t.Fatalf("function call = %#v, want lookup tool-1", event.Function)
+	}
+	if event.Function.Arguments != `{"query":"weather"}` {
+		t.Fatalf("arguments = %q, want reference tool content", event.Function.Arguments)
+	}
+}
+
 func assertAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
 	t.Helper()
 	select {
