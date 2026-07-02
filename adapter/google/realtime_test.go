@@ -281,6 +281,36 @@ func TestGoogleRealtimeModelVoiceUpdatePropagatesReferenceActiveSession(t *testi
 	}
 }
 
+func TestGoogleRealtimeModelTemperatureUpdatePropagatesReferenceActiveSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeTemperature(0.2),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	model.UpdateOptions(WithGoogleRealtimeTemperature(0.4))
+
+	if !firstSession.closed {
+		t.Fatal("first live session not closed after model temperature update")
+	}
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus temperature reconnect", len(connector.configs))
+	}
+	if got := connector.configs[1].Temperature; got == nil || *got != float32(0.4) {
+		t.Fatalf("reconnected temperature = %#v, want 0.4", got)
+	}
+}
+
 func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
 	if err != nil {

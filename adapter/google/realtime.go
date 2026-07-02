@@ -398,17 +398,20 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	var sessions []*googleRealtimeSession
+	sessions := make(map[*googleRealtimeSession]struct{})
 	m.mu.Lock()
 	if options.voiceSet {
 		m.voice = options.voice
 		for session := range m.sessions {
-			sessions = append(sessions, session)
+			sessions[session] = struct{}{}
 		}
 	}
 	if options.temperatureSet {
 		m.temperature = options.temperature
 		m.temperatureSet = true
+		for session := range m.sessions {
+			sessions[session] = struct{}{}
+		}
 	}
 	if options.toolBehaviorSet {
 		m.toolBehavior = options.toolBehavior
@@ -419,8 +422,13 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 		m.toolResponseSchedulingSet = true
 	}
 	m.mu.Unlock()
-	for _, session := range sessions {
-		_ = session.reconnectWithVoice(options.voice)
+	for session := range sessions {
+		if options.voiceSet {
+			_ = session.reconnectWithVoice(options.voice)
+		}
+		if options.temperatureSet {
+			_ = session.reconnectWithTemperature(options.temperature)
+		}
 	}
 }
 
@@ -510,6 +518,8 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		provider:                m.Provider(),
 		instructions:            m.instructions,
 		voice:                   m.voice,
+		temperature:             m.temperature,
+		temperatureSet:          m.temperatureSet,
 		vertexAI:                m.vertexAI,
 		mutableInstructions:     m.Capabilities().MutableInstructions,
 		mutableChatContext:      m.Capabilities().MutableChatContext,
@@ -691,6 +701,8 @@ type googleRealtimeSession struct {
 	provider                string
 	instructions            string
 	voice                   string
+	temperature             float64
+	temperatureSet          bool
 	vertexAI                bool
 	mutableInstructions     bool
 	mutableChatContext      bool
@@ -873,6 +885,47 @@ func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
 	return nil
 }
 
+func (s *googleRealtimeSession) reconnectWithTemperature(temperature float64) error {
+	if s == nil || s.isClosed() {
+		return nil
+	}
+	s.mu.Lock()
+	if s.temperatureSet && s.temperature == temperature {
+		s.mu.Unlock()
+		return nil
+	}
+	connector := s.connector
+	modelName := s.modelName
+	config := googleRealtimeCloneLiveConfig(s.liveConfig)
+	oldSession := s.liveSession
+	s.mu.Unlock()
+	if connector == nil || config == nil {
+		return errors.New("google realtime session option update is not implemented")
+	}
+	googleRealtimeSetConfigTemperature(config, temperature)
+	if oldSession != nil {
+		_ = oldSession.Close()
+	}
+	s.closeGeneration()
+	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = nextSession.Close()
+		return nil
+	}
+	s.liveSession = nextSession
+	s.liveConfig = config
+	s.temperature = temperature
+	s.temperatureSet = true
+	s.mu.Unlock()
+	go s.receiveLoop(nextSession)
+	return nil
+}
+
 func googleRealtimeCloneLiveConfig(config *genai.LiveConnectConfig) *genai.LiveConnectConfig {
 	if config == nil {
 		return nil
@@ -901,6 +954,11 @@ func googleRealtimeSetConfigVoice(config *genai.LiveConnectConfig, voice string)
 		config.SpeechConfig.VoiceConfig = &genai.VoiceConfig{}
 	}
 	config.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig = &genai.PrebuiltVoiceConfig{VoiceName: voice}
+}
+
+func googleRealtimeSetConfigTemperature(config *genai.LiveConnectConfig, temperature float64) {
+	value := float32(temperature)
+	config.Temperature = &value
 }
 
 func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
