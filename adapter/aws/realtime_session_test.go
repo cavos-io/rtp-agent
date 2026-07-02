@@ -146,6 +146,30 @@ func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionDoesNotReplaySeededUserHistory(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{ID: "user-seeded", Role: llm.ChatRoleUser, Text: "already seeded"})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	sentCount := len(stream.sent)
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext after start error = %v", err)
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("seeded history replay sent %d new events, want none", len(stream.sent)-sentCount)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	stream := &fakeAWSRealtimeStream{}
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

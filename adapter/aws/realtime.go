@@ -267,6 +267,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 			return err
 		}
 	}
+	s.markChatContextUserMessagesSent(chatCtx)
 	audioStart, err := s.builder.createAudioContentStartEvent(defaultAWSRealtimeInputSampleRate)
 	if err != nil {
 		return err
@@ -718,6 +719,21 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 		}
 	}
 	return nil
+}
+
+func (s *awsRealtimeSession) markChatContextUserMessagesSent(chatCtx *llm.ChatContext) {
+	if chatCtx == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range chatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || msg.Role != llm.ChatRoleUser || msg.ID == "" || msg.TextContent() == "" {
+			continue
+		}
+		s.sent[msg.ID] = struct{}{}
+	}
 }
 
 func (s *awsRealtimeSession) sendToolResult(ctx context.Context, toolUseID string, result string) error {
