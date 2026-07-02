@@ -225,17 +225,7 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 		pending: make(map[string]struct{}),
 		sent:    make(map[string]struct{}),
 	}
-	session.turns = newAWSRealtimeTurnTracker(session.emit, func() {
-		generation := session.ensureGeneration()
-		session.emit(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeGenerationCreated,
-			Generation: &llm.GenerationCreatedEvent{
-				MessageCh:  generation.messageCh,
-				FunctionCh: generation.functionCh,
-				ResponseID: generation.responseID,
-			},
-		})
-	})
+	session.turns = newAWSRealtimeTurnTracker(session.emit, session.emitGenerationCreated)
 	return session
 }
 
@@ -306,6 +296,9 @@ func (s *awsRealtimeSession) readResponses() {
 }
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
+	if awsRealtimeNestedMap(payload, "event", "completionStart") != nil {
+		s.emitGenerationCreated()
+	}
 	if s.turns != nil {
 		s.turns.feed(payload)
 	}
@@ -359,6 +352,18 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
 		s.closeGeneration()
 	}
+}
+
+func (s *awsRealtimeSession) emitGenerationCreated() {
+	generation := s.ensureGeneration()
+	s.emit(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:  generation.messageCh,
+			FunctionCh: generation.functionCh,
+			ResponseID: generation.responseID,
+		},
+	})
 }
 
 func (s *awsRealtimeSession) ensureGeneration() *awsRealtimeGeneration {

@@ -258,6 +258,33 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationStreams(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil || created.Generation.ResponseID == "" {
+		t.Fatalf("generation = %#v, want response id", created.Generation)
+	}
+	if created.Generation.MessageCh == nil || created.Generation.FunctionCh == nil {
+		t.Fatalf("generation streams = %#v/%#v, want reference streams", created.Generation.MessageCh, created.Generation.FunctionCh)
+	}
+	select {
+	case msg := <-created.Generation.MessageCh:
+		if msg.MessageID != created.Generation.ResponseID || msg.TextCh == nil || msg.AudioCh == nil || msg.ModalitiesCh == nil {
+			t.Fatalf("message generation = %#v, want response id and streams", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for completionStart message generation")
+	}
+}
+
 func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
