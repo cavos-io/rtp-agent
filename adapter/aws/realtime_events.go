@@ -130,6 +130,69 @@ func (b *awsRealtimeEventBuilder) createPromptStartEvent(voiceID string, sampleR
 	})
 }
 
+func (b *awsRealtimeEventBuilder) createAudioContentStartEvent(sampleRate int) (string, error) {
+	if sampleRate == 0 {
+		sampleRate = defaultAWSRealtimeInputSampleRate
+	}
+	return marshalAWSRealtimeEvent(map[string]any{
+		"contentStart": map[string]any{
+			"promptName":  b.promptName,
+			"contentName": b.audioContentName,
+			"type":        "AUDIO",
+			"interactive": true,
+			"role":        "USER",
+			"audioInputConfiguration": map[string]any{
+				"mediaType":       "audio/lpcm",
+				"sampleRateHertz": sampleRate,
+				"sampleSizeBits":  defaultAWSRealtimeSampleSizeBits,
+				"channelCount":    defaultAWSRealtimeChannels,
+				"audioType":       "SPEECH",
+				"encoding":        "base64",
+			},
+		},
+	})
+}
+
+func (b *awsRealtimeEventBuilder) createAudioInputEvent(audioContent string) (string, error) {
+	return marshalAWSRealtimeEvent(map[string]any{
+		"audioInput": map[string]any{
+			"promptName":  b.promptName,
+			"contentName": b.audioContentName,
+			"content":     audioContent,
+		},
+	})
+}
+
+func (b *awsRealtimeEventBuilder) createPromptEndBlock() ([]string, error) {
+	audioEnd, err := b.createContentEndEvent(b.audioContentName)
+	if err != nil {
+		return nil, err
+	}
+	promptEnd, err := b.createPromptEndEvent()
+	if err != nil {
+		return nil, err
+	}
+	sessionEnd, err := b.createSessionEndEvent()
+	if err != nil {
+		return nil, err
+	}
+	return []string{audioEnd, promptEnd, sessionEnd}, nil
+}
+
+func (b *awsRealtimeEventBuilder) createPromptEndEvent() (string, error) {
+	return marshalAWSRealtimeEvent(map[string]any{
+		"promptEnd": map[string]any{
+			"promptName": b.promptName,
+		},
+	})
+}
+
+func (b *awsRealtimeEventBuilder) createSessionEndEvent() (string, error) {
+	return marshalAWSRealtimeEvent(map[string]any{
+		"sessionEnd": map[string]any{},
+	})
+}
+
 func (b *awsRealtimeEventBuilder) createTextContentBlock(contentName string, role string, content string) ([]string, error) {
 	start, err := b.createTextContentStartEvent(contentName, role, false)
 	if err != nil {

@@ -87,6 +87,60 @@ func TestAWSRealtimeEventBuilderCreatesReferencePromptStartBlock(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeEventBuilderCreatesReferenceAudioAndCloseEvents(t *testing.T) {
+	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
+
+	audioStart, err := builder.createAudioContentStartEvent(16000)
+	if err != nil {
+		t.Fatalf("createAudioContentStartEvent error = %v", err)
+	}
+	start := mustAWSRealtimeJSONEvent(t, audioStart)
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "promptName"); got != "prompt-1" {
+		t.Fatalf("audio start promptName = %q, want prompt-1", got)
+	}
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "contentName"); got != "audio-1" {
+		t.Fatalf("audio start contentName = %q, want audio-1", got)
+	}
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "AUDIO" {
+		t.Fatalf("audio start type = %q, want AUDIO", got)
+	}
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "role"); got != "USER" {
+		t.Fatalf("audio start role = %q, want USER", got)
+	}
+	audioConfig := nestedMap(t, start, "event", "contentStart", "audioInputConfiguration")
+	assertAWSRealtimeJSONNumber(t, audioConfig["sampleRateHertz"], 16000)
+	if got := audioConfig["encoding"]; got != "base64" {
+		t.Fatalf("audio encoding = %v, want base64", got)
+	}
+
+	audioInput, err := builder.createAudioInputEvent("YWJj")
+	if err != nil {
+		t.Fatalf("createAudioInputEvent error = %v", err)
+	}
+	input := mustAWSRealtimeJSONEvent(t, audioInput)
+	if got := awsRealtimeNestedString(input, "event", "audioInput", "content"); got != "YWJj" {
+		t.Fatalf("audio content = %q, want YWJj", got)
+	}
+
+	closeEvents, err := builder.createPromptEndBlock()
+	if err != nil {
+		t.Fatalf("createPromptEndBlock error = %v", err)
+	}
+	if len(closeEvents) != 3 {
+		t.Fatalf("close event count = %d, want 3", len(closeEvents))
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[0]), "event", "contentEnd", "contentName"); got != "audio-1" {
+		t.Fatalf("close contentEnd = %q, want audio-1", got)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[1]), "event", "promptEnd", "promptName"); got != "prompt-1" {
+		t.Fatalf("promptEnd promptName = %q, want prompt-1", got)
+	}
+	sessionEnd := mustAWSRealtimeJSONEvent(t, closeEvents[2])
+	if _, ok := nestedMap(t, sessionEnd, "event")["sessionEnd"].(map[string]any); !ok {
+		t.Fatalf("sessionEnd = %#v, want object", sessionEnd)
+	}
+}
+
 func mustAWSRealtimeJSONEvent(t *testing.T, raw string) map[string]any {
 	t.Helper()
 	var decoded map[string]any
