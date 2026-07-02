@@ -1094,13 +1094,16 @@ func (s *googleRealtimeSession) closeGeneration() {
 	if s.generation == nil || s.generation.closed {
 		return
 	}
+	defer func() {
+		_ = recover()
+	}()
 	s.markGenerationCompleted()
+	s.generation.closed = true
 	close(s.generation.textCh)
 	close(s.generation.audioCh)
 	close(s.generation.modalitiesCh)
 	close(s.generation.messageCh)
 	close(s.generation.functionCh)
-	s.generation.closed = true
 }
 
 func (s *googleRealtimeSession) emitUsageMetrics(usage *genai.UsageMetadata) {

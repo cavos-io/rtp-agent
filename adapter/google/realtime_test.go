@@ -1043,6 +1043,35 @@ func TestGoogleRealtimeSessionSuppressesLateGenerationDeltasAfterClose(t *testin
 	session.sendGenerationAudio([]byte{1, 2})
 }
 
+func TestGoogleRealtimeSessionSuppressesDuplicateGenerationCloseRace(t *testing.T) {
+	textCh := make(chan string)
+	audioCh := make(chan *audiomodel.AudioFrame)
+	modalitiesCh := make(chan []string)
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	close(textCh)
+	close(audioCh)
+	close(modalitiesCh)
+	close(messageCh)
+	close(functionCh)
+	session := &googleRealtimeSession{
+		generation: &googleRealtimeGeneration{
+			textCh:       textCh,
+			audioCh:      audioCh,
+			modalitiesCh: modalitiesCh,
+			messageCh:    messageCh,
+			functionCh:   functionCh,
+		},
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("duplicate generation close panicked: %v", recovered)
+		}
+	}()
+	session.closeGeneration()
+}
+
 func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
