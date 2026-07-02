@@ -746,6 +746,36 @@ func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionToolCallsEmitReferenceSpeechStopped(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ToolCall: &genai.LiveServerToolCall{
+			FunctionCalls: []*genai.FunctionCall{{
+				ID:   "call-weather",
+				Name: "weather",
+				Args: map[string]any{"city": "Paris"},
+			}},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	_ = nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeSpeechStopped || event.SpeechStopped == nil || event.SpeechStopped.UserTranscriptionEnabled {
+		t.Fatalf("tool call completion event = %#v, want speech_stopped with transcription disabled", event)
+	}
+}
+
 func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

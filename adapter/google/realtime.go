@@ -663,6 +663,10 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	if message.ToolCall != nil {
 		s.ensureGeneration()
 		s.handleToolCalls(message.ToolCall)
+		s.emitEvent(llm.RealtimeEvent{
+			Type:          llm.RealtimeEventTypeSpeechStopped,
+			SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
+		})
 		s.closeGeneration()
 	}
 	if message.UsageMetadata != nil {
