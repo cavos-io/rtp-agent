@@ -264,7 +264,8 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	}
 	for _, event := range append(initEvents, historyEvents...) {
 		if err := s.sendRawEvent(ctx, event); err != nil {
-			return err
+			s.closeStartupStream()
+			return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
 		}
 	}
 	s.markChatContextUserMessagesSent(chatCtx)
@@ -273,10 +274,18 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		return err
 	}
 	if err := s.sendRawEvent(ctx, audioStart); err != nil {
-		return err
+		s.closeStartupStream()
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
 	}
 	go s.readResponses()
 	return nil
+}
+
+func (s *awsRealtimeSession) closeStartupStream() {
+	if s.stream != nil {
+		_ = s.stream.Close()
+		s.stream = nil
+	}
 }
 
 func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) error {

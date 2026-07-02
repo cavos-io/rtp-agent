@@ -72,6 +72,28 @@ func TestAWSRealtimeSessionStartErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionStartSendErrorClosesStream(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	stream.sendErr = errors.New("bedrock send failed")
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+
+	session, err := provider.Session()
+
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Nova Sonic realtime startup send failed") {
+		t.Fatalf("Session error = %q, want startup send context", err.Error())
+	}
+	if !stream.closed {
+		t.Fatal("stream closed = false, want true after failed startup send")
+	}
+}
+
 func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -1018,9 +1040,10 @@ func (c *fakeAWSRealtimeClient) InvokeModelWithBidirectionalStream(ctx context.C
 }
 
 type fakeAWSRealtimeStream struct {
-	sent   []string
-	closed bool
-	events chan awstypes.InvokeModelWithBidirectionalStreamOutput
+	sent    []string
+	closed  bool
+	sendErr error
+	events  chan awstypes.InvokeModelWithBidirectionalStreamOutput
 }
 
 func awsRealtimeTestStereoFrame(sampleRate uint32, samples [][2]int16) *model.AudioFrame {
@@ -1048,6 +1071,9 @@ func (s *fakeAWSRealtimeStream) emitJSON(raw string) {
 }
 
 func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeModelWithBidirectionalStreamInput) error {
+	if s.sendErr != nil {
+		return s.sendErr
+	}
 	chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk)
 	if !ok {
 		return nil
