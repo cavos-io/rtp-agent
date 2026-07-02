@@ -403,9 +403,6 @@ func (s *awsRealtimeSession) ensureGeneration() *awsRealtimeGeneration {
 }
 
 func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any) {
-	if awsRealtimeNestedString(payload, "event", "contentStart", "role") != "ASSISTANT" {
-		return
-	}
 	contentID := awsRealtimeNestedString(payload, "event", "contentStart", "contentId")
 	if contentID == "" {
 		return
@@ -416,9 +413,11 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	switch {
 	case contentType == "AUDIO":
 		streamType = "ASSISTANT_AUDIO"
-	case contentType == "TEXT" && strings.Contains(additionalFields, "SPECULATIVE"):
+	case awsRealtimeNestedString(payload, "event", "contentStart", "role") == "ASSISTANT" &&
+		contentType == "TEXT" && strings.Contains(additionalFields, "SPECULATIVE"):
 		streamType = "ASSISTANT_TEXT"
-	case contentType == "TEXT" && strings.Contains(additionalFields, "FINAL"):
+	case awsRealtimeNestedString(payload, "event", "contentStart", "role") == "ASSISTANT" &&
+		contentType == "TEXT" && strings.Contains(additionalFields, "FINAL"):
 		streamType = "ASSISTANT_FINAL"
 	default:
 		return

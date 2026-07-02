@@ -262,6 +262,46 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationStreams(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionTracksReferenceAudioContentStartWithoutRole(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+	select {
+	case <-msg.ModalitiesCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for modalities")
+	}
+
+	audioBytes := []byte{9, 8, 7, 6}
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","contentId":"audio-roleless"}}}`)
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-roleless","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	audio := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	if string(audio.Data) != string(audioBytes) {
+		t.Fatalf("audio data = %v, want %v", audio.Data, audioBytes)
+	}
+	select {
+	case frame := <-msg.AudioCh:
+		if string(frame.Data) != string(audioBytes) {
+			t.Fatalf("generation audio = %v, want %v", frame.Data, audioBytes)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generated audio")
+	}
+}
+
 func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
