@@ -761,6 +761,12 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 	if options.Instructions == "" || s.model == nil || s.model.modalities != defaultAWSRealtimeModalities {
 		return nil
 	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil
+	}
 	msg := &llm.ChatMessage{
 		ID:      uuid.NewString(),
 		Role:    llm.ChatRoleUser,

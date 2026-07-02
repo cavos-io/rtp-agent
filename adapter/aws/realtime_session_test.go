@@ -256,6 +256,27 @@ func TestAWSRealtimeSessionUpdateChatContextAfterCloseIsIgnored(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplyAfterCloseIsIgnored(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	sentCount := len(stream.sent)
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask again"})
+	if err != nil {
+		t.Fatalf("GenerateReply after Close error = %v, want nil", err)
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("GenerateReply after Close sent %d events, want none", len(stream.sent)-sentCount)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
