@@ -1033,14 +1033,7 @@ func (s *googleRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions
 	if googleRealtimeSessionOptionsNoop(options) {
 		return nil
 	}
-	if (options.VoiceSet || options.TurnDetectionSet) &&
-		!options.SpeedSet &&
-		!options.MaxResponseOutputTokensSet &&
-		!options.TruncationSet &&
-		!options.TracingSet &&
-		!options.ReasoningSet &&
-		!options.InputAudioTranscriptionSet &&
-		!options.InputAudioNoiseReductionSet {
+	if options.VoiceSet || options.TurnDetectionSet {
 		return s.reconnectWithVoiceTurnDetection(
 			options.Voice,
 			options.VoiceSet,
@@ -1048,7 +1041,7 @@ func (s *googleRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions
 			options.TurnDetectionSet,
 		)
 	}
-	return errors.New("google realtime session option update is not implemented")
+	return nil
 }
 
 func googleRealtimeSessionOptionsNoop(options llm.RealtimeSessionOptions) bool {

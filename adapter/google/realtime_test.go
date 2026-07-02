@@ -219,6 +219,66 @@ func TestGoogleRealtimeSessionIgnoresReferenceToolChoiceUpdate(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionIgnoresUnsupportedGenericOptionsLikeReference(t *testing.T) {
+	session := &googleRealtimeSession{}
+
+	err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		Speed:                       1.25,
+		SpeedSet:                    true,
+		MaxResponseOutputTokens:     64,
+		MaxResponseOutputTokensSet:  true,
+		Truncation:                  "disabled",
+		TruncationSet:               true,
+		Tracing:                     map[string]any{"workflow_name": "checkout"},
+		TracingSet:                  true,
+		Reasoning:                   map[string]any{"effort": "low"},
+		ReasoningSet:                true,
+		InputAudioTranscription:     map[string]any{"model": "gpt-4o-transcribe"},
+		InputAudioTranscriptionSet:  true,
+		InputAudioNoiseReduction:    map[string]any{"type": "near_field"},
+		InputAudioNoiseReductionSet: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions error = %v, want nil for unsupported reference no-ops", err)
+	}
+}
+
+func TestGoogleRealtimeSessionVoiceUpdateIgnoresUnsupportedGenericOptions(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	err = session.UpdateOptions(llm.RealtimeSessionOptions{
+		Voice:                      "Kore",
+		VoiceSet:                   true,
+		Speed:                      1.25,
+		SpeedSet:                   true,
+		MaxResponseOutputTokens:    64,
+		MaxResponseOutputTokensSet: true,
+	})
+	if err != nil {
+		t.Fatalf("UpdateOptions voice plus unsupported error = %v, want reference reconnect", err)
+	}
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial plus one reconnect", len(connector.configs))
+	}
+	if got := connector.configs[1].SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName; got != "Kore" {
+		t.Fatalf("voice = %q, want Kore", got)
+	}
+}
+
 func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
