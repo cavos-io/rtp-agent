@@ -36,6 +36,9 @@ func TestAWSRealtimeDefaultsMatchReference(t *testing.T) {
 		AutoToolReplyGeneration: true,
 		AudioOutput:             true,
 		ManualFunctionCalls:     false,
+		MutableChatContext:      true,
+		MutableInstructions:     true,
+		MutableTools:            true,
 		PerResponseToolChoice:   false,
 	}
 	if caps != want {

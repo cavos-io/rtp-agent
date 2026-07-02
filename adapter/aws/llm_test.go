@@ -180,6 +180,31 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamChunksCarryReferenceRequestID(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberText{Value: "hello"},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+		requestID: "aws-request-1",
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want text chunk", err)
+	}
+	if chunk.ID != "aws-request-1" {
+		t.Fatalf("chunk ID = %q, want reference request ID", chunk.ID)
+	}
+}
+
 func TestAWSLLMStreamMapsReferenceCacheReadUsage(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{
@@ -212,6 +237,37 @@ func TestAWSLLMStreamMapsReferenceCacheReadUsage(t *testing.T) {
 	}
 	if chunk.Usage.PromptCachedTokens != 5 {
 		t.Fatalf("prompt cached tokens = %d, want cacheReadInputTokens", chunk.Usage.PromptCachedTokens)
+	}
+}
+
+func TestAWSLLMStreamUsageChunkIsReferenceUsageOnly(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{
+		Value: awstypes.ConverseStreamMetadataEvent{
+			Usage: &awstypes.TokenUsage{
+				InputTokens:  awsInt32(1),
+				OutputTokens: awsInt32(2),
+				TotalTokens:  awsInt32(3),
+			},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want usage chunk", err)
+	}
+	if chunk == nil || chunk.Usage == nil {
+		t.Fatalf("Next chunk = %#v, want usage", chunk)
+	}
+	if chunk.Delta != nil {
+		t.Fatalf("usage chunk delta = %#v, want nil like reference metadata chunk", chunk.Delta)
 	}
 }
 
@@ -269,6 +325,43 @@ func TestAWSLLMStreamErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AWS Bedrock LLM stream failed") {
 		t.Fatalf("Next error = %q, want AWS Bedrock stream context", err.Error())
+	}
+}
+
+func TestAWSLLMStreamErrorAfterChunkIsReferenceNonRetryable(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberText{Value: "hello"},
+		},
+	}
+	reader.err = errors.New("bedrock stream reset")
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want text chunk before stream error", err)
+	}
+	if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("first Next chunk = %#v, want hello text delta", chunk)
+	}
+
+	chunk, err = stream.Next()
+	if chunk != nil {
+		t.Fatalf("second Next chunk = %#v, want nil", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Retryable {
+		t.Fatal("Retryable = true, want false after partial reference chunk")
 	}
 }
 

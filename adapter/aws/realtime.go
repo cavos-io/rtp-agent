@@ -137,6 +137,9 @@ func (m *AWSRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 		AutoToolReplyGeneration: true,
 		AudioOutput:             true,
 		ManualFunctionCalls:     false,
+		MutableChatContext:      true,
+		MutableInstructions:     true,
+		MutableTools:            true,
 		PerResponseToolChoice:   false,
 	}
 }
@@ -169,6 +172,7 @@ type awsRealtimeStream interface {
 	Send(context.Context, awstypes.InvokeModelWithBidirectionalStreamInput) error
 	Events() <-chan awstypes.InvokeModelWithBidirectionalStreamOutput
 	Close() error
+	Err() error
 }
 
 type awsRealtimeSDKClient struct {
@@ -192,21 +196,23 @@ func (c *awsRealtimeSDKClient) InvokeModelWithBidirectionalStream(ctx context.Co
 }
 
 type awsRealtimeSession struct {
-	model        *AWSRealtimeModel
-	client       awsRealtimeClient
-	builder      *awsRealtimeEventBuilder
-	stream       awsRealtimeStream
-	eventCh      chan llm.RealtimeEvent
-	turns        *awsRealtimeTurnTracker
-	generation   *awsRealtimeGeneration
-	chatCtx      *llm.ChatContext
-	instructions string
-	tools        []llm.Tool
-	pending      map[string]struct{}
-	sent         map[string]struct{}
-	audioBStream *coreaudio.AudioByteStream
-	mu           sync.Mutex
-	closed       bool
+	model                    *AWSRealtimeModel
+	client                   awsRealtimeClient
+	builder                  *awsRealtimeEventBuilder
+	stream                   awsRealtimeStream
+	eventCh                  chan llm.RealtimeEvent
+	turns                    *awsRealtimeTurnTracker
+	generation               *awsRealtimeGeneration
+	chatCtx                  *llm.ChatContext
+	instructions             string
+	tools                    []llm.Tool
+	pending                  map[string]struct{}
+	sent                     map[string]struct{}
+	recycleToolsAfterPending bool
+	audioBStream             *coreaudio.AudioByteStream
+	audioNorm                awsRealtimeInputAudioNormalizer
+	mu                       sync.Mutex
+	closed                   bool
 }
 
 type awsRealtimeGeneration struct {
@@ -298,7 +304,14 @@ func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) err
 	if s.stream == nil {
 		return errors.New("AWS Nova Sonic realtime stream is not initialized")
 	}
-	if err := s.stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
+	return sendAWSRealtimeRawEvent(ctx, s.stream, event)
+}
+
+func sendAWSRealtimeRawEvent(ctx context.Context, stream awsRealtimeStream, event string) error {
+	if stream == nil {
+		return errors.New("AWS Nova Sonic realtime stream is not initialized")
+	}
+	if err := stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
 		Value: awstypes.BidirectionalInputPayloadPart{Bytes: []byte(event)},
 	}); err != nil {
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime send failed: %v", err))
@@ -307,10 +320,11 @@ func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) err
 }
 
 func (s *awsRealtimeSession) readResponses() {
-	if s.stream == nil {
+	stream := s.stream
+	if stream == nil {
 		return
 	}
-	for event := range s.stream.Events() {
+	for event := range stream.Events() {
 		chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamOutputMemberChunk)
 		if !ok || len(chunk.Value.Bytes) == 0 {
 			continue
@@ -324,6 +338,12 @@ func (s *awsRealtimeSession) readResponses() {
 			continue
 		}
 		s.handleResponseEvent(payload)
+	}
+	if err := stream.Err(); err != nil {
+		s.emit(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err)),
+		})
 	}
 }
 
@@ -694,7 +714,14 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 		s.mu.Lock()
 		delete(s.pending, output.CallID)
+		shouldRecycle := len(s.pending) == 0 && s.recycleToolsAfterPending
+		if shouldRecycle {
+			s.recycleToolsAfterPending = false
+		}
 		s.mu.Unlock()
+		if shouldRecycle {
+			return s.recycleForUpdatedTools(context.Background())
+		}
 	}
 	return nil
 }
@@ -771,7 +798,14 @@ func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	changed := awsRealtimeToolNamesChanged(s.tools, tools)
 	s.tools = append([]llm.Tool(nil), tools...)
 	started := s.stream != nil && !s.closed
+	hasPendingTools := len(s.pending) > 0
+	if started && changed && hasPendingTools {
+		s.recycleToolsAfterPending = true
+	}
 	s.mu.Unlock()
+	if started && changed && hasPendingTools {
+		return nil
+	}
 	if started && changed {
 		return s.recycleForUpdatedTools(context.Background())
 	}
@@ -800,11 +834,25 @@ func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
 	s.closeGeneration()
 	s.mu.Lock()
 	stream := s.stream
+	closeEvents, err := s.builder.createPromptEndBlock()
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	s.stream = nil
 	s.builder = newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString())
 	s.pending = make(map[string]struct{})
+	s.recycleToolsAfterPending = false
 	s.mu.Unlock()
 	if stream != nil {
+		if err := s.flushBufferedAudioInput(ctx, stream); err != nil {
+			return err
+		}
+		for _, event := range closeEvents {
+			if err := sendAWSRealtimeRawEvent(ctx, stream, event); err != nil {
+				return err
+			}
+		}
 		if err := stream.Close(); err != nil {
 			return err
 		}
@@ -853,6 +901,9 @@ func (s *awsRealtimeSession) Close() error {
 
 	s.closeGeneration()
 	if stream != nil {
+		if err := s.flushBufferedAudioInput(context.Background(), stream); err != nil {
+			return err
+		}
 		closeEvents, err := s.builder.createPromptEndBlock()
 		if err != nil {
 			return err
@@ -872,6 +923,19 @@ func (s *awsRealtimeSession) Close() error {
 
 func (s *awsRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
 
+func (s *awsRealtimeSession) flushBufferedAudioInput(ctx context.Context, stream awsRealtimeStream) error {
+	for _, frame := range s.audioBStream.Flush() {
+		event, err := s.builder.createAudioInputEvent(base64.StdEncoding.EncodeToString(frame.Data))
+		if err != nil {
+			return err
+		}
+		if err := sendAWSRealtimeRawEvent(ctx, stream, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
@@ -882,7 +946,7 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if closed {
 		return nil
 	}
-	normalized, err := normalizeAWSRealtimeInputFrame(frame)
+	normalized, err := s.audioNorm.normalize(frame)
 	if err != nil {
 		return err
 	}
@@ -898,52 +962,129 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return nil
 }
 
-func normalizeAWSRealtimeInputFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+type awsRealtimeInputAudioNormalizer struct {
+	sampleRate    uint32
+	numChannels   uint32
+	inputSamples  uint64
+	outputSamples uint64
+	remainder     uint64
+	lastSample    int16
+	hasTail       bool
+}
+
+func (n *awsRealtimeInputAudioNormalizer) normalize(frame *model.AudioFrame) (*model.AudioFrame, error) {
 	if frame == nil {
 		return nil, nil
 	}
-	normalized, err := downmixAWSRealtimeInputFrameToMono(frame)
-	if err != nil {
-		return nil, err
+	if frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return frame, nil
 	}
-	if normalized.SampleRate != defaultAWSRealtimeInputSampleRate {
-		normalized, err = coreaudio.ResampleAudioFrame(normalized, defaultAWSRealtimeInputSampleRate)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return normalized, nil
-}
-
-func downmixAWSRealtimeInputFrameToMono(frame *model.AudioFrame) (*model.AudioFrame, error) {
-	if frame == nil || frame.NumChannels <= 1 {
+	if frame.SampleRate == defaultAWSRealtimeInputSampleRate && frame.NumChannels == defaultAWSRealtimeChannels {
+		n.reset()
 		return frame, nil
 	}
 	if len(frame.Data)%2 != 0 {
-		return nil, fmt.Errorf("cannot downmix non-16-bit PCM audio")
+		return nil, fmt.Errorf("aws realtime input audio must be 16-bit PCM")
 	}
-	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 {
+		samplesPerChannel = uint32(len(frame.Data)) / frame.NumChannels / 2
+	}
+	expectedBytes := int(samplesPerChannel * frame.NumChannels * 2)
 	if len(frame.Data) < expectedBytes {
-		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+		return nil, fmt.Errorf("aws realtime input audio data is shorter than declared sample count")
 	}
-	channels := int(frame.NumChannels)
-	samples := int(frame.SamplesPerChannel)
-	out := make([]byte, samples*2)
-	for i := 0; i < samples; i++ {
-		sum := 0
-		for ch := 0; ch < channels; ch++ {
-			offset := (i*channels + ch) * 2
-			sum += int(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
-		}
-		binary.LittleEndian.PutUint16(out[i*2:i*2+2], uint16(int16(sum/channels)))
+	if n.sampleRate != frame.SampleRate || n.numChannels != frame.NumChannels {
+		n.sampleRate = frame.SampleRate
+		n.numChannels = frame.NumChannels
+		n.inputSamples = 0
+		n.outputSamples = 0
+		n.remainder = 0
+		n.hasTail = false
 	}
+	if samplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        defaultAWSRealtimeInputSampleRate,
+			NumChannels:       defaultAWSRealtimeChannels,
+			SamplesPerChannel: 0,
+		}, nil
+	}
+
+	prevInputSamples := n.inputSamples
+	nextInputSamples := prevInputSamples + uint64(samplesPerChannel)
+	prevOutputSamples := n.outputSamples
+	nextOutputSamples := nextInputSamples * uint64(defaultAWSRealtimeInputSampleRate) / uint64(frame.SampleRate)
+	outSamples := uint32(nextOutputSamples - prevOutputSamples)
+	out := make([]byte, int(outSamples*defaultAWSRealtimeChannels*2))
+	channelCount := int(frame.NumChannels)
+	previousSample := n.lastSample
+	hasPrevious := n.hasTail
+	n.hasTail = false
+	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
+		srcPos := (prevOutputSamples + uint64(outIdx)) * uint64(frame.SampleRate)
+		srcGlobalIdx := srcPos / uint64(defaultAWSRealtimeInputSampleRate)
+		frac := srcPos % uint64(defaultAWSRealtimeInputSampleRate)
+		sample := awsRealtimeInterpolatedInputSample(frame, srcGlobalIdx, frac, uint64(defaultAWSRealtimeInputSampleRate), prevInputSamples, samplesPerChannel, channelCount, previousSample, hasPrevious)
+		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(sample))
+	}
+	n.inputSamples = nextInputSamples
+	n.outputSamples = nextOutputSamples
+	n.remainder = nextInputSamples * uint64(defaultAWSRealtimeInputSampleRate) % uint64(frame.SampleRate)
+	n.lastSample = awsRealtimeInputSample(frame, uint64(samplesPerChannel-1), samplesPerChannel, channelCount)
+	n.hasTail = n.remainder > 0
+
 	return &model.AudioFrame{
 		Data:              out,
-		SampleRate:        frame.SampleRate,
-		NumChannels:       1,
-		SamplesPerChannel: frame.SamplesPerChannel,
+		SampleRate:        defaultAWSRealtimeInputSampleRate,
+		NumChannels:       defaultAWSRealtimeChannels,
+		SamplesPerChannel: outSamples,
 		ParticipantID:     frame.ParticipantID,
 	}, nil
+}
+
+func (n *awsRealtimeInputAudioNormalizer) reset() {
+	n.sampleRate = 0
+	n.numChannels = 0
+	n.inputSamples = 0
+	n.outputSamples = 0
+	n.remainder = 0
+	n.lastSample = 0
+	n.hasTail = false
+}
+
+func awsRealtimeInputSample(frame *model.AudioFrame, sampleIndex uint64, samplesPerChannel uint32, channelCount int) int16 {
+	if sampleIndex >= uint64(samplesPerChannel) {
+		sampleIndex = uint64(samplesPerChannel - 1)
+	}
+	var sum int32
+	for ch := 0; ch < channelCount; ch++ {
+		offset := (int(sampleIndex)*channelCount + ch) * 2
+		sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+	}
+	return int16(sum / int32(channelCount))
+}
+
+func awsRealtimeInterpolatedInputSample(frame *model.AudioFrame, sampleIndex uint64, frac uint64, denom uint64, frameStart uint64, samplesPerChannel uint32, channelCount int, previousSample int16, hasPrevious bool) int16 {
+	current := awsRealtimeInputSampleAt(frame, sampleIndex, frameStart, samplesPerChannel, channelCount, previousSample, hasPrevious)
+	if frac == 0 || denom == 0 {
+		return current
+	}
+	next := awsRealtimeInputSampleAt(frame, sampleIndex+1, frameStart, samplesPerChannel, channelCount, previousSample, hasPrevious)
+	return int16((int64(current)*int64(denom-frac) + int64(next)*int64(frac)) / int64(denom))
+}
+
+func awsRealtimeInputSampleAt(frame *model.AudioFrame, sampleIndex uint64, frameStart uint64, samplesPerChannel uint32, channelCount int, previousSample int16, hasPrevious bool) int16 {
+	if sampleIndex < frameStart {
+		if hasPrevious {
+			return previousSample
+		}
+		return awsRealtimeInputSample(frame, 0, samplesPerChannel, channelCount)
+	}
+	localIdx := sampleIndex - frameStart
+	if localIdx >= uint64(samplesPerChannel) {
+		localIdx = uint64(samplesPerChannel - 1)
+	}
+	return awsRealtimeInputSample(frame, localIdx, samplesPerChannel, channelCount)
 }
 
 func (s *awsRealtimeSession) PushVideo(*images.VideoFrame) error {

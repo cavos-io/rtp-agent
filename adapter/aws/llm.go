@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -98,8 +99,10 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
 	}
 
+	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
 	return &awsLLMStream{
-		stream: out.GetStream(),
+		stream:    out.GetStream(),
+		requestID: requestID,
 	}, nil
 }
 
@@ -160,11 +163,13 @@ func buildAWSToolChoice(choice llm.ToolChoice) types.ToolChoice {
 }
 
 type awsLLMStream struct {
-	stream     *bedrockruntime.ConverseStreamEventStream
-	closed     bool
-	toolCallID string
-	toolName   string
-	toolArgs   string
+	stream       *bedrockruntime.ConverseStreamEventStream
+	requestID    string
+	closed       bool
+	emittedChunk bool
+	toolCallID   string
+	toolName     string
+	toolArgs     string
 }
 
 func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
@@ -437,22 +442,22 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
-				return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM stream failed: %v", err))
+				return nil, llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("AWS Bedrock LLM stream failed: %v", err), !s.emittedChunk)
 			}
 			return nil, io.EOF
-		}
-
-		chunk := &llm.ChatChunk{
-			Delta: &llm.ChoiceDelta{
-				Role: llm.ChatRoleAssistant,
-			},
 		}
 
 		switch v := event.(type) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
 			if textDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
-				chunk.Delta.Content = textDelta.Value
-				return chunk, nil
+				s.emittedChunk = true
+				return &llm.ChatChunk{
+					ID: s.requestID,
+					Delta: &llm.ChoiceDelta{
+						Role:    llm.ChatRoleAssistant,
+						Content: textDelta.Value,
+					},
+				}, nil
 			}
 			if toolDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberToolUse); ok {
 				s.toolArgs += aws.ToString(toolDelta.Value.Input)
@@ -467,24 +472,34 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStop:
 			if s.toolCallID != "" {
-				chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
-					CallID:    s.toolCallID,
-					Name:      s.toolName,
-					Type:      "function",
-					Arguments: s.toolArgs,
-				})
+				s.emittedChunk = true
+				chunk := &llm.ChatChunk{
+					ID: s.requestID,
+					Delta: &llm.ChoiceDelta{
+						Role: llm.ChatRoleAssistant,
+						ToolCalls: []llm.FunctionToolCall{{
+							CallID:    s.toolCallID,
+							Name:      s.toolName,
+							Type:      "function",
+							Arguments: s.toolArgs,
+						}},
+					},
+				}
 				s.toolCallID, s.toolName, s.toolArgs = "", "", ""
 				return chunk, nil
 			}
 		case *types.ConverseStreamOutputMemberMetadata:
 			if v.Value.Usage != nil {
-				chunk.Usage = &llm.CompletionUsage{
-					PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
-					CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
-					TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
-					PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
-				}
-				return chunk, nil
+				s.emittedChunk = true
+				return &llm.ChatChunk{
+					ID: s.requestID,
+					Usage: &llm.CompletionUsage{
+						PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
+						CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
+						TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
+						PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
+					},
+				}, nil
 			}
 		case *types.ConverseStreamOutputMemberMessageStop:
 			continue

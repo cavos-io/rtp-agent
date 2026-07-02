@@ -163,6 +163,16 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 		t.Fatalf("UpdateTools active error = %v", err)
 	}
 
+	closeEvents := first.sent[len(first.sent)-3:]
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[0]), "event", "contentEnd", "contentName"); got == "" {
+		t.Fatalf("recycle contentEnd contentName empty")
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[1]), "event", "promptEnd", "promptName"); got == "" {
+		t.Fatalf("recycle promptEnd promptName empty")
+	}
+	if _, ok := nestedMap(t, mustAWSRealtimeJSONEvent(t, closeEvents[2]), "event")["sessionEnd"].(map[string]any); !ok {
+		t.Fatalf("recycle sessionEnd event = %s", closeEvents[2])
+	}
 	if !first.closed {
 		t.Fatal("first stream closed = false, want true after active tool update recycle")
 	}
@@ -441,6 +451,75 @@ func TestAWSRealtimeSessionPushAudioChunksReferenceInput(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	sentCount := len(stream.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events before Close = %d, want none until chunk flush", got)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events after Close = %d, want flushed tail", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 256*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
+	}
+	audioIndex := -1
+	contentEndIndex := -1
+	for i, raw := range stream.sent[sentCount:] {
+		event := mustAWSRealtimeJSONEvent(t, raw)
+		if awsRealtimeNestedString(event, "event", "audioInput", "content") != "" {
+			audioIndex = i
+		}
+		if awsRealtimeNestedString(event, "event", "contentEnd", "contentName") != "" {
+			contentEndIndex = i
+			break
+		}
+	}
+	if audioIndex < 0 || contentEndIndex < 0 || audioIndex > contentEndIndex {
+		t.Fatalf("audioInput/contentEnd order = %d/%d, want audio tail before contentEnd", audioIndex, contentEndIndex)
+	}
+}
+
+func TestAWSRealtimeSessionPushAudioPreservesResampleDurationAcrossFrames(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	sentCount := len(stream.sent)
+	for range 180 {
+		if err := session.PushAudio(awsRealtimeTestMonoFrame(44100, make([]int16, 100))); err != nil {
+			t.Fatalf("PushAudio error = %v", err)
+		}
+	}
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 12 {
+		t.Fatalf("audioInput chunks = %d, want 12 with cumulative 44.1kHz->16kHz resampling", len(audioInputs))
+	}
+}
+
 func TestAWSRealtimeSessionMapsReferenceResponseEvents(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -465,6 +544,31 @@ func TestAWSRealtimeSessionMapsReferenceResponseEvents(t *testing.T) {
 	audio := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
 	if string(audio.Data) != string(audioBytes) {
 		t.Fatalf("audio data = %v, want %v", audio.Data, audioBytes)
+	}
+}
+
+func TestAWSRealtimeSessionEmitsErrorOnReferenceReadFailure(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	stream.err = errors.New("bedrock output stream failed")
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	close(stream.events)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeError)
+	if event.Error == nil {
+		t.Fatal("Error = nil, want stream failure")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(event.Error, &connectionErr) {
+		t.Fatalf("Error = %T %v, want APIConnectionError", event.Error, event.Error)
+	}
+	if !strings.Contains(event.Error.Error(), "AWS Nova Sonic realtime stream failed") {
+		t.Fatalf("Error = %q, want stream failure context", event.Error.Error())
 	}
 }
 
@@ -912,6 +1016,77 @@ func TestAWSRealtimeSessionUpdateChatContextSendsReferenceToolResult(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionDefersToolUpdateRecycleUntilPendingToolResult(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	session := newAWSRealtimeSession(provider, client)
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	first.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	first.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","toolName":"lookup","content":"{\"query\":\"weather\"}"}}}`)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
+
+	sentBeforeUpdate := len(first.sent)
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools active error = %v", err)
+	}
+	if first.closed {
+		t.Fatal("first stream closed = true, want deferred recycle while tool result pending")
+	}
+	if len(second.sent) != 0 {
+		t.Fatalf("second stream sent %d events, want no restart before pending tool result", len(second.sent))
+	}
+	if len(first.sent) != sentBeforeUpdate {
+		t.Fatalf("UpdateTools sent %d events before tool result, want none", len(first.sent)-sentBeforeUpdate)
+	}
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		CallID: "tool-1",
+		Name:   "lookup",
+		Output: `{"forecast":"sunny"}`,
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	toolResult := mustAWSRealtimeJSONEvent(t, first.sent[sentBeforeUpdate+1])
+	if got := awsRealtimeNestedString(toolResult, "event", "toolResult", "content"); got != `{"forecast":"sunny"}` {
+		t.Fatalf("tool result content = %q, want output before recycle", got)
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want recycle after pending tool result")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no events, want restarted prompt after tool result")
+	}
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, second.sent[1]), "event", "promptStart", "toolConfiguration")
+	tools, ok := toolConfig["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("recycled tools = %#v, want one tool", toolConfig["tools"])
+	}
+	spec := nestedMap(t, map[string]any{"tool": tools[0]}, "tool", "toolSpec")
+	if spec["name"] != "lookup_order" {
+		t.Fatalf("recycled tool name = %#v, want lookup_order", spec["name"])
+	}
+}
+
 func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -1231,6 +1406,7 @@ type fakeAWSRealtimeStream struct {
 	sent    []string
 	closed  bool
 	sendErr error
+	err     error
 	events  chan awstypes.InvokeModelWithBidirectionalStreamOutput
 }
 
@@ -1318,6 +1494,10 @@ func (s *fakeAWSRealtimeStream) Events() <-chan awstypes.InvokeModelWithBidirect
 func (s *fakeAWSRealtimeStream) Close() error {
 	s.closed = true
 	return nil
+}
+
+func (s *fakeAWSRealtimeStream) Err() error {
+	return s.err
 }
 
 type awsSecondRequestTestTool struct{}
