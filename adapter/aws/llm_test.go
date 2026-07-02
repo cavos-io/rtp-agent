@@ -149,6 +149,41 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamMapsReferenceCacheReadUsage(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{
+		Value: awstypes.ConverseStreamMetadataEvent{
+			Usage: &awstypes.TokenUsage{
+				InputTokens:          awsInt32(11),
+				OutputTokens:         awsInt32(7),
+				TotalTokens:          awsInt32(18),
+				CacheReadInputTokens: awsInt32(5),
+			},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want usage chunk", err)
+	}
+	if chunk == nil || chunk.Usage == nil {
+		t.Fatalf("Next chunk = %#v, want usage", chunk)
+	}
+	if chunk.Usage.PromptTokens != 11 || chunk.Usage.CompletionTokens != 7 || chunk.Usage.TotalTokens != 18 {
+		t.Fatalf("usage = %+v, want prompt/completion/total token counts", chunk.Usage)
+	}
+	if chunk.Usage.PromptCachedTokens != 5 {
+		t.Fatalf("prompt cached tokens = %d, want cacheReadInputTokens", chunk.Usage.PromptCachedTokens)
+	}
+}
+
 func TestBuildAWSMessagesGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"
@@ -361,5 +396,9 @@ func (r *fakeAWSLLMReader) Err() error {
 }
 
 func awsString(value string) *string {
+	return &value
+}
+
+func awsInt32(value int32) *int32 {
 	return &value
 }

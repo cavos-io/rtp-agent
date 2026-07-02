@@ -467,9 +467,10 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		case *types.ConverseStreamOutputMemberMetadata:
 			if v.Value.Usage != nil {
 				chunk.Usage = &llm.CompletionUsage{
-					PromptTokens:     int(aws.ToInt32(v.Value.Usage.InputTokens)),
-					CompletionTokens: int(aws.ToInt32(v.Value.Usage.OutputTokens)),
-					TotalTokens:      int(aws.ToInt32(v.Value.Usage.TotalTokens)),
+					PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
+					CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
+					TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
+					PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
 				}
 				return chunk, nil
 			}
