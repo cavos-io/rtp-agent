@@ -242,6 +242,38 @@ func TestAWSRealtimeSessionUpdateChatContextSendsInteractiveUserText(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionMapsReferenceUsageMetrics(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("amazon.nova-sonic-v1:0", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"usageEvent":{"completionId":"completion-1","details":{"delta":{"input":{"speechTokens":3,"textTokens":4},"output":{"speechTokens":5,"textTokens":6}}}}}}`)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	if event.Metrics == nil {
+		t.Fatal("Metrics = nil")
+	}
+	if event.Metrics.RequestID != "completion-1" {
+		t.Fatalf("RequestID = %q, want completion-1", event.Metrics.RequestID)
+	}
+	if event.Metrics.InputTokens != 7 || event.Metrics.OutputTokens != 11 || event.Metrics.TotalTokens != 18 {
+		t.Fatalf("token counts = input %d output %d total %d, want 7/11/18", event.Metrics.InputTokens, event.Metrics.OutputTokens, event.Metrics.TotalTokens)
+	}
+	if event.Metrics.InputTokenDetails.AudioTokens != 3 || event.Metrics.InputTokenDetails.TextTokens != 4 {
+		t.Fatalf("input details = %+v, want audio=3 text=4", event.Metrics.InputTokenDetails)
+	}
+	if event.Metrics.OutputTokenDetails.AudioTokens != 5 || event.Metrics.OutputTokenDetails.TextTokens != 6 {
+		t.Fatalf("output details = %+v, want audio=5 text=6", event.Metrics.OutputTokenDetails)
+	}
+	if event.Metrics.Metadata == nil || event.Metrics.Metadata.ModelName != "amazon.nova-sonic-v1:0" || event.Metrics.Metadata.ModelProvider != "Amazon" {
+		t.Fatalf("metadata = %+v, want AWS Nova Sonic", event.Metrics.Metadata)
+	}
+}
+
 func assertAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
 	t.Helper()
 	select {

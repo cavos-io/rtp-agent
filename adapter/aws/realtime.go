@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -14,6 +15,7 @@ import (
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/google/uuid"
 )
@@ -324,6 +326,9 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			},
 		})
 	}
+	if usage := awsRealtimeNestedMap(payload, "event", "usageEvent"); usage != nil {
+		s.emitUsageMetrics(usage)
+	}
 }
 
 func normalizeAWSRealtimeToolArguments(content string) string {
@@ -343,6 +348,69 @@ func normalizeAWSRealtimeToolArguments(content string) string {
 		return content
 	}
 	return innerString
+}
+
+func (s *awsRealtimeSession) emitUsageMetrics(usage map[string]any) {
+	input := awsRealtimeNestedMap(usage, "details", "delta", "input")
+	output := awsRealtimeNestedMap(usage, "details", "delta", "output")
+	inputSpeech := awsRealtimeNumberAsInt(input["speechTokens"])
+	inputText := awsRealtimeNumberAsInt(input["textTokens"])
+	outputSpeech := awsRealtimeNumberAsInt(output["speechTokens"])
+	outputText := awsRealtimeNumberAsInt(output["textTokens"])
+	inputTokens := inputSpeech + inputText
+	outputTokens := outputSpeech + outputText
+	s.emit(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			Label:        s.model.Label(),
+			RequestID:    awsRealtimeMapString(usage, "completionId"),
+			Timestamp:    time.Now(),
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+			TotalTokens:  inputTokens + outputTokens,
+			InputTokenDetails: telemetry.InputTokenDetails{
+				TextTokens:  inputText,
+				AudioTokens: inputSpeech,
+			},
+			OutputTokenDetails: telemetry.OutputTokenDetails{
+				TextTokens:  outputText,
+				AudioTokens: outputSpeech,
+			},
+			Metadata: &telemetry.Metadata{
+				ModelName:     s.model.Model(),
+				ModelProvider: s.model.Provider(),
+			},
+		},
+	})
+}
+
+func awsRealtimeNestedMap(root map[string]any, path ...string) map[string]any {
+	var current any = root
+	for _, key := range path {
+		asMap, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		current = asMap[key]
+	}
+	asMap, _ := current.(map[string]any)
+	return asMap
+}
+
+func awsRealtimeMapString(root map[string]any, key string) string {
+	value, _ := root[key].(string)
+	return value
+}
+
+func awsRealtimeNumberAsInt(value any) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	default:
+		return 0
+	}
 }
 
 func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
