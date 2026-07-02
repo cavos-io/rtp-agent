@@ -13,6 +13,7 @@ const (
 	defaultAWSRealtimeOutputSampleRate = 24000
 	defaultAWSRealtimeSampleSizeBits   = 16
 	defaultAWSRealtimeChannels         = 1
+	defaultAWSRealtimeInputChunkSize   = 512
 	defaultAWSRealtimeMaxTokens        = 1024
 	defaultAWSRealtimeTopP             = 0.9
 	defaultAWSRealtimeTemperature      = 0.7

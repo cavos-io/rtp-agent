@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -318,7 +319,7 @@ func (s *awsSTTStream) readLoop() {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
-				if err != io.EOF {
+				if err != io.EOF && !isHarmlessAWSSTTStreamCloseError(err) {
 					s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream failed: %v", err))
 				}
 			}
@@ -328,7 +329,7 @@ func (s *awsSTTStream) readLoop() {
 		switch v := event.(type) {
 		case *types.TranscriptResultStreamMemberTranscriptEvent:
 			for _, result := range v.Value.Transcript.Results {
-				if result.StartTime == 0 && !s.speaking {
+				if result.StartTime == 0 {
 					s.speaking = true
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 				}
@@ -353,6 +354,10 @@ func (s *awsSTTStream) readLoop() {
 			}
 		}
 	}
+}
+
+func isHarmlessAWSSTTStreamCloseError(err error) bool {
+	return strings.Contains(err.Error(), "complete signal was sent without the preceding empty frame")
 }
 
 func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64, fallbackLanguage string, includeSourceLanguages bool) stt.SpeechData {
@@ -402,12 +407,10 @@ func awsSpeechDataFromAlternativeOffset(alt types.Alternative, startTimeOffset f
 }
 
 func awsAlternativeConfidence(items []types.Item) float64 {
-	for _, item := range items {
-		if item.Type == types.ItemTypePronunciation {
-			return aws.ToFloat64(item.Confidence)
-		}
+	if len(items) == 0 {
+		return 0
 	}
-	return 0
+	return aws.ToFloat64(items[0].Confidence)
 }
 
 func awsTimedStringsOffset(items []types.Item, startTimeOffset float64) []stt.TimedString {
@@ -417,9 +420,6 @@ func awsTimedStringsOffset(items []types.Item, startTimeOffset float64) []stt.Ti
 
 	words := make([]stt.TimedString, 0, len(items))
 	for _, item := range items {
-		if item.Type != types.ItemTypePronunciation {
-			continue
-		}
 		words = append(words, stt.TimedString{
 			Text:            aws.ToString(item.Content),
 			StartTime:       item.StartTime + startTimeOffset,

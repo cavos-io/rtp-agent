@@ -51,13 +51,13 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 	if data.Confidence != 0.94 {
 		t.Fatalf("confidence = %v, want first pronunciation confidence", data.Confidence)
 	}
-	if len(data.Words) != 2 {
-		t.Fatalf("words = %d, want 2", len(data.Words))
+	if len(data.Words) != 3 {
+		t.Fatalf("words = %d, want pronunciation plus punctuation items", len(data.Words))
 	}
 	if got := data.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.94 || got.SpeakerID != "spk_0" {
 		t.Fatalf("first word = %+v, want hello timing with speaker", got)
 	}
-	if got := data.Words[1]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.91 || got.SpeakerID != "spk_1" {
+	if got := data.Words[2]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.91 || got.SpeakerID != "spk_1" {
 		t.Fatalf("second word = %+v, want world timing with speaker", got)
 	}
 
@@ -70,6 +70,62 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 	})
 	if punctuationOnly.Confidence != 0 {
 		t.Fatalf("punctuation-only confidence = %v, want reference zero confidence", punctuationOnly.Confidence)
+	}
+}
+
+func TestAWSSpeechDataFromAlternativePreservesPunctuationItems(t *testing.T) {
+	data := awsSpeechDataFromAlternative(types.Alternative{
+		Transcript: awsconfig.String("hello, world"),
+		Items: []types.Item{
+			{
+				Type:       types.ItemTypePronunciation,
+				Content:    awsconfig.String("hello"),
+				StartTime:  0.1,
+				EndTime:    0.3,
+				Confidence: awsconfig.Float64(0.94),
+			},
+			{
+				Type:    types.ItemTypePunctuation,
+				Content: awsconfig.String(","),
+			},
+			{
+				Type:       types.ItemTypePronunciation,
+				Content:    awsconfig.String("world"),
+				StartTime:  0.4,
+				EndTime:    0.8,
+				Confidence: awsconfig.Float64(0.91),
+			},
+		},
+	})
+
+	if len(data.Words) != 3 {
+		t.Fatalf("words = %d, want punctuation item preserved between words", len(data.Words))
+	}
+	if got := data.Words[1]; got.Text != "," || got.StartTime != 0 || got.EndTime != 0 || got.Confidence != 0 {
+		t.Fatalf("punctuation word = %+v, want reference punctuation timed string", got)
+	}
+}
+
+func TestAWSSpeechDataFromAlternativeUsesReferenceFirstItemConfidence(t *testing.T) {
+	data := awsSpeechDataFromAlternative(types.Alternative{
+		Transcript: awsconfig.String(", hello"),
+		Items: []types.Item{
+			{
+				Type:    types.ItemTypePunctuation,
+				Content: awsconfig.String(","),
+			},
+			{
+				Type:       types.ItemTypePronunciation,
+				Content:    awsconfig.String("hello"),
+				StartTime:  0.1,
+				EndTime:    0.3,
+				Confidence: awsconfig.Float64(0.94),
+			},
+		},
+	})
+
+	if data.Confidence != 0 {
+		t.Fatalf("confidence = %v, want first item confidence zero from punctuation", data.Confidence)
 	}
 }
 
@@ -465,7 +521,7 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 }
 
-func TestAWSSTTStreamEmitsReferenceStartOfSpeechOncePerResultSequence(t *testing.T) {
+func TestAWSSTTStreamEmitsReferenceStartOfSpeechForEachZeroStartResult(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
 		es.Reader = reader
@@ -507,6 +563,7 @@ func TestAWSSTTStreamEmitsReferenceStartOfSpeechOncePerResultSequence(t *testing
 	wantTypes := []stt.SpeechEventType{
 		stt.SpeechEventStartOfSpeech,
 		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventStartOfSpeech,
 		stt.SpeechEventFinalTranscript,
 		stt.SpeechEventEndOfSpeech,
 	}
@@ -806,6 +863,31 @@ func TestAWSSTTProviderStreamErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AWS Transcribe stream failed") {
 		t.Fatalf("Next error = %q, want stream failure context", err.Error())
+	}
+}
+
+func TestAWSSTTEmptyFrameCloseDiagnosticReturnsEOF(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	reader.err = errors.New("complete signal was sent without the preceding empty frame")
+	close(reader.events)
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+	go providerStream.readLoop()
+
+	event, err := providerStream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF for reference harmless empty-frame diagnostic", err)
 	}
 }
 
