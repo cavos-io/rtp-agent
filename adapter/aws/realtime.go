@@ -199,6 +199,7 @@ type awsRealtimeSession struct {
 	eventCh      chan llm.RealtimeEvent
 	turns        *awsRealtimeTurnTracker
 	generation   *awsRealtimeGeneration
+	chatCtx      *llm.ChatContext
 	instructions string
 	tools        []llm.Tool
 	pending      map[string]struct{}
@@ -236,11 +237,12 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		ModelId: aws.String(s.model.model),
 	})
 	if err != nil {
-		return err
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream start failed: %v", err))
 	}
 	s.stream = stream
 	s.mu.Lock()
 	systemPrompt := s.instructions
+	chatCtx := s.chatCtx
 	tools := append([]llm.Tool(nil), s.tools...)
 	s.mu.Unlock()
 	if systemPrompt == "" {
@@ -250,6 +252,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		voiceID:                s.model.voice,
 		outputSampleRate:       defaultAWSRealtimeOutputSampleRate,
 		systemContent:          systemPrompt,
+		chatCtx:                chatCtx,
 		tools:                  tools,
 		maxTokens:              defaultAWSRealtimeMaxTokens,
 		topP:                   defaultAWSRealtimeTopP,
@@ -261,27 +264,40 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	}
 	for _, event := range append(initEvents, historyEvents...) {
 		if err := s.sendRawEvent(ctx, event); err != nil {
-			return err
+			s.closeStartupStream()
+			return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
 		}
 	}
+	s.markChatContextUserMessagesSent(chatCtx)
 	audioStart, err := s.builder.createAudioContentStartEvent(defaultAWSRealtimeInputSampleRate)
 	if err != nil {
 		return err
 	}
 	if err := s.sendRawEvent(ctx, audioStart); err != nil {
-		return err
+		s.closeStartupStream()
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime startup send failed: %v", err))
 	}
 	go s.readResponses()
 	return nil
+}
+
+func (s *awsRealtimeSession) closeStartupStream() {
+	if s.stream != nil {
+		_ = s.stream.Close()
+		s.stream = nil
+	}
 }
 
 func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) error {
 	if s.stream == nil {
 		return errors.New("AWS Nova Sonic realtime stream is not initialized")
 	}
-	return s.stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
+	if err := s.stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
 		Value: awstypes.BidirectionalInputPayloadPart{Bytes: []byte(event)},
-	})
+	}); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime send failed: %v", err))
+	}
+	return nil
 }
 
 func (s *awsRealtimeSession) readResponses() {
@@ -630,8 +646,14 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	}
 	s.mu.Lock()
 	closed := s.closed
-	s.mu.Unlock()
 	if closed {
+		s.mu.Unlock()
+		return nil
+	}
+	started := s.stream != nil
+	s.chatCtx = chatCtx.Copy()
+	s.mu.Unlock()
+	if !started {
 		return nil
 	}
 	for _, item := range chatCtx.Items {
@@ -647,9 +669,6 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 		s.mu.Lock()
 		_, pending := s.pending[output.CallID]
-		if pending {
-			delete(s.pending, output.CallID)
-		}
 		s.mu.Unlock()
 		if !pending {
 			continue
@@ -667,6 +686,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		if err := s.sendToolResult(context.Background(), output.CallID, content); err != nil {
 			return err
 		}
+		s.mu.Lock()
+		delete(s.pending, output.CallID)
+		s.mu.Unlock()
 	}
 	return nil
 }
@@ -692,9 +714,6 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 	}
 	s.mu.Lock()
 	_, alreadySent := s.sent[msg.ID]
-	if !alreadySent {
-		s.sent[msg.ID] = struct{}{}
-	}
 	s.mu.Unlock()
 	if alreadySent {
 		return nil
@@ -708,7 +727,25 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 			return err
 		}
 	}
+	s.mu.Lock()
+	s.sent[msg.ID] = struct{}{}
+	s.mu.Unlock()
 	return nil
+}
+
+func (s *awsRealtimeSession) markChatContextUserMessagesSent(chatCtx *llm.ChatContext) {
+	if chatCtx == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range chatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || msg.Role != llm.ChatRoleUser || msg.ID == "" || msg.TextContent() == "" {
+			continue
+		}
+		s.sent[msg.ID] = struct{}{}
+	}
 }
 
 func (s *awsRealtimeSession) sendToolResult(ctx context.Context, toolUseID string, result string) error {
@@ -725,15 +762,61 @@ func (s *awsRealtimeSession) sendToolResult(ctx context.Context, toolUseID strin
 }
 func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	s.mu.Lock()
+	changed := awsRealtimeToolNamesChanged(s.tools, tools)
 	s.tools = append([]llm.Tool(nil), tools...)
+	started := s.stream != nil && !s.closed
 	s.mu.Unlock()
+	if started && changed {
+		return s.recycleForUpdatedTools(context.Background())
+	}
 	return nil
 }
+
+func awsRealtimeToolNamesChanged(oldTools []llm.Tool, newTools []llm.Tool) bool {
+	if len(oldTools) != len(newTools) {
+		return true
+	}
+	for i := range oldTools {
+		if oldTools[i] == nil || newTools[i] == nil {
+			if oldTools[i] != newTools[i] {
+				return true
+			}
+			continue
+		}
+		if oldTools[i].Name() != newTools[i].Name() {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
+	s.closeGeneration()
+	s.mu.Lock()
+	stream := s.stream
+	s.stream = nil
+	s.builder = newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString())
+	s.pending = make(map[string]struct{})
+	s.mu.Unlock()
+	if stream != nil {
+		if err := stream.Close(); err != nil {
+			return err
+		}
+	}
+	return s.start(ctx)
+}
+
 func (s *awsRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return nil
 }
 func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
 	if options.Instructions == "" || s.model == nil || s.model.modalities != defaultAWSRealtimeModalities {
+		return nil
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
 		return nil
 	}
 	msg := &llm.ChatMessage{
@@ -747,7 +830,10 @@ func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return awsRealtimeUnsupported("truncate")
 }
-func (s *awsRealtimeSession) Interrupt() error { return nil }
+func (s *awsRealtimeSession) Interrupt() error {
+	s.closeGeneration()
+	return nil
+}
 
 func (s *awsRealtimeSession) Close() error {
 	s.mu.Lock()

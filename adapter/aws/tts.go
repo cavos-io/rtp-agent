@@ -247,6 +247,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
 		data, err := io.ReadAll(s.stream)
 		if err != nil {
+			_ = s.Close()
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS response read failed: %v", err))
 		}
 		if len(data) == 0 {
@@ -332,9 +333,9 @@ func (s *awsTTSChunkedStream) Close() error {
 	}
 	stream := s.stream
 	s.stream = nil
-	err := stream.Close()
+	_ = stream.Close()
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
-	return err
+	return nil
 }

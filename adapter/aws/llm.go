@@ -20,8 +20,12 @@ const (
 )
 
 type AWSLLM struct {
-	client *bedrockruntime.Client
+	client awsLLMClient
 	model  string
+}
+
+type awsLLMClient interface {
+	ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
 }
 
 func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error) {
@@ -91,7 +95,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	out, err := l.client.ConverseStream(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
 	}
 
 	return &awsLLMStream{
@@ -107,14 +111,17 @@ func buildAWSToolConfig(options *llm.ChatOptions) *types.ToolConfiguration {
 	toolSpecs := make([]types.Tool, 0, len(options.Tools))
 	for _, t := range options.Tools {
 		doc := document.NewLazyDocument(llm.ToolParameters(t))
-		toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
-			Value: types.ToolSpecification{
-				Name:        aws.String(t.Name()),
-				Description: aws.String(t.Description()),
-				InputSchema: &types.ToolInputSchemaMemberJson{
-					Value: doc,
-				},
+		spec := types.ToolSpecification{
+			Name: aws.String(t.Name()),
+			InputSchema: &types.ToolInputSchemaMemberJson{
+				Value: doc,
 			},
+		}
+		if description := t.Description(); description != "" {
+			spec.Description = aws.String(description)
+		}
+		toolSpecs = append(toolSpecs, &types.ToolMemberToolSpec{
+			Value: spec,
 		})
 	}
 
@@ -186,7 +193,7 @@ func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
 		currentContent = append(currentContent, blocks...)
 	}
 
-	for _, group := range groupAWSChatItems(chatCtx.Items) {
+	for _, group := range groupAWSChatItems(convertAWSMidConversationInstructions(chatCtx.Items)) {
 		for _, item := range group.flatten() {
 			switch msg := item.(type) {
 			case *llm.ChatMessage:
@@ -225,6 +232,31 @@ func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
 	return messages, systemText
 }
 
+func convertAWSMidConversationInstructions(items []llm.ChatItem) []llm.ChatItem {
+	converted := make([]llm.ChatItem, 0, len(items))
+	firstSystemSeen := false
+	for _, item := range items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || (msg.Role != llm.ChatRoleSystem && msg.Role != llm.ChatRoleDeveloper) {
+			converted = append(converted, item)
+			continue
+		}
+		text := msg.TextContent()
+		if firstSystemSeen && text != "" {
+			converted = append(converted, &llm.ChatMessage{
+				ID:        msg.ID,
+				Role:      llm.ChatRoleUser,
+				Content:   []llm.ChatContent{{Text: fmt.Sprintf("<instructions>\n%s\n</instructions>", text)}},
+				CreatedAt: msg.CreatedAt,
+			})
+			continue
+		}
+		firstSystemSeen = true
+		converted = append(converted, item)
+	}
+	return converted
+}
+
 func awsMessageContentBlocks(msg *llm.ChatMessage) []types.ContentBlock {
 	blocks := make([]types.ContentBlock, 0, len(msg.Content))
 	for _, c := range msg.Content {
@@ -247,22 +279,9 @@ func awsImageBlock(image *llm.ImageContent) types.ContentBlock {
 	}
 	return &types.ContentBlockMemberImage{
 		Value: types.ImageBlock{
-			Format: awsImageFormat(img.MIMEType),
+			Format: types.ImageFormatJpeg,
 			Source: &types.ImageSourceMemberBytes{Value: img.DataBytes},
 		},
-	}
-}
-
-func awsImageFormat(mimeType string) types.ImageFormat {
-	switch mimeType {
-	case "image/png":
-		return types.ImageFormatPng
-	case "image/gif":
-		return types.ImageFormatGif
-	case "image/webp":
-		return types.ImageFormatWebp
-	default:
-		return types.ImageFormatJpeg
 	}
 }
 
@@ -283,20 +302,13 @@ func awsToolUseBlock(fc *llm.FunctionCall) types.ContentBlock {
 }
 
 func awsToolResultBlock(fco *llm.FunctionCallOutput) types.ContentBlock {
-	status := types.ToolResultStatusSuccess
-	if fco.IsError {
-		status = types.ToolResultStatusError
-	}
-
 	return &types.ContentBlockMemberToolResult{
 		Value: types.ToolResultBlock{
 			ToolUseId: aws.String(fco.CallID),
-			Status:    status,
+			Status:    types.ToolResultStatusSuccess,
 			Content: []types.ToolResultContentBlock{
-				&types.ToolResultContentBlockMemberJson{
-					Value: document.NewLazyDocument(map[string]interface{}{
-						"output": fco.Output,
-					}),
+				&types.ToolResultContentBlockMemberText{
+					Value: fco.Output,
 				},
 			},
 		},
@@ -425,7 +437,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
-				return nil, err
+				return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM stream failed: %v", err))
 			}
 			return nil, io.EOF
 		}
@@ -476,8 +488,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 		case *types.ConverseStreamOutputMemberMessageStop:
 			s.closed = true
-			// We can return a final chunk
-			return chunk, nil
+			return nil, io.EOF
 		}
 	}
 }

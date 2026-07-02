@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -220,7 +221,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	input := buildAWSStartStreamTranscriptionInput(s, language)
 	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream start failed: %v", err))
 	}
 
 	gs := &awsSTTStream{
@@ -305,6 +306,7 @@ type awsSTTStream struct {
 	events                   chan *stt.SpeechEvent
 	errCh                    chan error
 	closed                   bool
+	speaking                 bool
 	timingMu                 sync.Mutex
 	startTimeOffset          float64
 	startTime                float64
@@ -317,7 +319,7 @@ func (s *awsSTTStream) readLoop() {
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
 				if err != io.EOF {
-					s.errCh <- err
+					s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream failed: %v", err))
 				}
 			}
 			return
@@ -326,7 +328,8 @@ func (s *awsSTTStream) readLoop() {
 		switch v := event.(type) {
 		case *types.TranscriptResultStreamMemberTranscriptEvent:
 			for _, result := range v.Value.Transcript.Results {
-				if result.StartTime == 0 {
+				if result.StartTime == 0 && !s.speaking {
+					s.speaking = true
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 				}
 
@@ -345,6 +348,7 @@ func (s *awsSTTStream) readLoop() {
 				}
 				if !result.IsPartial {
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+					s.speaking = false
 				}
 			}
 		}
@@ -468,22 +472,28 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+	if err := s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
 			AudioChunk: frame.Data,
 		},
-	})
+	}); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
+	}
+	return nil
 }
 
 func (s *awsSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+	if err := s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
 			AudioChunk: []byte{},
 		},
-	})
+	}); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
+	}
+	return nil
 }
 
 func (s *awsSTTStream) Close() error {

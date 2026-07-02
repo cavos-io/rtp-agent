@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -30,6 +31,12 @@ func (awsRequestTestTool) Parameters() map[string]any {
 func (awsRequestTestTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
+
+type awsEmptyDescriptionTool struct {
+	awsRequestTestTool
+}
+
+func (awsEmptyDescriptionTool) Description() string { return "" }
 
 func TestAWSLLMDefaultsMatchReference(t *testing.T) {
 	provider := &AWSLLM{model: defaultAWSLLMModel}
@@ -81,6 +88,30 @@ func TestAWSLLMChatRequiresConfiguredClient(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "client is not configured") {
 		t.Fatalf("Chat error = %v, want configured-client error", err)
+	}
+}
+
+func TestAWSLLMChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: errors.New("bedrock dial failed")},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil", stream)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Bedrock LLM chat failed") {
+		t.Fatalf("Chat error = %q, want Bedrock chat context", err.Error())
 	}
 }
 
@@ -184,6 +215,52 @@ func TestAWSLLMStreamMapsReferenceCacheReadUsage(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamErrorReturnsAPIConnectionError(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.err = errors.New("bedrock stream reset")
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Bedrock LLM stream failed") {
+		t.Fatalf("Next error = %q, want AWS Bedrock stream context", err.Error())
+	}
+}
+
+func TestAWSLLMStreamMessageStopReturnsEOFWithoutEmptyChunk(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMessageStop{}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil empty terminal chunk suppressed", chunk)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next error = %v, want EOF", err)
+	}
+}
+
 func TestBuildAWSMessagesGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"
@@ -218,6 +295,59 @@ func TestBuildAWSMessagesGroupsToolCallsWithOutputs(t *testing.T) {
 	}
 	assertToolResultBlock(t, messages[2].Content, 0, "call_lookup", awstypes.ToolResultStatusSuccess)
 	assertToolResultBlock(t, messages[2].Content, 1, "call_weather", awstypes.ToolResultStatusSuccess)
+}
+
+func TestBuildAWSMessagesMapsReferenceToolResultText(t *testing.T) {
+	ctx := llm.NewChatContext()
+	groupID := "assistant-turn"
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: groupID, Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: groupID + "/tool-1", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "sunny"},
+	}
+
+	messages, _ := buildAWSMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3", len(messages))
+	}
+	block, ok := messages[2].Content[0].(*awstypes.ContentBlockMemberToolResult)
+	if !ok {
+		t.Fatalf("tool result block = %T, want ToolResult", messages[2].Content[0])
+	}
+	if len(block.Value.Content) != 1 {
+		t.Fatalf("tool result content len = %d, want 1", len(block.Value.Content))
+	}
+	text, ok := block.Value.Content[0].(*awstypes.ToolResultContentBlockMemberText)
+	if !ok {
+		t.Fatalf("tool result content = %T, want reference text content", block.Value.Content[0])
+	}
+	if text.Value != "sunny" {
+		t.Fatalf("tool result text = %q, want sunny", text.Value)
+	}
+}
+
+func TestBuildAWSMessagesKeepsReferenceToolResultStatusSuccessForErrors(t *testing.T) {
+	ctx := llm.NewChatContext()
+	groupID := "assistant-turn"
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: groupID, Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: groupID + "/tool-1", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "error: timeout", IsError: true},
+	}
+
+	messages, _ := buildAWSMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3", len(messages))
+	}
+	block, ok := messages[2].Content[0].(*awstypes.ContentBlockMemberToolResult)
+	if !ok {
+		t.Fatalf("tool result block = %T, want ToolResult", messages[2].Content[0])
+	}
+	if block.Value.Status != awstypes.ToolResultStatusSuccess {
+		t.Fatalf("tool result status = %q, want reference success", block.Value.Status)
+	}
 }
 
 func TestBuildAWSMessagesFiltersUnmatchedToolItems(t *testing.T) {
@@ -258,12 +388,13 @@ func TestBuildAWSMessagesIncludesInlineImageBlocks(t *testing.T) {
 	if len(messages[0].Content) != 2 {
 		t.Fatalf("len(content) = %d, want 2: %#v", len(messages[0].Content), messages[0].Content)
 	}
+	assertTextBlock(t, messages[0].Content, 0, "describe")
 	imageBlock, ok := messages[0].Content[1].(*awstypes.ContentBlockMemberImage)
 	if !ok {
 		t.Fatalf("image content = %#v, want ContentBlockMemberImage", messages[0].Content[1])
 	}
-	if imageBlock.Value.Format != awstypes.ImageFormatWebp {
-		t.Fatalf("image format = %q, want webp", imageBlock.Value.Format)
+	if imageBlock.Value.Format != awstypes.ImageFormatJpeg {
+		t.Fatalf("image format = %q, want jpeg like reference AWS formatter", imageBlock.Value.Format)
 	}
 	source, ok := imageBlock.Value.Source.(*awstypes.ImageSourceMemberBytes)
 	if !ok || !reflect.DeepEqual(source.Value, []byte("webp-bytes")) {
@@ -305,6 +436,23 @@ func TestBuildAWSToolConfigDropsToolsForNoneChoice(t *testing.T) {
 	}
 }
 
+func TestBuildAWSToolConfigOmitsReferenceEmptyDescription(t *testing.T) {
+	config := buildAWSToolConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{awsEmptyDescriptionTool{}},
+	})
+
+	if config == nil || len(config.Tools) != 1 {
+		t.Fatalf("tool config = %#v, want one tool", config)
+	}
+	tool, ok := config.Tools[0].(*awstypes.ToolMemberToolSpec)
+	if !ok {
+		t.Fatalf("tool = %T, want ToolSpec", config.Tools[0])
+	}
+	if tool.Value.Description != nil {
+		t.Fatalf("tool description = %#v, want nil for empty reference description", tool.Value.Description)
+	}
+}
+
 func TestBuildAWSMessagesCollectsSystemText(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
@@ -315,13 +463,39 @@ func TestBuildAWSMessagesCollectsSystemText(t *testing.T) {
 
 	messages, systemText := buildAWSMessages(ctx)
 
-	if systemText != "base\ndev\n" {
-		t.Fatalf("systemText = %q, want base/dev", systemText)
+	if systemText != "base\n" {
+		t.Fatalf("systemText = %q, want base", systemText)
 	}
 	if len(messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(messages))
 	}
-	assertTextBlock(t, messages[0].Content, 0, "hello")
+	assertTextBlock(t, messages[0].Content, 0, "<instructions>\ndev\n</instructions>")
+	assertTextBlock(t, messages[0].Content, 1, "hello")
+}
+
+func TestBuildAWSMessagesConvertsReferenceMidConversationInstructions(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "base"}}},
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+		&llm.ChatMessage{ID: "system-2", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "answer tersely"}}},
+		&llm.ChatMessage{ID: "user-2", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "weather?"}}},
+	}
+
+	messages, systemText := buildAWSMessages(ctx)
+
+	if systemText != "base\n" {
+		t.Fatalf("systemText = %q, want only first system message", systemText)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	if messages[2].Role != awstypes.ConversationRoleUser {
+		t.Fatalf("mid-instruction role = %q, want user", messages[2].Role)
+	}
+	assertTextBlock(t, messages[2].Content, 0, "<instructions>\nanswer tersely\n</instructions>")
+	assertTextBlock(t, messages[2].Content, 1, "weather?")
 }
 
 func assertTextBlock(t *testing.T, blocks []awstypes.ContentBlock, index int, want string) {
@@ -376,6 +550,18 @@ type fakeAWSLLMReader struct {
 	events chan awstypes.ConverseStreamOutput
 	err    error
 	closed bool
+}
+
+type fakeAWSLLMClient struct {
+	out *bedrockruntime.ConverseStreamOutput
+	err error
+}
+
+func (c fakeAWSLLMClient) ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.out, nil
 }
 
 func newFakeAWSLLMReader() *fakeAWSLLMReader {

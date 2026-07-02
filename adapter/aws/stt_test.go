@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -363,6 +364,10 @@ func TestAWSSTTStreamReturnsClientError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "start failed") {
 		t.Fatalf("Stream error = %v, want client error", err)
 	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
 }
 
 func TestAWSSTTRecognizeReportsUnsupportedOfflineMode(t *testing.T) {
@@ -455,6 +460,66 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 
 	_, err = providerStream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next EOF error = %v, want io.EOF", err)
+	}
+}
+
+func TestAWSSTTStreamEmitsReferenceStartOfSpeechOncePerResultSequence(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+
+	go providerStream.readLoop()
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{
+					{
+						IsPartial: true,
+						StartTime: 0.0,
+						EndTime:   0.2,
+						Alternatives: []types.Alternative{{
+							Transcript: awsconfig.String("hel"),
+						}},
+					},
+					{
+						IsPartial: false,
+						StartTime: 0.0,
+						EndTime:   0.4,
+						Alternatives: []types.Alternative{{
+							Transcript: awsconfig.String("hello"),
+						}},
+					},
+				},
+			},
+		},
+	}
+	close(reader.events)
+
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	for i, want := range wantTypes {
+		event, err := providerStream.Next()
+		if err != nil {
+			t.Fatalf("Next[%d] error = %v, want %s", i, err, want)
+		}
+		if event.Type != want {
+			t.Fatalf("event[%d] type = %q, want %q", i, event.Type, want)
+		}
+	}
+	_, err := providerStream.Next()
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next EOF error = %v, want io.EOF", err)
 	}
@@ -660,6 +725,33 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
+	writer := &fakeAWSSTTWriter{err: errors.New("transcribe write failed")}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = newFakeAWSSTTReader()
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("pcm")})
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("PushFrame error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Transcribe audio write failed") {
+		t.Fatalf("PushFrame error = %q, want write failure context", err.Error())
+	}
+
+	err = providerStream.Flush()
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAWSSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		providerStream := &awsSTTStream{
@@ -684,6 +776,36 @@ func TestAWSSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 		if got := event.Alternatives[0].Text; got != "hello" {
 			t.Fatalf("transcript = %q, want hello", got)
 		}
+	}
+}
+
+func TestAWSSTTProviderStreamErrorReturnsAPIConnectionError(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	reader.err = errors.New("transcribe stream reset")
+	close(reader.events)
+	writer := &fakeAWSSTTWriter{}
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+	go providerStream.readLoop()
+
+	event, err := providerStream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Transcribe stream failed") {
+		t.Fatalf("Next error = %q, want stream failure context", err.Error())
 	}
 }
 
