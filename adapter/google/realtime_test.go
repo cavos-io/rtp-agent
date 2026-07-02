@@ -2091,6 +2091,44 @@ func TestGoogleRealtimeSessionDropsInvalidReferenceAudioFrame(t *testing.T) {
 	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
 }
 
+func TestGoogleRealtimeSessionClonesReferenceOutputAudio(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	audioData := []byte{1, 2, 3, 4}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{
+				InlineData: &genai.Blob{Data: audioData, MIMEType: "audio/pcm;rate=24000"},
+			}}},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	frame := nextGoogleRealtimeTestAudio(t, message.AudioCh)
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeAudio {
+		t.Fatalf("event = %#v, want audio delta", event)
+	}
+
+	audioData[0] = 9
+	if frame.Data[0] != 1 {
+		t.Fatalf("frame audio mutated with provider buffer = %v", frame.Data)
+	}
+	if event.Data[0] != 1 {
+		t.Fatalf("event audio mutated with provider buffer = %v", event.Data)
+	}
+}
+
 func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

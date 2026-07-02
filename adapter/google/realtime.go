@@ -1,6 +1,7 @@
 package google
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -1554,7 +1555,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 					s.sendGenerationAudio(part.InlineData.Data)
 					s.emitEvent(llm.RealtimeEvent{
 						Type: llm.RealtimeEventTypeAudio,
-						Data: part.InlineData.Data,
+						Data: bytes.Clone(part.InlineData.Data),
 					})
 				}
 			}
@@ -1781,7 +1782,7 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 		s.generation.firstTokenAt = time.Now()
 	}
 	frame := &model.AudioFrame{
-		Data:              data,
+		Data:              bytes.Clone(data),
 		SampleRate:        googleRealtimeOutputSampleRate,
 		NumChannels:       googleRealtimeOutputChannels,
 		SamplesPerChannel: uint32(len(data) / (2 * googleRealtimeOutputChannels)),
