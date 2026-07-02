@@ -220,6 +220,36 @@ func TestBuildAWSMessagesGroupsToolCallsWithOutputs(t *testing.T) {
 	assertToolResultBlock(t, messages[2].Content, 1, "call_weather", awstypes.ToolResultStatusSuccess)
 }
 
+func TestBuildAWSMessagesMapsReferenceToolResultText(t *testing.T) {
+	ctx := llm.NewChatContext()
+	groupID := "assistant-turn"
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: groupID, Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: groupID + "/tool-1", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "sunny"},
+	}
+
+	messages, _ := buildAWSMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3", len(messages))
+	}
+	block, ok := messages[2].Content[0].(*awstypes.ContentBlockMemberToolResult)
+	if !ok {
+		t.Fatalf("tool result block = %T, want ToolResult", messages[2].Content[0])
+	}
+	if len(block.Value.Content) != 1 {
+		t.Fatalf("tool result content len = %d, want 1", len(block.Value.Content))
+	}
+	text, ok := block.Value.Content[0].(*awstypes.ToolResultContentBlockMemberText)
+	if !ok {
+		t.Fatalf("tool result content = %T, want reference text content", block.Value.Content[0])
+	}
+	if text.Value != "sunny" {
+		t.Fatalf("tool result text = %q, want sunny", text.Value)
+	}
+}
+
 func TestBuildAWSMessagesFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

@@ -293,10 +293,8 @@ func awsToolResultBlock(fco *llm.FunctionCallOutput) types.ContentBlock {
 			ToolUseId: aws.String(fco.CallID),
 			Status:    status,
 			Content: []types.ToolResultContentBlock{
-				&types.ToolResultContentBlockMemberJson{
-					Value: document.NewLazyDocument(map[string]interface{}{
-						"output": fco.Output,
-					}),
+				&types.ToolResultContentBlockMemberText{
+					Value: fco.Output,
 				},
 			},
 		},
