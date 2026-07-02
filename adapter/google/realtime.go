@@ -619,30 +619,31 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 	capabilities := m.Capabilities()
 	session := &googleRealtimeSession{
-		owner:                   m,
-		ctx:                     ctx,
-		cancel:                  cancel,
-		connector:               connector,
-		liveSession:             liveSession,
-		liveConfig:              config,
-		modelName:               m.Model(),
-		provider:                m.Provider(),
-		instructions:            m.instructions,
-		voice:                   m.voice,
-		temperature:             m.temperature,
-		temperatureSet:          m.temperatureSet,
-		vertexAI:                m.vertexAI,
-		audioOutput:             capabilities.AudioOutput,
-		mutableInstructions:     capabilities.MutableInstructions,
-		mutableChatContext:      capabilities.MutableChatContext,
-		chatCtx:                 llm.EmptyChatContext(),
-		toolBehavior:            m.toolBehavior,
-		toolResponseScheduling:  m.toolResponseScheduling,
-		eventCh:                 make(chan llm.RealtimeEvent, 16),
-		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
-		sessionResumptionHandle: m.sessionResumptionHandle,
-		manualActivityDetection: googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
-		suppressActivityStart:   googleRealtimeNoInterruption(m.realtimeInputConfig),
+		owner:                    m,
+		ctx:                      ctx,
+		cancel:                   cancel,
+		connector:                connector,
+		liveSession:              liveSession,
+		liveConfig:               config,
+		modelName:                m.Model(),
+		provider:                 m.Provider(),
+		instructions:             m.instructions,
+		voice:                    m.voice,
+		temperature:              m.temperature,
+		temperatureSet:           m.temperatureSet,
+		vertexAI:                 m.vertexAI,
+		audioOutput:              capabilities.AudioOutput,
+		outputAudioTranscription: m.outputAudioTranscription,
+		mutableInstructions:      capabilities.MutableInstructions,
+		mutableChatContext:       capabilities.MutableChatContext,
+		chatCtx:                  llm.EmptyChatContext(),
+		toolBehavior:             m.toolBehavior,
+		toolResponseScheduling:   m.toolResponseScheduling,
+		eventCh:                  make(chan llm.RealtimeEvent, 16),
+		audioStream:              audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+		sessionResumptionHandle:  m.sessionResumptionHandle,
+		manualActivityDetection:  googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
+		suppressActivityStart:    googleRealtimeNoInterruption(m.realtimeInputConfig),
 	}
 	m.registerSession(session)
 	go session.receiveLoop(liveSession)
@@ -895,43 +896,44 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 }
 
 type googleRealtimeSession struct {
-	owner                   *RealtimeModel
-	ctx                     context.Context
-	cancel                  context.CancelFunc
-	connector               googleRealtimeConnector
-	liveSession             googleRealtimeLiveSession
-	liveConfig              *genai.LiveConnectConfig
-	modelName               string
-	provider                string
-	instructions            string
-	voice                   string
-	temperature             float64
-	temperatureSet          bool
-	vertexAI                bool
-	audioOutput             bool
-	mutableInstructions     bool
-	mutableChatContext      bool
-	chatCtx                 *llm.ChatContext
-	tools                   []llm.Tool
-	toolBehavior            any
-	toolResponseScheduling  any
-	eventCh                 chan llm.RealtimeEvent
-	audioStream             *audio.AudioByteStream
-	generation              *googleRealtimeGeneration
-	responseSeq             int
-	functionSeq             int
-	pendingReply            bool
-	pendingReplyAt          time.Time
-	sessionResumptionHandle string
-	inputID                 string
-	inputSeq                int
-	inputText               string
-	manualActivityDetection bool
-	inUserActivity          bool
-	suppressActivityStart   bool
-	closeOnce               sync.Once
-	closed                  bool
-	mu                      sync.Mutex
+	owner                    *RealtimeModel
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	connector                googleRealtimeConnector
+	liveSession              googleRealtimeLiveSession
+	liveConfig               *genai.LiveConnectConfig
+	modelName                string
+	provider                 string
+	instructions             string
+	voice                    string
+	temperature              float64
+	temperatureSet           bool
+	vertexAI                 bool
+	audioOutput              bool
+	outputAudioTranscription bool
+	mutableInstructions      bool
+	mutableChatContext       bool
+	chatCtx                  *llm.ChatContext
+	tools                    []llm.Tool
+	toolBehavior             any
+	toolResponseScheduling   any
+	eventCh                  chan llm.RealtimeEvent
+	audioStream              *audio.AudioByteStream
+	generation               *googleRealtimeGeneration
+	responseSeq              int
+	functionSeq              int
+	pendingReply             bool
+	pendingReplyAt           time.Time
+	sessionResumptionHandle  string
+	inputID                  string
+	inputSeq                 int
+	inputText                string
+	manualActivityDetection  bool
+	inUserActivity           bool
+	suppressActivityStart    bool
+	closeOnce                sync.Once
+	closed                   bool
+	mu                       sync.Mutex
 }
 
 type googleRealtimeGeneration struct {
@@ -1821,6 +1823,12 @@ func (s *googleRealtimeSession) closeGeneration() {
 	}()
 	s.markGenerationCompleted()
 	s.generation.closed = true
+	if !s.outputAudioTranscription {
+		select {
+		case s.generation.textCh <- "":
+		default:
+		}
+	}
 	close(s.generation.textCh)
 	if !s.generation.audioChClosed {
 		close(s.generation.audioCh)

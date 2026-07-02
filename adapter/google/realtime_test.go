@@ -2603,6 +2603,44 @@ func TestGoogleRealtimeSessionTurnCompleteEmitsReferenceSpeechStopped(t *testing
 	}
 }
 
+func TestGoogleRealtimeSessionSendsReferenceEmptyTextWhenOutputTranscriptionDisabled(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeOutputAudioTranscription(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{
+				InlineData: &genai.Blob{Data: []byte{1, 2, 3, 4}},
+			}}},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{TurnComplete: true},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	text, ok := nextGoogleRealtimeTestTextValue(t, message.TextCh)
+	if !ok {
+		t.Fatal("text channel closed without empty reference sentinel")
+	}
+	if text != "" {
+		t.Fatalf("final text sentinel = %q, want empty reference sentinel", text)
+	}
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+}
+
 func nextGoogleRealtimeTestEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent) llm.RealtimeEvent {
 	t.Helper()
 	select {
@@ -2648,13 +2686,22 @@ func nextGoogleRealtimeTestMessage(t *testing.T, messageCh <-chan llm.MessageGen
 
 func nextGoogleRealtimeTestText(t *testing.T, textCh <-chan string) string {
 	t.Helper()
+	text, ok := nextGoogleRealtimeTestTextValue(t, textCh)
+	if !ok {
+		t.Fatal("realtime text channel closed, want text")
+	}
+	return text
+}
+
+func nextGoogleRealtimeTestTextValue(t *testing.T, textCh <-chan string) (string, bool) {
+	t.Helper()
 	select {
-	case text := <-textCh:
-		return text
+	case text, ok := <-textCh:
+		return text, ok
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for realtime text")
 	}
-	return ""
+	return "", false
 }
 
 func expectGoogleRealtimeTestTextClosed(t *testing.T, textCh <-chan string) {
