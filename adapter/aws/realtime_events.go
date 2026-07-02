@@ -163,6 +163,51 @@ func (b *awsRealtimeEventBuilder) createAudioInputEvent(audioContent string) (st
 	})
 }
 
+func (b *awsRealtimeEventBuilder) createToolContentBlock(contentName string, toolUseID string, content string) ([]string, error) {
+	start, err := b.createToolContentStartEvent(contentName, toolUseID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := b.createToolResultEvent(contentName, content)
+	if err != nil {
+		return nil, err
+	}
+	end, err := b.createContentEndEvent(contentName)
+	if err != nil {
+		return nil, err
+	}
+	return []string{start, result, end}, nil
+}
+
+func (b *awsRealtimeEventBuilder) createToolContentStartEvent(contentName string, toolUseID string) (string, error) {
+	return marshalAWSRealtimeEvent(map[string]any{
+		"contentStart": map[string]any{
+			"promptName":  b.promptName,
+			"contentName": contentName,
+			"type":        "TOOL",
+			"interactive": false,
+			"role":        "TOOL",
+			"toolResultInputConfiguration": map[string]any{
+				"toolUseId": toolUseID,
+				"type":      "TEXT",
+				"textInputConfiguration": map[string]any{
+					"mediaType": "text/plain",
+				},
+			},
+		},
+	})
+}
+
+func (b *awsRealtimeEventBuilder) createToolResultEvent(contentName string, content string) (string, error) {
+	return marshalAWSRealtimeEvent(map[string]any{
+		"toolResult": map[string]any{
+			"promptName":  b.promptName,
+			"contentName": contentName,
+			"content":     content,
+		},
+	})
+}
+
 func (b *awsRealtimeEventBuilder) createPromptEndBlock() ([]string, error) {
 	audioEnd, err := b.createContentEndEvent(b.audioContentName)
 	if err != nil {
@@ -195,6 +240,22 @@ func (b *awsRealtimeEventBuilder) createSessionEndEvent() (string, error) {
 
 func (b *awsRealtimeEventBuilder) createTextContentBlock(contentName string, role string, content string) ([]string, error) {
 	start, err := b.createTextContentStartEvent(contentName, role, false)
+	if err != nil {
+		return nil, err
+	}
+	text, err := b.createTextContentEvent(contentName, content)
+	if err != nil {
+		return nil, err
+	}
+	end, err := b.createContentEndEvent(contentName)
+	if err != nil {
+		return nil, err
+	}
+	return []string{start, text, end}, nil
+}
+
+func (b *awsRealtimeEventBuilder) createInteractiveTextContentBlock(contentName string, role string, content string) ([]string, error) {
+	start, err := b.createTextContentStartEvent(contentName, role, true)
 	if err != nil {
 		return nil, err
 	}
