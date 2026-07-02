@@ -70,6 +70,7 @@ type RealtimeModel struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
 }
@@ -108,6 +109,7 @@ type googleRealtimeOptions struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
 }
@@ -257,6 +259,12 @@ func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOpti
 	}
 }
 
+func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.realtimeInputConfig = config
+	}
+}
+
 func WithGoogleRealtimeSessionResumptionHandle(handle string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.sessionResumptionHandle = handle
@@ -329,6 +337,9 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	if options.turnDetection != nil {
 		turnDetection = *options.turnDetection
 	}
+	if googleRealtimeManualActivityDetection(options.realtimeInputConfig) {
+		turnDetection = false
+	}
 	inputAudioTranscription := true
 	if options.inputAudioTranscription != nil {
 		inputAudioTranscription = *options.inputAudioTranscription
@@ -371,6 +382,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		toolBehaviorSet:           options.toolBehaviorSet,
 		toolResponseScheduling:    options.toolResponseScheduling,
 		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
+		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
 		connector:                 options.connector,
 	}, nil
@@ -490,7 +502,8 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:                 make(chan llm.RealtimeEvent, 16),
 		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
 		sessionResumptionHandle: m.sessionResumptionHandle,
-		manualActivityDetection: !m.turnDetection,
+		manualActivityDetection: googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
+		suppressActivityStart:   googleRealtimeNoInterruption(m.realtimeInputConfig),
 	}
 	go session.receiveLoop()
 	return session, nil
@@ -518,7 +531,9 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	if m.outputAudioTranscription {
 		config.OutputAudioTranscription = &genai.AudioTranscriptionConfig{}
 	}
-	if !m.turnDetection {
+	if m.realtimeInputConfig != nil {
+		config.RealtimeInputConfig = m.realtimeInputConfig
+	} else if !m.turnDetection {
 		config.RealtimeInputConfig = &genai.RealtimeInputConfig{
 			AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
 		}
@@ -651,6 +666,7 @@ type googleRealtimeSession struct {
 	inputText               string
 	manualActivityDetection bool
 	inUserActivity          bool
+	suppressActivityStart   bool
 	closeOnce               sync.Once
 	closeErr                error
 	closed                  bool
@@ -790,7 +806,7 @@ func (s *googleRealtimeSession) Interrupt() error {
 		return nil
 	}
 	s.mu.Lock()
-	if !s.manualActivityDetection || s.inUserActivity {
+	if s.suppressActivityStart || !s.manualActivityDetection || s.inUserActivity {
 		s.mu.Unlock()
 		return nil
 	}
@@ -799,6 +815,14 @@ func (s *googleRealtimeSession) Interrupt() error {
 	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
 		ActivityStart: &genai.ActivityStart{},
 	})
+}
+
+func googleRealtimeManualActivityDetection(config *genai.RealtimeInputConfig) bool {
+	return config != nil && config.AutomaticActivityDetection != nil && config.AutomaticActivityDetection.Disabled
+}
+
+func googleRealtimeNoInterruption(config *genai.RealtimeInputConfig) bool {
+	return config != nil && config.ActivityHandling == genai.ActivityHandlingNoInterruption
 }
 
 func (s *googleRealtimeSession) endManualActivity() error {

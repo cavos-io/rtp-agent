@@ -333,6 +333,47 @@ func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionUsesReferenceRealtimeInputConfig(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeInputConfig(&genai.RealtimeInputConfig{
+			AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
+			ActivityHandling:           genai.ActivityHandlingNoInterruption,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	if model.Capabilities().TurnDetection {
+		t.Fatal("TurnDetection = true, want false when realtime input config disables automatic activity detection")
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.RealtimeInputConfig == nil || config.RealtimeInputConfig.AutomaticActivityDetection == nil {
+		t.Fatalf("realtime input config = %#v, want forwarded reference config", config)
+	}
+	if !config.RealtimeInputConfig.AutomaticActivityDetection.Disabled {
+		t.Fatalf("automatic activity disabled = false, want true")
+	}
+	if config.RealtimeInputConfig.ActivityHandling != genai.ActivityHandlingNoInterruption {
+		t.Fatalf("activity handling = %q, want NO_INTERRUPTION", config.RealtimeInputConfig.ActivityHandling)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	if len(connector.session.inputs) != 0 {
+		t.Fatalf("live inputs = %d, want no activity_start when activity handling forbids interruption", len(connector.session.inputs))
+	}
+}
+
 func TestGoogleRealtimeSessionResumptionMatchesReference(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}}
 	model, err := NewRealtimeModel("test-key",
