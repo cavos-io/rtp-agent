@@ -240,6 +240,27 @@ func TestAWSLLMStreamErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamMessageStopReturnsEOFWithoutEmptyChunk(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMessageStop{}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil empty terminal chunk suppressed", chunk)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next error = %v, want EOF", err)
+	}
+}
+
 func TestBuildAWSMessagesGroupsToolCallsWithOutputs(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"

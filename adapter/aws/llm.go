@@ -488,8 +488,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 		case *types.ConverseStreamOutputMemberMessageStop:
 			s.closed = true
-			// We can return a final chunk
-			return chunk, nil
+			return nil, io.EOF
 		}
 	}
 }
