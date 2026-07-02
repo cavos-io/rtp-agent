@@ -700,6 +700,38 @@ func TestGoogleRealtimeSessionHTTPOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionHTTPOptionsUsesReferenceConnectTimeout(t *testing.T) {
+	connectTimeout := 1500 * time.Millisecond
+	httpOptions := &genai.HTTPOptions{
+		Headers: http.Header{"x-custom": []string{"one"}},
+	}
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{Timeout: connectTimeout}),
+		WithGoogleRealtimeHTTPOptions(httpOptions),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.HTTPOptions == nil || config.HTTPOptions.Timeout == nil {
+		t.Fatalf("http timeout = %#v, want reference connect timeout", config)
+	}
+	if *config.HTTPOptions.Timeout != connectTimeout {
+		t.Fatalf("timeout = %v, want %v", *config.HTTPOptions.Timeout, connectTimeout)
+	}
+	if got := config.HTTPOptions.Headers.Get("x-custom"); got != "one" {
+		t.Fatalf("custom header = %q, want one", got)
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",
