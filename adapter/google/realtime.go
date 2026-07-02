@@ -79,6 +79,7 @@ type RealtimeModel struct {
 	affectiveDialog           bool
 	affectiveDialogSet        bool
 	contextWindowCompression  *genai.ContextWindowCompressionConfig
+	thinkingConfig            *genai.ThinkingConfig
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	apiVersion                string
@@ -125,6 +126,7 @@ type googleRealtimeOptions struct {
 	affectiveDialog           bool
 	affectiveDialogSet        bool
 	contextWindowCompression  *genai.ContextWindowCompressionConfig
+	thinkingConfig            *genai.ThinkingConfig
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
@@ -295,6 +297,12 @@ func WithGoogleRealtimeContextWindowCompression(config *genai.ContextWindowCompr
 	}
 }
 
+func WithGoogleRealtimeThinkingConfig(config *genai.ThinkingConfig) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.thinkingConfig = config
+	}
+}
+
 func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.realtimeInputConfig = config
@@ -427,6 +435,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		affectiveDialog:           options.affectiveDialog,
 		affectiveDialogSet:        options.affectiveDialogSet,
 		contextWindowCompression:  options.contextWindowCompression,
+		thinkingConfig:            options.thinkingConfig,
 		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
 		apiVersion:                apiVersion,
@@ -681,6 +690,9 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	}
 	if m.maxOutputTokensSet {
 		config.MaxOutputTokens = int32(m.maxOutputTokens)
+	}
+	if m.thinkingConfig != nil {
+		config.ThinkingConfig = m.thinkingConfig
 	}
 	return config
 }

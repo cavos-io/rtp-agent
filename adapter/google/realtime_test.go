@@ -609,6 +609,33 @@ func TestGoogleRealtimeSessionContextWindowCompressionMatchesReference(t *testin
 	}
 }
 
+func TestGoogleRealtimeSessionThinkingConfigMatchesReference(t *testing.T) {
+	budget := int32(64)
+	thinking := &genai.ThinkingConfig{
+		IncludeThoughts: true,
+		ThinkingBudget:  &budget,
+		ThinkingLevel:   genai.ThinkingLevelLow,
+	}
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeThinkingConfig(thinking),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.ThinkingConfig != thinking {
+		t.Fatalf("thinking config = %#v, want configured reference object", config)
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",
