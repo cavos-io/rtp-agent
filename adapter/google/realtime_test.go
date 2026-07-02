@@ -920,6 +920,35 @@ func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionReceiveErrorClosesReferenceGeneration(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			OutputTranscription: &genai.Transcription{Text: "partial"},
+		},
+	}
+	close(liveSession.serverMessages)
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "partial" {
+		t.Fatalf("text delta = %q, want partial", text)
+	}
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+}
+
 func TestGoogleRealtimeSessionOrdersInputBeforeOutputTranscription(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -1214,6 +1243,30 @@ func nextGoogleRealtimeTestText(t *testing.T, textCh <-chan string) string {
 	return ""
 }
 
+func expectGoogleRealtimeTestTextClosed(t *testing.T, textCh <-chan string) {
+	t.Helper()
+	select {
+	case _, ok := <-textCh:
+		if ok {
+			t.Fatal("realtime text channel open, want closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime text channel close")
+	}
+}
+
+func expectGoogleRealtimeTestAudioClosed(t *testing.T, audioCh <-chan *audiomodel.AudioFrame) {
+	t.Helper()
+	select {
+	case _, ok := <-audioCh:
+		if ok {
+			t.Fatal("realtime audio channel open, want closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime audio channel close")
+	}
+}
+
 func nextGoogleRealtimeTestAudio(t *testing.T, audioCh <-chan *audiomodel.AudioFrame) *audiomodel.AudioFrame {
 	t.Helper()
 	select {
@@ -1223,6 +1276,18 @@ func nextGoogleRealtimeTestAudio(t *testing.T, audioCh <-chan *audiomodel.AudioF
 		t.Fatal("timed out waiting for realtime audio")
 	}
 	return nil
+}
+
+func expectGoogleRealtimeTestFunctionClosed(t *testing.T, functionCh <-chan *llm.FunctionCall) {
+	t.Helper()
+	select {
+	case _, ok := <-functionCh:
+		if ok {
+			t.Fatal("realtime function channel open, want closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime function channel close")
+	}
 }
 
 func nextGoogleRealtimeTestFunction(t *testing.T, functionCh <-chan *llm.FunctionCall) *llm.FunctionCall {

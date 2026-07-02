@@ -656,6 +656,11 @@ func (s *googleRealtimeSession) Interrupt() error {
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
 
 func (s *googleRealtimeSession) receiveLoop() {
+	defer func() {
+		if s != nil {
+			s.closeGeneration()
+		}
+	}()
 	for {
 		if s == nil || s.liveSession == nil || s.isClosed() {
 			return
