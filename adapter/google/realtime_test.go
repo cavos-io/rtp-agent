@@ -575,7 +575,10 @@ func TestGoogleRealtimeSessionUpdateChatContextAppendsReferenceTurns(t *testing.
 
 func TestGoogleRealtimeSessionUpdateChatContextSendsReferenceToolResponse(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
-	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeToolResponseScheduling(genai.FunctionResponseSchedulingInterrupt),
+	)
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -610,6 +613,9 @@ func TestGoogleRealtimeSessionUpdateChatContextSendsReferenceToolResponse(t *tes
 	}
 	if response.Response["output"] != "sunny" {
 		t.Fatalf("function response payload = %#v, want output sunny", response.Response)
+	}
+	if response.Scheduling != genai.FunctionResponseSchedulingInterrupt {
+		t.Fatalf("function response scheduling = %q, want INTERRUPT", response.Scheduling)
 	}
 }
 

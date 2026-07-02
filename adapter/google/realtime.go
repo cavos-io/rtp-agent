@@ -485,6 +485,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		mutableInstructions:     m.Capabilities().MutableInstructions,
 		mutableChatContext:      m.Capabilities().MutableChatContext,
 		chatCtx:                 llm.EmptyChatContext(),
+		toolResponseScheduling:  m.toolResponseScheduling,
 		eventCh:                 make(chan llm.RealtimeEvent, 16),
 		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
 		sessionResumptionHandle: m.sessionResumptionHandle,
@@ -569,7 +570,7 @@ func googleRealtimeChatContextTurns(chatCtx *llm.ChatContext) ([]*genai.Content,
 	return turns, nil
 }
 
-func googleRealtimeToolResponses(chatCtx *llm.ChatContext, vertexAI bool) []*genai.FunctionResponse {
+func googleRealtimeToolResponses(chatCtx *llm.ChatContext, vertexAI bool, scheduling any) []*genai.FunctionResponse {
 	responses := make([]*genai.FunctionResponse, 0)
 	for _, item := range chatCtx.Items {
 		output, ok := item.(*llm.FunctionCallOutput)
@@ -582,6 +583,12 @@ func googleRealtimeToolResponses(chatCtx *llm.ChatContext, vertexAI bool) []*gen
 		}
 		if !vertexAI {
 			response.ID = output.CallID
+			switch value := scheduling.(type) {
+			case genai.FunctionResponseScheduling:
+				response.Scheduling = value
+			case string:
+				response.Scheduling = genai.FunctionResponseScheduling(value)
+			}
 		}
 		responses = append(responses, response)
 	}
@@ -624,6 +631,7 @@ type googleRealtimeSession struct {
 	mutableInstructions     bool
 	mutableChatContext      bool
 	chatCtx                 *llm.ChatContext
+	toolResponseScheduling  any
 	eventCh                 chan llm.RealtimeEvent
 	audioStream             *audio.AudioByteStream
 	generation              *googleRealtimeGeneration
@@ -720,7 +728,7 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 			}
 		}
 	}
-	responses := googleRealtimeToolResponses(appendCtx, s.vertexAI)
+	responses := googleRealtimeToolResponses(appendCtx, s.vertexAI, s.toolResponseScheduling)
 	if len(responses) == 0 {
 		return nil
 	}
