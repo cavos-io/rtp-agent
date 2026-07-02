@@ -1168,6 +1168,7 @@ type googleSTTStream struct {
 	pendingErr                  error
 	closed                      bool
 	inputClosed                 bool
+	callerClosedInput           bool
 	audioPushed                 bool
 	pushedSampleRate            uint32
 	inputAudio                  googleSTTInputAudioNormalizer
@@ -1945,6 +1946,9 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.inputClosed {
+		if s.callerClosedInput {
+			return errors.New("stream input ended")
+		}
 		return io.ErrClosedPipe
 	}
 	if frame != nil && frame.SampleRate != 0 {
@@ -1997,6 +2001,9 @@ func (s *googleSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.inputClosed {
+		if s.callerClosedInput {
+			return errors.New("stream input ended")
+		}
 		return io.ErrClosedPipe
 	}
 	if tail := s.inputAudio.flush(); tail != nil {
@@ -2012,9 +2019,13 @@ func (s *googleSTTStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.inputClosed {
+		if s.callerClosedInput {
+			return errors.New("stream input ended")
+		}
 		return io.ErrClosedPipe
 	}
 	s.inputClosed = true
+	s.callerClosedInput = true
 	if s.streamV2 != nil {
 		_ = s.streamV2.CloseSend()
 	} else {
@@ -2031,6 +2042,7 @@ func (s *googleSTTStream) Close() error {
 	}
 	s.closed = true
 	s.inputClosed = true
+	s.callerClosedInput = true
 	if s.streamV2 != nil {
 		_ = s.streamV2.CloseSend()
 	} else {

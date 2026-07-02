@@ -3065,8 +3065,8 @@ func TestGoogleSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	if !streamClient.closed {
 		t.Fatal("stream client closed = false after provider Close")
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame after provider Close error = %v, want input ended", err)
 	}
 }
 
@@ -3514,7 +3514,7 @@ func TestGoogleSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestGoogleSTTClosedStreamRejectsFlush(t *testing.T) {
+func TestGoogleSTTStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
 	stream := &googleSTTStream{
 		stream: &fakeGoogleStreamingRecognizeClient{},
 		events: make(chan *stt.SpeechEvent, 1),
@@ -3524,9 +3524,20 @@ func TestGoogleSTTClosedStreamRejectsFlush(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
-	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("Flush after Close error = %v, want %v", err, io.ErrClosedPipe)
+	checkInputEnded := func(name string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("%s after Close error = %v, want input ended", name, err)
+		}
 	}
+	checkInputEnded("PushFrame", stream.PushFrame(&model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}))
+	checkInputEnded("Flush", stream.Flush())
+	checkInputEnded("EndInput", stream.EndInput())
 }
 
 func TestGoogleSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
@@ -3547,8 +3558,8 @@ func TestGoogleSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	if !streamClient.closed {
 		t.Fatal("stream client closed = false after rejected registration")
 	}
-	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushFrame after rejected registration error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("again")}); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("PushFrame after rejected registration error = %v, want input ended", err)
 	}
 	if len(provider.streams) != 0 {
 		t.Fatalf("provider streams = %d, want 0", len(provider.streams))
