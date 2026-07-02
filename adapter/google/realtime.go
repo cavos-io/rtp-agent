@@ -2,6 +2,7 @@ package google
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1134,6 +1135,10 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if err != nil {
 		return err
 	}
+	resampled, err = googleRealtimeMonoAudioFrame(resampled)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, chunk := range s.audioStream.Write(resampled.Data) {
@@ -1147,6 +1152,50 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 		}
 	}
 	return nil
+}
+
+func googleRealtimeMonoAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil || frame.NumChannels == googleRealtimeInputChannels {
+		return frame, nil
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot downmix audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot downmix non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if frame.SamplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        frame.SampleRate,
+			NumChannels:       googleRealtimeInputChannels,
+			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+
+	channelCount := int(frame.NumChannels)
+	out := make([]byte, int(frame.SamplesPerChannel*2))
+	for sample := 0; sample < int(frame.SamplesPerChannel); sample++ {
+		var sum int32
+		for ch := 0; ch < channelCount; ch++ {
+			offset := (sample*channelCount + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
+		}
+		avg := int16(sum / int32(channelCount))
+		binary.LittleEndian.PutUint16(out[sample*2:], uint16(avg))
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       googleRealtimeInputChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
 }
 
 func (s *googleRealtimeSession) PushVideo(frame *images.VideoFrame) error {

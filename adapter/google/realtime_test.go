@@ -3,6 +3,7 @@ package google
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"strings"
 	"testing"
 	"time"
@@ -399,6 +400,49 @@ func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T)
 	}
 	if !liveSession.closed {
 		t.Fatal("live session closed = false")
+	}
+}
+
+func TestGoogleRealtimeSessionPushAudioDownmixesStereoLikeReference(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	stereo := make([]byte, 800*2*2)
+	for i := 0; i < 800; i++ {
+		binary.LittleEndian.PutUint16(stereo[i*4:], uint16(1000))
+		binary.LittleEndian.PutUint16(stereo[i*4+2:], uint16(3000))
+	}
+	err = session.PushAudio(&audiomodel.AudioFrame{
+		Data:              stereo,
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 800,
+	})
+	if err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs = %d, want one mono audio input", len(liveSession.inputs))
+	}
+	audio := liveSession.inputs[0].Audio
+	if audio == nil || audio.MIMEType != "audio/pcm;rate=16000" {
+		t.Fatalf("audio input = %#v, want reference PCM 16 kHz blob", audio)
+	}
+	if len(audio.Data) != 1600 {
+		t.Fatalf("audio data bytes = %d, want 800 mono samples", len(audio.Data))
+	}
+	for i := 0; i < 800; i++ {
+		if got := int16(binary.LittleEndian.Uint16(audio.Data[i*2:])); got != 2000 {
+			t.Fatalf("mono sample %d = %d, want averaged stereo sample 2000", i, got)
+		}
 	}
 }
 
