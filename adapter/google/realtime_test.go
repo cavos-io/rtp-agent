@@ -876,12 +876,55 @@ func TestGoogleRealtimeSessionAccumulatesReferenceInputTranscription(t *testing.
 		t.Fatalf("second item id = %q, want %q", second.InputTranscription.ItemID, first.InputTranscription.ItemID)
 	}
 
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("turn complete event = %#v, want speech_stopped before final transcript", stopped)
+	}
+
 	final := nextGoogleRealtimeTestEvent(t, session.EventCh())
 	if final.InputTranscription == nil || final.InputTranscription.Transcript != "hello world" || !final.InputTranscription.IsFinal {
 		t.Fatalf("final transcript = %#v, want accumulated final transcript", final.InputTranscription)
 	}
 	if final.InputTranscription.ItemID != first.InputTranscription.ItemID {
 		t.Fatalf("final item id = %q, want %q", final.InputTranscription.ItemID, first.InputTranscription.ItemID)
+	}
+}
+
+func TestGoogleRealtimeSessionTurnCompleteStopsSpeechBeforeFinalTranscript(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			InputTranscription: &genai.Transcription{Text: " hello"},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{TurnComplete: true},
+	}
+
+	expectGoogleRealtimeGeneration(t, session.EventCh())
+	interim := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if interim.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || interim.InputTranscription == nil || interim.InputTranscription.IsFinal {
+		t.Fatalf("interim transcript event = %#v, want non-final transcript", interim)
+	}
+
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("turn complete event = %#v, want speech_stopped before final transcript", stopped)
+	}
+
+	final := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if final.InputTranscription == nil || final.InputTranscription.Transcript != "hello" || !final.InputTranscription.IsFinal {
+		t.Fatalf("final transcript = %#v, want final transcript after speech_stopped", final.InputTranscription)
 	}
 }
 

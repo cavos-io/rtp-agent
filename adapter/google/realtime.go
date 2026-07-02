@@ -714,11 +714,6 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		s.inputText += text
 		s.emitInputTranscription(false)
 	}
-	if message.ServerContent.TurnComplete && s.inputText != "" {
-		s.emitInputTranscription(true)
-		s.inputID = ""
-		s.inputText = ""
-	}
 	if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
 		s.markGenerationCompleted()
 	}
@@ -730,6 +725,11 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			Type:          llm.RealtimeEventTypeSpeechStopped,
 			SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
 		})
+		if s.inputText != "" {
+			s.emitInputTranscription(true)
+			s.inputID = ""
+			s.inputText = ""
+		}
 		s.closeGeneration()
 	}
 }
