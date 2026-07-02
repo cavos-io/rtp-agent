@@ -916,6 +916,31 @@ func TestAWSSTTRequestTimeoutReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestAWSSTTInvalidStateErrorReturnsEOF(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	reader.err = errors.New("concurrent.futures.InvalidStateError: invalid state")
+	close(reader.events)
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+	go providerStream.readLoop()
+
+	event, err := providerStream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF for reference InvalidStateError cleanup", err)
+	}
+}
+
 func TestAWSSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}

@@ -359,7 +359,8 @@ func (s *awsSTTStream) readLoop() {
 func isHarmlessAWSSTTStreamCloseError(err error) bool {
 	message := err.Error()
 	return strings.Contains(message, "complete signal was sent without the preceding empty frame") ||
-		strings.HasPrefix(message, "Your request timed out")
+		strings.HasPrefix(message, "Your request timed out") ||
+		strings.Contains(message, "InvalidStateError")
 }
 
 func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64, fallbackLanguage string, includeSourceLanguages bool) stt.SpeechData {
