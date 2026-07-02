@@ -1033,27 +1033,37 @@ func (s *googleRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions
 	if googleRealtimeSessionOptionsNoop(options) {
 		return nil
 	}
-	if options.VoiceSet || options.TurnDetectionSet {
+	voiceSet := googleRealtimeVoiceOptionGiven(options)
+	turnDetectionSet := googleRealtimeTurnDetectionOptionGiven(options)
+	if voiceSet || turnDetectionSet {
 		return s.reconnectWithVoiceTurnDetection(
 			options.Voice,
-			options.VoiceSet,
+			voiceSet,
 			googleRealtimeTurnDetectionEnabled(options.TurnDetection),
-			options.TurnDetectionSet,
+			turnDetectionSet,
 		)
 	}
 	return nil
 }
 
 func googleRealtimeSessionOptionsNoop(options llm.RealtimeSessionOptions) bool {
-	return !options.VoiceSet &&
+	return !googleRealtimeVoiceOptionGiven(options) &&
 		!options.SpeedSet &&
 		!options.MaxResponseOutputTokensSet &&
 		!options.TruncationSet &&
 		!options.TracingSet &&
 		!options.ReasoningSet &&
-		!options.TurnDetectionSet &&
+		!googleRealtimeTurnDetectionOptionGiven(options) &&
 		!options.InputAudioTranscriptionSet &&
 		!options.InputAudioNoiseReductionSet
+}
+
+func googleRealtimeVoiceOptionGiven(options llm.RealtimeSessionOptions) bool {
+	return options.VoiceSet || options.Voice != ""
+}
+
+func googleRealtimeTurnDetectionOptionGiven(options llm.RealtimeSessionOptions) bool {
+	return options.TurnDetectionSet || options.TurnDetection != nil
 }
 
 func googleRealtimeTurnDetectionEnabled(value any) bool {

@@ -279,6 +279,68 @@ func TestGoogleRealtimeSessionVoiceUpdateIgnoresUnsupportedGenericOptions(t *tes
 	}
 }
 
+func TestGoogleRealtimeSessionVoiceUpdateTreatsNonEmptyValueAsReferenceGiven(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore"}); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v, want reference reconnect", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial plus voice reconnect", len(connector.configs))
+	}
+	if got := connector.configs[1].SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName; got != "Kore" {
+		t.Fatalf("voice = %q, want Kore", got)
+	}
+}
+
+func TestGoogleRealtimeSessionTurnDetectionUpdateTreatsNonNilValueAsReferenceGiven(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{TurnDetection: map[string]any{"type": "server_vad"}}); err != nil {
+		t.Fatalf("UpdateOptions turn detection error = %v, want reference reconnect", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial plus turn detection reconnect", len(connector.configs))
+	}
+	if config := connector.configs[1].RealtimeInputConfig; config != nil {
+		t.Fatalf("realtime input config = %#v, want nil when server turn detection is enabled", config)
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.manualActivityDetection {
+		t.Fatal("manualActivityDetection = true, want false after enabling server turn detection")
+	}
+}
+
 func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
