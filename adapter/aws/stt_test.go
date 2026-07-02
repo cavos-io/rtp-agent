@@ -460,6 +460,66 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamEmitsReferenceStartOfSpeechOncePerResultSequence(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+
+	go providerStream.readLoop()
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{
+					{
+						IsPartial: true,
+						StartTime: 0.0,
+						EndTime:   0.2,
+						Alternatives: []types.Alternative{{
+							Transcript: awsconfig.String("hel"),
+						}},
+					},
+					{
+						IsPartial: false,
+						StartTime: 0.0,
+						EndTime:   0.4,
+						Alternatives: []types.Alternative{{
+							Transcript: awsconfig.String("hello"),
+						}},
+					},
+				},
+			},
+		},
+	}
+	close(reader.events)
+
+	wantTypes := []stt.SpeechEventType{
+		stt.SpeechEventStartOfSpeech,
+		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventFinalTranscript,
+		stt.SpeechEventEndOfSpeech,
+	}
+	for i, want := range wantTypes {
+		event, err := providerStream.Next()
+		if err != nil {
+			t.Fatalf("Next[%d] error = %v, want %s", i, err, want)
+		}
+		if event.Type != want {
+			t.Fatalf("event[%d] type = %q, want %q", i, event.Type, want)
+		}
+	}
+	_, err := providerStream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next EOF error = %v, want io.EOF", err)
+	}
+}
+
 func TestAWSSTTStreamAppliesReferenceStartTimeOffset(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {

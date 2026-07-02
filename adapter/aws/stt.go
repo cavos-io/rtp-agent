@@ -305,6 +305,7 @@ type awsSTTStream struct {
 	events                   chan *stt.SpeechEvent
 	errCh                    chan error
 	closed                   bool
+	speaking                 bool
 	timingMu                 sync.Mutex
 	startTimeOffset          float64
 	startTime                float64
@@ -326,7 +327,8 @@ func (s *awsSTTStream) readLoop() {
 		switch v := event.(type) {
 		case *types.TranscriptResultStreamMemberTranscriptEvent:
 			for _, result := range v.Value.Transcript.Results {
-				if result.StartTime == 0 {
+				if result.StartTime == 0 && !s.speaking {
+					s.speaking = true
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 				}
 
@@ -345,6 +347,7 @@ func (s *awsSTTStream) readLoop() {
 				}
 				if !result.IsPartial {
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventEndOfSpeech}
+					s.speaking = false
 				}
 			}
 		}
