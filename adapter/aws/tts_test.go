@@ -224,6 +224,23 @@ func TestAWSTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
+	stream := &awsTTSChunkedStream{
+		stream: io.NopCloser(bytes.NewReader([]byte("not mp3 audio"))),
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on decode failure", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAWSTTSChunkedStreamReadFailureClosesReferenceStream(t *testing.T) {
 	body := &countingErrorAWSReadCloser{err: errors.New("polly read failed")}
 	provider := newAWSTTSWithClient(nil, "")

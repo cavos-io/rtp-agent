@@ -270,11 +270,13 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			return nil, io.EOF
 		}
-		return nil, err
+		_ = s.Close()
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS audio decode failed: %v", err))
 	}
 	frame, err = normalizeAWSTTSFrame(frame, s.provider)
 	if err != nil {
-		return nil, err
+		_ = s.Close()
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS audio decode failed: %v", err))
 	}
 
 	return &tts.SynthesizedAudio{
