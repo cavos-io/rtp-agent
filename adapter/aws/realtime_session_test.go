@@ -85,6 +85,32 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionPushAudioAfterCloseIsIgnored(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	sentCount := len(stream.sent)
+
+	err = session.PushAudio(&model.AudioFrame{
+		Data:              []byte{1, 2},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	})
+	if err != nil {
+		t.Fatalf("PushAudio after Close error = %v, want nil like reference closed channel", err)
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("PushAudio after Close sent %d events, want none", len(stream.sent)-sentCount)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

@@ -551,6 +551,12 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil
+	}
 	normalized, err := normalizeAWSRealtimeInputFrame(frame)
 	if err != nil {
 		return err
