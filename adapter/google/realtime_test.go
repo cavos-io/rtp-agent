@@ -427,6 +427,36 @@ func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeGenerationCreated || event.Generation == nil {
+		t.Fatalf("first event = %#v, want generation_created without speech_started prelude", event)
+	}
+	if !event.Generation.UserInitiated {
+		t.Fatalf("generation UserInitiated = false, want true for GenerateReply response")
+	}
+}
+
 func TestGoogleRealtimeSessionInterruptSendsReferenceActivityStart(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

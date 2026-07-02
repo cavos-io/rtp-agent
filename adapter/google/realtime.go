@@ -555,23 +555,24 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 }
 
 type googleRealtimeSession struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	liveSession googleRealtimeLiveSession
-	modelName   string
-	provider    string
-	eventCh     chan llm.RealtimeEvent
-	audioStream *audio.AudioByteStream
-	generation  *googleRealtimeGeneration
-	responseSeq int
-	functionSeq int
-	inputID     string
-	inputSeq    int
-	inputText   string
-	closeOnce   sync.Once
-	closeErr    error
-	closed      bool
-	mu          sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	liveSession  googleRealtimeLiveSession
+	modelName    string
+	provider     string
+	eventCh      chan llm.RealtimeEvent
+	audioStream  *audio.AudioByteStream
+	generation   *googleRealtimeGeneration
+	responseSeq  int
+	functionSeq  int
+	pendingReply bool
+	inputID      string
+	inputSeq     int
+	inputText    string
+	closeOnce    sync.Once
+	closeErr     error
+	closed       bool
+	mu           sync.Mutex
 }
 
 type googleRealtimeGeneration struct {
@@ -615,10 +616,15 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		Parts: []*genai.Part{{Text: "."}},
 	})
 	turnComplete := true
-	return s.liveSession.SendClientContent(genai.LiveClientContentInput{
+	s.setPendingReply(true)
+	if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
 		Turns:        turns,
 		TurnComplete: &turnComplete,
-	})
+	}); err != nil {
+		s.setPendingReply(false)
+		return err
+	}
+	return nil
 }
 func (s *googleRealtimeSession) Say(text string) error {
 	if s == nil || s.liveSession == nil || text == "" || s.isClosed() {
@@ -789,16 +795,33 @@ func (s *googleRealtimeSession) ensureGeneration() {
 		ModalitiesCh: generation.modalitiesCh,
 	}
 	s.generation = generation
-	s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+	userInitiated := s.consumePendingReply()
+	if !userInitiated {
+		s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+	}
 	s.emitEvent(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
 			MessageCh:     generation.messageCh,
 			FunctionCh:    generation.functionCh,
 			ResponseID:    responseID,
-			UserInitiated: false,
+			UserInitiated: userInitiated,
 		},
 	})
+}
+
+func (s *googleRealtimeSession) setPendingReply(pending bool) {
+	s.mu.Lock()
+	s.pendingReply = pending
+	s.mu.Unlock()
+}
+
+func (s *googleRealtimeSession) consumePendingReply() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pendingReply
+	s.pendingReply = false
+	return pending
 }
 
 func (s *googleRealtimeSession) sendGenerationText(text string) {
