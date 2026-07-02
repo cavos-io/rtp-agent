@@ -711,6 +711,28 @@ func TestAWSRealtimeSessionEmitsErrorOnReferenceReadFailure(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionReadDeadlineEmitsAPITimeoutError(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	stream.err = context.DeadlineExceeded
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	close(stream.events)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeError)
+	if event.Error == nil {
+		t.Fatal("Error = nil, want stream timeout")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(event.Error, &timeoutErr) {
+		t.Fatalf("Error = %T %v, want APITimeoutError", event.Error, event.Error)
+	}
+}
+
 func TestAWSRealtimeSessionReadFailureClosesReferenceGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	stream.err = errors.New("bedrock output stream failed")
