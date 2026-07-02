@@ -943,6 +943,77 @@ func TestAWSRealtimeSessionUpdateChatContextSendsReferenceToolResult(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionDefersToolUpdateRecycleUntilPendingToolResult(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	session := newAWSRealtimeSession(provider, client)
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	first.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	first.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","toolName":"lookup","content":"{\"query\":\"weather\"}"}}}`)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
+
+	sentBeforeUpdate := len(first.sent)
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools active error = %v", err)
+	}
+	if first.closed {
+		t.Fatal("first stream closed = true, want deferred recycle while tool result pending")
+	}
+	if len(second.sent) != 0 {
+		t.Fatalf("second stream sent %d events, want no restart before pending tool result", len(second.sent))
+	}
+	if len(first.sent) != sentBeforeUpdate {
+		t.Fatalf("UpdateTools sent %d events before tool result, want none", len(first.sent)-sentBeforeUpdate)
+	}
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		CallID: "tool-1",
+		Name:   "lookup",
+		Output: `{"forecast":"sunny"}`,
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	toolResult := mustAWSRealtimeJSONEvent(t, first.sent[sentBeforeUpdate+1])
+	if got := awsRealtimeNestedString(toolResult, "event", "toolResult", "content"); got != `{"forecast":"sunny"}` {
+		t.Fatalf("tool result content = %q, want output before recycle", got)
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want recycle after pending tool result")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no events, want restarted prompt after tool result")
+	}
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, second.sent[1]), "event", "promptStart", "toolConfiguration")
+	tools, ok := toolConfig["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("recycled tools = %#v, want one tool", toolConfig["tools"])
+	}
+	spec := nestedMap(t, map[string]any{"tool": tools[0]}, "tool", "toolSpec")
+	if spec["name"] != "lookup_order" {
+		t.Fatalf("recycled tool name = %#v, want lookup_order", spec["name"])
+	}
+}
+
 func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

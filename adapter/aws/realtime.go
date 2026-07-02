@@ -192,22 +192,23 @@ func (c *awsRealtimeSDKClient) InvokeModelWithBidirectionalStream(ctx context.Co
 }
 
 type awsRealtimeSession struct {
-	model        *AWSRealtimeModel
-	client       awsRealtimeClient
-	builder      *awsRealtimeEventBuilder
-	stream       awsRealtimeStream
-	eventCh      chan llm.RealtimeEvent
-	turns        *awsRealtimeTurnTracker
-	generation   *awsRealtimeGeneration
-	chatCtx      *llm.ChatContext
-	instructions string
-	tools        []llm.Tool
-	pending      map[string]struct{}
-	sent         map[string]struct{}
-	audioBStream *coreaudio.AudioByteStream
-	audioNorm    awsRealtimeInputAudioNormalizer
-	mu           sync.Mutex
-	closed       bool
+	model                    *AWSRealtimeModel
+	client                   awsRealtimeClient
+	builder                  *awsRealtimeEventBuilder
+	stream                   awsRealtimeStream
+	eventCh                  chan llm.RealtimeEvent
+	turns                    *awsRealtimeTurnTracker
+	generation               *awsRealtimeGeneration
+	chatCtx                  *llm.ChatContext
+	instructions             string
+	tools                    []llm.Tool
+	pending                  map[string]struct{}
+	sent                     map[string]struct{}
+	recycleToolsAfterPending bool
+	audioBStream             *coreaudio.AudioByteStream
+	audioNorm                awsRealtimeInputAudioNormalizer
+	mu                       sync.Mutex
+	closed                   bool
 }
 
 type awsRealtimeGeneration struct {
@@ -702,7 +703,14 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 		s.mu.Lock()
 		delete(s.pending, output.CallID)
+		shouldRecycle := len(s.pending) == 0 && s.recycleToolsAfterPending
+		if shouldRecycle {
+			s.recycleToolsAfterPending = false
+		}
 		s.mu.Unlock()
+		if shouldRecycle {
+			return s.recycleForUpdatedTools(context.Background())
+		}
 	}
 	return nil
 }
@@ -779,7 +787,14 @@ func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	changed := awsRealtimeToolNamesChanged(s.tools, tools)
 	s.tools = append([]llm.Tool(nil), tools...)
 	started := s.stream != nil && !s.closed
+	hasPendingTools := len(s.pending) > 0
+	if started && changed && hasPendingTools {
+		s.recycleToolsAfterPending = true
+	}
 	s.mu.Unlock()
+	if started && changed && hasPendingTools {
+		return nil
+	}
 	if started && changed {
 		return s.recycleForUpdatedTools(context.Background())
 	}
@@ -816,6 +831,7 @@ func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
 	s.stream = nil
 	s.builder = newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString())
 	s.pending = make(map[string]struct{})
+	s.recycleToolsAfterPending = false
 	s.mu.Unlock()
 	if stream != nil {
 		for _, event := range closeEvents {
