@@ -2409,6 +2409,41 @@ func TestGoogleRealtimeSessionClonesReferenceOutputAudio(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionPreservesReferenceAudioDeltasUnderBackpressure(t *testing.T) {
+	session := &googleRealtimeSession{
+		ctx: context.Background(),
+		generation: &googleRealtimeGeneration{
+			audioCh: make(chan *audiomodel.AudioFrame, 1),
+		},
+	}
+
+	session.sendGenerationAudio([]byte{1, 2})
+	done := make(chan struct{})
+	go func() {
+		session.sendGenerationAudio([]byte{3, 4})
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("sendGenerationAudio returned before backpressured audio was drained")
+	case <-time.After(20 * time.Millisecond):
+	}
+	first := nextGoogleRealtimeTestAudio(t, session.generation.audioCh)
+	if !bytes.Equal(first.Data, []byte{1, 2}) {
+		t.Fatalf("first audio = %v, want first delta", first.Data)
+	}
+	second := nextGoogleRealtimeTestAudio(t, session.generation.audioCh)
+	if !bytes.Equal(second.Data, []byte{3, 4}) {
+		t.Fatalf("second audio = %v, want second delta preserved under backpressure", second.Data)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("sendGenerationAudio blocked after audio deltas drained")
+	}
+}
+
 func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

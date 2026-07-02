@@ -1687,7 +1687,8 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 			Name:      functionCall.Name,
 			Arguments: string(arguments),
 		}:
-		default:
+		case <-s.doneCh():
+			return
 		}
 	}
 }
@@ -1808,7 +1809,7 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 	}
 	select {
 	case s.generation.textCh <- text:
-	default:
+	case <-s.doneCh():
 	}
 }
 
@@ -1830,8 +1831,15 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 	}
 	select {
 	case s.generation.audioCh <- frame:
-	default:
+	case <-s.doneCh():
 	}
+}
+
+func (s *googleRealtimeSession) doneCh() <-chan struct{} {
+	if s == nil || s.ctx == nil {
+		return nil
+	}
+	return s.ctx.Done()
 }
 
 func googleRealtimeValidOutputAudioData(data []byte) bool {
