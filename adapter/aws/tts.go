@@ -260,6 +260,9 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		if len(first) == 0 && firstErr != nil {
 			_ = s.Close()
+			if errors.Is(firstErr, context.DeadlineExceeded) {
+				return nil, llm.NewAPITimeoutError(firstErr.Error())
+			}
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS response read failed: %v", firstErr))
 		}
 		s.hasAudio = true
@@ -343,6 +346,9 @@ func (s *awsTTSChunkedStream) popReadErr() error {
 	}
 	select {
 	case err := <-s.readErr:
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("AWS Polly TTS response read failed: %v", err), !s.emittedAudio)
 	default:
 		return nil

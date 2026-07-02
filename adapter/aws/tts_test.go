@@ -302,6 +302,23 @@ func TestAWSTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
+	stream := &awsTTSChunkedStream{
+		stream: erroringAWSReadCloser{err: context.DeadlineExceeded},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSTTSChunkedStreamReadFailureAfterAudioIsReferenceNonRetryable(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
