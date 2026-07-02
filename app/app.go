@@ -6844,6 +6844,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		return nil, nil
 	case providerOpenAI:
 		return openai.NewRealtimeModel(cfg.OpenAIAPIKey, cfg.RealtimeModel), nil
+	case providerGoogle:
+		return adaptergoogle.NewRealtimeModel(cfg.GoogleAPIKey, adaptergoogle.WithGoogleRealtimeModel(cfg.RealtimeModel))
 	case providerXAI:
 		opts := []xai.XaiRealtimeOption{}
 		if cfg.RealtimeModel != "" {
