@@ -950,6 +950,9 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 	if s.generation == nil || s.generation.closed || toolCall == nil {
 		return
 	}
+	defer func() {
+		_ = recover()
+	}()
 	for _, functionCall := range toolCall.FunctionCalls {
 		if functionCall == nil {
 			continue

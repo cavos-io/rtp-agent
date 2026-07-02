@@ -1285,6 +1285,29 @@ func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionSuppressesLateToolCallsAfterGenerationClose(t *testing.T) {
+	functionCh := make(chan *llm.FunctionCall)
+	close(functionCh)
+	session := &googleRealtimeSession{
+		generation: &googleRealtimeGeneration{
+			functionCh: functionCh,
+		},
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("late tool call panicked after generation close: %v", recovered)
+		}
+	}()
+	session.handleToolCalls(&genai.LiveServerToolCall{
+		FunctionCalls: []*genai.FunctionCall{{
+			ID:   "call_late",
+			Name: "late",
+			Args: map[string]any{"query": "stale"},
+		}},
+	})
+}
+
 func TestGoogleRealtimeSessionToolCallsEmitReferenceSpeechStopped(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
