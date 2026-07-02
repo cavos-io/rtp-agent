@@ -526,6 +526,8 @@ type AppConfig struct {
 	TTSModelOptions                         map[string]any
 	RealtimeProvider                        string
 	RealtimeModel                           string
+	RealtimeVoice                           string
+	RealtimeTurnDetection                   string
 
 	OpenAIAPIKey                string
 	AnamAPIKey                  string
@@ -910,6 +912,8 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSModelOptions:                         splitEnvMap("RTP_AGENT_TTS_MODEL_OPTIONS"),
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
+		RealtimeVoice:                           os.Getenv("RTP_AGENT_REALTIME_VOICE"),
+		RealtimeTurnDetection:                   os.Getenv("RTP_AGENT_REALTIME_TURN_DETECTION"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
 		AnamAPIKey:                              os.Getenv("ANAM_API_KEY"),
 		AnthropicAPIKey:                         os.Getenv("ANTHROPIC_API_KEY"),
@@ -6533,10 +6537,16 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerPhonic:
 		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
 	case providerAWS:
-		return adapteraws.NewAWSRealtimeModel(
-			cfg.RealtimeModel,
+		opts := []adapteraws.AWSRealtimeOption{
 			adapteraws.WithAWSRealtimeRegion(cfg.AWSRegion),
-		), nil
+		}
+		if cfg.RealtimeVoice != "" {
+			opts = append(opts, adapteraws.WithAWSRealtimeVoice(cfg.RealtimeVoice))
+		}
+		if cfg.RealtimeTurnDetection != "" {
+			opts = append(opts, adapteraws.WithAWSRealtimeTurnDetection(cfg.RealtimeTurnDetection))
+		}
+		return adapteraws.NewAWSRealtimeModel(cfg.RealtimeModel, opts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}
