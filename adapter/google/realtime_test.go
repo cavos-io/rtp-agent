@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -956,6 +957,25 @@ func TestGoogleRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionCloseSuppressesLiveSessionCloseError(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{closeErr: errors.New("websocket close failed")}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cleanup", err)
+	}
+	if !liveSession.closed {
+		t.Fatal("live session closed = false")
+	}
+}
+
 func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -1663,6 +1683,7 @@ type fakeGoogleRealtimeLiveSession struct {
 	toolResponses  []genai.LiveToolResponseInput
 	serverMessages chan *genai.LiveServerMessage
 	closed         bool
+	closeErr       error
 }
 
 func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealtimeInput) error {
@@ -1693,5 +1714,5 @@ func (s *fakeGoogleRealtimeLiveSession) Receive() (*genai.LiveServerMessage, err
 
 func (s *fakeGoogleRealtimeLiveSession) Close() error {
 	s.closed = true
-	return nil
+	return s.closeErr
 }

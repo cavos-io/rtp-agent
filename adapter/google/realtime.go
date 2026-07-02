@@ -668,7 +668,6 @@ type googleRealtimeSession struct {
 	inUserActivity          bool
 	suppressActivityStart   bool
 	closeOnce               sync.Once
-	closeErr                error
 	closed                  bool
 	mu                      sync.Mutex
 }
@@ -1173,10 +1172,10 @@ func (s *googleRealtimeSession) Close() error {
 		}
 		close(s.eventCh)
 		if s.liveSession != nil {
-			s.closeErr = s.liveSession.Close()
+			_ = s.liveSession.Close()
 		}
 	})
-	return s.closeErr
+	return nil
 }
 
 func (s *googleRealtimeSession) isClosed() bool {
