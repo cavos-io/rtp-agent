@@ -255,11 +255,12 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 		t.Fatalf("Session error = %v", err)
 	}
 
-	if err := session.PushAudio(&model.AudioFrame{Data: []byte{1, 2, 3}, SampleRate: 16000, NumChannels: 1}); err != nil {
+	frame := awsRealtimeTestMonoFrame(16000, make([]int16, 512))
+	if err := session.PushAudio(frame); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
 	audioInput := mustAWSRealtimeJSONEvent(t, stream.sent[len(stream.sent)-1])
-	if got := awsRealtimeNestedString(audioInput, "event", "audioInput", "content"); got != base64.StdEncoding.EncodeToString([]byte{1, 2, 3}) {
+	if got := awsRealtimeNestedString(audioInput, "event", "audioInput", "content"); got != base64.StdEncoding.EncodeToString(frame.Data) {
 		t.Fatalf("audioInput content = %q, want base64 PCM", got)
 	}
 
@@ -291,7 +292,7 @@ func TestAWSRealtimeSessionPushAudioSendErrorReturnsAPIConnectionError(t *testin
 	defer session.Close()
 	stream.sendErr = errors.New("bedrock send failed")
 
-	err = session.PushAudio(&model.AudioFrame{Data: []byte{1, 2, 3}, SampleRate: 16000, NumChannels: 1})
+	err = session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512)))
 
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
@@ -384,11 +385,11 @@ func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T)
 	}
 	defer session.Close()
 
-	frame := awsRealtimeTestStereoFrame(48000, [][2]int16{
-		{10, 30},
-		{20, 40},
-		{30, 50},
-	})
+	samples := make([][2]int16, 1536)
+	for i := range samples {
+		samples[i] = [2]int16{10, 30}
+	}
+	frame := awsRealtimeTestStereoFrame(48000, samples)
 	if err := session.PushAudio(frame); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
@@ -399,11 +400,44 @@ func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T)
 	if err != nil {
 		t.Fatalf("audioInput base64 decode error = %v", err)
 	}
-	if len(decoded) != 2 {
-		t.Fatalf("normalized audio bytes = %d, want one 16-bit mono sample", len(decoded))
+	if len(decoded) != 512*2 {
+		t.Fatalf("normalized audio bytes = %d, want one 512-sample 16-bit mono chunk", len(decoded))
 	}
 	if got := int16(binary.LittleEndian.Uint16(decoded)); got != 20 {
 		t.Fatalf("normalized sample = %d, want first downmixed 16k mono sample 20", got)
+	}
+}
+
+func TestAWSRealtimeSessionPushAudioChunksReferenceInput(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	sentCount := len(stream.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio first error = %v", err)
+	}
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after partial frame = %d, want 0", got)
+	}
+
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio second error = %v", err)
+	}
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events = %d, want one 512-sample chunk", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 512*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want %d", got, want)
 	}
 }
 
@@ -1212,6 +1246,37 @@ func awsRealtimeTestStereoFrame(sampleRate uint32, samples [][2]int16) *model.Au
 		NumChannels:       2,
 		SamplesPerChannel: uint32(len(samples)),
 	}
+}
+
+func awsRealtimeTestMonoFrame(sampleRate uint32, samples []int16) *model.AudioFrame {
+	data := make([]byte, len(samples)*2)
+	for i, sample := range samples {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(sample))
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        sampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: uint32(len(samples)),
+	}
+}
+
+func countAWSRealtimeAudioInputs(t *testing.T, events []string) int {
+	t.Helper()
+	return len(collectAWSRealtimeAudioInputPayloads(t, events))
+}
+
+func collectAWSRealtimeAudioInputPayloads(t *testing.T, events []string) []string {
+	t.Helper()
+	var payloads []string
+	for _, raw := range events {
+		event := mustAWSRealtimeJSONEvent(t, raw)
+		content := awsRealtimeNestedString(event, "event", "audioInput", "content")
+		if content != "" {
+			payloads = append(payloads, content)
+		}
+	}
+	return payloads
 }
 
 func newFakeAWSRealtimeStream() *fakeAWSRealtimeStream {

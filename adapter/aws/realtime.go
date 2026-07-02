@@ -204,6 +204,7 @@ type awsRealtimeSession struct {
 	tools        []llm.Tool
 	pending      map[string]struct{}
 	sent         map[string]struct{}
+	audioBStream *coreaudio.AudioByteStream
 	mu           sync.Mutex
 	closed       bool
 }
@@ -227,6 +228,11 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 		eventCh: make(chan llm.RealtimeEvent, 16),
 		pending: make(map[string]struct{}),
 		sent:    make(map[string]struct{}),
+		audioBStream: coreaudio.NewAudioByteStream(
+			defaultAWSRealtimeInputSampleRate,
+			defaultAWSRealtimeChannels,
+			defaultAWSRealtimeInputChunkSize,
+		),
 	}
 	session.turns = newAWSRealtimeTurnTracker(session.emit, session.emitGenerationCreated)
 	return session
@@ -880,11 +886,16 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if err != nil {
 		return err
 	}
-	event, err := s.builder.createAudioInputEvent(base64.StdEncoding.EncodeToString(normalized.Data))
-	if err != nil {
-		return err
+	for _, chunk := range s.audioBStream.Write(normalized.Data) {
+		event, err := s.builder.createAudioInputEvent(base64.StdEncoding.EncodeToString(chunk.Data))
+		if err != nil {
+			return err
+		}
+		if err := s.sendRawEvent(context.Background(), event); err != nil {
+			return err
+		}
 	}
-	return s.sendRawEvent(context.Background(), event)
+	return nil
 }
 
 func normalizeAWSRealtimeInputFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
