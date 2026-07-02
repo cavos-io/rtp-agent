@@ -345,7 +345,7 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	if s.streaming && googleEnableWordTimeOffsets(s) {
 		alignedTranscript = "word"
 	}
-	return stt.STTCapabilities{Streaming: s.streaming, InterimResults: s.interimResults, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: s.streaming, InterimResults: s.streaming && s.interimResults, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
 }
 
 func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {

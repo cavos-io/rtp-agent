@@ -228,6 +228,9 @@ func TestGoogleSTTStreamingCapabilityMatchesReferenceOption(t *testing.T) {
 	if capabilities.Streaming {
 		t.Fatal("Streaming capability = true, want false from reference use_streaming option")
 	}
+	if capabilities.InterimResults {
+		t.Fatal("InterimResults capability = true, want false when streaming disabled")
+	}
 	if capabilities.AlignedTranscript != "" {
 		t.Fatalf("AlignedTranscript = %q, want empty when streaming disabled", capabilities.AlignedTranscript)
 	}
