@@ -215,6 +215,37 @@ func TestAWSLLMStreamMapsReferenceCacheReadUsage(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamUsageChunkIsReferenceUsageOnly(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{
+		Value: awstypes.ConverseStreamMetadataEvent{
+			Usage: &awstypes.TokenUsage{
+				InputTokens:  awsInt32(1),
+				OutputTokens: awsInt32(2),
+				TotalTokens:  awsInt32(3),
+			},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want usage chunk", err)
+	}
+	if chunk == nil || chunk.Usage == nil {
+		t.Fatalf("Next chunk = %#v, want usage", chunk)
+	}
+	if chunk.Delta != nil {
+		t.Fatalf("usage chunk delta = %#v, want nil like reference metadata chunk", chunk.Delta)
+	}
+}
+
 func TestAWSLLMStreamKeepsUsageAfterMessageStop(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberMessageStop{}

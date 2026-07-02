@@ -442,17 +442,15 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			return nil, io.EOF
 		}
 
-		chunk := &llm.ChatChunk{
-			Delta: &llm.ChoiceDelta{
-				Role: llm.ChatRoleAssistant,
-			},
-		}
-
 		switch v := event.(type) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
 			if textDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
-				chunk.Delta.Content = textDelta.Value
-				return chunk, nil
+				return &llm.ChatChunk{
+					Delta: &llm.ChoiceDelta{
+						Role:    llm.ChatRoleAssistant,
+						Content: textDelta.Value,
+					},
+				}, nil
 			}
 			if toolDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberToolUse); ok {
 				s.toolArgs += aws.ToString(toolDelta.Value.Input)
@@ -467,24 +465,30 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStop:
 			if s.toolCallID != "" {
-				chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
-					CallID:    s.toolCallID,
-					Name:      s.toolName,
-					Type:      "function",
-					Arguments: s.toolArgs,
-				})
+				chunk := &llm.ChatChunk{
+					Delta: &llm.ChoiceDelta{
+						Role: llm.ChatRoleAssistant,
+						ToolCalls: []llm.FunctionToolCall{{
+							CallID:    s.toolCallID,
+							Name:      s.toolName,
+							Type:      "function",
+							Arguments: s.toolArgs,
+						}},
+					},
+				}
 				s.toolCallID, s.toolName, s.toolArgs = "", "", ""
 				return chunk, nil
 			}
 		case *types.ConverseStreamOutputMemberMetadata:
 			if v.Value.Usage != nil {
-				chunk.Usage = &llm.CompletionUsage{
-					PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
-					CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
-					TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
-					PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
-				}
-				return chunk, nil
+				return &llm.ChatChunk{
+					Usage: &llm.CompletionUsage{
+						PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
+						CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
+						TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
+						PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
+					},
+				}, nil
 			}
 		case *types.ConverseStreamOutputMemberMessageStop:
 			continue
