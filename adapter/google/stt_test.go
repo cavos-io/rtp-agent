@@ -228,8 +228,19 @@ func TestGoogleSTTStreamingCapabilityMatchesReferenceOption(t *testing.T) {
 	if capabilities.Streaming {
 		t.Fatal("Streaming capability = true, want false from reference use_streaming option")
 	}
+	if capabilities.InterimResults {
+		t.Fatal("InterimResults capability = true, want false when streaming disabled")
+	}
 	if capabilities.AlignedTranscript != "" {
 		t.Fatalf("AlignedTranscript = %q, want empty when streaming disabled", capabilities.AlignedTranscript)
+	}
+}
+
+func TestGoogleSTTInterimCapabilityMatchesReferenceOption(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTInterimResults(false))
+
+	if provider.Capabilities().InterimResults {
+		t.Fatal("InterimResults capability = true, want false from reference interim_results option")
 	}
 }
 
@@ -1692,6 +1703,36 @@ func TestGoogleSTTUpdateOptionsReportsReferenceReconnectError(t *testing.T) {
 	if statusErr.StatusCode != int(codes.Unavailable) {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
 	}
+}
+
+func TestGoogleSTTUpdateOptionsNoopPreservesReferenceActiveStream(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	if err := provider.UpdateOptions(); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+	select {
+	case calls := <-client.streamCallCh:
+		t.Fatalf("stream calls = %d, want no reconnect for no-op update", calls)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if firstStream.closed {
+		t.Fatal("first stream closed = true, want active stream preserved for no-op update")
+	}
+	close(firstRelease)
 }
 
 func TestGoogleSTTUpdateOptionsReconnectsActiveStreamButOmitsV1SpeechTimeouts(t *testing.T) {

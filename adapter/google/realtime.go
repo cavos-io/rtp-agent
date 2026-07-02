@@ -850,9 +850,13 @@ func googleRealtimeToolResponses(chatCtx *llm.ChatContext, vertexAI bool, schedu
 		if !ok {
 			continue
 		}
+		payload := map[string]any{"output": output.Output}
+		if output.IsError {
+			payload = map[string]any{"error": output.Output}
+		}
 		response := &genai.FunctionResponse{
 			Name:     output.Name,
-			Response: map[string]any{"output": output.Output},
+			Response: payload,
 		}
 		if !vertexAI {
 			response.ID = output.CallID
@@ -1132,7 +1136,16 @@ func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, vo
 		s.suppressActivityStart = googleRealtimeNoInterruption(config.RealtimeInputConfig)
 		s.inUserActivity = false
 	}
+	var chatCtx *llm.ChatContext
+	if s.chatCtx != nil {
+		chatCtx = s.chatCtx.Copy(llm.ChatContextCopyOptions{})
+	}
 	s.mu.Unlock()
+	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.clearLiveSession(nextSession)
+		_ = nextSession.Close()
+		return err
+	}
 	go s.receiveLoop(nextSession)
 	return nil
 }
@@ -1201,7 +1214,16 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	if options.toolBehaviorSet {
 		s.toolBehavior = options.toolBehavior
 	}
+	var chatCtx *llm.ChatContext
+	if s.chatCtx != nil {
+		chatCtx = s.chatCtx.Copy(llm.ChatContextCopyOptions{})
+	}
 	s.mu.Unlock()
+	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.clearLiveSession(nextSession)
+		_ = nextSession.Close()
+		return err
+	}
 	go s.receiveLoop(nextSession)
 	return nil
 }
@@ -1212,7 +1234,14 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	}
 	tools = append([]llm.Tool(nil), tools...)
 	s.mu.Lock()
-	if googleRealtimeSameTools(s.tools, tools) {
+	behavior := s.toolBehavior
+	nextToolsConfig := googleRealtimeToolsConfig(tools, behavior)
+	var currentToolsConfig []*genai.Tool
+	if s.liveConfig != nil {
+		currentToolsConfig = s.liveConfig.Tools
+	}
+	if reflect.DeepEqual(currentToolsConfig, nextToolsConfig) {
+		s.tools = tools
 		s.mu.Unlock()
 		return nil
 	}
@@ -1220,13 +1249,12 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
-	behavior := s.toolBehavior
 	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session tool update is not implemented")
 	}
-	config.Tools = googleRealtimeToolsConfig(tools, behavior)
+	config.Tools = nextToolsConfig
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
@@ -1244,36 +1272,18 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	s.liveSession = nextSession
 	s.liveConfig = config
 	s.tools = tools
+	var chatCtx *llm.ChatContext
+	if s.chatCtx != nil {
+		chatCtx = s.chatCtx.Copy(llm.ChatContextCopyOptions{})
+	}
 	s.mu.Unlock()
+	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.clearLiveSession(nextSession)
+		_ = nextSession.Close()
+		return err
+	}
 	go s.receiveLoop(nextSession)
 	return nil
-}
-
-func googleRealtimeSameTools(left, right []llm.Tool) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if !googleRealtimeSameTool(left[i], right[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func googleRealtimeSameTool(left, right llm.Tool) bool {
-	leftValue := reflect.ValueOf(left)
-	rightValue := reflect.ValueOf(right)
-	if !leftValue.IsValid() || !rightValue.IsValid() {
-		return !leftValue.IsValid() && !rightValue.IsValid()
-	}
-	if leftValue.Type() != rightValue.Type() {
-		return false
-	}
-	if leftValue.Kind() != reflect.Ptr && leftValue.Kind() != reflect.UnsafePointer {
-		return false
-	}
-	return leftValue.Pointer() == rightValue.Pointer()
 }
 
 func (s *googleRealtimeSession) updateToolResponseScheduling(scheduling any) {
@@ -1400,7 +1410,6 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		Turns:        turns,
 		TurnComplete: &turnComplete,
 	}); err != nil {
-		s.setPendingReply(false)
 		return err
 	}
 	return nil
@@ -1496,7 +1505,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 		return
 	}
 	_ = liveSession.Close()
-	s.closeGeneration()
+	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		s.emitEvent(llm.RealtimeEvent{
@@ -1519,6 +1528,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	}
 	s.mu.Unlock()
 	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.clearLiveSession(nextSession)
 		s.emitEvent(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
 			Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to replay Google realtime chat context after reconnect: %v", err)),
@@ -1541,7 +1551,7 @@ func (s *googleRealtimeSession) currentConnectOptions() llm.APIConnectOptions {
 }
 
 func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {
-	if liveSession == nil || chatCtx == nil || len(chatCtx.Items) == 0 || !s.mutableChatContext {
+	if liveSession == nil || chatCtx == nil || len(chatCtx.Items) == 0 {
 		return nil
 	}
 	turns, err := googleRealtimeChatContextTurns(chatCtx)
@@ -1556,6 +1566,17 @@ func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLive
 		Turns:        turns,
 		TurnComplete: &turnComplete,
 	})
+}
+
+func (s *googleRealtimeSession) clearLiveSession(liveSession googleRealtimeLiveSession) {
+	if s == nil || liveSession == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.liveSession == liveSession {
+		s.liveSession = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *googleRealtimeSession) activeLiveSession() googleRealtimeLiveSession {
@@ -1573,8 +1594,9 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		googleRealtimeSetConfigSessionResumption(s.liveConfig, update.NewHandle)
 	}
 	if message.ServerContent != nil {
+		generationUserInitiated := false
 		if s.isNewGenerationMessage(message) {
-			s.ensureGeneration()
+			generationUserInitiated = s.ensureGeneration()
 		}
 		if message.ServerContent.ModelTurn != nil {
 			for _, part := range message.ServerContent.ModelTurn.Parts {
@@ -1588,7 +1610,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 						Text: part.Text,
 					})
 				}
-				if part.InlineData != nil && googleRealtimeValidOutputAudioData(part.InlineData.Data) {
+				if googleRealtimeValidOutputAudioBlob(part.InlineData) {
 					s.sendGenerationAudio(part.InlineData.Data)
 					s.emitEvent(llm.RealtimeEvent{
 						Type: llm.RealtimeEventTypeAudio,
@@ -1615,7 +1637,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
 			s.markGenerationCompleted()
 		}
-		if message.ServerContent.Interrupted && !s.hasPendingReply() {
+		if message.ServerContent.Interrupted && !generationUserInitiated && !s.hasPendingReply() {
 			s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 		}
 		if message.ServerContent.TurnComplete {
@@ -1633,11 +1655,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	if message.ToolCall != nil {
 		s.ensureGeneration()
 		s.handleToolCalls(message.ToolCall)
-		s.emitEvent(llm.RealtimeEvent{
-			Type:          llm.RealtimeEventTypeSpeechStopped,
-			SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
-		})
-		s.closeGeneration()
+		s.finishCurrentGeneration()
 	}
 	if message.UsageMetadata != nil {
 		s.emitUsageMetrics(message.UsageMetadata)
@@ -1683,7 +1701,8 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 			Name:      functionCall.Name,
 			Arguments: string(arguments),
 		}:
-		default:
+		case <-s.doneCh():
+			return
 		}
 	}
 }
@@ -1705,9 +1724,9 @@ func (s *googleRealtimeSession) isNewGenerationMessage(message *genai.LiveServer
 	return content.InputTranscription != nil && content.InputTranscription.Text != ""
 }
 
-func (s *googleRealtimeSession) ensureGeneration() {
+func (s *googleRealtimeSession) ensureGeneration() bool {
 	if s.generation != nil && !s.generation.closed {
-		return
+		return false
 	}
 	s.responseSeq++
 	responseID := fmt.Sprintf("GR_%d", s.responseSeq)
@@ -1748,6 +1767,7 @@ func (s *googleRealtimeSession) ensureGeneration() {
 			UserInitiated: userInitiated,
 		},
 	})
+	return userInitiated
 }
 
 func (s *googleRealtimeSession) setPendingReply(pending bool) {
@@ -1804,7 +1824,7 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 	}
 	select {
 	case s.generation.textCh <- text:
-	default:
+	case <-s.doneCh():
 	}
 }
 
@@ -1826,12 +1846,26 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 	}
 	select {
 	case s.generation.audioCh <- frame:
-	default:
+	case <-s.doneCh():
 	}
+}
+
+func (s *googleRealtimeSession) doneCh() <-chan struct{} {
+	if s == nil || s.ctx == nil {
+		return nil
+	}
+	return s.ctx.Done()
 }
 
 func googleRealtimeValidOutputAudioData(data []byte) bool {
 	return len(data) > 0 && len(data)%(2*googleRealtimeOutputChannels) == 0
+}
+
+func googleRealtimeValidOutputAudioBlob(blob *genai.Blob) bool {
+	if blob == nil || !googleRealtimeValidOutputAudioData(blob.Data) {
+		return false
+	}
+	return blob.MIMEType == "" || strings.HasPrefix(strings.ToLower(blob.MIMEType), "audio/pcm")
 }
 
 func (s *googleRealtimeSession) commitCompletedTranscripts() {
@@ -1854,6 +1888,21 @@ func (s *googleRealtimeSession) commitCompletedTranscripts() {
 			Text: s.generation.outputText,
 		})
 	}
+}
+
+func (s *googleRealtimeSession) finishCurrentGeneration() {
+	if s.generation == nil || s.generation.closed {
+		return
+	}
+	s.emitEvent(llm.RealtimeEvent{
+		Type:          llm.RealtimeEventTypeSpeechStopped,
+		SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
+	})
+	if s.inputText != "" {
+		s.emitInputTranscription(true)
+	}
+	s.commitCompletedTranscripts()
+	s.closeGeneration()
 }
 
 func (s *googleRealtimeSession) closeGeneration() {
@@ -2001,14 +2050,16 @@ func (s *googleRealtimeSession) Close() error {
 		}
 		s.mu.Lock()
 		s.closed = true
+		liveSession := s.liveSession
+		s.liveSession = nil
 		s.closeGeneration()
 		s.mu.Unlock()
 		if s.cancel != nil {
 			s.cancel()
 		}
 		close(s.eventCh)
-		if s.liveSession != nil {
-			_ = s.liveSession.Close()
+		if liveSession != nil {
+			_ = liveSession.Close()
 		}
 	})
 	return nil
