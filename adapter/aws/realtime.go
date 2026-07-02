@@ -354,8 +354,8 @@ func (s *awsRealtimeSession) readResponses() {
 		}
 		s.handleResponseEvent(payload)
 	}
+	s.closeGeneration()
 	if err := stream.Err(); err != nil {
-		s.closeGeneration()
 		s.emit(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
 			Error: llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err)),

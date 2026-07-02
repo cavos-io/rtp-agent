@@ -700,6 +700,53 @@ func TestAWSRealtimeSessionReadFailureClosesReferenceGeneration(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionReadEOFClosesReferenceGeneration(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	close(stream.events)
+
+	select {
+	case _, ok := <-msg.TextCh:
+		if ok {
+			t.Fatal("TextCh still open, want closed on provider EOF")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for TextCh close")
+	}
+	select {
+	case _, ok := <-msg.AudioCh:
+		if ok {
+			t.Fatal("AudioCh still open, want closed on provider EOF")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for AudioCh close")
+	}
+	select {
+	case _, ok := <-created.Generation.FunctionCh:
+		if ok {
+			t.Fatal("FunctionCh still open, want closed on provider EOF")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for FunctionCh close")
+	}
+	assertNoAWSRealtimeEvent(t, session.EventCh())
+}
+
 func TestAWSRealtimeSessionCreatesReferenceGenerationStreams(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
