@@ -328,7 +328,7 @@ func (s *awsSTTStream) readLoop() {
 		switch v := event.(type) {
 		case *types.TranscriptResultStreamMemberTranscriptEvent:
 			for _, result := range v.Value.Transcript.Results {
-				if result.StartTime == 0 && !s.speaking {
+				if result.StartTime == 0 {
 					s.speaking = true
 					s.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
 				}

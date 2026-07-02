@@ -498,7 +498,7 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 }
 
-func TestAWSSTTStreamEmitsReferenceStartOfSpeechOncePerResultSequence(t *testing.T) {
+func TestAWSSTTStreamEmitsReferenceStartOfSpeechForEachZeroStartResult(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
 		es.Reader = reader
@@ -540,6 +540,7 @@ func TestAWSSTTStreamEmitsReferenceStartOfSpeechOncePerResultSequence(t *testing
 	wantTypes := []stt.SpeechEventType{
 		stt.SpeechEventStartOfSpeech,
 		stt.SpeechEventInterimTranscript,
+		stt.SpeechEventStartOfSpeech,
 		stt.SpeechEventFinalTranscript,
 		stt.SpeechEventEndOfSpeech,
 	}
