@@ -9,13 +9,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	awssdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/polly"
 	"github.com/aws/aws-sdk-go-v2/service/polly/types"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 func TestAWSTTSDefaultsMatchReference(t *testing.T) {
@@ -149,6 +152,43 @@ func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 	}
 	if bytes.Equal(audio.Frame.Data, mp3Data[:len(audio.Frame.Data)]) {
 		t.Fatal("frame data still contains compressed mp3 bytes")
+	}
+}
+
+func TestAWSTTSChunkedStreamYieldsAudioBeforeResponseEOF(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	body := newBlockingAWSReadCloser(mp3Data)
+	stream := &awsTTSChunkedStream{
+		stream:   body,
+		provider: newAWSTTSWithClient(nil, ""),
+	}
+	defer stream.Close()
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("Next error = %v, want first audio before response EOF", got.err)
+		}
+		if got.audio == nil || got.audio.Frame == nil || len(got.audio.Frame.Data) == 0 {
+			t.Fatalf("Next audio = %+v, want decoded audio frame before response EOF", got.audio)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first audio before response EOF")
 	}
 }
 
@@ -432,6 +472,41 @@ func (c closeErrorAWSReadCloser) Read([]byte) (int, error) {
 
 func (c closeErrorAWSReadCloser) Close() error {
 	return c.err
+}
+
+type blockingAWSReadCloser struct {
+	mu      sync.Mutex
+	data    []byte
+	sent    bool
+	closed  bool
+	closeCh chan struct{}
+}
+
+func newBlockingAWSReadCloser(data []byte) *blockingAWSReadCloser {
+	return &blockingAWSReadCloser{data: append([]byte(nil), data...), closeCh: make(chan struct{})}
+}
+
+func (b *blockingAWSReadCloser) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	if !b.sent {
+		b.sent = true
+		n := copy(p, b.data)
+		b.mu.Unlock()
+		return n, nil
+	}
+	b.mu.Unlock()
+	<-b.closeCh
+	return 0, io.EOF
+}
+
+func (b *blockingAWSReadCloser) Close() error {
+	b.mu.Lock()
+	if !b.closed {
+		b.closed = true
+		close(b.closeCh)
+	}
+	b.mu.Unlock()
+	return nil
 }
 
 type countingErrorAWSReadCloser struct {
