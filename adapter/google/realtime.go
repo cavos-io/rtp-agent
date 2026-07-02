@@ -517,6 +517,11 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	if m.outputAudioTranscription {
 		config.OutputAudioTranscription = &genai.AudioTranscriptionConfig{}
 	}
+	if !m.turnDetection {
+		config.RealtimeInputConfig = &genai.RealtimeInputConfig{
+			AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
+		}
+	}
 	if m.temperatureSet {
 		value := float32(m.temperature)
 		config.Temperature = &value

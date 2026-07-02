@@ -308,6 +308,31 @@ func TestGoogleRealtimeSessionConnectsWithReferenceConfig(t *testing.T) {
 	var _ llm.RealtimeSession = session
 }
 
+func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.RealtimeInputConfig == nil || config.RealtimeInputConfig.AutomaticActivityDetection == nil {
+		t.Fatalf("realtime input config = %#v, want reference disabled automatic activity detection", config)
+	}
+	if !config.RealtimeInputConfig.AutomaticActivityDetection.Disabled {
+		t.Fatalf("automatic activity disabled = false, want true")
+	}
+}
+
 func TestGoogleRealtimeSessionResumptionMatchesReference(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}}
 	model, err := NewRealtimeModel("test-key",
