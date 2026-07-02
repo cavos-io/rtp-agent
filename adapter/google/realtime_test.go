@@ -746,6 +746,43 @@ func TestGoogleRealtimeSessionGenerationCompleteMarksReferenceMetricsEnd(t *test
 	}
 }
 
+func TestGoogleRealtimeSessionHandlesReferenceServerContentBeforeUsage(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+		UsageMetadata: &genai.UsageMetadata{
+			PromptTokenCount:   3,
+			ResponseTokenCount: 5,
+			TotalTokenCount:    8,
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	text := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if text.Type != llm.RealtimeEventTypeText || text.Text != "hello" {
+		t.Fatalf("content event = %#v, want text before metrics", text)
+	}
+	metrics := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if metrics.Type != llm.RealtimeEventTypeMetricsCollected || metrics.Metrics == nil {
+		t.Fatalf("metrics event = %#v, want usage after server content", metrics)
+	}
+	if metrics.Metrics.RequestID != generation.ResponseID {
+		t.Fatalf("metrics request id = %q, want generation %q", metrics.Metrics.RequestID, generation.ResponseID)
+	}
+}
+
 func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
