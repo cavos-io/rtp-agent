@@ -51,12 +51,18 @@ const (
 )
 
 type AWSRealtimeModel struct {
-	model         string
-	region        string
-	voice         string
-	modalities    string
-	turnDetection string
-	client        awsRealtimeClient
+	model          string
+	region         string
+	voice          string
+	modalities     string
+	turnDetection  string
+	maxTokens      int
+	topP           float64
+	temperature    float64
+	maxTokensSet   bool
+	topPSet        bool
+	temperatureSet bool
+	client         awsRealtimeClient
 }
 
 type AWSRealtimeOption func(*AWSRealtimeModel)
@@ -120,6 +126,27 @@ func WithAWSRealtimeTurnDetection(turnDetection string) AWSRealtimeOption {
 		if turnDetection != "" {
 			provider.turnDetection = turnDetection
 		}
+	}
+}
+
+func WithAWSRealtimeMaxTokens(maxTokens int) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.maxTokens = maxTokens
+		provider.maxTokensSet = true
+	}
+}
+
+func WithAWSRealtimeTopP(topP float64) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.topP = topP
+		provider.topPSet = true
+	}
+}
+
+func WithAWSRealtimeTemperature(temperature float64) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.temperature = temperature
+		provider.temperatureSet = true
 	}
 }
 
@@ -281,9 +308,12 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		systemContent:          systemPrompt,
 		chatCtx:                chatCtx,
 		tools:                  tools,
-		maxTokens:              defaultAWSRealtimeMaxTokens,
-		topP:                   defaultAWSRealtimeTopP,
-		temperature:            defaultAWSRealtimeTemperature,
+		maxTokens:              s.model.maxTokens,
+		topP:                   s.model.topP,
+		temperature:            s.model.temperature,
+		maxTokensSet:           s.model.maxTokensSet,
+		topPSet:                s.model.topPSet,
+		temperatureSet:         s.model.temperatureSet,
 		endpointingSensitivity: s.model.turnDetection,
 	})
 	if err != nil {

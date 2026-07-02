@@ -163,6 +163,31 @@ func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
 	assertAWSRealtimeJSONNumber(t, inference["temperature"], 1.0)
 }
 
+func TestAWSRealtimeSessionAppliesReferenceInferenceOptions(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}),
+		WithAWSRealtimeMaxTokens(4096),
+		WithAWSRealtimeTopP(0.25),
+		WithAWSRealtimeTemperature(0.5),
+	)
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	sessionStart := mustAWSRealtimeJSONEvent(t, stream.sent[0])
+	inference := nestedMap(t, sessionStart, "event", "sessionStart", "inferenceConfiguration")
+	assertAWSRealtimeJSONNumber(t, inference["maxTokens"], 4096)
+	assertAWSRealtimeJSONNumber(t, inference["topP"], 0.25)
+	assertAWSRealtimeJSONNumber(t, inference["temperature"], 0.5)
+}
+
 func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	first := newFakeAWSRealtimeStream()
 	second := newFakeAWSRealtimeStream()
