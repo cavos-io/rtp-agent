@@ -573,6 +573,46 @@ func TestGoogleRealtimeSessionUpdateChatContextAppendsReferenceTurns(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateChatContextSendsReferenceToolResponse(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.FunctionCall{ID: "call-item", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "output-item", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	if len(liveSession.clientContents) != 0 {
+		t.Fatalf("client contents = %d, want no chat-content turn for tool response", len(liveSession.clientContents))
+	}
+	if len(liveSession.toolResponses) != 1 {
+		t.Fatalf("tool responses = %d, want one tool response", len(liveSession.toolResponses))
+	}
+	responses := liveSession.toolResponses[0].FunctionResponses
+	if len(responses) != 1 {
+		t.Fatalf("function responses = %d, want one", len(responses))
+	}
+	response := responses[0]
+	if response.ID != "call_weather" || response.Name != "weather" {
+		t.Fatalf("function response id/name = (%q, %q), want call_weather/weather", response.ID, response.Name)
+	}
+	if response.Response["output"] != "sunny" {
+		t.Fatalf("function response payload = %#v, want output sunny", response.Response)
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -1420,6 +1460,7 @@ func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string,
 type fakeGoogleRealtimeLiveSession struct {
 	inputs         []genai.LiveRealtimeInput
 	clientContents []genai.LiveClientContentInput
+	toolResponses  []genai.LiveToolResponseInput
 	serverMessages chan *genai.LiveServerMessage
 	closed         bool
 }
@@ -1431,6 +1472,11 @@ func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealti
 
 func (s *fakeGoogleRealtimeLiveSession) SendClientContent(input genai.LiveClientContentInput) error {
 	s.clientContents = append(s.clientContents, input)
+	return nil
+}
+
+func (s *fakeGoogleRealtimeLiveSession) SendToolResponse(input genai.LiveToolResponseInput) error {
+	s.toolResponses = append(s.toolResponses, input)
 	return nil
 }
 
