@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"testing"
 	"time"
@@ -81,6 +82,38 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	}
 	if !stream.closed {
 		t.Fatal("stream closed = false, want true")
+	}
+}
+
+func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	frame := awsRealtimeTestStereoFrame(48000, [][2]int16{
+		{10, 30},
+		{20, 40},
+		{30, 50},
+	})
+	if err := session.PushAudio(frame); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	audioInput := mustAWSRealtimeJSONEvent(t, stream.sent[len(stream.sent)-1])
+	content := awsRealtimeNestedString(audioInput, "event", "audioInput", "content")
+	decoded, err := base64.StdEncoding.DecodeString(content)
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if len(decoded) != 2 {
+		t.Fatalf("normalized audio bytes = %d, want one 16-bit mono sample", len(decoded))
+	}
+	if got := int16(binary.LittleEndian.Uint16(decoded)); got != 20 {
+		t.Fatalf("normalized sample = %d, want first downmixed 16k mono sample 20", got)
 	}
 }
 
@@ -306,6 +339,20 @@ type fakeAWSRealtimeStream struct {
 	sent   []string
 	closed bool
 	events chan awstypes.InvokeModelWithBidirectionalStreamOutput
+}
+
+func awsRealtimeTestStereoFrame(sampleRate uint32, samples [][2]int16) *model.AudioFrame {
+	data := make([]byte, len(samples)*4)
+	for i, sample := range samples {
+		binary.LittleEndian.PutUint16(data[i*4:i*4+2], uint16(sample[0]))
+		binary.LittleEndian.PutUint16(data[i*4+2:i*4+4], uint16(sample[1]))
+	}
+	return &model.AudioFrame{
+		Data:              data,
+		SampleRate:        sampleRate,
+		NumChannels:       2,
+		SamplesPerChannel: uint32(len(samples)),
+	}
 }
 
 func newFakeAWSRealtimeStream() *fakeAWSRealtimeStream {

@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	bedrockruntime "github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
@@ -549,11 +551,63 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	event, err := s.builder.createAudioInputEvent(base64.StdEncoding.EncodeToString(frame.Data))
+	normalized, err := normalizeAWSRealtimeInputFrame(frame)
+	if err != nil {
+		return err
+	}
+	event, err := s.builder.createAudioInputEvent(base64.StdEncoding.EncodeToString(normalized.Data))
 	if err != nil {
 		return err
 	}
 	return s.sendRawEvent(context.Background(), event)
+}
+
+func normalizeAWSRealtimeInputFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil {
+		return nil, nil
+	}
+	normalized, err := downmixAWSRealtimeInputFrameToMono(frame)
+	if err != nil {
+		return nil, err
+	}
+	if normalized.SampleRate != defaultAWSRealtimeInputSampleRate {
+		normalized, err = coreaudio.ResampleAudioFrame(normalized, defaultAWSRealtimeInputSampleRate)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return normalized, nil
+}
+
+func downmixAWSRealtimeInputFrameToMono(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil || frame.NumChannels <= 1 {
+		return frame, nil
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot downmix non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	channels := int(frame.NumChannels)
+	samples := int(frame.SamplesPerChannel)
+	out := make([]byte, samples*2)
+	for i := 0; i < samples; i++ {
+		sum := 0
+		for ch := 0; ch < channels; ch++ {
+			offset := (i*channels + ch) * 2
+			sum += int(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+		}
+		binary.LittleEndian.PutUint16(out[i*2:i*2+2], uint16(int16(sum/channels)))
+	}
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: frame.SamplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
 }
 
 func (s *awsRealtimeSession) PushVideo(*images.VideoFrame) error {
