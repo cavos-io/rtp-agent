@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -211,6 +212,7 @@ type awsRealtimeGeneration struct {
 	textCh       chan string
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
+	contentTypes map[string]string
 	closeOnce    sync.Once
 }
 
@@ -317,7 +319,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			})
 			return
 		}
-		s.sendGenerationAudio(data)
+		s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data)
 		s.emit(llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeAudio,
 			Data: data,
@@ -325,7 +327,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 	}
 	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
 		if awsRealtimeNestedString(payload, "event", "textOutput", "role") == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
-			s.sendGenerationText(textContent)
+			s.sendGenerationText(awsRealtimeNestedString(payload, "event", "textOutput", "contentId"), textContent)
 			s.emit(llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeText,
 				Text: textContent,
@@ -372,6 +374,7 @@ func (s *awsRealtimeSession) ensureGeneration() *awsRealtimeGeneration {
 		textCh:       make(chan string, 16),
 		audioCh:      make(chan *model.AudioFrame, 16),
 		modalitiesCh: make(chan []string, 1),
+		contentTypes: make(map[string]string),
 	}
 	generation.modalitiesCh <- []string{"audio", "text"}
 	generation.messageCh <- llm.MessageGeneration{
@@ -388,16 +391,48 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	if awsRealtimeNestedString(payload, "event", "contentStart", "role") != "ASSISTANT" {
 		return
 	}
-	if awsRealtimeNestedString(payload, "event", "contentStart", "type") == "AUDIO" {
-		s.ensureGeneration()
+	contentID := awsRealtimeNestedString(payload, "event", "contentStart", "contentId")
+	if contentID == "" {
+		return
 	}
+	contentType := awsRealtimeNestedString(payload, "event", "contentStart", "type")
+	additionalFields := awsRealtimeNestedString(payload, "event", "contentStart", "additionalModelFields")
+	var streamType string
+	switch {
+	case contentType == "AUDIO":
+		streamType = "ASSISTANT_AUDIO"
+	case contentType == "TEXT" && strings.Contains(additionalFields, "SPECULATIVE"):
+		streamType = "ASSISTANT_TEXT"
+	case contentType == "TEXT" && strings.Contains(additionalFields, "FINAL"):
+		streamType = "ASSISTANT_FINAL"
+	default:
+		return
+	}
+	var generation *awsRealtimeGeneration
+	if streamType == "ASSISTANT_TEXT" {
+		generation = s.ensureGeneration()
+	} else {
+		s.mu.Lock()
+		generation = s.generation
+		s.mu.Unlock()
+	}
+	if generation == nil {
+		return
+	}
+	s.mu.Lock()
+	generation.contentTypes[contentID] = streamType
+	s.mu.Unlock()
 }
 
-func (s *awsRealtimeSession) sendGenerationAudio(data []byte) {
+func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) {
 	s.mu.Lock()
 	generation := s.generation
+	streamType := ""
+	if generation != nil {
+		streamType = generation.contentTypes[contentID]
+	}
 	s.mu.Unlock()
-	if generation == nil {
+	if generation == nil || streamType != "ASSISTANT_AUDIO" {
 		return
 	}
 	frame := &model.AudioFrame{
@@ -412,11 +447,15 @@ func (s *awsRealtimeSession) sendGenerationAudio(data []byte) {
 	}
 }
 
-func (s *awsRealtimeSession) sendGenerationText(text string) {
+func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
 	s.mu.Lock()
 	generation := s.generation
+	streamType := ""
+	if generation != nil {
+		streamType = generation.contentTypes[contentID]
+	}
 	s.mu.Unlock()
-	if generation == nil {
+	if generation == nil || streamType != "ASSISTANT_TEXT" {
 		return
 	}
 	select {
