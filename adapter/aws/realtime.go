@@ -772,7 +772,10 @@ func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return awsRealtimeUnsupported("truncate")
 }
-func (s *awsRealtimeSession) Interrupt() error { return nil }
+func (s *awsRealtimeSession) Interrupt() error {
+	s.closeGeneration()
+	return nil
+}
 
 func (s *awsRealtimeSession) Close() error {
 	s.mu.Lock()
