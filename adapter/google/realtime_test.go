@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -654,6 +655,48 @@ func TestGoogleRealtimeSessionMediaResolutionMatchesReference(t *testing.T) {
 	config := connector.config
 	if config == nil || config.MediaResolution != genai.MediaResolutionHigh {
 		t.Fatalf("media resolution = %#v, want high", config)
+	}
+}
+
+func TestGoogleRealtimeSessionHTTPOptionsMatchReference(t *testing.T) {
+	timeout := 2500 * time.Millisecond
+	httpOptions := &genai.HTTPOptions{
+		APIVersion: "v1alpha",
+		Headers:    http.Header{"x-custom": []string{"one"}},
+		Timeout:    &timeout,
+	}
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeHTTPOptions(httpOptions),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.HTTPOptions == nil {
+		t.Fatalf("http options = %#v, want configured reference options", config)
+	}
+	if config.HTTPOptions == httpOptions {
+		t.Fatal("http options reused caller pointer, want snapshot")
+	}
+	if config.HTTPOptions.APIVersion != "v1alpha" {
+		t.Fatalf("api version = %q, want caller value", config.HTTPOptions.APIVersion)
+	}
+	if got := config.HTTPOptions.Headers.Get("x-custom"); got != "one" {
+		t.Fatalf("custom header = %q, want one", got)
+	}
+	if got := config.HTTPOptions.Headers.Get("x-goog-api-client"); !strings.HasPrefix(got, "livekit-agents/") {
+		t.Fatalf("api client header = %q, want livekit-agents prefix", got)
+	}
+	if config.HTTPOptions.Timeout == nil || *config.HTTPOptions.Timeout != timeout {
+		t.Fatalf("timeout = %#v, want %v", config.HTTPOptions.Timeout, timeout)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -81,6 +82,7 @@ type RealtimeModel struct {
 	contextWindowCompression  *genai.ContextWindowCompressionConfig
 	thinkingConfig            *genai.ThinkingConfig
 	mediaResolution           genai.MediaResolution
+	httpOptions               *genai.HTTPOptions
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	apiVersion                string
@@ -129,6 +131,7 @@ type googleRealtimeOptions struct {
 	contextWindowCompression  *genai.ContextWindowCompressionConfig
 	thinkingConfig            *genai.ThinkingConfig
 	mediaResolution           genai.MediaResolution
+	httpOptions               *genai.HTTPOptions
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
@@ -311,6 +314,12 @@ func WithGoogleRealtimeMediaResolution(resolution genai.MediaResolution) GoogleR
 	}
 }
 
+func WithGoogleRealtimeHTTPOptions(httpOptions *genai.HTTPOptions) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.httpOptions = httpOptions
+	}
+}
+
 func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.realtimeInputConfig = config
@@ -445,6 +454,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		contextWindowCompression:  options.contextWindowCompression,
 		thinkingConfig:            options.thinkingConfig,
 		mediaResolution:           options.mediaResolution,
+		httpOptions:               options.httpOptions,
 		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
 		apiVersion:                apiVersion,
@@ -648,7 +658,7 @@ func (m *RealtimeModel) Close() error { return nil }
 
 func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	config := &genai.LiveConnectConfig{
-		HTTPOptions:        &genai.HTTPOptions{APIVersion: m.apiVersion},
+		HTTPOptions:        googleRealtimeHTTPOptions(m.httpOptions, m.apiVersion),
 		ResponseModalities: googleRealtimeModalities(m.modalities),
 		SpeechConfig: &genai.SpeechConfig{
 			VoiceConfig: &genai.VoiceConfig{
@@ -707,6 +717,47 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 		config.MediaResolution = m.mediaResolution
 	}
 	return config
+}
+
+func googleRealtimeHTTPOptions(options *genai.HTTPOptions, apiVersion string) *genai.HTTPOptions {
+	var clone genai.HTTPOptions
+	if options != nil {
+		clone = *options
+		if options.Timeout != nil {
+			timeout := *options.Timeout
+			clone.Timeout = &timeout
+		}
+		if options.Headers != nil {
+			clone.Headers = make(http.Header, len(options.Headers)+1)
+			for key, values := range options.Headers {
+				for _, value := range values {
+					clone.Headers.Add(key, value)
+				}
+			}
+		}
+		if options.ExtraBody != nil {
+			clone.ExtraBody = make(map[string]any, len(options.ExtraBody))
+			for key, value := range options.ExtraBody {
+				clone.ExtraBody[key] = value
+			}
+		}
+	}
+	if clone.APIVersion == "" {
+		clone.APIVersion = apiVersion
+	}
+	if clone.APIVersion == "" {
+		clone.APIVersion = "v1beta"
+	}
+	if clone.Headers == nil {
+		clone.Headers = http.Header{}
+	}
+	for key := range clone.Headers {
+		if strings.EqualFold(key, "x-goog-api-client") {
+			delete(clone.Headers, key)
+		}
+	}
+	clone.Headers.Set("x-goog-api-client", "livekit-agents/"+PluginVersion)
+	return &clone
 }
 
 func googleRealtimeModalities(modalities []string) []genai.Modality {
@@ -779,11 +830,10 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 	if c.model != nil && c.model.apiVersion != "" {
 		apiVersion = c.model.apiVersion
 	}
+	httpOptions := googleRealtimeHTTPOptions(c.model.httpOptions, apiVersion)
 	clientConfig := &genai.ClientConfig{
-		APIKey: c.model.apiKey,
-		HTTPOptions: genai.HTTPOptions{
-			APIVersion: apiVersion,
-		},
+		APIKey:      c.model.apiKey,
+		HTTPOptions: *httpOptions,
 	}
 	if c.model.vertexAI {
 		clientConfig.Backend = genai.BackendVertexAI
