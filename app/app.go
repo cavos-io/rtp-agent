@@ -6532,6 +6532,11 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		return xai.NewXaiRealtimeModel(cfg.XAIAPIKey, opts...), nil
 	case providerPhonic:
 		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
+	case providerAWS:
+		return adapteraws.NewAWSRealtimeModel(
+			cfg.RealtimeModel,
+			adapteraws.WithAWSRealtimeRegion(cfg.AWSRegion),
+		), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}

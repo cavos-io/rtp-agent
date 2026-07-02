@@ -14297,6 +14297,36 @@ func TestDefaultConfigFromEnvSelectsPhonicRealtimeModel(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
+	t.Setenv("AWS_REGION", "us-west-2")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "aws")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL", "amazon.nova-sonic-v1:0")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if got := llm.RealtimeModelName(app.RealtimeModel); got != "amazon.nova-sonic-v1:0" {
+		t.Fatalf("Realtime model = %q, want configured Nova Sonic model", got)
+	}
+	if got := llm.RealtimeProvider(app.RealtimeModel); got != "Amazon" {
+		t.Fatalf("Realtime provider = %q, want Amazon", got)
+	}
+	model, ok := app.RealtimeModel.(*adapteraws.AWSRealtimeModel)
+	if !ok {
+		t.Fatalf("RealtimeModel = %T, want *aws.AWSRealtimeModel", app.RealtimeModel)
+	}
+	if got := model.Region(); got != "us-west-2" {
+		t.Fatalf("Realtime region = %q, want us-west-2", got)
+	}
+	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
+		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
+	}
+}
+
 func TestDefaultConfigFromEnvRejectsUltravoxRealtimeProvider(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "ultravox")
