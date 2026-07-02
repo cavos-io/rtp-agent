@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,34 @@ func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) 
 
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[3]), "event", "textInput", "content"); got != "speak like a billing agent" {
 		t.Fatalf("system prompt = %q, want updated instructions", got)
+	}
+}
+
+func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, stream.sent[1]), "event", "promptStart", "toolConfiguration")
+	tools, ok := toolConfig["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", toolConfig["tools"])
+	}
+	spec := nestedMap(t, map[string]any{"tool": tools[0]}, "tool", "toolSpec")
+	if spec["name"] != "lookup" || spec["description"] != "look up information" {
+		t.Fatalf("toolSpec = %#v, want lookup tool", spec)
+	}
+	schema := awsRealtimeNestedString(map[string]any{"tool": tools[0]}, "tool", "toolSpec", "inputSchema", "json")
+	if !strings.Contains(schema, `"query"`) {
+		t.Fatalf("tool schema = %q, want query property", schema)
 	}
 }
 

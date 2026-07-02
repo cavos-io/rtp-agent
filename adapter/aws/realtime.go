@@ -200,6 +200,7 @@ type awsRealtimeSession struct {
 	turns        *awsRealtimeTurnTracker
 	generation   *awsRealtimeGeneration
 	instructions string
+	tools        []llm.Tool
 	pending      map[string]struct{}
 	sent         map[string]struct{}
 	mu           sync.Mutex
@@ -240,6 +241,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	s.stream = stream
 	s.mu.Lock()
 	systemPrompt := s.instructions
+	tools := append([]llm.Tool(nil), s.tools...)
 	s.mu.Unlock()
 	if systemPrompt == "" {
 		systemPrompt = defaultAWSRealtimeSystemPrompt
@@ -248,6 +250,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		voiceID:                s.model.voice,
 		outputSampleRate:       defaultAWSRealtimeOutputSampleRate,
 		systemContent:          systemPrompt,
+		tools:                  tools,
 		maxTokens:              defaultAWSRealtimeMaxTokens,
 		topP:                   defaultAWSRealtimeTopP,
 		temperature:            defaultAWSRealtimeTemperature,
@@ -720,7 +723,12 @@ func (s *awsRealtimeSession) sendToolResult(ctx context.Context, toolUseID strin
 	}
 	return nil
 }
-func (s *awsRealtimeSession) UpdateTools([]llm.Tool) error { return nil }
+func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
+	s.mu.Lock()
+	s.tools = append([]llm.Tool(nil), tools...)
+	s.mu.Unlock()
+	return nil
+}
 func (s *awsRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return nil
 }

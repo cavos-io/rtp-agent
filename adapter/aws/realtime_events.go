@@ -28,6 +28,7 @@ type awsRealtimePromptStartOptions struct {
 	outputSampleRate       int
 	systemContent          string
 	chatCtx                *llm.ChatContext
+	tools                  []llm.Tool
 	maxTokens              int
 	topP                   float64
 	temperature            float64
@@ -51,7 +52,7 @@ func (b *awsRealtimeEventBuilder) createPromptStartBlock(options awsRealtimeProm
 		return nil, nil, err
 	}
 	initEvents = append(initEvents, sessionStart)
-	promptStart, err := b.createPromptStartEvent(normalized.voiceID, normalized.outputSampleRate)
+	promptStart, err := b.createPromptStartEvent(normalized.voiceID, normalized.outputSampleRate, normalized.tools)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -104,7 +105,7 @@ func (b *awsRealtimeEventBuilder) createSessionStartEvent(maxTokens int, topP fl
 	})
 }
 
-func (b *awsRealtimeEventBuilder) createPromptStartEvent(voiceID string, sampleRate int) (string, error) {
+func (b *awsRealtimeEventBuilder) createPromptStartEvent(voiceID string, sampleRate int, tools []llm.Tool) (string, error) {
 	return marshalAWSRealtimeEvent(map[string]any{
 		"promptStart": map[string]any{
 			"promptName": b.promptName,
@@ -123,11 +124,36 @@ func (b *awsRealtimeEventBuilder) createPromptStartEvent(voiceID string, sampleR
 			"toolUseOutputConfiguration": map[string]any{
 				"mediaType": "application/json",
 			},
-			"toolConfiguration": map[string]any{
-				"tools": []any{},
-			},
+			"toolConfiguration": buildAWSRealtimeToolConfiguration(tools),
 		},
 	})
+}
+
+func buildAWSRealtimeToolConfiguration(tools []llm.Tool) map[string]any {
+	toolSpecs := make([]any, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		schemaBytes, err := json.Marshal(llm.ToolParameters(tool))
+		if err != nil {
+			schemaBytes = []byte(`{"type":"object","properties":{}}`)
+		}
+		description := tool.Description()
+		if description == "" {
+			description = "No description provided"
+		}
+		toolSpecs = append(toolSpecs, map[string]any{
+			"toolSpec": map[string]any{
+				"name":        tool.Name(),
+				"description": description,
+				"inputSchema": map[string]any{
+					"json": string(schemaBytes),
+				},
+			},
+		})
+	}
+	return map[string]any{"tools": toolSpecs}
 }
 
 func (b *awsRealtimeEventBuilder) createAudioContentStartEvent(sampleRate int) (string, error) {
