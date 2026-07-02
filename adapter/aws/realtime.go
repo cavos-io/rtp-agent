@@ -919,9 +919,6 @@ func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
 	s.recycleToolsAfterPending = false
 	s.mu.Unlock()
 	if stream != nil {
-		if err := s.flushBufferedAudioInput(ctx, stream); err != nil {
-			return err
-		}
 		for _, event := range closeEvents {
 			if err := sendAWSRealtimeRawEvent(ctx, stream, event); err != nil {
 				return err

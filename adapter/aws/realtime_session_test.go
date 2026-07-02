@@ -268,6 +268,56 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionUpdateToolsRecycleKeepsBufferedInputTail(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	session := newAWSRealtimeSession(provider, client)
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+
+	sentBeforeAudio := len(first.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio first tail error = %v", err)
+	}
+	if got := countAWSRealtimeAudioInputs(t, first.sent[sentBeforeAudio:]); got != 0 {
+		t.Fatalf("audioInput events before recycle = %d, want none for buffered tail", got)
+	}
+
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools active error = %v", err)
+	}
+	if got := countAWSRealtimeAudioInputs(t, first.sent[sentBeforeAudio:]); got != 0 {
+		t.Fatalf("old stream audioInput events during recycle = %d, want buffered tail kept", got)
+	}
+
+	sentSecondBeforeAudio := len(second.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio second tail error = %v", err)
+	}
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, second.sent[sentSecondBeforeAudio:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("new stream audioInput events after tail completion = %d, want one", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 512*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want carried tail chunk %d", got, want)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
 func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
