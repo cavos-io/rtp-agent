@@ -137,6 +137,9 @@ func (m *AWSRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 		AutoToolReplyGeneration: true,
 		AudioOutput:             true,
 		ManualFunctionCalls:     false,
+		MutableChatContext:      true,
+		MutableInstructions:     true,
+		MutableTools:            true,
 		PerResponseToolChoice:   false,
 	}
 }
