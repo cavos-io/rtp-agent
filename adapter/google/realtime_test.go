@@ -218,6 +218,39 @@ func TestGoogleRealtimeSessionIgnoresReferenceToolChoiceUpdate(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true}); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v, want reference reconnect", err)
+	}
+
+	if !firstSession.closed {
+		t.Fatal("first live session not closed after voice update")
+	}
+	if connector.configs[1].SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Kore" {
+		t.Fatalf("reconnected voice = %#v, want Kore", connector.configs[1].SpeechConfig)
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
+	}
+}
+
 func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
 	if err != nil {
@@ -1799,14 +1832,24 @@ func waitGoogleRealtimeGenerationCompleted(session *googleRealtimeSession) bool 
 }
 
 type fakeGoogleRealtimeConnector struct {
-	model   string
-	config  *genai.LiveConnectConfig
-	session *fakeGoogleRealtimeLiveSession
+	model    string
+	models   []string
+	config   *genai.LiveConnectConfig
+	configs  []*genai.LiveConnectConfig
+	session  *fakeGoogleRealtimeLiveSession
+	sessions []googleRealtimeLiveSession
 }
 
 func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
 	c.model = model
+	c.models = append(c.models, model)
 	c.config = config
+	c.configs = append(c.configs, config)
+	if len(c.sessions) > 0 {
+		session := c.sessions[0]
+		c.sessions = c.sessions[1:]
+		return session, nil
+	}
 	return c.session, nil
 }
 
