@@ -732,6 +732,30 @@ func TestGoogleRealtimeSessionHTTPOptionsUsesReferenceConnectTimeout(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionRetriesReferenceConnectFailure(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	connector := &fakeGoogleRealtimeConnector{
+		session:     liveSession,
+		connectErrs: []error{errors.New("temporary dial failure")},
+	}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v, want retry success", err)
+	}
+	defer session.Close()
+
+	if len(connector.models) != 2 {
+		t.Fatalf("connect attempts = %d, want initial failure plus retry", len(connector.models))
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",
@@ -2641,12 +2665,13 @@ func waitGoogleRealtimeGenerationCompleted(session *googleRealtimeSession) bool 
 }
 
 type fakeGoogleRealtimeConnector struct {
-	model    string
-	models   []string
-	config   *genai.LiveConnectConfig
-	configs  []*genai.LiveConnectConfig
-	session  *fakeGoogleRealtimeLiveSession
-	sessions []googleRealtimeLiveSession
+	model       string
+	models      []string
+	config      *genai.LiveConnectConfig
+	configs     []*genai.LiveConnectConfig
+	session     *fakeGoogleRealtimeLiveSession
+	sessions    []googleRealtimeLiveSession
+	connectErrs []error
 }
 
 func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
@@ -2654,6 +2679,11 @@ func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string,
 	c.models = append(c.models, model)
 	c.config = config
 	c.configs = append(c.configs, config)
+	if len(c.connectErrs) > 0 {
+		err := c.connectErrs[0]
+		c.connectErrs = c.connectErrs[1:]
+		return nil, err
+	}
 	if len(c.sessions) > 0 {
 		session := c.sessions[0]
 		c.sessions = c.sessions[1:]

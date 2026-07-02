@@ -612,7 +612,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	config := m.liveConnectConfig()
-	liveSession, err := connector.Connect(ctx, m.Model(), config)
+	liveSession, err := googleRealtimeConnectWithRetry(ctx, connector, m.Model(), config, m.connectOptions)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -647,6 +647,31 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	m.registerSession(session)
 	go session.receiveLoop(liveSession)
 	return session, nil
+}
+
+func googleRealtimeConnectWithRetry(ctx context.Context, connector googleRealtimeConnector, modelName string, config *genai.LiveConnectConfig, options llm.APIConnectOptions) (googleRealtimeLiveSession, error) {
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		liveSession, err := connector.Connect(ctx, modelName, config)
+		if err == nil {
+			return liveSession, nil
+		}
+		lastErr = err
+		if attempt >= options.MaxRetry {
+			return nil, lastErr
+		}
+		interval := options.IntervalForRetry(attempt)
+		if interval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (m *RealtimeModel) registerSession(session *googleRealtimeSession) {
