@@ -251,6 +251,36 @@ func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T
 	}
 }
 
+func TestGoogleRealtimeModelVoiceUpdatePropagatesReferenceActiveSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	model.UpdateOptions(WithGoogleRealtimeVoice("Kore"))
+
+	if !firstSession.closed {
+		t.Fatal("first live session not closed after model voice update")
+	}
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus voice reconnect", len(connector.configs))
+	}
+	if connector.configs[1].SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Kore" {
+		t.Fatalf("reconnected voice = %#v, want Kore", connector.configs[1].SpeechConfig)
+	}
+}
+
 func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
 	if err != nil {

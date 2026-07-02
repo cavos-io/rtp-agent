@@ -41,6 +41,7 @@ var (
 )
 
 type RealtimeModel struct {
+	mu                        sync.Mutex
 	apiKey                    string
 	instructions              string
 	model                     string
@@ -73,6 +74,7 @@ type RealtimeModel struct {
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
+	sessions                  map[*googleRealtimeSession]struct{}
 }
 
 type GoogleRealtimeOption func(*googleRealtimeOptions)
@@ -396,8 +398,13 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 	for _, opt := range opts {
 		opt(&options)
 	}
+	var sessions []*googleRealtimeSession
+	m.mu.Lock()
 	if options.voiceSet {
 		m.voice = options.voice
+		for session := range m.sessions {
+			sessions = append(sessions, session)
+		}
 	}
 	if options.temperatureSet {
 		m.temperature = options.temperature
@@ -410,6 +417,10 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 	if options.toolResponseSchedulingSet {
 		m.toolResponseScheduling = options.toolResponseScheduling
 		m.toolResponseSchedulingSet = true
+	}
+	m.mu.Unlock()
+	for _, session := range sessions {
+		_ = session.reconnectWithVoice(options.voice)
 	}
 }
 
@@ -489,6 +500,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		return nil, err
 	}
 	session := &googleRealtimeSession{
+		owner:                   m,
 		ctx:                     ctx,
 		cancel:                  cancel,
 		connector:               connector,
@@ -509,8 +521,30 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		manualActivityDetection: googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
 		suppressActivityStart:   googleRealtimeNoInterruption(m.realtimeInputConfig),
 	}
+	m.registerSession(session)
 	go session.receiveLoop(liveSession)
 	return session, nil
+}
+
+func (m *RealtimeModel) registerSession(session *googleRealtimeSession) {
+	if m == nil || session == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.sessions == nil {
+		m.sessions = make(map[*googleRealtimeSession]struct{})
+	}
+	m.sessions[session] = struct{}{}
+	m.mu.Unlock()
+}
+
+func (m *RealtimeModel) unregisterSession(session *googleRealtimeSession) {
+	if m == nil || session == nil {
+		return
+	}
+	m.mu.Lock()
+	delete(m.sessions, session)
+	m.mu.Unlock()
 }
 
 func (m *RealtimeModel) Close() error { return nil }
@@ -647,6 +681,7 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 }
 
 type googleRealtimeSession struct {
+	owner                   *RealtimeModel
 	ctx                     context.Context
 	cancel                  context.CancelFunc
 	connector               googleRealtimeConnector
@@ -1289,6 +1324,9 @@ func (s *googleRealtimeSession) Close() error {
 		return nil
 	}
 	s.closeOnce.Do(func() {
+		if s.owner != nil {
+			s.owner.unregisterSession(s)
+		}
 		s.mu.Lock()
 		s.closed = true
 		s.closeGeneration()
