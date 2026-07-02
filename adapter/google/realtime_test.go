@@ -585,6 +585,49 @@ func TestGoogleRealtimeSessionCreatesReferenceGenerationForModelTurn(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		UsageMetadata: &genai.UsageMetadata{
+			PromptTokenCount:   3,
+			ResponseTokenCount: 5,
+			TotalTokenCount:    8,
+		},
+	}
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta
+
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeMetricsCollected || event.Metrics == nil {
+		t.Fatalf("metrics event = %#v, want metrics_collected", event)
+	}
+	metrics := event.Metrics
+	if metrics.RequestID != generation.ResponseID {
+		t.Fatalf("request id = %q, want generation response id %q", metrics.RequestID, generation.ResponseID)
+	}
+	if metrics.InputTokens != 3 || metrics.OutputTokens != 5 || metrics.TotalTokens != 8 {
+		t.Fatalf("tokens = input %d output %d total %d, want 3/5/8", metrics.InputTokens, metrics.OutputTokens, metrics.TotalTokens)
+	}
+	if metrics.Metadata == nil || metrics.Metadata.ModelName != model.Model() || metrics.Metadata.ModelProvider != model.Provider() {
+		t.Fatalf("metadata = %#v, want model/provider", metrics.Metadata)
+	}
+}
+
 func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

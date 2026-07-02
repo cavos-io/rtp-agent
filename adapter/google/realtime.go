@@ -7,10 +7,12 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"google.golang.org/genai"
 )
@@ -465,6 +467,8 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		ctx:         ctx,
 		cancel:      cancel,
 		liveSession: liveSession,
+		modelName:   m.Model(),
+		provider:    m.Provider(),
 		eventCh:     make(chan llm.RealtimeEvent, 16),
 		audioStream: audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
 	}
@@ -553,6 +557,8 @@ type googleRealtimeSession struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	liveSession googleRealtimeLiveSession
+	modelName   string
+	provider    string
 	eventCh     chan llm.RealtimeEvent
 	audioStream *audio.AudioByteStream
 	generation  *googleRealtimeGeneration
@@ -573,6 +579,9 @@ type googleRealtimeGeneration struct {
 	textCh       chan string
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
+	createdAt    time.Time
+	firstTokenAt time.Time
+	completedAt  time.Time
 	closed       bool
 }
 
@@ -640,7 +649,13 @@ func (s *googleRealtimeSession) receiveLoop() {
 }
 
 func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) {
-	if message == nil || message.ServerContent == nil {
+	if message == nil {
+		return
+	}
+	if message.UsageMetadata != nil {
+		s.emitUsageMetrics(message.UsageMetadata)
+	}
+	if message.ServerContent == nil {
 		return
 	}
 	if s.isNewGenerationMessage(message) {
@@ -722,6 +737,7 @@ func (s *googleRealtimeSession) ensureGeneration() {
 		textCh:       make(chan string, 16),
 		audioCh:      make(chan *model.AudioFrame, 16),
 		modalitiesCh: make(chan []string, 1),
+		createdAt:    time.Now(),
 	}
 	generation.modalitiesCh <- []string{"audio", "text"}
 	generation.messageCh <- llm.MessageGeneration{
@@ -746,6 +762,9 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 	if s.generation == nil || s.generation.closed || text == "" {
 		return
 	}
+	if s.generation.firstTokenAt.IsZero() {
+		s.generation.firstTokenAt = time.Now()
+	}
 	select {
 	case s.generation.textCh <- text:
 	default:
@@ -755,6 +774,9 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 	if s.generation == nil || s.generation.closed || len(data) == 0 {
 		return
+	}
+	if s.generation.firstTokenAt.IsZero() {
+		s.generation.firstTokenAt = time.Now()
 	}
 	frame := &model.AudioFrame{
 		Data:              data,
@@ -772,12 +794,48 @@ func (s *googleRealtimeSession) closeGeneration() {
 	if s.generation == nil || s.generation.closed {
 		return
 	}
+	s.generation.completedAt = time.Now()
 	close(s.generation.textCh)
 	close(s.generation.audioCh)
 	close(s.generation.modalitiesCh)
 	close(s.generation.messageCh)
 	close(s.generation.functionCh)
 	s.generation.closed = true
+}
+
+func (s *googleRealtimeSession) emitUsageMetrics(usage *genai.UsageMetadata) {
+	if s.generation == nil || usage == nil {
+		return
+	}
+	now := time.Now()
+	durationEnd := now
+	if !s.generation.completedAt.IsZero() {
+		durationEnd = s.generation.completedAt
+	}
+	duration := durationEnd.Sub(s.generation.createdAt).Seconds()
+	ttft := -1.0
+	if !s.generation.firstTokenAt.IsZero() {
+		ttft = s.generation.firstTokenAt.Sub(s.generation.createdAt).Seconds()
+	}
+	tokensPerSecond := 0.0
+	if duration > 0 {
+		tokensPerSecond = float64(usage.ResponseTokenCount) / duration
+	}
+	s.emitEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeMetricsCollected,
+		Metrics: &telemetry.RealtimeModelMetrics{
+			RequestID:       s.generation.responseID,
+			Timestamp:       s.generation.createdAt,
+			Duration:        duration,
+			TTFT:            ttft,
+			Cancelled:       false,
+			InputTokens:     int(usage.PromptTokenCount),
+			OutputTokens:    int(usage.ResponseTokenCount),
+			TotalTokens:     int(usage.TotalTokenCount),
+			TokensPerSecond: tokensPerSecond,
+			Metadata:        &telemetry.Metadata{ModelName: s.modelName, ModelProvider: s.provider},
+		},
+	})
 }
 
 func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
