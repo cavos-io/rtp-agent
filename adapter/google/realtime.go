@@ -1033,8 +1033,7 @@ func (s *googleRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions
 	if googleRealtimeSessionOptionsNoop(options) {
 		return nil
 	}
-	if options.TurnDetectionSet &&
-		!options.VoiceSet &&
+	if (options.VoiceSet || options.TurnDetectionSet) &&
 		!options.SpeedSet &&
 		!options.MaxResponseOutputTokensSet &&
 		!options.TruncationSet &&
@@ -1042,18 +1041,12 @@ func (s *googleRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions
 		!options.ReasoningSet &&
 		!options.InputAudioTranscriptionSet &&
 		!options.InputAudioNoiseReductionSet {
-		return s.reconnectWithTurnDetection(googleRealtimeTurnDetectionEnabled(options.TurnDetection))
-	}
-	if options.VoiceSet &&
-		!options.SpeedSet &&
-		!options.MaxResponseOutputTokensSet &&
-		!options.TruncationSet &&
-		!options.TracingSet &&
-		!options.ReasoningSet &&
-		!options.TurnDetectionSet &&
-		!options.InputAudioTranscriptionSet &&
-		!options.InputAudioNoiseReductionSet {
-		return s.reconnectWithVoice(options.Voice)
+		return s.reconnectWithVoiceTurnDetection(
+			options.Voice,
+			options.VoiceSet,
+			googleRealtimeTurnDetectionEnabled(options.TurnDetection),
+			options.TurnDetectionSet,
+		)
 	}
 	return errors.New("google realtime session option update is not implemented")
 }
@@ -1079,12 +1072,15 @@ func googleRealtimeTurnDetectionEnabled(value any) bool {
 	}
 }
 
-func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
+func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, voiceSet bool, turnDetection bool, turnDetectionSet bool) error {
 	if s == nil || s.isClosed() {
 		return nil
 	}
 	s.mu.Lock()
-	if s.voice == voice {
+	manual := !turnDetection
+	voiceChanged := voiceSet && s.voice != voice
+	turnDetectionChanged := turnDetectionSet && s.manualActivityDetection != manual
+	if !voiceChanged && !turnDetectionChanged {
 		s.mu.Unlock()
 		return nil
 	}
@@ -1097,53 +1093,16 @@ func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
 	if connector == nil || config == nil {
 		return errors.New("google realtime session option update is not implemented")
 	}
-	googleRealtimeSetConfigVoice(config, voice)
-	if oldSession != nil {
-		_ = oldSession.Close()
+	if voiceSet {
+		googleRealtimeSetConfigVoice(config, voice)
 	}
-	s.closeGeneration()
-	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		_ = nextSession.Close()
-		return nil
-	}
-	s.liveSession = nextSession
-	s.liveConfig = config
-	s.voice = voice
-	s.mu.Unlock()
-	go s.receiveLoop(nextSession)
-	return nil
-}
-
-func (s *googleRealtimeSession) reconnectWithTurnDetection(enabled bool) error {
-	if s == nil || s.isClosed() {
-		return nil
-	}
-	manual := !enabled
-	s.mu.Lock()
-	if s.manualActivityDetection == manual {
-		s.mu.Unlock()
-		return nil
-	}
-	connector := s.connector
-	modelName := s.modelName
-	config := googleRealtimeCloneLiveConfig(s.liveConfig)
-	oldSession := s.liveSession
-	connectOptions := s.currentConnectOptions()
-	s.mu.Unlock()
-	if connector == nil || config == nil {
-		return errors.New("google realtime session option update is not implemented")
-	}
-	if enabled {
-		config.RealtimeInputConfig = nil
-	} else {
-		config.RealtimeInputConfig = &genai.RealtimeInputConfig{
-			AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
+	if turnDetectionSet {
+		if turnDetection {
+			config.RealtimeInputConfig = nil
+		} else {
+			config.RealtimeInputConfig = &genai.RealtimeInputConfig{
+				AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
+			}
 		}
 	}
 	if oldSession != nil {
@@ -1162,9 +1121,14 @@ func (s *googleRealtimeSession) reconnectWithTurnDetection(enabled bool) error {
 	}
 	s.liveSession = nextSession
 	s.liveConfig = config
-	s.manualActivityDetection = googleRealtimeManualActivityDetection(config.RealtimeInputConfig)
-	s.suppressActivityStart = googleRealtimeNoInterruption(config.RealtimeInputConfig)
-	s.inUserActivity = false
+	if voiceSet {
+		s.voice = voice
+	}
+	if turnDetectionSet {
+		s.manualActivityDetection = googleRealtimeManualActivityDetection(config.RealtimeInputConfig)
+		s.suppressActivityStart = googleRealtimeNoInterruption(config.RealtimeInputConfig)
+		s.inUserActivity = false
+	}
 	s.mu.Unlock()
 	go s.receiveLoop(nextSession)
 	return nil
