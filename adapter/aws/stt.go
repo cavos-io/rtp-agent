@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -220,7 +221,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	input := buildAWSStartStreamTranscriptionInput(s, language)
 	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream start failed: %v", err))
 	}
 
 	gs := &awsSTTStream{

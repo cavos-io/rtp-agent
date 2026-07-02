@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming"
 	"github.com/aws/aws-sdk-go-v2/service/transcribestreaming/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
@@ -362,6 +363,10 @@ func TestAWSSTTStreamReturnsClientError(t *testing.T) {
 
 	if err == nil || !strings.Contains(err.Error(), "start failed") {
 		t.Fatalf("Stream error = %v, want client error", err)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
