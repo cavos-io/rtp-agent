@@ -144,6 +144,42 @@ func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
 	assertAWSRealtimeJSONNumber(t, inference["temperature"], 1.0)
 }
 
+func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	session := newAWSRealtimeSession(provider, client)
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools active error = %v", err)
+	}
+
+	if !first.closed {
+		t.Fatal("first stream closed = false, want true after active tool update recycle")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no events, want restarted prompt with new tools")
+	}
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, second.sent[1]), "event", "promptStart", "toolConfiguration")
+	tools, ok := toolConfig["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("recycled tools = %#v, want one tool", toolConfig["tools"])
+	}
+	spec := nestedMap(t, map[string]any{"tool": tools[0]}, "tool", "toolSpec")
+	if spec["name"] != "lookup_order" {
+		t.Fatalf("recycled tool name = %#v, want lookup_order", spec["name"])
+	}
+}
+
 func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -1125,15 +1161,21 @@ func assertNoAWSRealtimeEventType(t *testing.T, ch <-chan llm.RealtimeEvent, unw
 }
 
 type fakeAWSRealtimeClient struct {
-	input  *bedrockruntime.InvokeModelWithBidirectionalStreamInput
-	stream awsRealtimeStream
-	err    error
+	input   *bedrockruntime.InvokeModelWithBidirectionalStreamInput
+	stream  awsRealtimeStream
+	streams []awsRealtimeStream
+	err     error
 }
 
 func (c *fakeAWSRealtimeClient) InvokeModelWithBidirectionalStream(ctx context.Context, input *bedrockruntime.InvokeModelWithBidirectionalStreamInput) (awsRealtimeStream, error) {
 	c.input = input
 	if c.err != nil {
 		return nil, c.err
+	}
+	if len(c.streams) > 0 {
+		stream := c.streams[0]
+		c.streams = c.streams[1:]
+		return stream, nil
 	}
 	return c.stream, nil
 }
@@ -1198,4 +1240,19 @@ func (s *fakeAWSRealtimeStream) Events() <-chan awstypes.InvokeModelWithBidirect
 func (s *fakeAWSRealtimeStream) Close() error {
 	s.closed = true
 	return nil
+}
+
+type awsSecondRequestTestTool struct{}
+
+func (awsSecondRequestTestTool) ID() string          { return "lookup_order" }
+func (awsSecondRequestTestTool) Name() string        { return "lookup_order" }
+func (awsSecondRequestTestTool) Description() string { return "look up orders" }
+func (awsSecondRequestTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"order_id": map[string]any{"type": "string"}},
+	}
+}
+func (awsSecondRequestTestTool) Execute(context.Context, string) (string, error) {
+	return `{"ok":true}`, nil
 }

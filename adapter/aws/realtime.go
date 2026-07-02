@@ -762,10 +762,50 @@ func (s *awsRealtimeSession) sendToolResult(ctx context.Context, toolUseID strin
 }
 func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	s.mu.Lock()
+	changed := awsRealtimeToolNamesChanged(s.tools, tools)
 	s.tools = append([]llm.Tool(nil), tools...)
+	started := s.stream != nil && !s.closed
 	s.mu.Unlock()
+	if started && changed {
+		return s.recycleForUpdatedTools(context.Background())
+	}
 	return nil
 }
+
+func awsRealtimeToolNamesChanged(oldTools []llm.Tool, newTools []llm.Tool) bool {
+	if len(oldTools) != len(newTools) {
+		return true
+	}
+	for i := range oldTools {
+		if oldTools[i] == nil || newTools[i] == nil {
+			if oldTools[i] != newTools[i] {
+				return true
+			}
+			continue
+		}
+		if oldTools[i].Name() != newTools[i].Name() {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
+	s.closeGeneration()
+	s.mu.Lock()
+	stream := s.stream
+	s.stream = nil
+	s.builder = newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString())
+	s.pending = make(map[string]struct{})
+	s.mu.Unlock()
+	if stream != nil {
+		if err := stream.Close(); err != nil {
+			return err
+		}
+	}
+	return s.start(ctx)
+}
+
 func (s *awsRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return nil
 }
