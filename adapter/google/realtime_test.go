@@ -1756,6 +1756,65 @@ func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionEmitsReferenceUsageTokenDetails(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+	expectGoogleRealtimeGeneration(t, session.EventCh())
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		UsageMetadata: &genai.UsageMetadata{
+			PromptTokensDetails: []*genai.ModalityTokenCount{
+				{Modality: genai.MediaModalityAudio, TokenCount: 2},
+				{Modality: genai.MediaModalityText, TokenCount: 3},
+				{Modality: genai.MediaModalityImage, TokenCount: 4},
+			},
+			CacheTokensDetails: []*genai.ModalityTokenCount{
+				{Modality: genai.MediaModalityAudio, TokenCount: 5},
+				{Modality: genai.MediaModalityText, TokenCount: 6},
+				{Modality: genai.MediaModalityImage, TokenCount: 7},
+			},
+			ResponseTokensDetails: []*genai.ModalityTokenCount{
+				{Modality: genai.MediaModalityAudio, TokenCount: 8},
+				{Modality: genai.MediaModalityText, TokenCount: 9},
+				{Modality: genai.MediaModalityImage, TokenCount: 10},
+			},
+		},
+	}
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta
+
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeMetricsCollected || event.Metrics == nil {
+		t.Fatalf("metrics event = %#v, want metrics_collected", event)
+	}
+	input := event.Metrics.InputTokenDetails
+	if input.AudioTokens != 2 || input.TextTokens != 3 || input.ImageTokens != 4 || input.CachedTokens != 18 {
+		t.Fatalf("input token details = %#v, want audio/text/image/cache 2/3/4/18", input)
+	}
+	if input.CachedTokensDetails == nil ||
+		input.CachedTokensDetails.AudioTokens != 5 ||
+		input.CachedTokensDetails.TextTokens != 6 ||
+		input.CachedTokensDetails.ImageTokens != 7 {
+		t.Fatalf("cached token details = %#v, want audio/text/image 5/6/7", input.CachedTokensDetails)
+	}
+	output := event.Metrics.OutputTokenDetails
+	if output.AudioTokens != 8 || output.TextTokens != 9 || output.ImageTokens != 10 {
+		t.Fatalf("output token details = %#v, want audio/text/image 8/9/10", output)
+	}
+}
+
 func TestGoogleRealtimeSessionGenerationCompleteMarksReferenceMetricsEnd(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

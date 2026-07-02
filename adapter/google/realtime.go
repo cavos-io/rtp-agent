@@ -1642,9 +1642,51 @@ func (s *googleRealtimeSession) emitUsageMetrics(usage *genai.UsageMetadata) {
 			OutputTokens:    int(usage.ResponseTokenCount),
 			TotalTokens:     int(usage.TotalTokenCount),
 			TokensPerSecond: tokensPerSecond,
-			Metadata:        &telemetry.Metadata{ModelName: s.modelName, ModelProvider: s.provider},
+			InputTokenDetails: telemetry.InputTokenDetails{
+				AudioTokens:         googleRealtimeModalityTokens(usage.PromptTokensDetails, genai.MediaModalityAudio),
+				TextTokens:          googleRealtimeModalityTokens(usage.PromptTokensDetails, genai.MediaModalityText),
+				ImageTokens:         googleRealtimeModalityTokens(usage.PromptTokensDetails, genai.MediaModalityImage),
+				CachedTokens:        googleRealtimeTokenCountTotal(usage.CacheTokensDetails),
+				CachedTokensDetails: googleRealtimeCachedTokenDetails(usage.CacheTokensDetails),
+			},
+			OutputTokenDetails: telemetry.OutputTokenDetails{
+				AudioTokens: googleRealtimeModalityTokens(usage.ResponseTokensDetails, genai.MediaModalityAudio),
+				TextTokens:  googleRealtimeModalityTokens(usage.ResponseTokensDetails, genai.MediaModalityText),
+				ImageTokens: googleRealtimeModalityTokens(usage.ResponseTokensDetails, genai.MediaModalityImage),
+			},
+			Metadata: &telemetry.Metadata{ModelName: s.modelName, ModelProvider: s.provider},
 		},
 	})
+}
+
+func googleRealtimeModalityTokens(details []*genai.ModalityTokenCount, modality genai.MediaModality) int {
+	total := 0
+	for _, detail := range details {
+		if detail == nil || detail.Modality != modality {
+			continue
+		}
+		total += int(detail.TokenCount)
+	}
+	return total
+}
+
+func googleRealtimeTokenCountTotal(details []*genai.ModalityTokenCount) int {
+	total := 0
+	for _, detail := range details {
+		if detail == nil {
+			continue
+		}
+		total += int(detail.TokenCount)
+	}
+	return total
+}
+
+func googleRealtimeCachedTokenDetails(details []*genai.ModalityTokenCount) *telemetry.CachedTokenDetails {
+	return &telemetry.CachedTokenDetails{
+		AudioTokens: googleRealtimeModalityTokens(details, genai.MediaModalityAudio),
+		TextTokens:  googleRealtimeModalityTokens(details, genai.MediaModalityText),
+		ImageTokens: googleRealtimeModalityTokens(details, genai.MediaModalityImage),
+	}
 }
 
 func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
