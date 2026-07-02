@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -30,6 +31,8 @@ const (
 	googleRealtimeOutputSampleRate   = 24000
 	googleRealtimeOutputChannels     = 1
 )
+
+var googleRealtimeGenerateReplyTimeout = 5 * time.Second
 
 var (
 	knownGoogleRealtimeGeminiModels = map[string]struct{}{
@@ -72,8 +75,18 @@ type RealtimeModel struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	proactivity               bool
+	proactivitySet            bool
+	affectiveDialog           bool
+	affectiveDialogSet        bool
+	contextWindowCompression  *genai.ContextWindowCompressionConfig
+	thinkingConfig            *genai.ThinkingConfig
+	mediaResolution           genai.MediaResolution
+	httpOptions               *genai.HTTPOptions
+	connectOptions            llm.APIConnectOptions
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
+	apiVersion                string
 	connector                 googleRealtimeConnector
 	sessions                  map[*googleRealtimeSession]struct{}
 }
@@ -112,6 +125,15 @@ type googleRealtimeOptions struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	proactivity               bool
+	proactivitySet            bool
+	affectiveDialog           bool
+	affectiveDialogSet        bool
+	contextWindowCompression  *genai.ContextWindowCompressionConfig
+	thinkingConfig            *genai.ThinkingConfig
+	mediaResolution           genai.MediaResolution
+	httpOptions               *genai.HTTPOptions
+	connectOptions            *llm.APIConnectOptions
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
@@ -262,6 +284,50 @@ func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOpti
 	}
 }
 
+func WithGoogleRealtimeProactivity(enabled bool) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.proactivity = enabled
+		options.proactivitySet = true
+	}
+}
+
+func WithGoogleRealtimeAffectiveDialog(enabled bool) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.affectiveDialog = enabled
+		options.affectiveDialogSet = true
+	}
+}
+
+func WithGoogleRealtimeContextWindowCompression(config *genai.ContextWindowCompressionConfig) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.contextWindowCompression = config
+	}
+}
+
+func WithGoogleRealtimeThinkingConfig(config *genai.ThinkingConfig) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.thinkingConfig = config
+	}
+}
+
+func WithGoogleRealtimeMediaResolution(resolution genai.MediaResolution) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.mediaResolution = resolution
+	}
+}
+
+func WithGoogleRealtimeHTTPOptions(httpOptions *genai.HTTPOptions) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.httpOptions = httpOptions
+	}
+}
+
+func WithGoogleRealtimeConnectOptions(connectOptions llm.APIConnectOptions) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.connectOptions = &connectOptions
+	}
+}
+
 func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.realtimeInputConfig = config
@@ -355,6 +421,17 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	if candidateCount == 0 {
 		candidateCount = 1
 	}
+	connectOptions := llm.DefaultAPIConnectOptions()
+	if options.connectOptions != nil {
+		connectOptions = *options.connectOptions
+	}
+	if err := connectOptions.Validate(); err != nil {
+		return nil, err
+	}
+	apiVersion := "v1beta"
+	if !vertexAI && ((options.proactivitySet && options.proactivity) || (options.affectiveDialogSet && options.affectiveDialog)) {
+		apiVersion = "v1alpha"
+	}
 	return &RealtimeModel{
 		apiKey:                    apiKey,
 		instructions:              options.instructions,
@@ -385,8 +462,18 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		toolBehaviorSet:           options.toolBehaviorSet,
 		toolResponseScheduling:    options.toolResponseScheduling,
 		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
+		proactivity:               options.proactivity,
+		proactivitySet:            options.proactivitySet,
+		affectiveDialog:           options.affectiveDialog,
+		affectiveDialogSet:        options.affectiveDialogSet,
+		contextWindowCompression:  options.contextWindowCompression,
+		thinkingConfig:            options.thinkingConfig,
+		mediaResolution:           options.mediaResolution,
+		httpOptions:               options.httpOptions,
+		connectOptions:            connectOptions,
 		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
+		apiVersion:                apiVersion,
 		connector:                 options.connector,
 	}, nil
 }
@@ -525,11 +612,12 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	config := m.liveConnectConfig()
-	liveSession, err := connector.Connect(ctx, m.Model(), config)
+	liveSession, err := googleRealtimeConnectWithRetry(ctx, connector, m.Model(), config, m.connectOptions)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
+	capabilities := m.Capabilities()
 	session := &googleRealtimeSession{
 		owner:                   m,
 		ctx:                     ctx,
@@ -544,8 +632,9 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		temperature:             m.temperature,
 		temperatureSet:          m.temperatureSet,
 		vertexAI:                m.vertexAI,
-		mutableInstructions:     m.Capabilities().MutableInstructions,
-		mutableChatContext:      m.Capabilities().MutableChatContext,
+		audioOutput:             capabilities.AudioOutput,
+		mutableInstructions:     capabilities.MutableInstructions,
+		mutableChatContext:      capabilities.MutableChatContext,
 		chatCtx:                 llm.EmptyChatContext(),
 		toolBehavior:            m.toolBehavior,
 		toolResponseScheduling:  m.toolResponseScheduling,
@@ -558,6 +647,31 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	m.registerSession(session)
 	go session.receiveLoop(liveSession)
 	return session, nil
+}
+
+func googleRealtimeConnectWithRetry(ctx context.Context, connector googleRealtimeConnector, modelName string, config *genai.LiveConnectConfig, options llm.APIConnectOptions) (googleRealtimeLiveSession, error) {
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		liveSession, err := connector.Connect(ctx, modelName, config)
+		if err == nil {
+			return liveSession, nil
+		}
+		lastErr = err
+		if attempt >= options.MaxRetry {
+			return nil, lastErr
+		}
+		interval := options.IntervalForRetry(attempt)
+		if interval <= 0 {
+			continue
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (m *RealtimeModel) registerSession(session *googleRealtimeSession) {
@@ -585,6 +699,7 @@ func (m *RealtimeModel) Close() error { return nil }
 
 func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	config := &genai.LiveConnectConfig{
+		HTTPOptions:        googleRealtimeHTTPOptions(m.httpOptions, m.apiVersion, m.connectOptions),
 		ResponseModalities: googleRealtimeModalities(m.modalities),
 		SpeechConfig: &genai.SpeechConfig{
 			VoiceConfig: &genai.VoiceConfig{
@@ -602,6 +717,17 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	}
 	if m.outputAudioTranscription {
 		config.OutputAudioTranscription = &genai.AudioTranscriptionConfig{}
+	}
+	if m.proactivitySet {
+		value := m.proactivity
+		config.Proactivity = &genai.ProactivityConfig{ProactiveAudio: &value}
+	}
+	if m.affectiveDialogSet {
+		value := m.affectiveDialog
+		config.EnableAffectiveDialog = &value
+	}
+	if m.contextWindowCompression != nil {
+		config.ContextWindowCompression = m.contextWindowCompression
 	}
 	if m.realtimeInputConfig != nil {
 		config.RealtimeInputConfig = m.realtimeInputConfig
@@ -625,7 +751,58 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	if m.maxOutputTokensSet {
 		config.MaxOutputTokens = int32(m.maxOutputTokens)
 	}
+	if m.thinkingConfig != nil {
+		config.ThinkingConfig = m.thinkingConfig
+	}
+	if m.mediaResolution != "" {
+		config.MediaResolution = m.mediaResolution
+	}
 	return config
+}
+
+func googleRealtimeHTTPOptions(options *genai.HTTPOptions, apiVersion string, connectOptions llm.APIConnectOptions) *genai.HTTPOptions {
+	var clone genai.HTTPOptions
+	if options != nil {
+		clone = *options
+		if options.Timeout != nil {
+			timeout := *options.Timeout
+			clone.Timeout = &timeout
+		}
+		if options.Headers != nil {
+			clone.Headers = make(http.Header, len(options.Headers)+1)
+			for key, values := range options.Headers {
+				for _, value := range values {
+					clone.Headers.Add(key, value)
+				}
+			}
+		}
+		if options.ExtraBody != nil {
+			clone.ExtraBody = make(map[string]any, len(options.ExtraBody))
+			for key, value := range options.ExtraBody {
+				clone.ExtraBody[key] = value
+			}
+		}
+	}
+	if clone.APIVersion == "" {
+		clone.APIVersion = apiVersion
+	}
+	if clone.APIVersion == "" {
+		clone.APIVersion = "v1beta"
+	}
+	if clone.Timeout == nil {
+		timeout := connectOptions.Timeout
+		clone.Timeout = &timeout
+	}
+	if clone.Headers == nil {
+		clone.Headers = http.Header{}
+	}
+	for key := range clone.Headers {
+		if strings.EqualFold(key, "x-goog-api-client") {
+			delete(clone.Headers, key)
+		}
+	}
+	clone.Headers.Set("x-goog-api-client", "livekit-agents/"+PluginVersion)
+	return &clone
 }
 
 func googleRealtimeModalities(modalities []string) []genai.Modality {
@@ -694,11 +871,14 @@ type googleRealtimeDefaultConnector struct {
 }
 
 func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
+	apiVersion := "v1beta"
+	if c.model != nil && c.model.apiVersion != "" {
+		apiVersion = c.model.apiVersion
+	}
+	httpOptions := googleRealtimeHTTPOptions(c.model.httpOptions, apiVersion, c.model.connectOptions)
 	clientConfig := &genai.ClientConfig{
-		APIKey: c.model.apiKey,
-		HTTPOptions: genai.HTTPOptions{
-			APIVersion: "v1beta",
-		},
+		APIKey:      c.model.apiKey,
+		HTTPOptions: *httpOptions,
 	}
 	if c.model.vertexAI {
 		clientConfig.Backend = genai.BackendVertexAI
@@ -728,6 +908,7 @@ type googleRealtimeSession struct {
 	temperature             float64
 	temperatureSet          bool
 	vertexAI                bool
+	audioOutput             bool
 	mutableInstructions     bool
 	mutableChatContext      bool
 	chatCtx                 *llm.ChatContext
@@ -740,6 +921,7 @@ type googleRealtimeSession struct {
 	responseSeq             int
 	functionSeq             int
 	pendingReply            bool
+	pendingReplyAt          time.Time
 	sessionResumptionHandle string
 	inputID                 string
 	inputSeq                int
@@ -753,16 +935,18 @@ type googleRealtimeSession struct {
 }
 
 type googleRealtimeGeneration struct {
-	responseID   string
-	messageCh    chan llm.MessageGeneration
-	functionCh   chan *llm.FunctionCall
-	textCh       chan string
-	audioCh      chan *model.AudioFrame
-	modalitiesCh chan []string
-	createdAt    time.Time
-	firstTokenAt time.Time
-	completedAt  time.Time
-	closed       bool
+	responseID    string
+	messageCh     chan llm.MessageGeneration
+	functionCh    chan *llm.FunctionCall
+	textCh        chan string
+	audioCh       chan *model.AudioFrame
+	modalitiesCh  chan []string
+	outputText    string
+	audioChClosed bool
+	createdAt     time.Time
+	firstTokenAt  time.Time
+	completedAt   time.Time
+	closed        bool
 }
 
 func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
@@ -1113,6 +1297,13 @@ func googleRealtimeSetConfigInstructions(config *genai.LiveConnectConfig, instru
 	config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: instructions}}}
 }
 
+func googleRealtimeSetConfigSessionResumption(config *genai.LiveConnectConfig, handle string) {
+	if config == nil {
+		return
+	}
+	config.SessionResumption = &genai.SessionResumptionConfig{Handle: handle}
+}
+
 func googleRealtimeToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
@@ -1328,6 +1519,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	}
 	if update := message.SessionResumptionUpdate; update != nil && update.Resumable && update.NewHandle != "" {
 		s.sessionResumptionHandle = update.NewHandle
+		googleRealtimeSetConfigSessionResumption(s.liveConfig, update.NewHandle)
 	}
 	if message.ServerContent != nil {
 		if s.isNewGenerationMessage(message) {
@@ -1382,9 +1574,8 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			})
 			if s.inputText != "" {
 				s.emitInputTranscription(true)
-				s.inputID = ""
-				s.inputText = ""
 			}
+			s.commitCompletedTranscripts()
 			s.closeGeneration()
 		}
 	}
@@ -1478,7 +1669,14 @@ func (s *googleRealtimeSession) ensureGeneration() {
 		modalitiesCh: make(chan []string, 1),
 		createdAt:    time.Now(),
 	}
-	generation.modalitiesCh <- []string{"audio", "text"}
+	modalities := []string{"text"}
+	if s.audioOutput {
+		modalities = []string{"audio", "text"}
+	} else {
+		close(generation.audioCh)
+		generation.audioChClosed = true
+	}
+	generation.modalitiesCh <- modalities
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    responseID,
 		TextCh:       generation.textCh,
@@ -1504,21 +1702,42 @@ func (s *googleRealtimeSession) ensureGeneration() {
 func (s *googleRealtimeSession) setPendingReply(pending bool) {
 	s.mu.Lock()
 	s.pendingReply = pending
+	if pending {
+		s.pendingReplyAt = time.Now()
+	} else {
+		s.pendingReplyAt = time.Time{}
+	}
 	s.mu.Unlock()
 }
 
 func (s *googleRealtimeSession) consumePendingReply() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pendingReplyExpiredLocked() {
+		return false
+	}
 	pending := s.pendingReply
 	s.pendingReply = false
+	s.pendingReplyAt = time.Time{}
 	return pending
 }
 
 func (s *googleRealtimeSession) hasPendingReply() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pendingReplyExpiredLocked() {
+		return false
+	}
 	return s.pendingReply
+}
+
+func (s *googleRealtimeSession) pendingReplyExpiredLocked() bool {
+	if !s.pendingReply || s.pendingReplyAt.IsZero() || time.Since(s.pendingReplyAt) < googleRealtimeGenerateReplyTimeout {
+		return false
+	}
+	s.pendingReply = false
+	s.pendingReplyAt = time.Time{}
+	return true
 }
 
 func (s *googleRealtimeSession) sendGenerationText(text string) {
@@ -1528,6 +1747,7 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 	defer func() {
 		_ = recover()
 	}()
+	s.generation.outputText += text
 	if s.generation.firstTokenAt.IsZero() {
 		s.generation.firstTokenAt = time.Now()
 	}
@@ -1538,7 +1758,7 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 }
 
 func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
-	if s.generation == nil || s.generation.closed || len(data) == 0 {
+	if s.generation == nil || s.generation.closed || s.generation.audioChClosed || len(data) == 0 {
 		return
 	}
 	defer func() {
@@ -1559,6 +1779,28 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 	}
 }
 
+func (s *googleRealtimeSession) commitCompletedTranscripts() {
+	if s.chatCtx == nil {
+		s.chatCtx = llm.EmptyChatContext()
+	}
+	if s.inputText != "" {
+		s.chatCtx.AddMessage(llm.ChatMessageArgs{
+			ID:   s.currentInputID(),
+			Role: llm.ChatRoleUser,
+			Text: s.inputText,
+		})
+		s.inputID = ""
+		s.inputText = ""
+	}
+	if s.generation != nil && s.generation.outputText != "" {
+		s.chatCtx.AddMessage(llm.ChatMessageArgs{
+			ID:   s.generation.responseID,
+			Role: llm.ChatRoleAssistant,
+			Text: s.generation.outputText,
+		})
+	}
+}
+
 func (s *googleRealtimeSession) closeGeneration() {
 	if s.generation == nil || s.generation.closed {
 		return
@@ -1569,7 +1811,10 @@ func (s *googleRealtimeSession) closeGeneration() {
 	s.markGenerationCompleted()
 	s.generation.closed = true
 	close(s.generation.textCh)
-	close(s.generation.audioCh)
+	if !s.generation.audioChClosed {
+		close(s.generation.audioCh)
+		s.generation.audioChClosed = true
+	}
 	close(s.generation.modalitiesCh)
 	close(s.generation.messageCh)
 	close(s.generation.functionCh)
@@ -1605,9 +1850,51 @@ func (s *googleRealtimeSession) emitUsageMetrics(usage *genai.UsageMetadata) {
 			OutputTokens:    int(usage.ResponseTokenCount),
 			TotalTokens:     int(usage.TotalTokenCount),
 			TokensPerSecond: tokensPerSecond,
-			Metadata:        &telemetry.Metadata{ModelName: s.modelName, ModelProvider: s.provider},
+			InputTokenDetails: telemetry.InputTokenDetails{
+				AudioTokens:         googleRealtimeModalityTokens(usage.PromptTokensDetails, genai.MediaModalityAudio),
+				TextTokens:          googleRealtimeModalityTokens(usage.PromptTokensDetails, genai.MediaModalityText),
+				ImageTokens:         googleRealtimeModalityTokens(usage.PromptTokensDetails, genai.MediaModalityImage),
+				CachedTokens:        googleRealtimeTokenCountTotal(usage.CacheTokensDetails),
+				CachedTokensDetails: googleRealtimeCachedTokenDetails(usage.CacheTokensDetails),
+			},
+			OutputTokenDetails: telemetry.OutputTokenDetails{
+				AudioTokens: googleRealtimeModalityTokens(usage.ResponseTokensDetails, genai.MediaModalityAudio),
+				TextTokens:  googleRealtimeModalityTokens(usage.ResponseTokensDetails, genai.MediaModalityText),
+				ImageTokens: googleRealtimeModalityTokens(usage.ResponseTokensDetails, genai.MediaModalityImage),
+			},
+			Metadata: &telemetry.Metadata{ModelName: s.modelName, ModelProvider: s.provider},
 		},
 	})
+}
+
+func googleRealtimeModalityTokens(details []*genai.ModalityTokenCount, modality genai.MediaModality) int {
+	total := 0
+	for _, detail := range details {
+		if detail == nil || detail.Modality != modality {
+			continue
+		}
+		total += int(detail.TokenCount)
+	}
+	return total
+}
+
+func googleRealtimeTokenCountTotal(details []*genai.ModalityTokenCount) int {
+	total := 0
+	for _, detail := range details {
+		if detail == nil {
+			continue
+		}
+		total += int(detail.TokenCount)
+	}
+	return total
+}
+
+func googleRealtimeCachedTokenDetails(details []*genai.ModalityTokenCount) *telemetry.CachedTokenDetails {
+	return &telemetry.CachedTokenDetails{
+		AudioTokens: googleRealtimeModalityTokens(details, genai.MediaModalityAudio),
+		TextTokens:  googleRealtimeModalityTokens(details, genai.MediaModalityText),
+		ImageTokens: googleRealtimeModalityTokens(details, genai.MediaModalityImage),
+	}
 }
 
 func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
