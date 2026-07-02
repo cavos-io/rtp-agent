@@ -771,6 +771,9 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testin
 	if created.Generation == nil || created.Generation.ResponseID == "" {
 		t.Fatalf("generation = %#v, want response id", created.Generation)
 	}
+	if created.Generation.ResponseID != "completion-1" {
+		t.Fatalf("response id = %q, want provider completion id", created.Generation.ResponseID)
+	}
 	if created.Generation.MessageCh == nil || created.Generation.FunctionCh == nil {
 		t.Fatalf("generation streams = %#v/%#v, want reference streams", created.Generation.MessageCh, created.Generation.FunctionCh)
 	}

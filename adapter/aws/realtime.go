@@ -363,8 +363,8 @@ func (s *awsRealtimeSession) readResponses() {
 }
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
-	if awsRealtimeNestedMap(payload, "event", "completionStart") != nil {
-		s.emitGenerationCreated()
+	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
+		s.emitGenerationCreatedWithResponseID(awsRealtimeMapString(completionStart, "completionId"))
 	}
 	if s.turns != nil {
 		s.turns.feed(payload)
@@ -432,7 +432,11 @@ func (s *awsRealtimeSession) hasPendingTools() bool {
 }
 
 func (s *awsRealtimeSession) emitGenerationCreated() {
-	generation := s.ensureGeneration()
+	s.emitGenerationCreatedWithResponseID("")
+}
+
+func (s *awsRealtimeSession) emitGenerationCreatedWithResponseID(responseID string) {
+	generation := s.ensureGeneration(responseID)
 	s.emit(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
@@ -443,14 +447,17 @@ func (s *awsRealtimeSession) emitGenerationCreated() {
 	})
 }
 
-func (s *awsRealtimeSession) ensureGeneration() *awsRealtimeGeneration {
+func (s *awsRealtimeSession) ensureGeneration(responseID string) *awsRealtimeGeneration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != nil {
 		return s.generation
 	}
+	if responseID == "" {
+		responseID = uuid.NewString()
+	}
 	generation := &awsRealtimeGeneration{
-		responseID:   uuid.NewString(),
+		responseID:   responseID,
 		messageCh:    make(chan llm.MessageGeneration, 1),
 		functionCh:   make(chan *llm.FunctionCall, 8),
 		textCh:       make(chan string, 16),
@@ -491,7 +498,7 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	}
 	var generation *awsRealtimeGeneration
 	if streamType == "ASSISTANT_TEXT" {
-		generation = s.ensureGeneration()
+		generation = s.ensureGeneration("")
 	} else {
 		s.mu.Lock()
 		generation = s.generation
