@@ -1308,6 +1308,10 @@ func (s *googleSTTStream) readLoop() {
 					err = restartErr
 				}
 			}
+			if s.isClosed() {
+				s.terminate()
+				return
+			}
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
 			}
@@ -1395,6 +1399,10 @@ func (s *googleSTTStream) readLoopV2() {
 				if restartErr != nil {
 					err = restartErr
 				}
+			}
+			if s.isClosed() {
+				s.terminate()
+				return
 			}
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)

@@ -3550,6 +3550,34 @@ func TestGoogleSTTReadLoopIgnoresLateTranscriptAfterCloseLikeReference(t *testin
 	}
 }
 
+func TestGoogleSTTReadLoopIgnoresLateReceiveErrorAfterCloseLikeReference(t *testing.T) {
+	stream := &googleSTTStream{
+		stream: &fakeGoogleStreamingRecognizeClient{
+			recvErr: status.Error(codes.Unavailable, "late failure"),
+		},
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+	stream.errCh <- errors.New("older error")
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		stream.readLoop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(20 * time.Millisecond):
+		<-stream.errCh
+		<-done
+		t.Fatal("readLoop blocked on late receive error after Close")
+	}
+}
+
 func TestGoogleSTTStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
 	stream := &googleSTTStream{
 		stream: &fakeGoogleStreamingRecognizeClient{},
