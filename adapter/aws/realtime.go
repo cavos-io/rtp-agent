@@ -1188,14 +1188,7 @@ func (s *awsRealtimeSession) PushVideo(*images.VideoFrame) error {
 	return nil
 }
 func (s *awsRealtimeSession) CommitAudio() error {
-	s.mu.Lock()
-	closed := s.closed
-	stream := s.stream
-	s.mu.Unlock()
-	if closed || stream == nil {
-		return nil
-	}
-	return s.flushBufferedAudioInput(context.Background(), stream)
+	return nil
 }
 func (s *awsRealtimeSession) ClearAudio() error {
 	s.audioBStream.Clear()
