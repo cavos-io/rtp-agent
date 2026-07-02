@@ -1266,12 +1266,42 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	}
 	s.liveSession = nextSession
 	s.liveConfig = config
+	var chatCtx *llm.ChatContext
+	if s.chatCtx != nil {
+		chatCtx = s.chatCtx.Copy(llm.ChatContextCopyOptions{})
+	}
 	s.mu.Unlock()
+	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.emitEvent(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to replay Google realtime chat context after reconnect: %v", err)),
+		})
+		_ = nextSession.Close()
+		return
+	}
 	s.emitEvent(llm.RealtimeEvent{
 		Type:      llm.RealtimeEventTypeSessionReconnected,
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
 	})
 	go s.receiveLoop(nextSession)
+}
+
+func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {
+	if liveSession == nil || chatCtx == nil || len(chatCtx.Items) == 0 || !s.mutableChatContext {
+		return nil
+	}
+	turns, err := googleRealtimeChatContextTurns(chatCtx)
+	if err != nil {
+		return err
+	}
+	if len(turns) == 0 {
+		return nil
+	}
+	turnComplete := false
+	return liveSession.SendClientContent(genai.LiveClientContentInput{
+		Turns:        turns,
+		TurnComplete: &turnComplete,
+	})
 }
 
 func (s *googleRealtimeSession) activeLiveSession() googleRealtimeLiveSession {
