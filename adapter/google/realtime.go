@@ -1641,6 +1641,10 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			Type:          llm.RealtimeEventTypeSpeechStopped,
 			SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
 		})
+		if s.inputText != "" {
+			s.emitInputTranscription(true)
+		}
+		s.commitCompletedTranscripts()
 		s.closeGeneration()
 	}
 	if message.UsageMetadata != nil {

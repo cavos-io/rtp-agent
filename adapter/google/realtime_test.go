@@ -2694,6 +2694,58 @@ func TestGoogleRealtimeSessionToolCallsEmitReferenceSpeechStopped(t *testing.T) 
 	}
 }
 
+func TestGoogleRealtimeSessionToolCallsCommitReferenceTranscripts(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	rawSession, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer rawSession.Close()
+	session := rawSession.(*googleRealtimeSession)
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn:          &genai.Content{Parts: []*genai.Part{{Text: "checking"}}},
+			InputTranscription: &genai.Transcription{Text: " question"},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ToolCall: &genai.LiveServerToolCall{
+			FunctionCalls: []*genai.FunctionCall{{
+				ID:   "call-weather",
+				Name: "weather",
+				Args: map[string]any{"city": "Paris"},
+			}},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // interim input transcript
+	_ = nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
+	for {
+		event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+		if event.Type == llm.RealtimeEventTypeSpeechStopped {
+			break
+		}
+	}
+
+	messages := session.chatCtx.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("chat context messages = %d, want committed user and assistant transcripts", len(messages))
+	}
+	if messages[0].Role != llm.ChatRoleUser || messages[0].TextContent() != "question" {
+		t.Fatalf("user transcript message = %#v, want trimmed question", messages[0])
+	}
+	if messages[1].Role != llm.ChatRoleAssistant || messages[1].TextContent() != "checking" {
+		t.Fatalf("assistant transcript message = %#v, want checking", messages[1])
+	}
+}
+
 func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
