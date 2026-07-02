@@ -153,8 +153,11 @@ func buildAWSToolChoice(choice llm.ToolChoice) types.ToolChoice {
 }
 
 type awsLLMStream struct {
-	stream *bedrockruntime.ConverseStreamEventStream
-	closed bool
+	stream     *bedrockruntime.ConverseStreamEventStream
+	closed     bool
+	toolCallID string
+	toolName   string
+	toolArgs   string
 }
 
 func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
@@ -440,20 +443,25 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 				return chunk, nil
 			}
 			if toolDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberToolUse); ok {
-				// Bedrock tool calls can be chunked.
-				// Aggregate tool call deltas correctly.
-				chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
-					Arguments: aws.ToString(toolDelta.Value.Input),
-				})
-				return chunk, nil
+				s.toolArgs += aws.ToString(toolDelta.Value.Input)
+				continue
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStart:
 			if toolStart, ok := v.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
+				s.toolCallID = aws.ToString(toolStart.Value.ToolUseId)
+				s.toolName = aws.ToString(toolStart.Value.Name)
+				s.toolArgs = ""
+				continue
+			}
+		case *types.ConverseStreamOutputMemberContentBlockStop:
+			if s.toolCallID != "" {
 				chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
-					CallID: aws.ToString(toolStart.Value.ToolUseId),
-					Name:   aws.ToString(toolStart.Value.Name),
-					Type:   "function",
+					CallID:    s.toolCallID,
+					Name:      s.toolName,
+					Type:      "function",
+					Arguments: s.toolArgs,
 				})
+				s.toolCallID, s.toolName, s.toolArgs = "", "", ""
 				return chunk, nil
 			}
 		case *types.ConverseStreamOutputMemberMetadata:
