@@ -658,12 +658,28 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 				return err
 			}
 			content = string(data)
+		} else {
+			content = normalizeAWSRealtimeToolResult(content)
 		}
 		if err := s.sendToolResult(context.Background(), output.CallID, content); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func normalizeAWSRealtimeToolResult(content string) string {
+	var parsed any
+	if err := json.Unmarshal([]byte(content), &parsed); err == nil {
+		if _, ok := parsed.(string); !ok {
+			return content
+		}
+	}
+	data, err := json.Marshal(map[string]string{"tool_result": content})
+	if err != nil {
+		return content
+	}
+	return string(data)
 }
 
 func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *llm.ChatMessage) error {
