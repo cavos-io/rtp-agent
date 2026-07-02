@@ -1076,6 +1076,25 @@ func TestGoogleLLMStreamCloseUnblocksPendingNext(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamCloseIsIdempotent(t *testing.T) {
+	stopCalls := 0
+	stream := &googleLLMStream{
+		stop: func() {
+			stopCalls++
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if stopCalls != 1 {
+		t.Fatalf("stop calls = %d, want 1", stopCalls)
+	}
+}
+
 func TestGoogleLLMStreamTreatsReference499AsEOF(t *testing.T) {
 	stream := &googleLLMStream{
 		next: func() (*genai.GenerateContentResponse, error, bool) {

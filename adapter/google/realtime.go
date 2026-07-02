@@ -2,6 +2,7 @@ package google
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,6 +70,7 @@ type RealtimeModel struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
 }
@@ -107,6 +109,7 @@ type googleRealtimeOptions struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
 }
@@ -256,6 +259,12 @@ func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOpti
 	}
 }
 
+func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.realtimeInputConfig = config
+	}
+}
+
 func WithGoogleRealtimeSessionResumptionHandle(handle string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.sessionResumptionHandle = handle
@@ -328,6 +337,9 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	if options.turnDetection != nil {
 		turnDetection = *options.turnDetection
 	}
+	if googleRealtimeManualActivityDetection(options.realtimeInputConfig) {
+		turnDetection = false
+	}
 	inputAudioTranscription := true
 	if options.inputAudioTranscription != nil {
 		inputAudioTranscription = *options.inputAudioTranscription
@@ -370,6 +382,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		toolBehaviorSet:           options.toolBehaviorSet,
 		toolResponseScheduling:    options.toolResponseScheduling,
 		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
+		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
 		connector:                 options.connector,
 	}, nil
@@ -489,6 +502,8 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:                 make(chan llm.RealtimeEvent, 16),
 		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
 		sessionResumptionHandle: m.sessionResumptionHandle,
+		manualActivityDetection: googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
+		suppressActivityStart:   googleRealtimeNoInterruption(m.realtimeInputConfig),
 	}
 	go session.receiveLoop()
 	return session, nil
@@ -515,6 +530,13 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	}
 	if m.outputAudioTranscription {
 		config.OutputAudioTranscription = &genai.AudioTranscriptionConfig{}
+	}
+	if m.realtimeInputConfig != nil {
+		config.RealtimeInputConfig = m.realtimeInputConfig
+	} else if !m.turnDetection {
+		config.RealtimeInputConfig = &genai.RealtimeInputConfig{
+			AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
+		}
 	}
 	if m.temperatureSet {
 		value := float32(m.temperature)
@@ -642,8 +664,10 @@ type googleRealtimeSession struct {
 	inputID                 string
 	inputSeq                int
 	inputText               string
+	manualActivityDetection bool
+	inUserActivity          bool
+	suppressActivityStart   bool
 	closeOnce               sync.Once
-	closeErr                error
 	closed                  bool
 	mu                      sync.Mutex
 }
@@ -744,6 +768,12 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 	if s == nil || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
+	if !s.mutableChatContext {
+		return fmt.Errorf("generate_reply is not compatible with %q", s.modelName)
+	}
+	if err := s.endManualActivity(); err != nil {
+		return err
+	}
 	turns := make([]*genai.Content, 0, 2)
 	if options.Instructions != "" {
 		turns = append(turns, &genai.Content{
@@ -777,8 +807,36 @@ func (s *googleRealtimeSession) Interrupt() error {
 	if s == nil || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
+	s.mu.Lock()
+	if s.suppressActivityStart || !s.manualActivityDetection || s.inUserActivity {
+		s.mu.Unlock()
+		return nil
+	}
+	s.inUserActivity = true
+	s.mu.Unlock()
 	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
 		ActivityStart: &genai.ActivityStart{},
+	})
+}
+
+func googleRealtimeManualActivityDetection(config *genai.RealtimeInputConfig) bool {
+	return config != nil && config.AutomaticActivityDetection != nil && config.AutomaticActivityDetection.Disabled
+}
+
+func googleRealtimeNoInterruption(config *genai.RealtimeInputConfig) bool {
+	return config != nil && config.ActivityHandling == genai.ActivityHandlingNoInterruption
+}
+
+func (s *googleRealtimeSession) endManualActivity() error {
+	s.mu.Lock()
+	if !s.manualActivityDetection || !s.inUserActivity {
+		s.mu.Unlock()
+		return nil
+	}
+	s.inUserActivity = false
+	s.mu.Unlock()
+	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+		ActivityEnd: &genai.ActivityEnd{},
 	})
 }
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
@@ -1108,16 +1166,17 @@ func (s *googleRealtimeSession) Close() error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closed = true
+		s.closeGeneration()
 		s.mu.Unlock()
 		if s.cancel != nil {
 			s.cancel()
 		}
 		close(s.eventCh)
 		if s.liveSession != nil {
-			s.closeErr = s.liveSession.Close()
+			_ = s.liveSession.Close()
 		}
 	})
-	return s.closeErr
+	return nil
 }
 
 func (s *googleRealtimeSession) isClosed() bool {
@@ -1134,6 +1193,10 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if err != nil {
 		return err
 	}
+	resampled, err = googleRealtimeMonoAudioFrame(resampled)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, chunk := range s.audioStream.Write(resampled.Data) {
@@ -1147,6 +1210,50 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 		}
 	}
 	return nil
+}
+
+func googleRealtimeMonoAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil || frame.NumChannels == googleRealtimeInputChannels {
+		return frame, nil
+	}
+	if frame.NumChannels == 0 {
+		return nil, fmt.Errorf("cannot downmix audio with zero channels")
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, fmt.Errorf("cannot downmix non-16-bit PCM audio")
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
+	}
+	if frame.SamplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        frame.SampleRate,
+			NumChannels:       googleRealtimeInputChannels,
+			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+
+	channelCount := int(frame.NumChannels)
+	out := make([]byte, int(frame.SamplesPerChannel*2))
+	for sample := 0; sample < int(frame.SamplesPerChannel); sample++ {
+		var sum int32
+		for ch := 0; ch < channelCount; ch++ {
+			offset := (sample*channelCount + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
+		}
+		avg := int16(sum / int32(channelCount))
+		binary.LittleEndian.PutUint16(out[sample*2:], uint16(avg))
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       googleRealtimeInputChannels,
+		SamplesPerChannel: frame.SamplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
 }
 
 func (s *googleRealtimeSession) PushVideo(frame *images.VideoFrame) error {

@@ -3,6 +3,8 @@ package google
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -307,6 +309,72 @@ func TestGoogleRealtimeSessionConnectsWithReferenceConfig(t *testing.T) {
 	var _ llm.RealtimeSession = session
 }
 
+func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.RealtimeInputConfig == nil || config.RealtimeInputConfig.AutomaticActivityDetection == nil {
+		t.Fatalf("realtime input config = %#v, want reference disabled automatic activity detection", config)
+	}
+	if !config.RealtimeInputConfig.AutomaticActivityDetection.Disabled {
+		t.Fatalf("automatic activity disabled = false, want true")
+	}
+}
+
+func TestGoogleRealtimeSessionUsesReferenceRealtimeInputConfig(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeInputConfig(&genai.RealtimeInputConfig{
+			AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
+			ActivityHandling:           genai.ActivityHandlingNoInterruption,
+		}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	if model.Capabilities().TurnDetection {
+		t.Fatal("TurnDetection = true, want false when realtime input config disables automatic activity detection")
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.RealtimeInputConfig == nil || config.RealtimeInputConfig.AutomaticActivityDetection == nil {
+		t.Fatalf("realtime input config = %#v, want forwarded reference config", config)
+	}
+	if !config.RealtimeInputConfig.AutomaticActivityDetection.Disabled {
+		t.Fatalf("automatic activity disabled = false, want true")
+	}
+	if config.RealtimeInputConfig.ActivityHandling != genai.ActivityHandlingNoInterruption {
+		t.Fatalf("activity handling = %q, want NO_INTERRUPTION", config.RealtimeInputConfig.ActivityHandling)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	if len(connector.session.inputs) != 0 {
+		t.Fatalf("live inputs = %d, want no activity_start when activity handling forbids interruption", len(connector.session.inputs))
+	}
+}
+
 func TestGoogleRealtimeSessionResumptionMatchesReference(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}}
 	model, err := NewRealtimeModel("test-key",
@@ -402,6 +470,49 @@ func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionPushAudioDownmixesStereoLikeReference(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	stereo := make([]byte, 800*2*2)
+	for i := 0; i < 800; i++ {
+		binary.LittleEndian.PutUint16(stereo[i*4:], uint16(1000))
+		binary.LittleEndian.PutUint16(stereo[i*4+2:], uint16(3000))
+	}
+	err = session.PushAudio(&audiomodel.AudioFrame{
+		Data:              stereo,
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 800,
+	})
+	if err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs = %d, want one mono audio input", len(liveSession.inputs))
+	}
+	audio := liveSession.inputs[0].Audio
+	if audio == nil || audio.MIMEType != "audio/pcm;rate=16000" {
+		t.Fatalf("audio input = %#v, want reference PCM 16 kHz blob", audio)
+	}
+	if len(audio.Data) != 1600 {
+		t.Fatalf("audio data bytes = %d, want 800 mono samples", len(audio.Data))
+	}
+	for i := 0; i < 800; i++ {
+		if got := int16(binary.LittleEndian.Uint16(audio.Data[i*2:])); got != 2000 {
+			t.Fatalf("mono sample %d = %d, want averaged stereo sample 2000", i, got)
+		}
+	}
+}
+
 func TestGoogleRealtimeSessionClearAudioPreservesReferenceBufferedTail(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -477,6 +588,29 @@ func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	}
 	if content.Turns[1].Role != "user" || len(content.Turns[1].Parts) != 1 || content.Turns[1].Parts[0].Text != "." {
 		t.Fatalf("placeholder turn = %#v, want user dot", content.Turns[1])
+	}
+}
+
+func TestGoogleRealtimeSessionGenerateReplyRejectsImmutableModel(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeModel("gemini-3.1-flash-live-preview"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "reply now"})
+	if err == nil || !strings.Contains(err.Error(), "generate_reply is not compatible") {
+		t.Fatalf("GenerateReply error = %v, want incompatible model error", err)
+	}
+	if len(liveSession.clientContents) != 0 {
+		t.Fatalf("client contents = %d, want none for immutable model", len(liveSession.clientContents))
 	}
 }
 
@@ -649,7 +783,7 @@ func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated
 	}
 }
 
-func TestGoogleRealtimeSessionInterruptSendsReferenceActivityStart(t *testing.T) {
+func TestGoogleRealtimeSessionInterruptRequiresManualActivityDetection(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
 	if err != nil {
@@ -664,11 +798,72 @@ func TestGoogleRealtimeSessionInterruptSendsReferenceActivityStart(t *testing.T)
 		t.Fatalf("Interrupt error = %v", err)
 	}
 
+	if len(liveSession.inputs) != 0 {
+		t.Fatalf("live inputs = %d, want no activity start when server activity detection is enabled", len(liveSession.inputs))
+	}
+}
+
+func TestGoogleRealtimeSessionInterruptSendsManualActivityStart(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("second Interrupt error = %v", err)
+	}
+
 	if len(liveSession.inputs) != 1 {
-		t.Fatalf("live inputs = %d, want activity start input", len(liveSession.inputs))
+		t.Fatalf("live inputs = %d, want one manual activity start input", len(liveSession.inputs))
 	}
 	if liveSession.inputs[0].ActivityStart == nil {
 		t.Fatalf("activity start = nil, input %#v", liveSession.inputs[0])
+	}
+}
+
+func TestGoogleRealtimeSessionGenerateReplyEndsManualActivity(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 2 {
+		t.Fatalf("live inputs = %d, want activity start and activity end", len(liveSession.inputs))
+	}
+	if liveSession.inputs[0].ActivityStart == nil {
+		t.Fatalf("first input = %#v, want activity start", liveSession.inputs[0])
+	}
+	if liveSession.inputs[1].ActivityEnd == nil {
+		t.Fatalf("second input = %#v, want activity end before reply content", liveSession.inputs[1])
+	}
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client contents = %d, want generate reply content after activity end", len(liveSession.clientContents))
 	}
 }
 
@@ -760,6 +955,56 @@ func TestGoogleRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	if len(liveSession.inputs) != 0 || len(liveSession.clientContents) != 0 {
 		t.Fatalf("late sends = inputs %d clientContent %d, want suppressed after close", len(liveSession.inputs), len(liveSession.clientContents))
 	}
+}
+
+func TestGoogleRealtimeSessionCloseSuppressesLiveSessionCloseError(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{closeErr: errors.New("websocket close failed")}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cleanup", err)
+	}
+	if !liveSession.closed {
+		t.Fatal("live session closed = false")
+	}
+}
+
+func TestGoogleRealtimeSessionCloseClosesActiveGeneration(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			OutputTranscription: &genai.Transcription{Text: "partial"},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "partial" {
+		t.Fatalf("text delta = %q, want partial", text)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
 }
 
 func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
@@ -1469,6 +1714,7 @@ type fakeGoogleRealtimeLiveSession struct {
 	toolResponses  []genai.LiveToolResponseInput
 	serverMessages chan *genai.LiveServerMessage
 	closed         bool
+	closeErr       error
 }
 
 func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealtimeInput) error {
@@ -1499,5 +1745,5 @@ func (s *fakeGoogleRealtimeLiveSession) Receive() (*genai.LiveServerMessage, err
 
 func (s *fakeGoogleRealtimeLiveSession) Close() error {
 	s.closed = true
-	return nil
+	return s.closeErr
 }

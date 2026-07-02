@@ -512,6 +512,7 @@ type googleTTSChunkedStream struct {
 	request        *texttospeechpb.SynthesizeSpeechRequest
 	requested      bool
 	closed         atomic.Bool
+	closeOnce      sync.Once
 	data           []byte
 	offset         int
 	encoding       texttospeechpb.AudioEncoding
@@ -623,6 +624,9 @@ func (s *googleTTSChunkedStream) nextDecodedAudio() (*tts.SynthesizedAudio, erro
 
 	frame, err := s.decoder.Next()
 	if err != nil {
+		if s.closed.Load() {
+			return nil, io.EOF
+		}
 		if strings.Contains(err.Error(), "decoder closed") {
 			if s.emittedAudio {
 				return s.emitFinal()
@@ -688,13 +692,15 @@ func (s *googleTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 }
 
 func (s *googleTTSChunkedStream) Close() error {
-	s.closed.Store(true)
-	if s.cancel != nil {
-		s.cancel()
-	}
-	if s.decoder != nil {
-		return s.decoder.Close()
-	}
+	s.closeOnce.Do(func() {
+		s.closed.Store(true)
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.decoder != nil {
+			_ = s.decoder.Close()
+		}
+	})
 	return nil
 }
 

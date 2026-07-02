@@ -15,6 +15,7 @@ import (
 	"time"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/googleapis/gax-go/v2"
@@ -1809,6 +1810,86 @@ func TestGoogleTTSSynthesizeCloseBeforeNextSkipsReferenceRequest(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	decoder := &fakeGoogleTTSAudioStreamDecoder{secondCloseErr: errors.New("decoder closed twice")}
+	cancelCalls := 0
+	stream := &googleTTSChunkedStream{
+		cancel: func() {
+			cancelCalls++
+		},
+		decoder: decoder,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close returned error: %v, want nil like reference cleanup", err)
+	}
+	if decoder.closeCalls != 1 {
+		t.Fatalf("decoder Close calls = %d, want 1", decoder.closeCalls)
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("cancel calls = %d, want 1", cancelCalls)
+	}
+}
+
+func TestGoogleTTSChunkedStreamCloseSuppressesDecoderCloseError(t *testing.T) {
+	stream := &googleTTSChunkedStream{
+		decoder: &fakeGoogleTTSAudioStreamDecoder{closeErr: errors.New("decoder cleanup failed")},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v, want nil for caller-owned cleanup", err)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
+func TestGoogleTTSChunkedStreamCloseDuringDecoderReadReturnsEOF(t *testing.T) {
+	decoder := &fakeGoogleTTSAudioStreamDecoder{
+		nextStarted: make(chan struct{}),
+		nextRelease: make(chan struct{}),
+		nextErr:     errors.New("decoder closed"),
+	}
+	stream := &googleTTSChunkedStream{
+		decoder:        decoder,
+		decoderStarted: true,
+		encoding:       texttospeech.AudioEncoding_MP3,
+		emittedAudio:   true,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			errCh <- fmt.Errorf("Next returned audio after Close: %#v", audio)
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-decoder.nextStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("decoder Next did not start")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	close(decoder.nextRelease)
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %v, want EOF", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Next did not unblock after Close")
+	}
+}
+
 func TestGoogleTTSSynthesizeCloseCancelsInFlightReferenceRequest(t *testing.T) {
 	entered := make(chan struct{})
 	client := &fakeGoogleTTSClient{
@@ -2457,3 +2538,35 @@ func (s *fakeGoogleTTSStream) Context() context.Context {
 }
 func (s *fakeGoogleTTSStream) SendMsg(m any) error { return nil }
 func (s *fakeGoogleTTSStream) RecvMsg(m any) error { return nil }
+
+type fakeGoogleTTSAudioStreamDecoder struct {
+	closeCalls     int
+	closeErr       error
+	nextStarted    chan struct{}
+	nextRelease    chan struct{}
+	nextErr        error
+	secondCloseErr error
+}
+
+func (d *fakeGoogleTTSAudioStreamDecoder) Push([]byte) {}
+func (d *fakeGoogleTTSAudioStreamDecoder) EndInput()   {}
+func (d *fakeGoogleTTSAudioStreamDecoder) Next() (*model.AudioFrame, error) {
+	if d.nextStarted != nil {
+		close(d.nextStarted)
+		d.nextStarted = nil
+	}
+	if d.nextRelease != nil {
+		<-d.nextRelease
+	}
+	if d.nextErr != nil {
+		return nil, d.nextErr
+	}
+	return nil, io.EOF
+}
+func (d *fakeGoogleTTSAudioStreamDecoder) Close() error {
+	d.closeCalls++
+	if d.closeCalls > 1 {
+		return d.secondCloseErr
+	}
+	return d.closeErr
+}

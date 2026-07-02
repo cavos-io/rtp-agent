@@ -722,6 +722,7 @@ type googleLLMStream struct {
 	next              func() (*genai.GenerateContentResponse, error, bool)
 	stop              func()
 	closed            atomic.Bool
+	closeOnce         sync.Once
 	responseGenerated bool
 	chunkEmitted      bool
 	requestID         string
@@ -1173,9 +1174,11 @@ func googleFunctionCallID(call *genai.FunctionCall) string {
 }
 
 func (s *googleLLMStream) Close() error {
-	s.closed.Store(true)
-	if s.stop != nil {
-		s.stop()
-	}
+	s.closeOnce.Do(func() {
+		s.closed.Store(true)
+		if s.stop != nil {
+			s.stop()
+		}
+	})
 	return nil
 }
