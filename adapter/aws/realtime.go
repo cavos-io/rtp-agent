@@ -319,6 +319,12 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		})
 	}
 	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
+		if textContent == awsRealtimeBargeInContent {
+			if !s.hasPendingTools() {
+				s.closeGeneration()
+			}
+			return
+		}
 		if awsRealtimeNestedString(payload, "event", "textOutput", "role") == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
 			s.sendGenerationText(awsRealtimeNestedString(payload, "event", "textOutput", "contentId"), textContent)
 			s.emit(llm.RealtimeEvent{
@@ -355,6 +361,12 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
 		s.closeGeneration()
 	}
+}
+
+func (s *awsRealtimeSession) hasPendingTools() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pending) > 0
 }
 
 func (s *awsRealtimeSession) emitGenerationCreated() {
