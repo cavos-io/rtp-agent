@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -318,7 +319,7 @@ func (s *awsSTTStream) readLoop() {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
-				if err != io.EOF {
+				if err != io.EOF && !isHarmlessAWSSTTStreamCloseError(err) {
 					s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream failed: %v", err))
 				}
 			}
@@ -353,6 +354,10 @@ func (s *awsSTTStream) readLoop() {
 			}
 		}
 	}
+}
+
+func isHarmlessAWSSTTStreamCloseError(err error) bool {
+	return strings.Contains(err.Error(), "complete signal was sent without the preceding empty frame")
 }
 
 func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64, fallbackLanguage string, includeSourceLanguages bool) stt.SpeechData {
