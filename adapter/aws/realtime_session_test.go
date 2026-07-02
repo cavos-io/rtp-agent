@@ -445,18 +445,25 @@ func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
 	}
 	defer session.Close()
 
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
 	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","toolName":"lookup","content":"{\"query\":\"weather\"}"}}}`)
 
-	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
-	if event.Function == nil {
-		t.Fatal("Function = nil, want tool call")
+	var call *llm.FunctionCall
+	select {
+	case call = <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
 	}
-	if event.Function.CallID != "tool-1" || event.Function.Name != "lookup" {
-		t.Fatalf("function call = %#v, want lookup tool-1", event.Function)
+	if call.CallID != "tool-1" || call.Name != "lookup" {
+		t.Fatalf("function call = %#v, want lookup tool-1", call)
 	}
-	if event.Function.Arguments != `{"query":"weather"}` {
-		t.Fatalf("arguments = %q, want reference tool content", event.Function.Arguments)
+	if call.Arguments != `{"query":"weather"}` {
+		t.Fatalf("arguments = %q, want reference tool content", call.Arguments)
 	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
 }
 
 func TestAWSRealtimeSessionUpdateChatContextSendsReferenceToolResult(t *testing.T) {
@@ -468,8 +475,16 @@ func TestAWSRealtimeSessionUpdateChatContextSendsReferenceToolResult(t *testing.
 	}
 	defer session.Close()
 
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
 	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","toolName":"lookup","content":"{\"query\":\"weather\"}"}}}`)
-	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
 
 	ctx := llm.NewChatContext()
 	ctx.Append(&llm.FunctionCallOutput{
@@ -508,8 +523,16 @@ func TestAWSRealtimeSessionWrapsReferenceToolErrorResult(t *testing.T) {
 	}
 	defer session.Close()
 
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
 	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-err","toolName":"lookup","content":"{}"}}}`)
-	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
 
 	ctx := llm.NewChatContext()
 	ctx.Append(&llm.FunctionCallOutput{
@@ -622,6 +645,21 @@ func assertNoAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent) {
 	case event := <-ch:
 		t.Fatalf("unexpected event: %#v", event)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func assertNoAWSRealtimeEventType(t *testing.T, ch <-chan llm.RealtimeEvent, unwanted llm.RealtimeEventType) {
+	t.Helper()
+	deadline := time.After(50 * time.Millisecond)
+	for {
+		select {
+		case event := <-ch:
+			if event.Type == unwanted {
+				t.Fatalf("unexpected %s event: %#v", unwanted, event)
+			}
+		case <-deadline:
+			return
+		}
 	}
 }
 

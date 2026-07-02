@@ -343,14 +343,6 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
 			Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
 		})
-		s.emit(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeFunctionCall,
-			Function: &llm.FunctionToolCall{
-				CallID:    toolUseID,
-				Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
-				Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
-			},
-		})
 	}
 	if usage := awsRealtimeNestedMap(payload, "event", "usageEvent"); usage != nil {
 		s.emitUsageMetrics(usage)
