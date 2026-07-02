@@ -1216,10 +1216,59 @@ func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSessio
 		}
 		message, err := liveSession.Receive()
 		if err != nil {
+			if !errors.Is(err, context.Canceled) && s.activeLiveSession() == liveSession && !s.isClosed() {
+				s.reconnectAfterReceiveError(liveSession, err)
+			}
 			return
 		}
 		s.handleServerMessage(message)
 	}
+}
+
+func (s *googleRealtimeSession) reconnectAfterReceiveError(liveSession googleRealtimeLiveSession, receiveErr error) {
+	if s == nil || s.isClosed() {
+		return
+	}
+	s.mu.Lock()
+	if s.liveSession != liveSession {
+		s.mu.Unlock()
+		return
+	}
+	connector := s.connector
+	modelName := s.modelName
+	config := googleRealtimeCloneLiveConfig(s.liveConfig)
+	s.mu.Unlock()
+	if connector == nil || config == nil {
+		s.emitEvent(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf("google realtime receive failed: %v", receiveErr)),
+		})
+		return
+	}
+	_ = liveSession.Close()
+	s.closeGeneration()
+	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	if err != nil {
+		s.emitEvent(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect Google realtime: %v", err)),
+		})
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = nextSession.Close()
+		return
+	}
+	s.liveSession = nextSession
+	s.liveConfig = config
+	s.mu.Unlock()
+	s.emitEvent(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
+	go s.receiveLoop(nextSession)
 }
 
 func (s *googleRealtimeSession) activeLiveSession() googleRealtimeLiveSession {
