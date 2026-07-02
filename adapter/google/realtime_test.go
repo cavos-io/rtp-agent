@@ -307,6 +307,59 @@ func TestGoogleRealtimeSessionConnectsWithReferenceConfig(t *testing.T) {
 	var _ llm.RealtimeSession = session
 }
 
+func TestGoogleRealtimeSessionResumptionMatchesReference(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeSessionResumptionHandle("resume-old"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if connector.config == nil || connector.config.SessionResumption == nil {
+		t.Fatalf("session resumption config = %#v, want reference session resumption config", connector.config)
+	}
+	if connector.config.SessionResumption.Handle != "resume-old" {
+		t.Fatalf("session resumption handle = %q, want resume-old", connector.config.SessionResumption.Handle)
+	}
+
+	googleSession := session.(*googleRealtimeSession)
+	connector.session.serverMessages <- &genai.LiveServerMessage{
+		SessionResumptionUpdate: &genai.LiveServerSessionResumptionUpdate{
+			Resumable: true,
+			NewHandle: "resume-new",
+		},
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if googleSession.sessionResumptionHandle == "resume-new" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if googleSession.sessionResumptionHandle != "resume-new" {
+		t.Fatalf("session resumption handle after resumable update = %q, want resume-new", googleSession.sessionResumptionHandle)
+	}
+
+	connector.session.serverMessages <- &genai.LiveServerMessage{
+		SessionResumptionUpdate: &genai.LiveServerSessionResumptionUpdate{
+			Resumable: false,
+			NewHandle: "drop-me",
+		},
+	}
+	time.Sleep(10 * time.Millisecond)
+	if googleSession.sessionResumptionHandle != "resume-new" {
+		t.Fatalf("session resumption handle after non-resumable update = %q, want unchanged resume-new", googleSession.sessionResumptionHandle)
+	}
+}
+
 func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -424,6 +477,145 @@ func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	}
 	if content.Turns[1].Role != "user" || len(content.Turns[1].Parts) != 1 || content.Turns[1].Parts[0].Text != "." {
 		t.Fatalf("placeholder turn = %#v, want user dot", content.Turns[1])
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateInstructionsSendsReferenceContent(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeInstructions("old"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateInstructions("new system prompt"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client contents = %d, want one instruction update", len(liveSession.clientContents))
+	}
+	update := liveSession.clientContents[0]
+	if update.TurnComplete == nil || *update.TurnComplete {
+		t.Fatalf("turn complete = %#v, want false", update.TurnComplete)
+	}
+	if len(update.Turns) != 1 || len(update.Turns[0].Parts) != 1 {
+		t.Fatalf("instruction update turns = %#v, want one text turn", update.Turns)
+	}
+	if update.Turns[0].Role != "" {
+		t.Fatalf("instruction role = %q, want empty Gemini role", update.Turns[0].Role)
+	}
+	if update.Turns[0].Parts[0].Text != "new system prompt" {
+		t.Fatalf("instruction text = %q, want new system prompt", update.Turns[0].Parts[0].Text)
+	}
+
+	if err := session.UpdateInstructions("new system prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions error = %v", err)
+	}
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client contents after unchanged update = %d, want still one", len(liveSession.clientContents))
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateChatContextAppendsReferenceTurns(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstCtx := llm.NewChatContext()
+	firstCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	if err := session.UpdateChatContext(firstCtx); err != nil {
+		t.Fatalf("first UpdateChatContext error = %v", err)
+	}
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client contents after first update = %d, want one append", len(liveSession.clientContents))
+	}
+	first := liveSession.clientContents[0]
+	if first.TurnComplete == nil || *first.TurnComplete {
+		t.Fatalf("first turn complete = %#v, want false", first.TurnComplete)
+	}
+	if len(first.Turns) != 1 || first.Turns[0].Role != "user" || first.Turns[0].Parts[0].Text != "hello" {
+		t.Fatalf("first turns = %#v, want user hello", first.Turns)
+	}
+
+	nextCtx := llm.NewChatContext()
+	nextCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+	}
+	if err := session.UpdateChatContext(nextCtx); err != nil {
+		t.Fatalf("second UpdateChatContext error = %v", err)
+	}
+	if len(liveSession.clientContents) != 2 {
+		t.Fatalf("client contents after second update = %d, want one additional append", len(liveSession.clientContents))
+	}
+	second := liveSession.clientContents[1]
+	if second.TurnComplete == nil || *second.TurnComplete {
+		t.Fatalf("second turn complete = %#v, want false", second.TurnComplete)
+	}
+	if len(second.Turns) != 1 || second.Turns[0].Role != "model" || second.Turns[0].Parts[0].Text != "hi" {
+		t.Fatalf("second turns = %#v, want appended model hi only", second.Turns)
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateChatContextSendsReferenceToolResponse(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeToolResponseScheduling(genai.FunctionResponseSchedulingInterrupt),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.FunctionCall{ID: "call-item", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "output-item", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	if len(liveSession.clientContents) != 0 {
+		t.Fatalf("client contents = %d, want no chat-content turn for tool response", len(liveSession.clientContents))
+	}
+	if len(liveSession.toolResponses) != 1 {
+		t.Fatalf("tool responses = %d, want one tool response", len(liveSession.toolResponses))
+	}
+	responses := liveSession.toolResponses[0].FunctionResponses
+	if len(responses) != 1 {
+		t.Fatalf("function responses = %d, want one", len(responses))
+	}
+	response := responses[0]
+	if response.ID != "call_weather" || response.Name != "weather" {
+		t.Fatalf("function response id/name = (%q, %q), want call_weather/weather", response.ID, response.Name)
+	}
+	if response.Response["output"] != "sunny" {
+		t.Fatalf("function response payload = %#v, want output sunny", response.Response)
+	}
+	if response.Scheduling != genai.FunctionResponseSchedulingInterrupt {
+		t.Fatalf("function response scheduling = %q, want INTERRUPT", response.Scheduling)
 	}
 }
 
@@ -867,6 +1059,35 @@ func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionReceiveErrorClosesReferenceGeneration(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			OutputTranscription: &genai.Transcription{Text: "partial"},
+		},
+	}
+	close(liveSession.serverMessages)
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "partial" {
+		t.Fatalf("text delta = %q, want partial", text)
+	}
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+}
+
 func TestGoogleRealtimeSessionOrdersInputBeforeOutputTranscription(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -1161,6 +1382,30 @@ func nextGoogleRealtimeTestText(t *testing.T, textCh <-chan string) string {
 	return ""
 }
 
+func expectGoogleRealtimeTestTextClosed(t *testing.T, textCh <-chan string) {
+	t.Helper()
+	select {
+	case _, ok := <-textCh:
+		if ok {
+			t.Fatal("realtime text channel open, want closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime text channel close")
+	}
+}
+
+func expectGoogleRealtimeTestAudioClosed(t *testing.T, audioCh <-chan *audiomodel.AudioFrame) {
+	t.Helper()
+	select {
+	case _, ok := <-audioCh:
+		if ok {
+			t.Fatal("realtime audio channel open, want closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime audio channel close")
+	}
+}
+
 func nextGoogleRealtimeTestAudio(t *testing.T, audioCh <-chan *audiomodel.AudioFrame) *audiomodel.AudioFrame {
 	t.Helper()
 	select {
@@ -1170,6 +1415,18 @@ func nextGoogleRealtimeTestAudio(t *testing.T, audioCh <-chan *audiomodel.AudioF
 		t.Fatal("timed out waiting for realtime audio")
 	}
 	return nil
+}
+
+func expectGoogleRealtimeTestFunctionClosed(t *testing.T, functionCh <-chan *llm.FunctionCall) {
+	t.Helper()
+	select {
+	case _, ok := <-functionCh:
+		if ok {
+			t.Fatal("realtime function channel open, want closed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime function channel close")
+	}
 }
 
 func nextGoogleRealtimeTestFunction(t *testing.T, functionCh <-chan *llm.FunctionCall) *llm.FunctionCall {
@@ -1209,6 +1466,7 @@ func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string,
 type fakeGoogleRealtimeLiveSession struct {
 	inputs         []genai.LiveRealtimeInput
 	clientContents []genai.LiveClientContentInput
+	toolResponses  []genai.LiveToolResponseInput
 	serverMessages chan *genai.LiveServerMessage
 	closed         bool
 }
@@ -1220,6 +1478,11 @@ func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealti
 
 func (s *fakeGoogleRealtimeLiveSession) SendClientContent(input genai.LiveClientContentInput) error {
 	s.clientContents = append(s.clientContents, input)
+	return nil
+}
+
+func (s *fakeGoogleRealtimeLiveSession) SendToolResponse(input genai.LiveToolResponseInput) error {
+	s.toolResponses = append(s.toolResponses, input)
 	return nil
 }
 

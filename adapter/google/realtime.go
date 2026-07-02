@@ -69,6 +69,7 @@ type RealtimeModel struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
 }
 
@@ -106,6 +107,7 @@ type googleRealtimeOptions struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
 }
 
@@ -116,6 +118,7 @@ type googleRealtimeConnector interface {
 type googleRealtimeLiveSession interface {
 	SendRealtimeInput(genai.LiveRealtimeInput) error
 	SendClientContent(genai.LiveClientContentInput) error
+	SendToolResponse(genai.LiveToolResponseInput) error
 	Receive() (*genai.LiveServerMessage, error)
 	Close() error
 }
@@ -253,6 +256,12 @@ func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOpti
 	}
 }
 
+func WithGoogleRealtimeSessionResumptionHandle(handle string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.sessionResumptionHandle = handle
+	}
+}
+
 func WithGoogleRealtimeConnector(connector googleRealtimeConnector) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.connector = connector
@@ -361,6 +370,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		toolBehaviorSet:           options.toolBehaviorSet,
 		toolResponseScheduling:    options.toolResponseScheduling,
 		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
+		sessionResumptionHandle:   options.sessionResumptionHandle,
 		connector:                 options.connector,
 	}, nil
 }
@@ -465,13 +475,20 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		return nil, err
 	}
 	session := &googleRealtimeSession{
-		ctx:         ctx,
-		cancel:      cancel,
-		liveSession: liveSession,
-		modelName:   m.Model(),
-		provider:    m.Provider(),
-		eventCh:     make(chan llm.RealtimeEvent, 16),
-		audioStream: audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+		ctx:                     ctx,
+		cancel:                  cancel,
+		liveSession:             liveSession,
+		modelName:               m.Model(),
+		provider:                m.Provider(),
+		instructions:            m.instructions,
+		vertexAI:                m.vertexAI,
+		mutableInstructions:     m.Capabilities().MutableInstructions,
+		mutableChatContext:      m.Capabilities().MutableChatContext,
+		chatCtx:                 llm.EmptyChatContext(),
+		toolResponseScheduling:  m.toolResponseScheduling,
+		eventCh:                 make(chan llm.RealtimeEvent, 16),
+		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+		sessionResumptionHandle: m.sessionResumptionHandle,
 	}
 	go session.receiveLoop()
 	return session, nil
@@ -488,6 +505,7 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 			},
 			LanguageCode: m.language,
 		},
+		SessionResumption: &genai.SessionResumptionConfig{Handle: m.sessionResumptionHandle},
 	}
 	if m.instructions != "" {
 		config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: m.instructions}}}
@@ -529,6 +547,54 @@ func googleRealtimeModalities(modalities []string) []genai.Modality {
 	return out
 }
 
+func googleRealtimeChatContextTurns(chatCtx *llm.ChatContext) ([]*genai.Content, error) {
+	injectDummy := false
+	contentCtx := chatCtx.Copy(llm.ChatContextCopyOptions{ExcludeFunctionCall: true})
+	turnsMap, _ := contentCtx.ToProviderFormat("google", llm.ChatContextProviderFormatOptions{
+		InjectDummyUserMessage: &injectDummy,
+	})
+	turns := make([]*genai.Content, 0, len(turnsMap))
+	for _, turnMap := range turnsMap {
+		data, err := json.Marshal(turnMap)
+		if err != nil {
+			return nil, err
+		}
+		var turn genai.Content
+		if err := json.Unmarshal(data, &turn); err != nil {
+			return nil, err
+		}
+		if len(turn.Parts) > 0 {
+			turns = append(turns, &turn)
+		}
+	}
+	return turns, nil
+}
+
+func googleRealtimeToolResponses(chatCtx *llm.ChatContext, vertexAI bool, scheduling any) []*genai.FunctionResponse {
+	responses := make([]*genai.FunctionResponse, 0)
+	for _, item := range chatCtx.Items {
+		output, ok := item.(*llm.FunctionCallOutput)
+		if !ok {
+			continue
+		}
+		response := &genai.FunctionResponse{
+			Name:     output.Name,
+			Response: map[string]any{"output": output.Output},
+		}
+		if !vertexAI {
+			response.ID = output.CallID
+			switch value := scheduling.(type) {
+			case genai.FunctionResponseScheduling:
+				response.Scheduling = value
+			case string:
+				response.Scheduling = genai.FunctionResponseScheduling(value)
+			}
+		}
+		responses = append(responses, response)
+	}
+	return responses
+}
+
 type googleRealtimeDefaultConnector struct {
 	model *RealtimeModel
 }
@@ -555,24 +621,31 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 }
 
 type googleRealtimeSession struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	liveSession  googleRealtimeLiveSession
-	modelName    string
-	provider     string
-	eventCh      chan llm.RealtimeEvent
-	audioStream  *audio.AudioByteStream
-	generation   *googleRealtimeGeneration
-	responseSeq  int
-	functionSeq  int
-	pendingReply bool
-	inputID      string
-	inputSeq     int
-	inputText    string
-	closeOnce    sync.Once
-	closeErr     error
-	closed       bool
-	mu           sync.Mutex
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	liveSession             googleRealtimeLiveSession
+	modelName               string
+	provider                string
+	instructions            string
+	vertexAI                bool
+	mutableInstructions     bool
+	mutableChatContext      bool
+	chatCtx                 *llm.ChatContext
+	toolResponseScheduling  any
+	eventCh                 chan llm.RealtimeEvent
+	audioStream             *audio.AudioByteStream
+	generation              *googleRealtimeGeneration
+	responseSeq             int
+	functionSeq             int
+	pendingReply            bool
+	sessionResumptionHandle string
+	inputID                 string
+	inputSeq                int
+	inputText               string
+	closeOnce               sync.Once
+	closeErr                error
+	closed                  bool
+	mu                      sync.Mutex
 }
 
 type googleRealtimeGeneration struct {
@@ -588,11 +661,78 @@ type googleRealtimeGeneration struct {
 	closed       bool
 }
 
-func (s *googleRealtimeSession) UpdateInstructions(string) error {
-	return errors.New("google realtime session instruction update is not implemented")
+func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
+	if s == nil {
+		return nil
+	}
+	if s.instructions == instructions {
+		return nil
+	}
+	s.instructions = instructions
+	if !s.mutableInstructions || s.liveSession == nil || s.isClosed() {
+		return nil
+	}
+	role := ""
+	if s.vertexAI {
+		role = "model"
+	}
+	turnComplete := false
+	return s.liveSession.SendClientContent(genai.LiveClientContentInput{
+		Turns: []*genai.Content{{
+			Role:  role,
+			Parts: []*genai.Part{{Text: instructions}},
+		}},
+		TurnComplete: &turnComplete,
+	})
 }
-func (s *googleRealtimeSession) UpdateChatContext(*llm.ChatContext) error {
-	return errors.New("google realtime session chat context update is not implemented")
+func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
+	if s == nil || chatCtx == nil {
+		return nil
+	}
+	nextCtx := chatCtx.Copy(llm.ChatContextCopyOptions{
+		ExcludeHandoff:      true,
+		ExcludeInstructions: true,
+		ExcludeEmptyMessage: true,
+		ExcludeConfigUpdate: true,
+	})
+	if s.chatCtx == nil {
+		s.chatCtx = llm.EmptyChatContext()
+	}
+	diffOps := llm.ComputeChatCtxDiff(s.chatCtx, nextCtx)
+	appendCtx := llm.EmptyChatContext()
+	for _, create := range diffOps.ToCreate {
+		itemID := create[1]
+		if itemID == nil {
+			continue
+		}
+		if item := nextCtx.GetByID(*itemID); item != nil {
+			appendCtx.Items = append(appendCtx.Items, item)
+		}
+	}
+	s.chatCtx = nextCtx
+	if len(appendCtx.Items) == 0 || s.liveSession == nil || s.isClosed() {
+		return nil
+	}
+	if s.mutableChatContext {
+		turns, err := googleRealtimeChatContextTurns(appendCtx)
+		if err != nil {
+			return err
+		}
+		if len(turns) > 0 {
+			turnComplete := false
+			if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
+				Turns:        turns,
+				TurnComplete: &turnComplete,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	responses := googleRealtimeToolResponses(appendCtx, s.vertexAI, s.toolResponseScheduling)
+	if len(responses) == 0 {
+		return nil
+	}
+	return s.liveSession.SendToolResponse(genai.LiveToolResponseInput{FunctionResponses: responses})
 }
 func (s *googleRealtimeSession) UpdateTools([]llm.Tool) error {
 	return errors.New("google realtime session tool update is not implemented")
@@ -644,6 +784,11 @@ func (s *googleRealtimeSession) Interrupt() error {
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
 
 func (s *googleRealtimeSession) receiveLoop() {
+	defer func() {
+		if s != nil {
+			s.closeGeneration()
+		}
+	}()
 	for {
 		if s == nil || s.liveSession == nil || s.isClosed() {
 			return
@@ -659,6 +804,9 @@ func (s *googleRealtimeSession) receiveLoop() {
 func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) {
 	if message == nil {
 		return
+	}
+	if update := message.SessionResumptionUpdate; update != nil && update.Resumable && update.NewHandle != "" {
+		s.sessionResumptionHandle = update.NewHandle
 	}
 	if message.ServerContent != nil {
 		if s.isNewGenerationMessage(message) {
