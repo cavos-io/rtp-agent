@@ -1655,6 +1655,27 @@ func TestGoogleTTSStreamCloseSuppressesProviderCloseError(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamCloseIsIdempotent(t *testing.T) {
+	cancelCalls := 0
+	stream := &googleTTSSynthesizeStream{
+		cancel: func() {
+			cancelCalls++
+		},
+		streams: []texttospeech.TextToSpeech_StreamingSynthesizeClient{&fakeGoogleTTSStream{}},
+	}
+	stream.cond = sync.NewCond(&stream.mu)
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close returned error: %v", err)
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("cancel calls = %d, want 1", cancelCalls)
+	}
+}
+
 func TestGoogleTTSStreamCloseUnblocksPendingNext(t *testing.T) {
 	recvBlock := make(chan struct{})
 	streamClient := &fakeGoogleTTSStream{recvBlock: recvBlock}

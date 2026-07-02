@@ -707,6 +707,7 @@ func (s *googleTTSChunkedStream) Close() error {
 type googleTTSSynthesizeStream struct {
 	mu          sync.Mutex
 	cond        *sync.Cond
+	closeOnce   sync.Once
 	cancel      context.CancelFunc
 	owner       *GoogleTTS
 	ctx         context.Context
@@ -907,21 +908,23 @@ func (s *googleTTSSynthesizeStream) EndInput() error {
 }
 
 func (s *googleTTSSynthesizeStream) Close() error {
-	s.mu.Lock()
-	s.closed = true
-	s.ignoreInput = true
-	streams := append([]texttospeechpb.TextToSpeech_StreamingSynthesizeClient(nil), s.streams...)
-	s.streams = nil
-	s.active = nil
-	s.cond.Broadcast()
-	if s.cancel != nil {
-		s.cancel()
-	}
-	s.mu.Unlock()
-	s.unregister()
-	for _, stream := range streams {
-		_ = stream.CloseSend()
-	}
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.ignoreInput = true
+		streams := append([]texttospeechpb.TextToSpeech_StreamingSynthesizeClient(nil), s.streams...)
+		s.streams = nil
+		s.active = nil
+		s.cond.Broadcast()
+		if s.cancel != nil {
+			s.cancel()
+		}
+		s.mu.Unlock()
+		s.unregister()
+		for _, stream := range streams {
+			_ = stream.CloseSend()
+		}
+	})
 	return nil
 }
 
