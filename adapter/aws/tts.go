@@ -126,22 +126,12 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
-	if t.client == nil {
-		return nil, fmt.Errorf("aws polly client is not configured")
-	}
-	out, err := t.client.SynthesizeSpeech(ctx, buildAWSSynthesizeSpeechInput(t, text))
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
 	stream := &awsTTSChunkedStream{
-		stream:    out.AudioStream,
-		requestID: requestID,
-		provider:  t,
+		ctx:      ctx,
+		text:     text,
+		options:  t.snapshotOptions(),
+		lazy:     true,
+		provider: t,
 	}
 	if !t.registerStream(stream) {
 		stream.Close()
@@ -150,22 +140,53 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	return stream, nil
 }
 
-func buildAWSSynthesizeSpeechInput(t *AWSTTS, text string) *polly.SynthesizeSpeechInput {
-	input := &polly.SynthesizeSpeechInput{
-		OutputFormat: t.outputFormat,
-		Text:         aws.String(text),
-		VoiceId:      t.voice,
-		SampleRate:   aws.String(fmt.Sprintf("%d", t.sampleRate)),
-		Engine:       t.engine,
-		TextType:     t.textType,
+type awsTTSRequestOptions struct {
+	voice        types.VoiceId
+	engine       types.Engine
+	outputFormat types.OutputFormat
+	textType     types.TextType
+	language     types.LanguageCode
+	sampleRate   int
+}
+
+func (t *AWSTTS) snapshotOptions() awsTTSRequestOptions {
+	if t == nil {
+		return awsTTSRequestOptions{}
 	}
-	if t.language != "" {
-		input.LanguageCode = t.language
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return awsTTSRequestOptions{
+		voice:        t.voice,
+		engine:       t.engine,
+		outputFormat: t.outputFormat,
+		textType:     t.textType,
+		language:     t.language,
+		sampleRate:   t.sampleRate,
+	}
+}
+
+func buildAWSSynthesizeSpeechInput(t *AWSTTS, text string) *polly.SynthesizeSpeechInput {
+	return buildAWSSynthesizeSpeechInputFromOptions(t.snapshotOptions(), text)
+}
+
+func buildAWSSynthesizeSpeechInputFromOptions(opts awsTTSRequestOptions, text string) *polly.SynthesizeSpeechInput {
+	input := &polly.SynthesizeSpeechInput{
+		OutputFormat: opts.outputFormat,
+		Text:         aws.String(text),
+		VoiceId:      opts.voice,
+		SampleRate:   aws.String(fmt.Sprintf("%d", opts.sampleRate)),
+		Engine:       opts.engine,
+		TextType:     opts.textType,
+	}
+	if opts.language != "" {
+		input.LanguageCode = opts.language
 	}
 	return input
 }
 
 func (t *AWSTTS) UpdateOptions(opts ...AWSTTSOption) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -230,11 +251,16 @@ func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type awsTTSChunkedStream struct {
+	ctx          context.Context
+	text         string
+	options      awsTTSRequestOptions
 	stream       io.ReadCloser
 	decoder      codecs.AudioStreamDecoder
 	readErr      chan error
 	requestID    string
+	lazy         bool
 	started      bool
+	closed       bool
 	hasAudio     bool
 	emittedAudio bool
 	finalSent    bool
@@ -242,6 +268,15 @@ type awsTTSChunkedStream struct {
 }
 
 func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+	if s.lazy {
+		if err := s.open(); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
+	}
 	if s.stream == nil {
 		return nil, io.EOF
 	}
@@ -295,6 +330,28 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		RequestID: s.requestID,
 		Frame:     frame,
 	}, nil
+}
+
+func (s *awsTTSChunkedStream) open() error {
+	s.lazy = false
+	if s.provider == nil || s.provider.client == nil {
+		return fmt.Errorf("aws polly client is not configured")
+	}
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out, err := s.provider.client.SynthesizeSpeech(ctx, buildAWSSynthesizeSpeechInputFromOptions(s.options, s.text))
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
+	s.stream = out.AudioStream
+	s.requestID = requestID
+	return nil
 }
 
 func readAWSTTSChunk(stream io.Reader) ([]byte, error) {
@@ -395,6 +452,8 @@ func downmixAWSTTSFrameToMono(frame *model.AudioFrame) *model.AudioFrame {
 }
 
 func (s *awsTTSChunkedStream) Close() error {
+	s.closed = true
+	s.lazy = false
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}

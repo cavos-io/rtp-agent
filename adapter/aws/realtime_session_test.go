@@ -15,6 +15,7 @@ import (
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/google/uuid"
 )
 
 func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
@@ -268,12 +269,63 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionUpdateToolsRecycleKeepsBufferedInputTail(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	session := newAWSRealtimeSession(provider, client)
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+
+	sentBeforeAudio := len(first.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio first tail error = %v", err)
+	}
+	if got := countAWSRealtimeAudioInputs(t, first.sent[sentBeforeAudio:]); got != 0 {
+		t.Fatalf("audioInput events before recycle = %d, want none for buffered tail", got)
+	}
+
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools active error = %v", err)
+	}
+	if got := countAWSRealtimeAudioInputs(t, first.sent[sentBeforeAudio:]); got != 0 {
+		t.Fatalf("old stream audioInput events during recycle = %d, want buffered tail kept", got)
+	}
+
+	sentSecondBeforeAudio := len(second.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio second tail error = %v", err)
+	}
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, second.sent[sentSecondBeforeAudio:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("new stream audioInput events after tail completion = %d, want one", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 512*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want carried tail chunk %d", got, want)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+}
+
 func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
 
 	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleSystem, Text: "system instructions"})
 	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
 	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "hi"})
 	if err := session.UpdateChatContext(ctx); err != nil {
@@ -289,7 +341,7 @@ func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	defer session.Close()
 
 	if len(stream.sent) != 12 {
-		t.Fatalf("sent event count = %d, want 12 with two history messages", len(stream.sent))
+		t.Fatalf("sent event count = %d, want 12 with system filtered and two history messages", len(stream.sent))
 	}
 	firstHistoryStart := mustAWSRealtimeJSONEvent(t, stream.sent[5])
 	if got := awsRealtimeNestedString(firstHistoryStart, "event", "contentStart", "role"); got != "USER" {
@@ -529,7 +581,7 @@ func TestAWSRealtimeSessionPushAudioChunksReferenceInput(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
+func TestAWSRealtimeSessionCloseDropsReferenceInputAudioTail(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -549,16 +601,8 @@ func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
 		t.Fatalf("Close error = %v", err)
 	}
 
-	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
-	if len(audioInputs) != 1 {
-		t.Fatalf("audioInput events after Close = %d, want flushed tail", len(audioInputs))
-	}
-	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
-	if err != nil {
-		t.Fatalf("audioInput base64 decode error = %v", err)
-	}
-	if got, want := len(decoded), 256*2; got != want {
-		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after Close = %d, want buffered tail dropped", got)
 	}
 	audioIndex := -1
 	contentEndIndex := -1
@@ -572,12 +616,48 @@ func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
 			break
 		}
 	}
-	if audioIndex < 0 || contentEndIndex < 0 || audioIndex > contentEndIndex {
-		t.Fatalf("audioInput/contentEnd order = %d/%d, want audio tail before contentEnd", audioIndex, contentEndIndex)
+	if audioIndex >= 0 || contentEndIndex < 0 {
+		t.Fatalf("audioInput/contentEnd order = %d/%d, want no tail before contentEnd", audioIndex, contentEndIndex)
 	}
 }
 
-func TestAWSRealtimeSessionClearAudioDropsBufferedInputTail(t *testing.T) {
+func TestAWSRealtimeSessionCloseKeepsCompletedInputChunks(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	sentCount := len(stream.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512))); err != nil {
+		t.Fatalf("PushAudio complete chunk error = %v", err)
+	}
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio tail error = %v", err)
+	}
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events before Close = %d, want one completed chunk", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 512*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want completed chunk %d", got, want)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	audioInputs = collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events after Close = %d, want no extra tail chunk", len(audioInputs))
+	}
+}
+
+func TestAWSRealtimeSessionClearAudioIsReferenceNoop(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -592,23 +672,26 @@ func TestAWSRealtimeSessionClearAudioDropsBufferedInputTail(t *testing.T) {
 	if err := session.ClearAudio(); err != nil {
 		t.Fatalf("ClearAudio error = %v", err)
 	}
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after ClearAudio = %d, want no-op", got)
+	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
 
-	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
-		t.Fatalf("audioInput events after ClearAudio+Close = %d, want buffered tail dropped", got)
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 0 {
+		t.Fatalf("audioInput events after Close = %d, want buffered tail dropped", len(audioInputs))
 	}
 }
 
-func TestAWSRealtimeSessionCommitAudioFlushesBufferedInputTail(t *testing.T) {
+func TestAWSRealtimeSessionCommitAudioIsReferenceNoop(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
 	if err != nil {
 		t.Fatalf("Session error = %v", err)
 	}
-	defer session.Close()
 
 	sentCount := len(stream.sent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
@@ -619,22 +702,21 @@ func TestAWSRealtimeSessionCommitAudioFlushesBufferedInputTail(t *testing.T) {
 	}
 
 	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
-	if len(audioInputs) != 1 {
-		t.Fatalf("audioInput events after CommitAudio = %d, want flushed tail", len(audioInputs))
+	if len(audioInputs) != 0 {
+		t.Fatalf("audioInput events after CommitAudio = %d, want no-op", len(audioInputs))
 	}
-	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
-	if err != nil {
-		t.Fatalf("audioInput base64 decode error = %v", err)
+	if err := session.CommitAudio(); err != nil {
+		t.Fatalf("second CommitAudio error = %v", err)
 	}
-	if got, want := len(decoded), 256*2; got != want {
-		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after second CommitAudio = %d, want no-op", got)
 	}
-	sentAfterCommit := len(stream.sent)
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentAfterCommit:]); got != 0 {
-		t.Fatalf("audioInput events after Close = %d, want no duplicate committed tail", got)
+	audioInputs = collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 0 {
+		t.Fatalf("audioInput events after Close = %d, want buffered tail dropped", len(audioInputs))
 	}
 }
 
@@ -891,6 +973,7 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationStreams(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for generated text")
 	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeText)
 }
 
 func TestAWSRealtimeSessionTracksReferenceAudioContentStartWithoutRole(t *testing.T) {
@@ -947,8 +1030,11 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testin
 	if created.Generation == nil || created.Generation.ResponseID == "" {
 		t.Fatalf("generation = %#v, want response id", created.Generation)
 	}
-	if created.Generation.ResponseID != "completion-1" {
-		t.Fatalf("response id = %q, want provider completion id", created.Generation.ResponseID)
+	if created.Generation.ResponseID == "completion-1" {
+		t.Fatalf("response id = %q, want generated LiveKit id distinct from provider completion id", created.Generation.ResponseID)
+	}
+	if _, err := uuid.Parse(created.Generation.ResponseID); err != nil {
+		t.Fatalf("response id = %q, want generated UUID: %v", created.Generation.ResponseID, err)
 	}
 	if created.Generation.MessageCh == nil || created.Generation.FunctionCh == nil {
 		t.Fatalf("generation streams = %#v/%#v, want reference streams", created.Generation.MessageCh, created.Generation.FunctionCh)
@@ -956,7 +1042,7 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testin
 	select {
 	case msg := <-created.Generation.MessageCh:
 		if msg.MessageID != created.Generation.ResponseID || msg.TextCh == nil || msg.AudioCh == nil || msg.ModalitiesCh == nil {
-			t.Fatalf("message generation = %#v, want response id and streams", msg)
+			t.Fatalf("message generation = %#v, want generated response id and streams", msg)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for completionStart message generation")
@@ -1062,7 +1148,7 @@ func TestAWSRealtimeSessionClosesReferenceGenerationOnBargeIn(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeSessionInterruptClosesReferenceGeneration(t *testing.T) {
+func TestAWSRealtimeSessionInterruptIsReferenceNoop(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -1079,33 +1165,46 @@ func TestAWSRealtimeSessionInterruptClosesReferenceGeneration(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for message generation")
 	}
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","role":"ASSISTANT","contentId":"audio-1"}}}`)
 
 	if err := session.Interrupt(); err != nil {
 		t.Fatalf("Interrupt error = %v", err)
 	}
+
+	audioBytes := []byte{1, 2, 3, 4}
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-1","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	audioEvent := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	if string(audioEvent.Data) != string(audioBytes) {
+		t.Fatalf("audio event data = %v, want %v", audioEvent.Data, audioBytes)
+	}
 	select {
-	case _, ok := <-msg.TextCh:
-		if ok {
-			t.Fatal("TextCh still open, want closed on interrupt")
+	case audio, ok := <-msg.AudioCh:
+		if !ok {
+			t.Fatal("AudioCh closed on interrupt, want provider-managed barge-in")
+		}
+		if string(audio.Data) != string(audioBytes) {
+			t.Fatalf("message audio data = %v, want %v", audio.Data, audioBytes)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for TextCh close")
+		t.Fatal("timed out waiting for AudioCh data")
 	}
+
+	stream.emitJSON(`{"event":{"completionEnd":{"completionId":"completion-1"}}}`)
 	select {
 	case _, ok := <-msg.AudioCh:
 		if ok {
-			t.Fatal("AudioCh still open, want closed on interrupt")
+			t.Fatal("AudioCh still open, want closed after provider completionEnd")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for AudioCh close")
+		t.Fatal("timed out waiting for AudioCh close after completionEnd")
 	}
 	select {
 	case _, ok := <-created.Generation.FunctionCh:
 		if ok {
-			t.Fatal("FunctionCh still open, want closed on interrupt")
+			t.Fatal("FunctionCh still open, want closed after provider completionEnd")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for FunctionCh close")
+		t.Fatal("timed out waiting for FunctionCh close after completionEnd")
 	}
 }
 
@@ -1161,7 +1260,7 @@ func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 
 	stream.emitJSON(`{"event":{"contentStart":{"type":"TEXT","role":"ASSISTANT","contentId":"final-1","additionalModelFields":"{\"generationStage\":\"FINAL\"}"}}}`)
 	stream.emitJSON(`{"event":{"textOutput":{"role":"ASSISTANT","content":"final transcript","contentId":"final-1"}}}`)
-	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeText)
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeText)
 	select {
 	case text := <-msg.TextCh:
 		t.Fatalf("generation text delta = %q, want final assistant text filtered from stream", text)
