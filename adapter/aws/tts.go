@@ -333,9 +333,9 @@ func (s *awsTTSChunkedStream) Close() error {
 	}
 	stream := s.stream
 	s.stream = nil
-	err := stream.Close()
+	_ = stream.Close()
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
-	return err
+	return nil
 }

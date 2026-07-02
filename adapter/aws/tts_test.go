@@ -349,6 +349,19 @@ func TestAWSTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamCloseSuppressesBodyCloseError(t *testing.T) {
+	stream := &awsTTSChunkedStream{
+		stream: closeErrorAWSReadCloser{err: errors.New("body close failed")},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for caller-owned cancellation cleanup", err)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after Close error = %v, want EOF", err)
+	}
+}
+
 func TestAWSTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 	if err := provider.Close(); err != nil {
@@ -390,6 +403,18 @@ func (c erroringAWSReadCloser) Read([]byte) (int, error) {
 
 func (c erroringAWSReadCloser) Close() error {
 	return nil
+}
+
+type closeErrorAWSReadCloser struct {
+	err error
+}
+
+func (c closeErrorAWSReadCloser) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (c closeErrorAWSReadCloser) Close() error {
+	return c.err
 }
 
 type countingErrorAWSReadCloser struct {
