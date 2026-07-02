@@ -530,6 +530,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		cancel()
 		return nil, err
 	}
+	capabilities := m.Capabilities()
 	session := &googleRealtimeSession{
 		owner:                   m,
 		ctx:                     ctx,
@@ -544,8 +545,9 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		temperature:             m.temperature,
 		temperatureSet:          m.temperatureSet,
 		vertexAI:                m.vertexAI,
-		mutableInstructions:     m.Capabilities().MutableInstructions,
-		mutableChatContext:      m.Capabilities().MutableChatContext,
+		audioOutput:             capabilities.AudioOutput,
+		mutableInstructions:     capabilities.MutableInstructions,
+		mutableChatContext:      capabilities.MutableChatContext,
 		chatCtx:                 llm.EmptyChatContext(),
 		toolBehavior:            m.toolBehavior,
 		toolResponseScheduling:  m.toolResponseScheduling,
@@ -728,6 +730,7 @@ type googleRealtimeSession struct {
 	temperature             float64
 	temperatureSet          bool
 	vertexAI                bool
+	audioOutput             bool
 	mutableInstructions     bool
 	mutableChatContext      bool
 	chatCtx                 *llm.ChatContext
@@ -753,17 +756,18 @@ type googleRealtimeSession struct {
 }
 
 type googleRealtimeGeneration struct {
-	responseID   string
-	messageCh    chan llm.MessageGeneration
-	functionCh   chan *llm.FunctionCall
-	textCh       chan string
-	audioCh      chan *model.AudioFrame
-	modalitiesCh chan []string
-	outputText   string
-	createdAt    time.Time
-	firstTokenAt time.Time
-	completedAt  time.Time
-	closed       bool
+	responseID    string
+	messageCh     chan llm.MessageGeneration
+	functionCh    chan *llm.FunctionCall
+	textCh        chan string
+	audioCh       chan *model.AudioFrame
+	modalitiesCh  chan []string
+	outputText    string
+	audioChClosed bool
+	createdAt     time.Time
+	firstTokenAt  time.Time
+	completedAt   time.Time
+	closed        bool
 }
 
 func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
@@ -1478,7 +1482,14 @@ func (s *googleRealtimeSession) ensureGeneration() {
 		modalitiesCh: make(chan []string, 1),
 		createdAt:    time.Now(),
 	}
-	generation.modalitiesCh <- []string{"audio", "text"}
+	modalities := []string{"text"}
+	if s.audioOutput {
+		modalities = []string{"audio", "text"}
+	} else {
+		close(generation.audioCh)
+		generation.audioChClosed = true
+	}
+	generation.modalitiesCh <- modalities
 	generation.messageCh <- llm.MessageGeneration{
 		MessageID:    responseID,
 		TextCh:       generation.textCh,
@@ -1539,7 +1550,7 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 }
 
 func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
-	if s.generation == nil || s.generation.closed || len(data) == 0 {
+	if s.generation == nil || s.generation.closed || s.generation.audioChClosed || len(data) == 0 {
 		return
 	}
 	defer func() {
@@ -1592,7 +1603,10 @@ func (s *googleRealtimeSession) closeGeneration() {
 	s.markGenerationCompleted()
 	s.generation.closed = true
 	close(s.generation.textCh)
-	close(s.generation.audioCh)
+	if !s.generation.audioChClosed {
+		close(s.generation.audioCh)
+		s.generation.audioChClosed = true
+	}
 	close(s.generation.modalitiesCh)
 	close(s.generation.messageCh)
 	close(s.generation.functionCh)

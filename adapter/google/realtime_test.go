@@ -1639,6 +1639,39 @@ func TestGoogleRealtimeSessionAgentGenerationEmitsReferenceSpeechStartedFirst(t 
 	}
 }
 
+func TestGoogleRealtimeSessionTextOnlyGenerationUsesReferenceModalities(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeModalities([]string{"TEXT"}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	select {
+	case modalities := <-message.ModalitiesCh:
+		if len(modalities) != 1 || modalities[0] != "text" {
+			t.Fatalf("modalities = %#v, want reference text-only generation", modalities)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for generation modalities")
+	}
+}
+
 func TestGoogleRealtimeSessionCreatesReferenceGenerationForModelTurn(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
