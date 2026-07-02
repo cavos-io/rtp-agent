@@ -850,9 +850,13 @@ func googleRealtimeToolResponses(chatCtx *llm.ChatContext, vertexAI bool, schedu
 		if !ok {
 			continue
 		}
+		payload := map[string]any{"output": output.Output}
+		if output.IsError {
+			payload = map[string]any{"error": output.Output}
+		}
 		response := &genai.FunctionResponse{
 			Name:     output.Name,
-			Response: map[string]any{"output": output.Output},
+			Response: payload,
 		}
 		if !vertexAI {
 			response.ID = output.CallID
