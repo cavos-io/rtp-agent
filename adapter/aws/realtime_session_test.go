@@ -200,6 +200,48 @@ func TestAWSRealtimeSessionWrapsReferenceToolErrorResult(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionUpdateChatContextSendsInteractiveUserText(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.ChatMessage{
+		ID:      "user-1",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "hello sonic"}},
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+	textEvents := stream.sent[len(stream.sent)-3:]
+	start := mustAWSRealtimeJSONEvent(t, textEvents[0])
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "TEXT" {
+		t.Fatalf("text contentStart type = %q, want TEXT", got)
+	}
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "role"); got != "USER" {
+		t.Fatalf("text role = %q, want USER", got)
+	}
+	if got := nestedMap(t, start, "event", "contentStart")["interactive"]; got != true {
+		t.Fatalf("interactive = %v, want true", got)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, textEvents[1]), "event", "textInput", "content"); got != "hello sonic" {
+		t.Fatalf("text input = %q, want hello sonic", got)
+	}
+
+	sentCount := len(stream.sent)
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext repeat error = %v", err)
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("repeat UpdateChatContext sent %d new events, want none", len(stream.sent)-sentCount)
+	}
+}
+
 func assertAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
 	t.Helper()
 	select {

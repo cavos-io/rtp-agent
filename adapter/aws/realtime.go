@@ -194,6 +194,7 @@ type awsRealtimeSession struct {
 	eventCh chan llm.RealtimeEvent
 	turns   *awsRealtimeTurnTracker
 	pending map[string]struct{}
+	sent    map[string]struct{}
 	mu      sync.Mutex
 	closed  bool
 }
@@ -205,6 +206,7 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 		builder: newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString()),
 		eventCh: make(chan llm.RealtimeEvent, 16),
 		pending: make(map[string]struct{}),
+		sent:    make(map[string]struct{}),
 	}
 	session.turns = newAWSRealtimeTurnTracker(session.emit, func() {
 		session.emit(llm.RealtimeEvent{
@@ -362,6 +364,12 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		return nil
 	}
 	for _, item := range chatCtx.Items {
+		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleUser {
+			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
+				return err
+			}
+			continue
+		}
 		output, ok := item.(*llm.FunctionCallOutput)
 		if !ok {
 			continue
@@ -384,6 +392,32 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			content = string(data)
 		}
 		if err := s.sendToolResult(context.Background(), output.CallID, content); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *llm.ChatMessage) error {
+	text := msg.TextContent()
+	if msg.ID == "" || text == "" {
+		return nil
+	}
+	s.mu.Lock()
+	_, alreadySent := s.sent[msg.ID]
+	if !alreadySent {
+		s.sent[msg.ID] = struct{}{}
+	}
+	s.mu.Unlock()
+	if alreadySent {
+		return nil
+	}
+	events, err := s.builder.createInteractiveTextContentBlock(uuid.NewString(), "USER", text)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		if err := s.sendRawEvent(ctx, event); err != nil {
 			return err
 		}
 	}

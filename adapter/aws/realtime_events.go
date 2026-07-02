@@ -254,6 +254,22 @@ func (b *awsRealtimeEventBuilder) createTextContentBlock(contentName string, rol
 	return []string{start, text, end}, nil
 }
 
+func (b *awsRealtimeEventBuilder) createInteractiveTextContentBlock(contentName string, role string, content string) ([]string, error) {
+	start, err := b.createTextContentStartEvent(contentName, role, true)
+	if err != nil {
+		return nil, err
+	}
+	text, err := b.createTextContentEvent(contentName, content)
+	if err != nil {
+		return nil, err
+	}
+	end, err := b.createContentEndEvent(contentName)
+	if err != nil {
+		return nil, err
+	}
+	return []string{start, text, end}, nil
+}
+
 func (b *awsRealtimeEventBuilder) createTextContentStartEvent(contentName string, role string, interactive bool) (string, error) {
 	return marshalAWSRealtimeEvent(map[string]any{
 		"contentStart": map[string]any{
