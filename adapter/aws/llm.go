@@ -163,12 +163,13 @@ func buildAWSToolChoice(choice llm.ToolChoice) types.ToolChoice {
 }
 
 type awsLLMStream struct {
-	stream     *bedrockruntime.ConverseStreamEventStream
-	requestID  string
-	closed     bool
-	toolCallID string
-	toolName   string
-	toolArgs   string
+	stream       *bedrockruntime.ConverseStreamEventStream
+	requestID    string
+	closed       bool
+	emittedChunk bool
+	toolCallID   string
+	toolName     string
+	toolArgs     string
 }
 
 func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
@@ -441,7 +442,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		event := <-s.stream.Events()
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
-				return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM stream failed: %v", err))
+				return nil, llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("AWS Bedrock LLM stream failed: %v", err), !s.emittedChunk)
 			}
 			return nil, io.EOF
 		}
@@ -449,6 +450,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		switch v := event.(type) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
 			if textDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
+				s.emittedChunk = true
 				return &llm.ChatChunk{
 					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
@@ -470,6 +472,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStop:
 			if s.toolCallID != "" {
+				s.emittedChunk = true
 				chunk := &llm.ChatChunk{
 					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
@@ -487,6 +490,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 		case *types.ConverseStreamOutputMemberMetadata:
 			if v.Value.Usage != nil {
+				s.emittedChunk = true
 				return &llm.ChatChunk{
 					ID: s.requestID,
 					Usage: &llm.CompletionUsage{
