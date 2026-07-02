@@ -481,7 +481,7 @@ func (s *awsSTTStream) Flush() error {
 	}
 	return s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
-			AudioChunk: nil,
+			AudioChunk: []byte{},
 		},
 	})
 }
@@ -493,7 +493,7 @@ func (s *awsSTTStream) Close() error {
 	s.closed = true
 	_ = s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
-			AudioChunk: nil,
+			AudioChunk: []byte{},
 		},
 	})
 	return s.stream.Close()
