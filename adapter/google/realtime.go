@@ -22,6 +22,8 @@ const (
 	defaultGoogleRealtimeLocation    = "us-central1"
 	googleRealtimeInputSampleRate    = 16000
 	googleRealtimeInputChannels      = 1
+	googleRealtimeOutputSampleRate   = 24000
+	googleRealtimeOutputChannels     = 1
 )
 
 var (
@@ -463,7 +465,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		ctx:         ctx,
 		cancel:      cancel,
 		liveSession: liveSession,
-		eventCh:     make(chan llm.RealtimeEvent),
+		eventCh:     make(chan llm.RealtimeEvent, 16),
 		audioStream: audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
 	}
 	go session.receiveLoop()
@@ -553,6 +555,8 @@ type googleRealtimeSession struct {
 	liveSession googleRealtimeLiveSession
 	eventCh     chan llm.RealtimeEvent
 	audioStream *audio.AudioByteStream
+	generation  *googleRealtimeGeneration
+	responseSeq int
 	inputID     string
 	inputSeq    int
 	inputText   string
@@ -560,6 +564,16 @@ type googleRealtimeSession struct {
 	closeErr    error
 	closed      bool
 	mu          sync.Mutex
+}
+
+type googleRealtimeGeneration struct {
+	responseID   string
+	messageCh    chan llm.MessageGeneration
+	functionCh   chan *llm.FunctionCall
+	textCh       chan string
+	audioCh      chan *model.AudioFrame
+	modalitiesCh chan []string
+	closed       bool
 }
 
 func (s *googleRealtimeSession) UpdateInstructions(string) error {
@@ -629,18 +643,23 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	if message == nil || message.ServerContent == nil {
 		return
 	}
+	if s.isNewGenerationMessage(message) {
+		s.ensureGeneration()
+	}
 	if message.ServerContent.ModelTurn != nil {
 		for _, part := range message.ServerContent.ModelTurn.Parts {
 			if part == nil || part.Thought {
 				continue
 			}
 			if part.Text != "" {
+				s.sendGenerationText(part.Text)
 				s.emitEvent(llm.RealtimeEvent{
 					Type: llm.RealtimeEventTypeText,
 					Text: part.Text,
 				})
 			}
 			if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+				s.sendGenerationAudio(part.InlineData.Data)
 				s.emitEvent(llm.RealtimeEvent{
 					Type: llm.RealtimeEventTypeAudio,
 					Data: part.InlineData.Data,
@@ -649,6 +668,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		}
 	}
 	if message.ServerContent.OutputTranscription != nil && message.ServerContent.OutputTranscription.Text != "" {
+		s.sendGenerationText(message.ServerContent.OutputTranscription.Text)
 		s.emitEvent(llm.RealtimeEvent{
 			Type: llm.RealtimeEventTypeText,
 			Text: message.ServerContent.OutputTranscription.Text,
@@ -667,9 +687,97 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		s.inputID = ""
 		s.inputText = ""
 	}
+	if message.ServerContent.TurnComplete {
+		s.closeGeneration()
+	}
 	if message.ServerContent.Interrupted {
 		s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 	}
+}
+
+func (s *googleRealtimeSession) isNewGenerationMessage(message *genai.LiveServerMessage) bool {
+	if message.ServerContent == nil {
+		return false
+	}
+	content := message.ServerContent
+	if content.ModelTurn != nil {
+		return true
+	}
+	if content.OutputTranscription != nil && content.OutputTranscription.Text != "" {
+		return true
+	}
+	return content.InputTranscription != nil && content.InputTranscription.Text != ""
+}
+
+func (s *googleRealtimeSession) ensureGeneration() {
+	if s.generation != nil && !s.generation.closed {
+		return
+	}
+	s.responseSeq++
+	responseID := fmt.Sprintf("GR_%d", s.responseSeq)
+	generation := &googleRealtimeGeneration{
+		responseID:   responseID,
+		messageCh:    make(chan llm.MessageGeneration, 1),
+		functionCh:   make(chan *llm.FunctionCall),
+		textCh:       make(chan string, 16),
+		audioCh:      make(chan *model.AudioFrame, 16),
+		modalitiesCh: make(chan []string, 1),
+	}
+	generation.modalitiesCh <- []string{"audio", "text"}
+	generation.messageCh <- llm.MessageGeneration{
+		MessageID:    responseID,
+		TextCh:       generation.textCh,
+		AudioCh:      generation.audioCh,
+		ModalitiesCh: generation.modalitiesCh,
+	}
+	s.generation = generation
+	s.emitEvent(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     generation.messageCh,
+			FunctionCh:    generation.functionCh,
+			ResponseID:    responseID,
+			UserInitiated: false,
+		},
+	})
+}
+
+func (s *googleRealtimeSession) sendGenerationText(text string) {
+	if s.generation == nil || s.generation.closed || text == "" {
+		return
+	}
+	select {
+	case s.generation.textCh <- text:
+	default:
+	}
+}
+
+func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
+	if s.generation == nil || s.generation.closed || len(data) == 0 {
+		return
+	}
+	frame := &model.AudioFrame{
+		Data:              data,
+		SampleRate:        googleRealtimeOutputSampleRate,
+		NumChannels:       googleRealtimeOutputChannels,
+		SamplesPerChannel: uint32(len(data) / (2 * googleRealtimeOutputChannels)),
+	}
+	select {
+	case s.generation.audioCh <- frame:
+	default:
+	}
+}
+
+func (s *googleRealtimeSession) closeGeneration() {
+	if s.generation == nil || s.generation.closed {
+		return
+	}
+	close(s.generation.textCh)
+	close(s.generation.audioCh)
+	close(s.generation.modalitiesCh)
+	close(s.generation.messageCh)
+	close(s.generation.functionCh)
+	s.generation.closed = true
 }
 
 func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
