@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -51,6 +52,24 @@ func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
 		t.Fatalf("event[5] type = %q, want AUDIO", got)
 	}
 	assertAWSRealtimeJSONNumber(t, nestedMap(t, audioStart, "event", "contentStart", "audioInputConfiguration")["sampleRateHertz"], 16000)
+}
+
+func TestAWSRealtimeSessionStartErrorReturnsAPIConnectionError(t *testing.T) {
+	client := &fakeAWSRealtimeClient{err: errors.New("bedrock invoke failed")}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+
+	session, err := provider.Session()
+
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Nova Sonic realtime stream start failed") {
+		t.Fatalf("Session error = %q, want Nova Sonic stream context", err.Error())
+	}
 }
 
 func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) {

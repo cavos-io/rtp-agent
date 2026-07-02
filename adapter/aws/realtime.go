@@ -237,7 +237,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		ModelId: aws.String(s.model.model),
 	})
 	if err != nil {
-		return err
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream start failed: %v", err))
 	}
 	s.stream = stream
 	s.mu.Lock()
