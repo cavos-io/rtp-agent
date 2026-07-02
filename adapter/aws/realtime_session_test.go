@@ -620,6 +620,38 @@ func TestAWSRealtimeSessionUpdateChatContextSendsInteractiveUserText(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask for the card number"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+
+	textEvents := stream.sent[len(stream.sent)-3:]
+	start := mustAWSRealtimeJSONEvent(t, textEvents[0])
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "TEXT" {
+		t.Fatalf("text contentStart type = %q, want TEXT", got)
+	}
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "role"); got != "USER" {
+		t.Fatalf("text role = %q, want USER", got)
+	}
+	if got := nestedMap(t, start, "event", "contentStart")["interactive"]; got != true {
+		t.Fatalf("interactive = %v, want true", got)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, textEvents[1]), "event", "textInput", "content"); got != "ask for the card number" {
+		t.Fatalf("text input = %q, want instructions", got)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, textEvents[2]), "event", "contentEnd", "contentName"); got == "" {
+		t.Fatal("contentEnd contentName empty")
+	}
+}
+
 func TestAWSRealtimeSessionMapsReferenceUsageMetrics(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("amazon.nova-sonic-v1:0", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

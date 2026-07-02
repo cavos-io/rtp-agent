@@ -697,8 +697,18 @@ func (s *awsRealtimeSession) UpdateTools([]llm.Tool) error { return nil }
 func (s *awsRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return nil
 }
-func (s *awsRealtimeSession) GenerateReply(llm.RealtimeGenerateReplyOptions) error { return nil }
-func (s *awsRealtimeSession) Say(string) error                                     { return awsRealtimeUnsupported("say") }
+func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
+	if options.Instructions == "" || s.model == nil || s.model.modalities != defaultAWSRealtimeModalities {
+		return nil
+	}
+	msg := &llm.ChatMessage{
+		ID:      uuid.NewString(),
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: options.Instructions}},
+	}
+	return s.sendInteractiveUserText(context.Background(), msg)
+}
+func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("say") }
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return awsRealtimeUnsupported("truncate")
 }
