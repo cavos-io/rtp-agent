@@ -54,6 +54,25 @@ func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
 	assertAWSRealtimeJSONNumber(t, nestedMap(t, audioStart, "event", "contentStart", "audioInputConfiguration")["sampleRateHertz"], 16000)
 }
 
+func TestAWSRealtimeSessionUsesReferenceDefaultSystemPrompt(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	prompt := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[3]), "event", "textInput", "content")
+	if !strings.Contains(prompt, "CRITICAL LANGUAGE MIRRORING RULES") {
+		t.Fatalf("default system prompt missing reference language mirroring rules: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not make up information or make assumptions") {
+		t.Fatalf("default system prompt missing reference truthfulness guard: %q", prompt)
+	}
+}
+
 func TestAWSRealtimeSessionStartErrorReturnsAPIConnectionError(t *testing.T) {
 	client := &fakeAWSRealtimeClient{err: errors.New("bedrock invoke failed")}
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
