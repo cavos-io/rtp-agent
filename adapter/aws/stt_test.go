@@ -827,6 +827,29 @@ func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamWriteDeadlineReturnsAPITimeoutError(t *testing.T) {
+	writer := &fakeAWSSTTWriter{err: context.DeadlineExceeded}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = newFakeAWSSTTReader()
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("pcm")})
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("PushFrame error = %T %v, want APITimeoutError", err, err)
+	}
+
+	err = providerStream.Flush()
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Flush error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		providerStream := &awsSTTStream{

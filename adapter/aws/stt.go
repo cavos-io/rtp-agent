@@ -484,6 +484,9 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 			AudioChunk: frame.Data,
 		},
 	}); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
 	}
 	return nil
@@ -498,6 +501,9 @@ func (s *awsSTTStream) Flush() error {
 			AudioChunk: []byte{},
 		},
 	}); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
 	}
 	return nil
