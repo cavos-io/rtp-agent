@@ -250,6 +250,29 @@ func TestBuildAWSMessagesMapsReferenceToolResultText(t *testing.T) {
 	}
 }
 
+func TestBuildAWSMessagesKeepsReferenceToolResultStatusSuccessForErrors(t *testing.T) {
+	ctx := llm.NewChatContext()
+	groupID := "assistant-turn"
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: groupID, Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: groupID + "/tool-1", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "error: timeout", IsError: true},
+	}
+
+	messages, _ := buildAWSMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3", len(messages))
+	}
+	block, ok := messages[2].Content[0].(*awstypes.ContentBlockMemberToolResult)
+	if !ok {
+		t.Fatalf("tool result block = %T, want ToolResult", messages[2].Content[0])
+	}
+	if block.Value.Status != awstypes.ToolResultStatusSuccess {
+		t.Fatalf("tool result status = %q, want reference success", block.Value.Status)
+	}
+}
+
 func TestBuildAWSMessagesFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

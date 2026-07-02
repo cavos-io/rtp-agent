@@ -283,15 +283,10 @@ func awsToolUseBlock(fc *llm.FunctionCall) types.ContentBlock {
 }
 
 func awsToolResultBlock(fco *llm.FunctionCallOutput) types.ContentBlock {
-	status := types.ToolResultStatusSuccess
-	if fco.IsError {
-		status = types.ToolResultStatusError
-	}
-
 	return &types.ContentBlockMemberToolResult{
 		Value: types.ToolResultBlock{
 			ToolUseId: aws.String(fco.CallID),
-			Status:    status,
+			Status:    types.ToolResultStatusSuccess,
 			Content: []types.ToolResultContentBlock{
 				&types.ToolResultContentBlockMemberText{
 					Value: fco.Output,
