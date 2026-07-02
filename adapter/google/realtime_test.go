@@ -582,6 +582,33 @@ func TestGoogleRealtimeSessionProactivityConfigMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionContextWindowCompressionMatchesReference(t *testing.T) {
+	triggerTokens := int64(4096)
+	targetTokens := int64(2048)
+	compression := &genai.ContextWindowCompressionConfig{
+		TriggerTokens: &triggerTokens,
+		SlidingWindow: &genai.SlidingWindow{TargetTokens: &targetTokens},
+	}
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeContextWindowCompression(compression),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.ContextWindowCompression != compression {
+		t.Fatalf("context window compression = %#v, want configured reference object", config)
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",

@@ -78,6 +78,7 @@ type RealtimeModel struct {
 	proactivitySet            bool
 	affectiveDialog           bool
 	affectiveDialogSet        bool
+	contextWindowCompression  *genai.ContextWindowCompressionConfig
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	apiVersion                string
@@ -123,6 +124,7 @@ type googleRealtimeOptions struct {
 	proactivitySet            bool
 	affectiveDialog           bool
 	affectiveDialogSet        bool
+	contextWindowCompression  *genai.ContextWindowCompressionConfig
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
@@ -287,6 +289,12 @@ func WithGoogleRealtimeAffectiveDialog(enabled bool) GoogleRealtimeOption {
 	}
 }
 
+func WithGoogleRealtimeContextWindowCompression(config *genai.ContextWindowCompressionConfig) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.contextWindowCompression = config
+	}
+}
+
 func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.realtimeInputConfig = config
@@ -418,6 +426,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		proactivitySet:            options.proactivitySet,
 		affectiveDialog:           options.affectiveDialog,
 		affectiveDialogSet:        options.affectiveDialogSet,
+		contextWindowCompression:  options.contextWindowCompression,
 		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
 		apiVersion:                apiVersion,
@@ -647,6 +656,9 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	if m.affectiveDialogSet {
 		value := m.affectiveDialog
 		config.EnableAffectiveDialog = &value
+	}
+	if m.contextWindowCompression != nil {
+		config.ContextWindowCompression = m.contextWindowCompression
 	}
 	if m.realtimeInputConfig != nil {
 		config.RealtimeInputConfig = m.realtimeInputConfig
