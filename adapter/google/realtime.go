@@ -1217,7 +1217,10 @@ func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSessio
 		message, err := liveSession.Receive()
 		if err != nil {
 			if !errors.Is(err, context.Canceled) && s.activeLiveSession() == liveSession && !s.isClosed() {
-				s.reconnectAfterReceiveError(liveSession, err)
+				s.reconnectActiveSession(liveSession,
+					fmt.Sprintf("google realtime receive failed: %v", err),
+					"failed to reconnect Google realtime after receive error: %v",
+				)
 			}
 			return
 		}
@@ -1225,7 +1228,7 @@ func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSessio
 	}
 }
 
-func (s *googleRealtimeSession) reconnectAfterReceiveError(liveSession googleRealtimeLiveSession, receiveErr error) {
+func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtimeLiveSession, unavailableMessage string, reconnectMessage string) {
 	if s == nil || s.isClosed() {
 		return
 	}
@@ -1241,7 +1244,7 @@ func (s *googleRealtimeSession) reconnectAfterReceiveError(liveSession googleRea
 	if connector == nil || config == nil {
 		s.emitEvent(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: llm.NewAPIConnectionError(fmt.Sprintf("google realtime receive failed: %v", receiveErr)),
+			Error: llm.NewAPIConnectionError(unavailableMessage),
 		})
 		return
 	}
@@ -1251,7 +1254,7 @@ func (s *googleRealtimeSession) reconnectAfterReceiveError(liveSession googleRea
 	if err != nil {
 		s.emitEvent(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect Google realtime: %v", err)),
+			Error: llm.NewAPIConnectionError(fmt.Sprintf(reconnectMessage, err)),
 		})
 		return
 	}
@@ -1354,6 +1357,12 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	}
 	if message.UsageMetadata != nil {
 		s.emitUsageMetrics(message.UsageMetadata)
+	}
+	if message.GoAway != nil {
+		s.reconnectActiveSession(s.activeLiveSession(),
+			"google realtime received go_away",
+			"failed to reconnect Google realtime after go_away: %v",
+		)
 	}
 }
 
