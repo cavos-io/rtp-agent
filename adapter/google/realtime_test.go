@@ -830,6 +830,39 @@ func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionOrdersInputBeforeOutputTranscription(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			InputTranscription:  &genai.Transcription{Text: " user"},
+			OutputTranscription: &genai.Transcription{Text: "assistant"},
+		},
+	}
+
+	expectGoogleRealtimeGeneration(t, session.EventCh())
+	input := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if input.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || input.InputTranscription == nil {
+		t.Fatalf("first event = %#v, want input transcription before output text", input)
+	}
+	if input.InputTranscription.Transcript != "user" || input.InputTranscription.IsFinal {
+		t.Fatalf("input transcription = %#v, want interim user transcript", input.InputTranscription)
+	}
+	output := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if output.Type != llm.RealtimeEventTypeText || output.Text != "assistant" {
+		t.Fatalf("second event = %#v, want output transcription text", output)
+	}
+}
+
 func TestGoogleRealtimeSessionAccumulatesReferenceInputTranscription(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 3)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

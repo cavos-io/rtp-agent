@@ -699,13 +699,6 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			}
 		}
 	}
-	if message.ServerContent.OutputTranscription != nil && message.ServerContent.OutputTranscription.Text != "" {
-		s.sendGenerationText(message.ServerContent.OutputTranscription.Text)
-		s.emitEvent(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeText,
-			Text: message.ServerContent.OutputTranscription.Text,
-		})
-	}
 	if message.ServerContent.InputTranscription != nil && message.ServerContent.InputTranscription.Text != "" {
 		text := message.ServerContent.InputTranscription.Text
 		if s.inputText == "" {
@@ -713,6 +706,13 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		}
 		s.inputText += text
 		s.emitInputTranscription(false)
+	}
+	if message.ServerContent.OutputTranscription != nil && message.ServerContent.OutputTranscription.Text != "" {
+		s.sendGenerationText(message.ServerContent.OutputTranscription.Text)
+		s.emitEvent(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeText,
+			Text: message.ServerContent.OutputTranscription.Text,
+		})
 	}
 	if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
 		s.markGenerationCompleted()
