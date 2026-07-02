@@ -523,7 +523,8 @@ func (s *awsSTTStream) Close() error {
 			AudioChunk: []byte{},
 		},
 	})
-	return s.stream.Close()
+	_ = s.stream.Close()
+	return nil
 }
 
 func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {

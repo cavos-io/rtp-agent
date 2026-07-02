@@ -800,6 +800,28 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamCloseSuppressesReferenceWriterCloseError(t *testing.T) {
+	writer := &fakeAWSSTTWriter{closeErr: errors.New("transcribe close failed")}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = newFakeAWSSTTReader()
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil for reference cleanup suppression", err)
+	}
+	if !writer.closed {
+		t.Fatal("writer closed = false, want close attempted")
+	}
+	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
+		t.Fatalf("close chunks = %#v, want one empty sentinel before close", writer.chunks)
+	}
+}
+
 func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	writer := &fakeAWSSTTWriter{err: errors.New("transcribe write failed")}
 	providerStream := &awsSTTStream{
@@ -1054,6 +1076,7 @@ type fakeAWSSTTWriter struct {
 	chunkWasNil []bool
 	closed      bool
 	err         error
+	closeErr    error
 }
 
 func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) error {
@@ -1072,7 +1095,7 @@ func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) erro
 
 func (w *fakeAWSSTTWriter) Close() error {
 	w.closed = true
-	return nil
+	return w.closeErr
 }
 
 func (w *fakeAWSSTTWriter) Err() error {
