@@ -91,6 +91,30 @@ func TestAWSLLMChatRequiresConfiguredClient(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: errors.New("bedrock dial failed")},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil", stream)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Bedrock LLM chat failed") {
+		t.Fatalf("Chat error = %q, want Bedrock chat context", err.Error())
+	}
+}
+
 func TestAWSLLMStreamClosedState(t *testing.T) {
 	stream := &awsLLMStream{closed: true}
 
@@ -505,6 +529,18 @@ type fakeAWSLLMReader struct {
 	events chan awstypes.ConverseStreamOutput
 	err    error
 	closed bool
+}
+
+type fakeAWSLLMClient struct {
+	out *bedrockruntime.ConverseStreamOutput
+	err error
+}
+
+func (c fakeAWSLLMClient) ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	return c.out, nil
 }
 
 func newFakeAWSLLMReader() *fakeAWSLLMReader {

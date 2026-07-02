@@ -20,8 +20,12 @@ const (
 )
 
 type AWSLLM struct {
-	client *bedrockruntime.Client
+	client awsLLMClient
 	model  string
+}
+
+type awsLLMClient interface {
+	ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
 }
 
 func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error) {
@@ -91,7 +95,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	out, err := l.client.ConverseStream(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
 	}
 
 	return &awsLLMStream{
