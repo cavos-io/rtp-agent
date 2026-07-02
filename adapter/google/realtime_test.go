@@ -9,6 +9,7 @@ import (
 
 	audiomodel "github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"google.golang.org/genai"
 )
 
@@ -469,6 +470,36 @@ func TestGoogleRealtimeSessionSaySendsReferenceRealtimeText(t *testing.T) {
 	}
 	if liveSession.inputs[0].Text != "hello live model" {
 		t.Fatalf("text input = %q, want reference realtime text", liveSession.inputs[0].Text)
+	}
+}
+
+func TestGoogleRealtimeSessionPushVideoSendsReferenceJPEGInput(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.PushVideo(&images.VideoFrame{
+		Data:   []byte{255, 0, 0, 255},
+		Width:  1,
+		Height: 1,
+		Format: "rgba",
+	})
+	if err != nil {
+		t.Fatalf("PushVideo error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs = %d, want one video input", len(liveSession.inputs))
+	}
+	video := liveSession.inputs[0].Video
+	if video == nil || len(video.Data) == 0 || video.MIMEType != "image/jpeg" {
+		t.Fatalf("video input = %#v, want reference JPEG blob", video)
 	}
 }
 

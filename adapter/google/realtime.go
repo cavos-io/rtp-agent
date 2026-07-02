@@ -954,8 +954,20 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return nil
 }
 
-func (s *googleRealtimeSession) PushVideo(*images.VideoFrame) error {
-	return errors.New("google realtime session video input is not implemented")
+func (s *googleRealtimeSession) PushVideo(frame *images.VideoFrame) error {
+	if s == nil || s.liveSession == nil || frame == nil || s.isClosed() {
+		return nil
+	}
+	data, err := images.Encode(frame, images.NewEncodeOptions())
+	if err != nil {
+		return err
+	}
+	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+		Video: &genai.Blob{
+			Data:     data,
+			MIMEType: "image/jpeg",
+		},
+	})
 }
 func (s *googleRealtimeSession) CommitAudio() error { return nil }
 func (s *googleRealtimeSession) ClearAudio() error  { return nil }
