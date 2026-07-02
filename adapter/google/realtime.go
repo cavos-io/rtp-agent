@@ -430,19 +430,29 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 	}
 	m.mu.Unlock()
 	for session := range sessions {
-		if options.voiceSet {
-			_ = session.reconnectWithVoice(options.voice)
-		}
-		if options.temperatureSet {
-			_ = session.reconnectWithTemperature(options.temperature)
-		}
-		if options.toolBehaviorSet {
-			_ = session.reconnectWithToolBehavior(options.toolBehavior)
+		if options.voiceSet || options.temperatureSet || options.toolBehaviorSet {
+			_ = session.reconnectWithModelOptions(googleRealtimeReconnectOptions{
+				voice:           options.voice,
+				voiceSet:        options.voiceSet,
+				temperature:     options.temperature,
+				temperatureSet:  options.temperatureSet,
+				toolBehavior:    options.toolBehavior,
+				toolBehaviorSet: options.toolBehaviorSet,
+			})
 		}
 		if options.toolResponseSchedulingSet {
 			session.updateToolResponseScheduling(options.toolResponseScheduling)
 		}
 	}
+}
+
+type googleRealtimeReconnectOptions struct {
+	voice           string
+	voiceSet        bool
+	temperature     float64
+	temperatureSet  bool
+	toolBehavior    any
+	toolBehaviorSet bool
 }
 
 func googleRealtimeDefaultVertexAI() bool {
@@ -901,12 +911,22 @@ func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
 	return nil
 }
 
-func (s *googleRealtimeSession) reconnectWithTemperature(temperature float64) error {
+func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtimeReconnectOptions) error {
 	if s == nil || s.isClosed() {
 		return nil
 	}
 	s.mu.Lock()
-	if s.temperatureSet && s.temperature == temperature {
+	changed := false
+	if options.voiceSet && s.voice != options.voice {
+		changed = true
+	}
+	if options.temperatureSet && (!s.temperatureSet || s.temperature != options.temperature) {
+		changed = true
+	}
+	if options.toolBehaviorSet && googleRealtimeToolBehavior(s.toolBehavior) != googleRealtimeToolBehavior(options.toolBehavior) {
+		changed = true
+	}
+	if !changed {
 		s.mu.Unlock()
 		return nil
 	}
@@ -914,11 +934,20 @@ func (s *googleRealtimeSession) reconnectWithTemperature(temperature float64) er
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
+	tools := append([]llm.Tool(nil), s.tools...)
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session option update is not implemented")
 	}
-	googleRealtimeSetConfigTemperature(config, temperature)
+	if options.voiceSet {
+		googleRealtimeSetConfigVoice(config, options.voice)
+	}
+	if options.temperatureSet {
+		googleRealtimeSetConfigTemperature(config, options.temperature)
+	}
+	if options.toolBehaviorSet {
+		config.Tools = googleRealtimeToolsConfig(tools, options.toolBehavior)
+	}
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
@@ -935,8 +964,16 @@ func (s *googleRealtimeSession) reconnectWithTemperature(temperature float64) er
 	}
 	s.liveSession = nextSession
 	s.liveConfig = config
-	s.temperature = temperature
-	s.temperatureSet = true
+	if options.voiceSet {
+		s.voice = options.voice
+	}
+	if options.temperatureSet {
+		s.temperature = options.temperature
+		s.temperatureSet = true
+	}
+	if options.toolBehaviorSet {
+		s.toolBehavior = options.toolBehavior
+	}
 	s.mu.Unlock()
 	go s.receiveLoop(nextSession)
 	return nil
@@ -979,47 +1016,6 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	s.liveSession = nextSession
 	s.liveConfig = config
 	s.tools = tools
-	s.mu.Unlock()
-	go s.receiveLoop(nextSession)
-	return nil
-}
-
-func (s *googleRealtimeSession) reconnectWithToolBehavior(behavior any) error {
-	if s == nil || s.isClosed() {
-		return nil
-	}
-	s.mu.Lock()
-	if googleRealtimeToolBehavior(s.toolBehavior) == googleRealtimeToolBehavior(behavior) {
-		s.mu.Unlock()
-		return nil
-	}
-	connector := s.connector
-	modelName := s.modelName
-	config := googleRealtimeCloneLiveConfig(s.liveConfig)
-	oldSession := s.liveSession
-	tools := append([]llm.Tool(nil), s.tools...)
-	s.mu.Unlock()
-	if connector == nil || config == nil {
-		return errors.New("google realtime session tool behavior update is not implemented")
-	}
-	config.Tools = googleRealtimeToolsConfig(tools, behavior)
-	if oldSession != nil {
-		_ = oldSession.Close()
-	}
-	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
-	if err != nil {
-		return err
-	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		_ = nextSession.Close()
-		return nil
-	}
-	s.liveSession = nextSession
-	s.liveConfig = config
-	s.toolBehavior = behavior
 	s.mu.Unlock()
 	go s.receiveLoop(nextSession)
 	return nil

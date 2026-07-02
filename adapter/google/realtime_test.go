@@ -390,6 +390,65 @@ func TestGoogleRealtimeModelToolBehaviorUpdatePropagatesReferenceActiveSession(t
 	}
 }
 
+func TestGoogleRealtimeModelCombinedUpdatesUseSingleReferenceReconnect(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	thirdSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	fourthSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	fifthSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession, thirdSession, fourthSession, fifthSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+		WithGoogleRealtimeTemperature(0.2),
+		WithGoogleRealtimeToolBehavior(genai.BehaviorBlocking),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	if err := session.UpdateTools([]llm.Tool{googleRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	model.UpdateOptions(
+		WithGoogleRealtimeVoice("Kore"),
+		WithGoogleRealtimeTemperature(0.4),
+		WithGoogleRealtimeToolBehavior(genai.BehaviorNonBlocking),
+	)
+
+	if !secondSession.closed {
+		t.Fatal("tool session not closed after combined model update")
+	}
+	if thirdSession.closed || fourthSession.closed {
+		t.Fatalf("extra reconnect sessions closed: third=%v fourth=%v, want only one combined reconnect", thirdSession.closed, fourthSession.closed)
+	}
+	if len(connector.configs) != 3 {
+		t.Fatalf("connect calls = %d, want initial session, tool reconnect, and one combined update reconnect", len(connector.configs))
+	}
+	config := connector.configs[2]
+	if config.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Kore" {
+		t.Fatalf("voice = %q, want Kore", config.SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName)
+	}
+	if got := config.Temperature; got == nil || *got != float32(0.4) {
+		t.Fatalf("temperature = %#v, want 0.4", got)
+	}
+	if len(config.Tools) != 1 || len(config.Tools[0].FunctionDeclarations) != 1 {
+		t.Fatalf("tools = %#v, want one function declaration", config.Tools)
+	}
+	if got := config.Tools[0].FunctionDeclarations[0].Behavior; got != genai.BehaviorNonBlocking {
+		t.Fatalf("tool behavior = %q, want NON_BLOCKING", got)
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != thirdSession {
+		t.Fatalf("active live session = %#v, want third session after one combined reconnect", googleSession.liveSession)
+	}
+}
+
 func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
 	if err != nil {
