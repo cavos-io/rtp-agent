@@ -460,6 +460,9 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
 				s.closeContext()
+				if errors.Is(err, context.DeadlineExceeded) {
+					return nil, llm.NewAPITimeoutErrorWithRetryable("", !s.emittedChunk)
+				}
 				return nil, llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("AWS Bedrock LLM stream failed: %v", err), !s.emittedChunk)
 			}
 			s.closeContext()

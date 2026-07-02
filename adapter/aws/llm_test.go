@@ -376,6 +376,28 @@ func TestAWSLLMStreamErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamDeadlineReturnsAPITimeoutError(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.err = context.DeadlineExceeded
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil on stream timeout", chunk)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSLLMStreamErrorAfterChunkIsReferenceNonRetryable(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
