@@ -80,6 +80,7 @@ type RealtimeModel struct {
 	affectiveDialogSet        bool
 	contextWindowCompression  *genai.ContextWindowCompressionConfig
 	thinkingConfig            *genai.ThinkingConfig
+	mediaResolution           genai.MediaResolution
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	apiVersion                string
@@ -127,6 +128,7 @@ type googleRealtimeOptions struct {
 	affectiveDialogSet        bool
 	contextWindowCompression  *genai.ContextWindowCompressionConfig
 	thinkingConfig            *genai.ThinkingConfig
+	mediaResolution           genai.MediaResolution
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
@@ -303,6 +305,12 @@ func WithGoogleRealtimeThinkingConfig(config *genai.ThinkingConfig) GoogleRealti
 	}
 }
 
+func WithGoogleRealtimeMediaResolution(resolution genai.MediaResolution) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.mediaResolution = resolution
+	}
+}
+
 func WithGoogleRealtimeInputConfig(config *genai.RealtimeInputConfig) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.realtimeInputConfig = config
@@ -436,6 +444,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		affectiveDialogSet:        options.affectiveDialogSet,
 		contextWindowCompression:  options.contextWindowCompression,
 		thinkingConfig:            options.thinkingConfig,
+		mediaResolution:           options.mediaResolution,
 		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
 		apiVersion:                apiVersion,
@@ -693,6 +702,9 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	}
 	if m.thinkingConfig != nil {
 		config.ThinkingConfig = m.thinkingConfig
+	}
+	if m.mediaResolution != "" {
+		config.MediaResolution = m.mediaResolution
 	}
 	return config
 }

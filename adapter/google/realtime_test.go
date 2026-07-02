@@ -636,6 +636,27 @@ func TestGoogleRealtimeSessionThinkingConfigMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionMediaResolutionMatchesReference(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeMediaResolution(genai.MediaResolutionHigh),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.MediaResolution != genai.MediaResolutionHigh {
+		t.Fatalf("media resolution = %#v, want high", config)
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",
