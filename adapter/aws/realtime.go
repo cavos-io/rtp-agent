@@ -879,13 +879,20 @@ func (s *awsRealtimeSession) UpdateOptions(llm.RealtimeSessionOptions) error {
 	return nil
 }
 func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
-	if options.Instructions == "" || s.model == nil || s.model.modalities != defaultAWSRealtimeModalities {
+	if s.model == nil {
 		return nil
 	}
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
+		return nil
+	}
+	if s.model.modalities != defaultAWSRealtimeModalities {
+		s.emitEmptyGenerationCreated(true)
+		return nil
+	}
+	if options.Instructions == "" {
 		return nil
 	}
 	msg := &llm.ChatMessage{
@@ -895,6 +902,22 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 	}
 	return s.sendInteractiveUserText(context.Background(), msg)
 }
+
+func (s *awsRealtimeSession) emitEmptyGenerationCreated(userInitiated bool) {
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	close(messageCh)
+	close(functionCh)
+	s.emit(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:     messageCh,
+			FunctionCh:    functionCh,
+			UserInitiated: userInitiated,
+		},
+	})
+}
+
 func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("say") }
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return nil

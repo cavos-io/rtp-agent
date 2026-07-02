@@ -1400,6 +1400,48 @@ func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T)
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplyAudioOnlyEmitsReferenceEmptyGeneration(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic1(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	sentCount := len(stream.sent)
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "not supported"}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want empty generation")
+	}
+	if !created.Generation.UserInitiated {
+		t.Fatal("UserInitiated = false, want true for GenerateReply")
+	}
+	select {
+	case _, ok := <-created.Generation.MessageCh:
+		if ok {
+			t.Fatal("MessageCh yielded message, want closed empty stream")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for empty MessageCh close")
+	}
+	select {
+	case _, ok := <-created.Generation.FunctionCh:
+		if ok {
+			t.Fatal("FunctionCh yielded call, want closed empty stream")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for empty FunctionCh close")
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("GenerateReply sent %d provider events, want no-op provider send for audio-only model", len(stream.sent)-sentCount)
+	}
+}
+
 func TestAWSRealtimeSessionMapsReferenceUsageMetrics(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("amazon.nova-sonic-v1:0", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
