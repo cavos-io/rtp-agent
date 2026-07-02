@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -416,20 +417,42 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 	if options.toolBehaviorSet {
 		m.toolBehavior = options.toolBehavior
 		m.toolBehaviorSet = true
+		for session := range m.sessions {
+			sessions[session] = struct{}{}
+		}
 	}
 	if options.toolResponseSchedulingSet {
 		m.toolResponseScheduling = options.toolResponseScheduling
 		m.toolResponseSchedulingSet = true
+		for session := range m.sessions {
+			sessions[session] = struct{}{}
+		}
 	}
 	m.mu.Unlock()
 	for session := range sessions {
-		if options.voiceSet {
-			_ = session.reconnectWithVoice(options.voice)
+		if options.voiceSet || options.temperatureSet || options.toolBehaviorSet {
+			_ = session.reconnectWithModelOptions(googleRealtimeReconnectOptions{
+				voice:           options.voice,
+				voiceSet:        options.voiceSet,
+				temperature:     options.temperature,
+				temperatureSet:  options.temperatureSet,
+				toolBehavior:    options.toolBehavior,
+				toolBehaviorSet: options.toolBehaviorSet,
+			})
 		}
-		if options.temperatureSet {
-			_ = session.reconnectWithTemperature(options.temperature)
+		if options.toolResponseSchedulingSet {
+			session.updateToolResponseScheduling(options.toolResponseScheduling)
 		}
 	}
+}
+
+type googleRealtimeReconnectOptions struct {
+	voice           string
+	voiceSet        bool
+	temperature     float64
+	temperatureSet  bool
+	toolBehavior    any
+	toolBehaviorSet bool
 }
 
 func googleRealtimeDefaultVertexAI() bool {
@@ -524,6 +547,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		mutableInstructions:     m.Capabilities().MutableInstructions,
 		mutableChatContext:      m.Capabilities().MutableChatContext,
 		chatCtx:                 llm.EmptyChatContext(),
+		toolBehavior:            m.toolBehavior,
 		toolResponseScheduling:  m.toolResponseScheduling,
 		eventCh:                 make(chan llm.RealtimeEvent, 16),
 		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
@@ -707,6 +731,8 @@ type googleRealtimeSession struct {
 	mutableInstructions     bool
 	mutableChatContext      bool
 	chatCtx                 *llm.ChatContext
+	tools                   []llm.Tool
+	toolBehavior            any
 	toolResponseScheduling  any
 	eventCh                 chan llm.RealtimeEvent
 	audioStream             *audio.AudioByteStream
@@ -747,6 +773,7 @@ func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
 		return nil
 	}
 	s.instructions = instructions
+	googleRealtimeSetConfigInstructions(s.liveConfig, instructions)
 	if !s.mutableInstructions || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
@@ -806,14 +833,14 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 			}
 		}
 	}
-	responses := googleRealtimeToolResponses(appendCtx, s.vertexAI, s.toolResponseScheduling)
+	responses := googleRealtimeToolResponses(appendCtx, s.vertexAI, s.currentToolResponseScheduling())
 	if len(responses) == 0 {
 		return nil
 	}
 	return s.liveSession.SendToolResponse(genai.LiveToolResponseInput{FunctionResponses: responses})
 }
-func (s *googleRealtimeSession) UpdateTools([]llm.Tool) error {
-	return errors.New("google realtime session tool update is not implemented")
+func (s *googleRealtimeSession) UpdateTools(tools []llm.Tool) error {
+	return s.reconnectWithTools(tools)
 }
 func (s *googleRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions) error {
 	if googleRealtimeSessionOptionsNoop(options) {
@@ -885,12 +912,22 @@ func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
 	return nil
 }
 
-func (s *googleRealtimeSession) reconnectWithTemperature(temperature float64) error {
+func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtimeReconnectOptions) error {
 	if s == nil || s.isClosed() {
 		return nil
 	}
 	s.mu.Lock()
-	if s.temperatureSet && s.temperature == temperature {
+	changed := false
+	if options.voiceSet && s.voice != options.voice {
+		changed = true
+	}
+	if options.temperatureSet && (!s.temperatureSet || s.temperature != options.temperature) {
+		changed = true
+	}
+	if options.toolBehaviorSet && googleRealtimeToolBehavior(s.toolBehavior) != googleRealtimeToolBehavior(options.toolBehavior) {
+		changed = true
+	}
+	if !changed {
 		s.mu.Unlock()
 		return nil
 	}
@@ -898,11 +935,20 @@ func (s *googleRealtimeSession) reconnectWithTemperature(temperature float64) er
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
+	tools := append([]llm.Tool(nil), s.tools...)
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session option update is not implemented")
 	}
-	googleRealtimeSetConfigTemperature(config, temperature)
+	if options.voiceSet {
+		googleRealtimeSetConfigVoice(config, options.voice)
+	}
+	if options.temperatureSet {
+		googleRealtimeSetConfigTemperature(config, options.temperature)
+	}
+	if options.toolBehaviorSet {
+		config.Tools = googleRealtimeToolsConfig(tools, options.toolBehavior)
+	}
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
@@ -919,11 +965,106 @@ func (s *googleRealtimeSession) reconnectWithTemperature(temperature float64) er
 	}
 	s.liveSession = nextSession
 	s.liveConfig = config
-	s.temperature = temperature
-	s.temperatureSet = true
+	if options.voiceSet {
+		s.voice = options.voice
+	}
+	if options.temperatureSet {
+		s.temperature = options.temperature
+		s.temperatureSet = true
+	}
+	if options.toolBehaviorSet {
+		s.toolBehavior = options.toolBehavior
+	}
 	s.mu.Unlock()
 	go s.receiveLoop(nextSession)
 	return nil
+}
+
+func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
+	if s == nil || s.isClosed() {
+		return nil
+	}
+	tools = append([]llm.Tool(nil), tools...)
+	s.mu.Lock()
+	if googleRealtimeSameTools(s.tools, tools) {
+		s.mu.Unlock()
+		return nil
+	}
+	connector := s.connector
+	modelName := s.modelName
+	config := googleRealtimeCloneLiveConfig(s.liveConfig)
+	oldSession := s.liveSession
+	behavior := s.toolBehavior
+	s.mu.Unlock()
+	if connector == nil || config == nil {
+		return errors.New("google realtime session tool update is not implemented")
+	}
+	config.Tools = googleRealtimeToolsConfig(tools, behavior)
+	if oldSession != nil {
+		_ = oldSession.Close()
+	}
+	s.closeGeneration()
+	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = nextSession.Close()
+		return nil
+	}
+	s.liveSession = nextSession
+	s.liveConfig = config
+	s.tools = tools
+	s.mu.Unlock()
+	go s.receiveLoop(nextSession)
+	return nil
+}
+
+func googleRealtimeSameTools(left, right []llm.Tool) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !googleRealtimeSameTool(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func googleRealtimeSameTool(left, right llm.Tool) bool {
+	leftValue := reflect.ValueOf(left)
+	rightValue := reflect.ValueOf(right)
+	if !leftValue.IsValid() || !rightValue.IsValid() {
+		return !leftValue.IsValid() && !rightValue.IsValid()
+	}
+	if leftValue.Type() != rightValue.Type() {
+		return false
+	}
+	if leftValue.Kind() != reflect.Ptr && leftValue.Kind() != reflect.UnsafePointer {
+		return false
+	}
+	return leftValue.Pointer() == rightValue.Pointer()
+}
+
+func (s *googleRealtimeSession) updateToolResponseScheduling(scheduling any) {
+	if s == nil || s.isClosed() {
+		return
+	}
+	s.mu.Lock()
+	s.toolResponseScheduling = scheduling
+	s.mu.Unlock()
+}
+
+func (s *googleRealtimeSession) currentToolResponseScheduling() any {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.toolResponseScheduling
 }
 
 func googleRealtimeCloneLiveConfig(config *genai.LiveConnectConfig) *genai.LiveConnectConfig {
@@ -959,6 +1100,43 @@ func googleRealtimeSetConfigVoice(config *genai.LiveConnectConfig, voice string)
 func googleRealtimeSetConfigTemperature(config *genai.LiveConnectConfig, temperature float64) {
 	value := float32(temperature)
 	config.Temperature = &value
+}
+
+func googleRealtimeSetConfigInstructions(config *genai.LiveConnectConfig, instructions string) {
+	if config == nil {
+		return
+	}
+	if instructions == "" {
+		config.SystemInstruction = nil
+		return
+	}
+	config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: instructions}}}
+}
+
+func googleRealtimeToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
+	if len(tools) == 0 {
+		return nil
+	}
+	declarations := make([]*genai.FunctionDeclaration, 0, len(tools))
+	for _, tool := range tools {
+		declaration := buildGoogleFunctionDeclaration(tool)
+		if behavior := googleRealtimeToolBehavior(behavior); behavior != "" {
+			declaration.Behavior = behavior
+		}
+		declarations = append(declarations, declaration)
+	}
+	return []*genai.Tool{{FunctionDeclarations: declarations}}
+}
+
+func googleRealtimeToolBehavior(value any) genai.Behavior {
+	switch typed := value.(type) {
+	case genai.Behavior:
+		return typed
+	case string:
+		return genai.Behavior(typed)
+	default:
+		return ""
+	}
 }
 
 func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
@@ -1050,10 +1228,92 @@ func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSessio
 		}
 		message, err := liveSession.Receive()
 		if err != nil {
+			if !errors.Is(err, context.Canceled) && s.activeLiveSession() == liveSession && !s.isClosed() {
+				s.reconnectActiveSession(liveSession,
+					fmt.Sprintf("google realtime receive failed: %v", err),
+					"failed to reconnect Google realtime after receive error: %v",
+				)
+			}
 			return
 		}
 		s.handleServerMessage(message)
 	}
+}
+
+func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtimeLiveSession, unavailableMessage string, reconnectMessage string) {
+	if s == nil || s.isClosed() {
+		return
+	}
+	s.mu.Lock()
+	if s.liveSession != liveSession {
+		s.mu.Unlock()
+		return
+	}
+	connector := s.connector
+	modelName := s.modelName
+	config := googleRealtimeCloneLiveConfig(s.liveConfig)
+	s.mu.Unlock()
+	if connector == nil || config == nil {
+		s.emitEvent(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(unavailableMessage),
+		})
+		return
+	}
+	_ = liveSession.Close()
+	s.closeGeneration()
+	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	if err != nil {
+		s.emitEvent(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf(reconnectMessage, err)),
+		})
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = nextSession.Close()
+		return
+	}
+	s.liveSession = nextSession
+	s.liveConfig = config
+	var chatCtx *llm.ChatContext
+	if s.chatCtx != nil {
+		chatCtx = s.chatCtx.Copy(llm.ChatContextCopyOptions{})
+	}
+	s.mu.Unlock()
+	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.emitEvent(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to replay Google realtime chat context after reconnect: %v", err)),
+		})
+		_ = nextSession.Close()
+		return
+	}
+	s.emitEvent(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
+	go s.receiveLoop(nextSession)
+}
+
+func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {
+	if liveSession == nil || chatCtx == nil || len(chatCtx.Items) == 0 || !s.mutableChatContext {
+		return nil
+	}
+	turns, err := googleRealtimeChatContextTurns(chatCtx)
+	if err != nil {
+		return err
+	}
+	if len(turns) == 0 {
+		return nil
+	}
+	turnComplete := false
+	return liveSession.SendClientContent(genai.LiveClientContentInput{
+		Turns:        turns,
+		TurnComplete: &turnComplete,
+	})
 }
 
 func (s *googleRealtimeSession) activeLiveSession() googleRealtimeLiveSession {
@@ -1139,6 +1399,12 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	}
 	if message.UsageMetadata != nil {
 		s.emitUsageMetrics(message.UsageMetadata)
+	}
+	if message.GoAway != nil {
+		s.reconnectActiveSession(s.activeLiveSession(),
+			"google realtime received go_away",
+			"failed to reconnect Google realtime after go_away: %v",
+		)
 	}
 }
 
