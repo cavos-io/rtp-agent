@@ -417,9 +417,6 @@ func awsTimedStringsOffset(items []types.Item, startTimeOffset float64) []stt.Ti
 
 	words := make([]stt.TimedString, 0, len(items))
 	for _, item := range items {
-		if item.Type != types.ItemTypePronunciation {
-			continue
-		}
 		words = append(words, stt.TimedString{
 			Text:            aws.ToString(item.Content),
 			StartTime:       item.StartTime + startTimeOffset,
