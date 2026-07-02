@@ -1330,6 +1330,45 @@ func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated
 	}
 }
 
+func TestGoogleRealtimeSessionExpiresReferencePendingGenerateReply(t *testing.T) {
+	oldTimeout := googleRealtimeGenerateReplyTimeout
+	googleRealtimeGenerateReplyTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { googleRealtimeGenerateReplyTimeout = oldTimeout })
+
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	time.Sleep(2 * googleRealtimeGenerateReplyTimeout)
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "late agent output"}}},
+		},
+	}
+
+	started := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if started.Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("first event = %#v, want speech_started after pending reply timeout", started)
+	}
+	created := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if created.Type != llm.RealtimeEventTypeGenerationCreated || created.Generation == nil {
+		t.Fatalf("second event = %#v, want generation_created", created)
+	}
+	if created.Generation.UserInitiated {
+		t.Fatal("generation UserInitiated = true, want false after pending reply timeout")
+	}
+}
+
 func TestGoogleRealtimeSessionInterruptRequiresManualActivityDetection(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

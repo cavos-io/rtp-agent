@@ -31,6 +31,8 @@ const (
 	googleRealtimeOutputChannels     = 1
 )
 
+var googleRealtimeGenerateReplyTimeout = 5 * time.Second
+
 var (
 	knownGoogleRealtimeGeminiModels = map[string]struct{}{
 		"gemini-3.1-flash-live-preview":                 {},
@@ -743,6 +745,7 @@ type googleRealtimeSession struct {
 	responseSeq             int
 	functionSeq             int
 	pendingReply            bool
+	pendingReplyAt          time.Time
 	sessionResumptionHandle string
 	inputID                 string
 	inputSeq                int
@@ -1523,21 +1526,42 @@ func (s *googleRealtimeSession) ensureGeneration() {
 func (s *googleRealtimeSession) setPendingReply(pending bool) {
 	s.mu.Lock()
 	s.pendingReply = pending
+	if pending {
+		s.pendingReplyAt = time.Now()
+	} else {
+		s.pendingReplyAt = time.Time{}
+	}
 	s.mu.Unlock()
 }
 
 func (s *googleRealtimeSession) consumePendingReply() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pendingReplyExpiredLocked() {
+		return false
+	}
 	pending := s.pendingReply
 	s.pendingReply = false
+	s.pendingReplyAt = time.Time{}
 	return pending
 }
 
 func (s *googleRealtimeSession) hasPendingReply() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pendingReplyExpiredLocked() {
+		return false
+	}
 	return s.pendingReply
+}
+
+func (s *googleRealtimeSession) pendingReplyExpiredLocked() bool {
+	if !s.pendingReply || s.pendingReplyAt.IsZero() || time.Since(s.pendingReplyAt) < googleRealtimeGenerateReplyTimeout {
+		return false
+	}
+	s.pendingReply = false
+	s.pendingReplyAt = time.Time{}
+	return true
 }
 
 func (s *googleRealtimeSession) sendGenerationText(text string) {
