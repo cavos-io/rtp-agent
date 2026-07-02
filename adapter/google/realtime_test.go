@@ -204,6 +204,113 @@ func TestGoogleRealtimeUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionIgnoresReferenceToolChoiceUpdate(t *testing.T) {
+	session := &googleRealtimeSession{}
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{}); err != nil {
+		t.Fatalf("empty UpdateOptions error = %v, want nil", err)
+	}
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{
+		ToolChoice:    "auto",
+		ToolChoiceSet: true,
+	}); err != nil {
+		t.Fatalf("tool_choice UpdateOptions error = %v, want reference warning-only no-op", err)
+	}
+}
+
+func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true}); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v, want reference reconnect", err)
+	}
+
+	if !firstSession.closed {
+		t.Fatal("first live session not closed after voice update")
+	}
+	if connector.configs[1].SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Kore" {
+		t.Fatalf("reconnected voice = %#v, want Kore", connector.configs[1].SpeechConfig)
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
+	}
+}
+
+func TestGoogleRealtimeModelVoiceUpdatePropagatesReferenceActiveSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	model.UpdateOptions(WithGoogleRealtimeVoice("Kore"))
+
+	if !firstSession.closed {
+		t.Fatal("first live session not closed after model voice update")
+	}
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus voice reconnect", len(connector.configs))
+	}
+	if connector.configs[1].SpeechConfig.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Kore" {
+		t.Fatalf("reconnected voice = %#v, want Kore", connector.configs[1].SpeechConfig)
+	}
+}
+
+func TestGoogleRealtimeModelTemperatureUpdatePropagatesReferenceActiveSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeTemperature(0.2),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	model.UpdateOptions(WithGoogleRealtimeTemperature(0.4))
+
+	if !firstSession.closed {
+		t.Fatal("first live session not closed after model temperature update")
+	}
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus temperature reconnect", len(connector.configs))
+	}
+	if got := connector.configs[1].Temperature; got == nil || *got != float32(0.4) {
+		t.Fatalf("reconnected temperature = %#v, want 0.4", got)
+	}
+}
+
 func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
 	if err != nil {
@@ -976,6 +1083,21 @@ func TestGoogleRealtimeSessionCloseSuppressesLiveSessionCloseError(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionSuppressesLateEventAfterEventChannelClose(t *testing.T) {
+	session := &googleRealtimeSession{
+		ctx:     context.Background(),
+		eventCh: make(chan llm.RealtimeEvent),
+	}
+	close(session.eventCh)
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("emitEvent panicked after event channel close: %v", recovered)
+		}
+	}()
+	session.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeError})
+}
+
 func TestGoogleRealtimeSessionCloseClosesActiveGeneration(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -1005,6 +1127,56 @@ func TestGoogleRealtimeSessionCloseClosesActiveGeneration(t *testing.T) {
 	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
 	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
 	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+}
+
+func TestGoogleRealtimeSessionSuppressesLateGenerationDeltasAfterClose(t *testing.T) {
+	textCh := make(chan string)
+	audioCh := make(chan *audiomodel.AudioFrame)
+	close(textCh)
+	close(audioCh)
+	session := &googleRealtimeSession{
+		generation: &googleRealtimeGeneration{
+			textCh:  textCh,
+			audioCh: audioCh,
+		},
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("late generation delta panicked after generation close: %v", recovered)
+		}
+	}()
+	session.sendGenerationText("late")
+	session.sendGenerationAudio([]byte{1, 2})
+}
+
+func TestGoogleRealtimeSessionSuppressesDuplicateGenerationCloseRace(t *testing.T) {
+	textCh := make(chan string)
+	audioCh := make(chan *audiomodel.AudioFrame)
+	modalitiesCh := make(chan []string)
+	messageCh := make(chan llm.MessageGeneration)
+	functionCh := make(chan *llm.FunctionCall)
+	close(textCh)
+	close(audioCh)
+	close(modalitiesCh)
+	close(messageCh)
+	close(functionCh)
+	session := &googleRealtimeSession{
+		generation: &googleRealtimeGeneration{
+			textCh:       textCh,
+			audioCh:      audioCh,
+			modalitiesCh: modalitiesCh,
+			messageCh:    messageCh,
+			functionCh:   functionCh,
+		},
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("duplicate generation close panicked: %v", recovered)
+		}
+	}()
+	session.closeGeneration()
 }
 
 func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
@@ -1247,6 +1419,29 @@ func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	if call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
 		t.Fatalf("function call = %#v, want reference Gemini tool call", call)
 	}
+}
+
+func TestGoogleRealtimeSessionSuppressesLateToolCallsAfterGenerationClose(t *testing.T) {
+	functionCh := make(chan *llm.FunctionCall)
+	close(functionCh)
+	session := &googleRealtimeSession{
+		generation: &googleRealtimeGeneration{
+			functionCh: functionCh,
+		},
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("late tool call panicked after generation close: %v", recovered)
+		}
+	}()
+	session.handleToolCalls(&genai.LiveServerToolCall{
+		FunctionCalls: []*genai.FunctionCall{{
+			ID:   "call_late",
+			Name: "late",
+			Args: map[string]any{"query": "stale"},
+		}},
+	})
 }
 
 func TestGoogleRealtimeSessionToolCallsEmitReferenceSpeechStopped(t *testing.T) {
@@ -1697,14 +1892,24 @@ func waitGoogleRealtimeGenerationCompleted(session *googleRealtimeSession) bool 
 }
 
 type fakeGoogleRealtimeConnector struct {
-	model   string
-	config  *genai.LiveConnectConfig
-	session *fakeGoogleRealtimeLiveSession
+	model    string
+	models   []string
+	config   *genai.LiveConnectConfig
+	configs  []*genai.LiveConnectConfig
+	session  *fakeGoogleRealtimeLiveSession
+	sessions []googleRealtimeLiveSession
 }
 
 func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
 	c.model = model
+	c.models = append(c.models, model)
 	c.config = config
+	c.configs = append(c.configs, config)
+	if len(c.sessions) > 0 {
+		session := c.sessions[0]
+		c.sessions = c.sessions[1:]
+		return session, nil
+	}
 	return c.session, nil
 }
 
