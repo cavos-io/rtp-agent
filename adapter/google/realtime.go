@@ -555,23 +555,24 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 }
 
 type googleRealtimeSession struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	liveSession googleRealtimeLiveSession
-	modelName   string
-	provider    string
-	eventCh     chan llm.RealtimeEvent
-	audioStream *audio.AudioByteStream
-	generation  *googleRealtimeGeneration
-	responseSeq int
-	functionSeq int
-	inputID     string
-	inputSeq    int
-	inputText   string
-	closeOnce   sync.Once
-	closeErr    error
-	closed      bool
-	mu          sync.Mutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	liveSession  googleRealtimeLiveSession
+	modelName    string
+	provider     string
+	eventCh      chan llm.RealtimeEvent
+	audioStream  *audio.AudioByteStream
+	generation   *googleRealtimeGeneration
+	responseSeq  int
+	functionSeq  int
+	pendingReply bool
+	inputID      string
+	inputSeq     int
+	inputText    string
+	closeOnce    sync.Once
+	closeErr     error
+	closed       bool
+	mu           sync.Mutex
 }
 
 type googleRealtimeGeneration struct {
@@ -615,10 +616,15 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		Parts: []*genai.Part{{Text: "."}},
 	})
 	turnComplete := true
-	return s.liveSession.SendClientContent(genai.LiveClientContentInput{
+	s.setPendingReply(true)
+	if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
 		Turns:        turns,
 		TurnComplete: &turnComplete,
-	})
+	}); err != nil {
+		s.setPendingReply(false)
+		return err
+	}
+	return nil
 }
 func (s *googleRealtimeSession) Say(text string) error {
 	if s == nil || s.liveSession == nil || text == "" || s.isClosed() {
@@ -654,71 +660,84 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	if message == nil {
 		return
 	}
+	if message.ServerContent != nil {
+		if s.isNewGenerationMessage(message) {
+			s.ensureGeneration()
+		}
+		if message.ServerContent.ModelTurn != nil {
+			for _, part := range message.ServerContent.ModelTurn.Parts {
+				if part == nil || part.Thought {
+					continue
+				}
+				if part.Text != "" {
+					s.sendGenerationText(part.Text)
+					s.emitEvent(llm.RealtimeEvent{
+						Type: llm.RealtimeEventTypeText,
+						Text: part.Text,
+					})
+				}
+				if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+					s.sendGenerationAudio(part.InlineData.Data)
+					s.emitEvent(llm.RealtimeEvent{
+						Type: llm.RealtimeEventTypeAudio,
+						Data: part.InlineData.Data,
+					})
+				}
+			}
+		}
+		if message.ServerContent.InputTranscription != nil && message.ServerContent.InputTranscription.Text != "" {
+			text := message.ServerContent.InputTranscription.Text
+			if s.inputText == "" {
+				text = strings.TrimLeft(text, " \t\r\n")
+			}
+			s.inputText += text
+			s.emitInputTranscription(false)
+		}
+		if message.ServerContent.OutputTranscription != nil && message.ServerContent.OutputTranscription.Text != "" {
+			s.sendGenerationText(message.ServerContent.OutputTranscription.Text)
+			s.emitEvent(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeText,
+				Text: message.ServerContent.OutputTranscription.Text,
+			})
+		}
+		if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
+			s.markGenerationCompleted()
+		}
+		if message.ServerContent.Interrupted && !s.hasPendingReply() {
+			s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+		}
+		if message.ServerContent.TurnComplete {
+			s.emitEvent(llm.RealtimeEvent{
+				Type:          llm.RealtimeEventTypeSpeechStopped,
+				SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
+			})
+			if s.inputText != "" {
+				s.emitInputTranscription(true)
+				s.inputID = ""
+				s.inputText = ""
+			}
+			s.closeGeneration()
+		}
+	}
 	if message.ToolCall != nil {
 		s.ensureGeneration()
 		s.handleToolCalls(message.ToolCall)
-		s.closeGeneration()
-	}
-	if message.UsageMetadata != nil {
-		s.emitUsageMetrics(message.UsageMetadata)
-	}
-	if message.ServerContent == nil {
-		return
-	}
-	if s.isNewGenerationMessage(message) {
-		s.ensureGeneration()
-	}
-	if message.ServerContent.ModelTurn != nil {
-		for _, part := range message.ServerContent.ModelTurn.Parts {
-			if part == nil || part.Thought {
-				continue
-			}
-			if part.Text != "" {
-				s.sendGenerationText(part.Text)
-				s.emitEvent(llm.RealtimeEvent{
-					Type: llm.RealtimeEventTypeText,
-					Text: part.Text,
-				})
-			}
-			if part.InlineData != nil && len(part.InlineData.Data) > 0 {
-				s.sendGenerationAudio(part.InlineData.Data)
-				s.emitEvent(llm.RealtimeEvent{
-					Type: llm.RealtimeEventTypeAudio,
-					Data: part.InlineData.Data,
-				})
-			}
-		}
-	}
-	if message.ServerContent.OutputTranscription != nil && message.ServerContent.OutputTranscription.Text != "" {
-		s.sendGenerationText(message.ServerContent.OutputTranscription.Text)
-		s.emitEvent(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeText,
-			Text: message.ServerContent.OutputTranscription.Text,
-		})
-	}
-	if message.ServerContent.InputTranscription != nil && message.ServerContent.InputTranscription.Text != "" {
-		text := message.ServerContent.InputTranscription.Text
-		if s.inputText == "" {
-			text = strings.TrimLeft(text, " \t\r\n")
-		}
-		s.inputText += text
-		s.emitInputTranscription(false)
-	}
-	if message.ServerContent.TurnComplete && s.inputText != "" {
-		s.emitInputTranscription(true)
-		s.inputID = ""
-		s.inputText = ""
-	}
-	if message.ServerContent.TurnComplete {
 		s.emitEvent(llm.RealtimeEvent{
 			Type:          llm.RealtimeEventTypeSpeechStopped,
 			SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
 		})
 		s.closeGeneration()
 	}
-	if message.ServerContent.Interrupted {
-		s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+	if message.UsageMetadata != nil {
+		s.emitUsageMetrics(message.UsageMetadata)
 	}
+}
+
+func (s *googleRealtimeSession) markGenerationCompleted() {
+	if s.generation == nil || s.generation.closed || !s.generation.completedAt.IsZero() {
+		return
+	}
+	s.generation.completedAt = time.Now()
 }
 
 func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCall) {
@@ -789,16 +808,39 @@ func (s *googleRealtimeSession) ensureGeneration() {
 		ModalitiesCh: generation.modalitiesCh,
 	}
 	s.generation = generation
-	s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+	userInitiated := s.consumePendingReply()
+	if !userInitiated {
+		s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+	}
 	s.emitEvent(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
 			MessageCh:     generation.messageCh,
 			FunctionCh:    generation.functionCh,
 			ResponseID:    responseID,
-			UserInitiated: false,
+			UserInitiated: userInitiated,
 		},
 	})
+}
+
+func (s *googleRealtimeSession) setPendingReply(pending bool) {
+	s.mu.Lock()
+	s.pendingReply = pending
+	s.mu.Unlock()
+}
+
+func (s *googleRealtimeSession) consumePendingReply() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pendingReply
+	s.pendingReply = false
+	return pending
+}
+
+func (s *googleRealtimeSession) hasPendingReply() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pendingReply
 }
 
 func (s *googleRealtimeSession) sendGenerationText(text string) {
@@ -837,7 +879,7 @@ func (s *googleRealtimeSession) closeGeneration() {
 	if s.generation == nil || s.generation.closed {
 		return
 	}
-	s.generation.completedAt = time.Now()
+	s.markGenerationCompleted()
 	close(s.generation.textCh)
 	close(s.generation.audioCh)
 	close(s.generation.modalitiesCh)
