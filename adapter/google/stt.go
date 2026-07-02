@@ -349,6 +349,9 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
+	if len(opts) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	previous := googleSTTCaptureConfig(s)
 	oldLanguage := s.language

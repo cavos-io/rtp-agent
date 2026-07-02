@@ -1705,6 +1705,36 @@ func TestGoogleSTTUpdateOptionsReportsReferenceReconnectError(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsNoopPreservesReferenceActiveStream(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	if err := provider.UpdateOptions(); err != nil {
+		t.Fatalf("UpdateOptions returned error: %v", err)
+	}
+	select {
+	case calls := <-client.streamCallCh:
+		t.Fatalf("stream calls = %d, want no reconnect for no-op update", calls)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if firstStream.closed {
+		t.Fatal("first stream closed = true, want active stream preserved for no-op update")
+	}
+	close(firstRelease)
+}
+
 func TestGoogleSTTUpdateOptionsReconnectsActiveStreamButOmitsV1SpeechTimeouts(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
