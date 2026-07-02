@@ -722,7 +722,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
 		s.markGenerationCompleted()
 	}
-	if message.ServerContent.Interrupted {
+	if message.ServerContent.Interrupted && !s.hasPendingReply() {
 		s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 	}
 	if message.ServerContent.TurnComplete {
@@ -836,6 +836,12 @@ func (s *googleRealtimeSession) consumePendingReply() bool {
 	pending := s.pendingReply
 	s.pendingReply = false
 	return pending
+}
+
+func (s *googleRealtimeSession) hasPendingReply() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pendingReply
 }
 
 func (s *googleRealtimeSession) sendGenerationText(text string) {

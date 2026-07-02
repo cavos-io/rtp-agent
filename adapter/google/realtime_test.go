@@ -907,6 +907,28 @@ func TestGoogleRealtimeSessionInterruptedEmitsReferenceSpeechStarted(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionPendingReplySuppressesReferenceInterruptedSpeechStarted(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{Interrupted: true},
+	}
+
+	assertNoGoogleRealtimeEvent(t, session.EventCh())
+}
+
 func TestGoogleRealtimeSessionInterruptedTurnCompleteMatchesReferenceOrder(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -981,6 +1003,15 @@ func nextGoogleRealtimeTestEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent)
 		t.Fatal("timed out waiting for realtime event")
 	}
 	return llm.RealtimeEvent{}
+}
+
+func assertNoGoogleRealtimeEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent) {
+	t.Helper()
+	select {
+	case event := <-eventCh:
+		t.Fatalf("unexpected realtime event = %#v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 func expectGoogleRealtimeGeneration(t *testing.T, eventCh <-chan llm.RealtimeEvent) llm.GenerationCreatedEvent {
