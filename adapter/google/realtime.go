@@ -719,6 +719,9 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		s.inputID = ""
 		s.inputText = ""
 	}
+	if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
+		s.markGenerationCompleted()
+	}
 	if message.ServerContent.Interrupted {
 		s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 	}
@@ -729,6 +732,13 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		})
 		s.closeGeneration()
 	}
+}
+
+func (s *googleRealtimeSession) markGenerationCompleted() {
+	if s.generation == nil || s.generation.closed || !s.generation.completedAt.IsZero() {
+		return
+	}
+	s.generation.completedAt = time.Now()
 }
 
 func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCall) {
@@ -864,7 +874,7 @@ func (s *googleRealtimeSession) closeGeneration() {
 	if s.generation == nil || s.generation.closed {
 		return
 	}
-	s.generation.completedAt = time.Now()
+	s.markGenerationCompleted()
 	close(s.generation.textCh)
 	close(s.generation.audioCh)
 	close(s.generation.modalitiesCh)

@@ -717,6 +717,35 @@ func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionGenerationCompleteMarksReferenceMetricsEnd(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	realtimeSession := session.(*googleRealtimeSession)
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{GenerationComplete: true},
+	}
+
+	expectGoogleRealtimeGeneration(t, session.EventCh())
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta
+	if !waitGoogleRealtimeGenerationCompleted(realtimeSession) {
+		t.Fatal("generation_complete did not mark generation completedAt")
+	}
+}
+
 func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -1008,6 +1037,17 @@ func nextGoogleRealtimeTestFunction(t *testing.T, functionCh <-chan *llm.Functio
 		t.Fatal("timed out waiting for realtime function call")
 	}
 	return nil
+}
+
+func waitGoogleRealtimeGenerationCompleted(session *googleRealtimeSession) bool {
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if session.generation != nil && !session.generation.completedAt.IsZero() {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
 }
 
 type fakeGoogleRealtimeConnector struct {
