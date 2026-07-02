@@ -368,13 +368,39 @@ func TestBuildAWSMessagesCollectsSystemText(t *testing.T) {
 
 	messages, systemText := buildAWSMessages(ctx)
 
-	if systemText != "base\ndev\n" {
-		t.Fatalf("systemText = %q, want base/dev", systemText)
+	if systemText != "base\n" {
+		t.Fatalf("systemText = %q, want base", systemText)
 	}
 	if len(messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(messages))
 	}
-	assertTextBlock(t, messages[0].Content, 0, "hello")
+	assertTextBlock(t, messages[0].Content, 0, "<instructions>\ndev\n</instructions>")
+	assertTextBlock(t, messages[0].Content, 1, "hello")
+}
+
+func TestBuildAWSMessagesConvertsReferenceMidConversationInstructions(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "base"}}},
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+		&llm.ChatMessage{ID: "system-2", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "answer tersely"}}},
+		&llm.ChatMessage{ID: "user-2", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "weather?"}}},
+	}
+
+	messages, systemText := buildAWSMessages(ctx)
+
+	if systemText != "base\n" {
+		t.Fatalf("systemText = %q, want only first system message", systemText)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3: %#v", len(messages), messages)
+	}
+	if messages[2].Role != awstypes.ConversationRoleUser {
+		t.Fatalf("mid-instruction role = %q, want user", messages[2].Role)
+	}
+	assertTextBlock(t, messages[2].Content, 0, "<instructions>\nanswer tersely\n</instructions>")
+	assertTextBlock(t, messages[2].Content, 1, "weather?")
 }
 
 func assertTextBlock(t *testing.T, blocks []awstypes.ContentBlock, index int, want string) {

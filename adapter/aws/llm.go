@@ -186,7 +186,7 @@ func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
 		currentContent = append(currentContent, blocks...)
 	}
 
-	for _, group := range groupAWSChatItems(chatCtx.Items) {
+	for _, group := range groupAWSChatItems(convertAWSMidConversationInstructions(chatCtx.Items)) {
 		for _, item := range group.flatten() {
 			switch msg := item.(type) {
 			case *llm.ChatMessage:
@@ -223,6 +223,31 @@ func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
 	}
 
 	return messages, systemText
+}
+
+func convertAWSMidConversationInstructions(items []llm.ChatItem) []llm.ChatItem {
+	converted := make([]llm.ChatItem, 0, len(items))
+	firstSystemSeen := false
+	for _, item := range items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || (msg.Role != llm.ChatRoleSystem && msg.Role != llm.ChatRoleDeveloper) {
+			converted = append(converted, item)
+			continue
+		}
+		text := msg.TextContent()
+		if firstSystemSeen && text != "" {
+			converted = append(converted, &llm.ChatMessage{
+				ID:        msg.ID,
+				Role:      llm.ChatRoleUser,
+				Content:   []llm.ChatContent{{Text: fmt.Sprintf("<instructions>\n%s\n</instructions>", text)}},
+				CreatedAt: msg.CreatedAt,
+			})
+			continue
+		}
+		firstSystemSeen = true
+		converted = append(converted, item)
+	}
+	return converted
 }
 
 func awsMessageContentBlocks(msg *llm.ChatMessage) []types.ContentBlock {
