@@ -718,7 +718,7 @@ func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated
 	}
 }
 
-func TestGoogleRealtimeSessionInterruptSendsReferenceActivityStart(t *testing.T) {
+func TestGoogleRealtimeSessionInterruptRequiresManualActivityDetection(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
 	if err != nil {
@@ -733,11 +733,72 @@ func TestGoogleRealtimeSessionInterruptSendsReferenceActivityStart(t *testing.T)
 		t.Fatalf("Interrupt error = %v", err)
 	}
 
+	if len(liveSession.inputs) != 0 {
+		t.Fatalf("live inputs = %d, want no activity start when server activity detection is enabled", len(liveSession.inputs))
+	}
+}
+
+func TestGoogleRealtimeSessionInterruptSendsManualActivityStart(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("second Interrupt error = %v", err)
+	}
+
 	if len(liveSession.inputs) != 1 {
-		t.Fatalf("live inputs = %d, want activity start input", len(liveSession.inputs))
+		t.Fatalf("live inputs = %d, want one manual activity start input", len(liveSession.inputs))
 	}
 	if liveSession.inputs[0].ActivityStart == nil {
 		t.Fatalf("activity start = nil, input %#v", liveSession.inputs[0])
+	}
+}
+
+func TestGoogleRealtimeSessionGenerateReplyEndsManualActivity(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatalf("Interrupt error = %v", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 2 {
+		t.Fatalf("live inputs = %d, want activity start and activity end", len(liveSession.inputs))
+	}
+	if liveSession.inputs[0].ActivityStart == nil {
+		t.Fatalf("first input = %#v, want activity start", liveSession.inputs[0])
+	}
+	if liveSession.inputs[1].ActivityEnd == nil {
+		t.Fatalf("second input = %#v, want activity end before reply content", liveSession.inputs[1])
+	}
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client contents = %d, want generate reply content after activity end", len(liveSession.clientContents))
 	}
 }
 

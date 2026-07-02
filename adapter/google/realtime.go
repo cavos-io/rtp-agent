@@ -490,6 +490,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:                 make(chan llm.RealtimeEvent, 16),
 		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
 		sessionResumptionHandle: m.sessionResumptionHandle,
+		manualActivityDetection: !m.turnDetection,
 	}
 	go session.receiveLoop()
 	return session, nil
@@ -648,6 +649,8 @@ type googleRealtimeSession struct {
 	inputID                 string
 	inputSeq                int
 	inputText               string
+	manualActivityDetection bool
+	inUserActivity          bool
 	closeOnce               sync.Once
 	closeErr                error
 	closed                  bool
@@ -750,6 +753,9 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 	if s == nil || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
+	if err := s.endManualActivity(); err != nil {
+		return err
+	}
 	turns := make([]*genai.Content, 0, 2)
 	if options.Instructions != "" {
 		turns = append(turns, &genai.Content{
@@ -783,8 +789,28 @@ func (s *googleRealtimeSession) Interrupt() error {
 	if s == nil || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
+	s.mu.Lock()
+	if !s.manualActivityDetection || s.inUserActivity {
+		s.mu.Unlock()
+		return nil
+	}
+	s.inUserActivity = true
+	s.mu.Unlock()
 	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
 		ActivityStart: &genai.ActivityStart{},
+	})
+}
+
+func (s *googleRealtimeSession) endManualActivity() error {
+	s.mu.Lock()
+	if !s.manualActivityDetection || !s.inUserActivity {
+		s.mu.Unlock()
+		return nil
+	}
+	s.inUserActivity = false
+	s.mu.Unlock()
+	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+		ActivityEnd: &genai.ActivityEnd{},
 	})
 }
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
