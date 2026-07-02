@@ -187,6 +187,9 @@ func TestAWSRealtimeSessionMapsReferenceResponseEvents(t *testing.T) {
 	}
 
 	audioBytes := []byte{1, 2, 3, 4}
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","role":"ASSISTANT","contentId":"audio-1"}}}`)
 	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-1","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
 	audio := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
 	if string(audio.Data) != string(audioBytes) {
@@ -425,7 +428,7 @@ func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 
 	audioBytes := []byte{5, 6, 7, 8}
 	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"untracked-audio","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
-	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	assertNoAWSRealtimeEvent(t, session.EventCh())
 	select {
 	case frame := <-msg.AudioCh:
 		t.Fatalf("generation audio frame = %#v, want untracked audio filtered from stream", frame)
@@ -610,6 +613,15 @@ func assertAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for %s", want)
 		return llm.RealtimeEvent{}
+	}
+}
+
+func assertNoAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent) {
+	t.Helper()
+	select {
+	case event := <-ch:
+		t.Fatalf("unexpected event: %#v", event)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

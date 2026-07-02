@@ -312,11 +312,12 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			})
 			return
 		}
-		s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data)
-		s.emit(llm.RealtimeEvent{
-			Type: llm.RealtimeEventTypeAudio,
-			Data: data,
-		})
+		if s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data) {
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeAudio,
+				Data: data,
+			})
+		}
 	}
 	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
 		if textContent == awsRealtimeBargeInContent {
@@ -444,7 +445,7 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	s.mu.Unlock()
 }
 
-func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) {
+func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) bool {
 	s.mu.Lock()
 	generation := s.generation
 	streamType := ""
@@ -453,7 +454,7 @@ func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) 
 	}
 	s.mu.Unlock()
 	if generation == nil || streamType != "ASSISTANT_AUDIO" {
-		return
+		return false
 	}
 	frame := &model.AudioFrame{
 		Data:              data,
@@ -465,6 +466,7 @@ func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) 
 	case generation.audioCh <- frame:
 	default:
 	}
+	return true
 }
 
 func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
