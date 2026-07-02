@@ -324,6 +324,10 @@ func (s *awsSTTStream) readLoop() {
 		if event == nil {
 			if err := s.stream.Err(); err != nil {
 				if err != io.EOF && !isHarmlessAWSSTTStreamCloseError(err) {
+					if errors.Is(err, context.DeadlineExceeded) {
+						s.errCh <- llm.NewAPITimeoutError(err.Error())
+						return
+					}
 					s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream failed: %v", err))
 				}
 			}

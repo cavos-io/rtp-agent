@@ -907,6 +907,33 @@ func TestAWSSTTProviderStreamErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTProviderStreamDeadlineReturnsAPITimeoutError(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	reader.err = context.DeadlineExceeded
+	close(reader.events)
+	writer := &fakeAWSSTTWriter{}
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+	go providerStream.readLoop()
+
+	event, err := providerStream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSSTTEmptyFrameCloseDiagnosticReturnsEOF(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	reader.err = errors.New("complete signal was sent without the preceding empty frame")
