@@ -163,6 +163,16 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 		t.Fatalf("UpdateTools active error = %v", err)
 	}
 
+	closeEvents := first.sent[len(first.sent)-3:]
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[0]), "event", "contentEnd", "contentName"); got == "" {
+		t.Fatalf("recycle contentEnd contentName empty")
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[1]), "event", "promptEnd", "promptName"); got == "" {
+		t.Fatalf("recycle promptEnd promptName empty")
+	}
+	if _, ok := nestedMap(t, mustAWSRealtimeJSONEvent(t, closeEvents[2]), "event")["sessionEnd"].(map[string]any); !ok {
+		t.Fatalf("recycle sessionEnd event = %s", closeEvents[2])
+	}
 	if !first.closed {
 		t.Fatal("first stream closed = false, want true after active tool update recycle")
 	}
