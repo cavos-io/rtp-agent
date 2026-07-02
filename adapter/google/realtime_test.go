@@ -628,6 +628,35 @@ func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ToolCall: &genai.LiveServerToolCall{
+			FunctionCalls: []*genai.FunctionCall{{
+				ID:   "call_1",
+				Name: "lookup",
+				Args: map[string]any{"query": "hello"},
+			}},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	call := nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
+	if call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
+		t.Fatalf("function call = %#v, want reference Gemini tool call", call)
+	}
+}
+
 func TestGoogleRealtimeSessionReceivesReferenceOutputTranscription(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -779,6 +808,17 @@ func nextGoogleRealtimeTestAudio(t *testing.T, audioCh <-chan *audiomodel.AudioF
 		return frame
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for realtime audio")
+	}
+	return nil
+}
+
+func nextGoogleRealtimeTestFunction(t *testing.T, functionCh <-chan *llm.FunctionCall) *llm.FunctionCall {
+	t.Helper()
+	select {
+	case call := <-functionCh:
+		return call
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for realtime function call")
 	}
 	return nil
 }

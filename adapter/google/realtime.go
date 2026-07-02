@@ -2,6 +2,7 @@ package google
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -563,6 +564,7 @@ type googleRealtimeSession struct {
 	audioStream *audio.AudioByteStream
 	generation  *googleRealtimeGeneration
 	responseSeq int
+	functionSeq int
 	inputID     string
 	inputSeq    int
 	inputText   string
@@ -652,6 +654,11 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	if message == nil {
 		return
 	}
+	if message.ToolCall != nil {
+		s.ensureGeneration()
+		s.handleToolCalls(message.ToolCall)
+		s.closeGeneration()
+	}
 	if message.UsageMetadata != nil {
 		s.emitUsageMetrics(message.UsageMetadata)
 	}
@@ -710,7 +717,38 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	}
 }
 
+func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCall) {
+	if s.generation == nil || s.generation.closed || toolCall == nil {
+		return
+	}
+	for _, functionCall := range toolCall.FunctionCalls {
+		if functionCall == nil {
+			continue
+		}
+		arguments, err := json.Marshal(functionCall.Args)
+		if err != nil {
+			arguments = []byte("{}")
+		}
+		callID := functionCall.ID
+		if callID == "" {
+			s.functionSeq++
+			callID = fmt.Sprintf("fnc-call-%d", s.functionSeq)
+		}
+		select {
+		case s.generation.functionCh <- &llm.FunctionCall{
+			CallID:    callID,
+			Name:      functionCall.Name,
+			Arguments: string(arguments),
+		}:
+		default:
+		}
+	}
+}
+
 func (s *googleRealtimeSession) isNewGenerationMessage(message *genai.LiveServerMessage) bool {
+	if message.ToolCall != nil {
+		return true
+	}
 	if message.ServerContent == nil {
 		return false
 	}
@@ -733,7 +771,7 @@ func (s *googleRealtimeSession) ensureGeneration() {
 	generation := &googleRealtimeGeneration{
 		responseID:   responseID,
 		messageCh:    make(chan llm.MessageGeneration, 1),
-		functionCh:   make(chan *llm.FunctionCall),
+		functionCh:   make(chan *llm.FunctionCall, 16),
 		textCh:       make(chan string, 16),
 		audioCh:      make(chan *model.AudioFrame, 16),
 		modalitiesCh: make(chan []string, 1),
