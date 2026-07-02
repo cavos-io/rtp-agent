@@ -1834,6 +1834,19 @@ func TestGoogleTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSChunkedStreamCloseSuppressesDecoderCloseError(t *testing.T) {
+	stream := &googleTTSChunkedStream{
+		decoder: &fakeGoogleTTSAudioStreamDecoder{closeErr: errors.New("decoder cleanup failed")},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v, want nil for caller-owned cleanup", err)
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after Close = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestGoogleTTSSynthesizeCloseCancelsInFlightReferenceRequest(t *testing.T) {
 	entered := make(chan struct{})
 	client := &fakeGoogleTTSClient{
@@ -2485,6 +2498,7 @@ func (s *fakeGoogleTTSStream) RecvMsg(m any) error { return nil }
 
 type fakeGoogleTTSAudioStreamDecoder struct {
 	closeCalls     int
+	closeErr       error
 	secondCloseErr error
 }
 
@@ -2498,5 +2512,5 @@ func (d *fakeGoogleTTSAudioStreamDecoder) Close() error {
 	if d.closeCalls > 1 {
 		return d.secondCloseErr
 	}
-	return nil
+	return d.closeErr
 }

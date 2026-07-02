@@ -513,7 +513,6 @@ type googleTTSChunkedStream struct {
 	requested      bool
 	closed         atomic.Bool
 	closeOnce      sync.Once
-	closeErr       error
 	data           []byte
 	offset         int
 	encoding       texttospeechpb.AudioEncoding
@@ -696,10 +695,10 @@ func (s *googleTTSChunkedStream) Close() error {
 			s.cancel()
 		}
 		if s.decoder != nil {
-			s.closeErr = s.decoder.Close()
+			_ = s.decoder.Close()
 		}
 	})
-	return s.closeErr
+	return nil
 }
 
 type googleTTSSynthesizeStream struct {
