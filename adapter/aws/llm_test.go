@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -112,6 +113,32 @@ func TestAWSLLMChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AWS Bedrock LLM chat failed") {
 		t.Fatalf("Chat error = %q, want Bedrock chat context", err.Error())
+	}
+}
+
+func TestAWSLLMChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
+	var captured context.Context
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{
+			err:        errors.New("stop after capture"),
+			ctxCapture: &captured,
+		},
+		model: defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, _ = provider.Chat(context.Background(), ctx, llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}))
+
+	deadline, ok := captured.Deadline()
+	if !ok {
+		t.Fatal("request context has no deadline, want connect options timeout")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > 75*time.Millisecond {
+		t.Fatalf("request deadline remaining = %v, want within configured timeout", remaining)
 	}
 }
 
@@ -678,11 +705,15 @@ type fakeAWSLLMReader struct {
 }
 
 type fakeAWSLLMClient struct {
-	out *bedrockruntime.ConverseStreamOutput
-	err error
+	out        *bedrockruntime.ConverseStreamOutput
+	err        error
+	ctxCapture *context.Context
 }
 
-func (c fakeAWSLLMClient) ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, _ *bedrockruntime.ConverseStreamInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+	if c.ctxCapture != nil {
+		*c.ctxCapture = ctx
+	}
 	if c.err != nil {
 		return nil, c.err
 	}
