@@ -335,14 +335,16 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		}
 	}
 	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
-		s.mu.Lock()
-		s.pending[toolUseID] = struct{}{}
-		s.mu.Unlock()
-		s.sendGenerationFunction(&llm.FunctionCall{
+		if !s.sendGenerationFunction(&llm.FunctionCall{
 			CallID:    toolUseID,
 			Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
 			Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
-		})
+		}) {
+			return
+		}
+		s.mu.Lock()
+		s.pending[toolUseID] = struct{}{}
+		s.mu.Unlock()
 	}
 	if usage := awsRealtimeNestedMap(payload, "event", "usageEvent"); usage != nil {
 		s.emitUsageMetrics(usage)
@@ -478,18 +480,19 @@ func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
 	}
 }
 
-func (s *awsRealtimeSession) sendGenerationFunction(call *llm.FunctionCall) {
+func (s *awsRealtimeSession) sendGenerationFunction(call *llm.FunctionCall) bool {
 	s.mu.Lock()
 	generation := s.generation
 	s.mu.Unlock()
 	if generation == nil {
-		return
+		return false
 	}
 	select {
 	case generation.functionCh <- call:
 	default:
 	}
 	s.closeGeneration()
+	return true
 }
 
 func (s *awsRealtimeSession) closeGeneration() {
