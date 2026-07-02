@@ -1592,7 +1592,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 						Text: part.Text,
 					})
 				}
-				if part.InlineData != nil && googleRealtimeValidOutputAudioData(part.InlineData.Data) {
+				if googleRealtimeValidOutputAudioBlob(part.InlineData) {
 					s.sendGenerationAudio(part.InlineData.Data)
 					s.emitEvent(llm.RealtimeEvent{
 						Type: llm.RealtimeEventTypeAudio,
@@ -1836,6 +1836,13 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 
 func googleRealtimeValidOutputAudioData(data []byte) bool {
 	return len(data) > 0 && len(data)%(2*googleRealtimeOutputChannels) == 0
+}
+
+func googleRealtimeValidOutputAudioBlob(blob *genai.Blob) bool {
+	if blob == nil || !googleRealtimeValidOutputAudioData(blob.Data) {
+		return false
+	}
+	return blob.MIMEType == "" || strings.HasPrefix(strings.ToLower(blob.MIMEType), "audio/pcm")
 }
 
 func (s *googleRealtimeSession) commitCompletedTranscripts() {
