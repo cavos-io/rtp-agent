@@ -1053,6 +1053,9 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 	if s.generation == nil || s.generation.closed || text == "" {
 		return
 	}
+	defer func() {
+		_ = recover()
+	}()
 	if s.generation.firstTokenAt.IsZero() {
 		s.generation.firstTokenAt = time.Now()
 	}
@@ -1066,6 +1069,9 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 	if s.generation == nil || s.generation.closed || len(data) == 0 {
 		return
 	}
+	defer func() {
+		_ = recover()
+	}()
 	if s.generation.firstTokenAt.IsZero() {
 		s.generation.firstTokenAt = time.Now()
 	}

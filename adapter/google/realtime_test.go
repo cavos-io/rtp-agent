@@ -1022,6 +1022,27 @@ func TestGoogleRealtimeSessionCloseClosesActiveGeneration(t *testing.T) {
 	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
 }
 
+func TestGoogleRealtimeSessionSuppressesLateGenerationDeltasAfterClose(t *testing.T) {
+	textCh := make(chan string)
+	audioCh := make(chan *audiomodel.AudioFrame)
+	close(textCh)
+	close(audioCh)
+	session := &googleRealtimeSession{
+		generation: &googleRealtimeGeneration{
+			textCh:  textCh,
+			audioCh: audioCh,
+		},
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("late generation delta panicked after generation close: %v", recovered)
+		}
+	}()
+	session.sendGenerationText("late")
+	session.sendGenerationAudio([]byte{1, 2})
+}
+
 func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
