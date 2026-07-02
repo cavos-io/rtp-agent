@@ -523,6 +523,56 @@ func TestGoogleRealtimeSessionUpdateInstructionsSendsReferenceContent(t *testing
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateChatContextAppendsReferenceTurns(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstCtx := llm.NewChatContext()
+	firstCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	if err := session.UpdateChatContext(firstCtx); err != nil {
+		t.Fatalf("first UpdateChatContext error = %v", err)
+	}
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client contents after first update = %d, want one append", len(liveSession.clientContents))
+	}
+	first := liveSession.clientContents[0]
+	if first.TurnComplete == nil || *first.TurnComplete {
+		t.Fatalf("first turn complete = %#v, want false", first.TurnComplete)
+	}
+	if len(first.Turns) != 1 || first.Turns[0].Role != "user" || first.Turns[0].Parts[0].Text != "hello" {
+		t.Fatalf("first turns = %#v, want user hello", first.Turns)
+	}
+
+	nextCtx := llm.NewChatContext()
+	nextCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+	}
+	if err := session.UpdateChatContext(nextCtx); err != nil {
+		t.Fatalf("second UpdateChatContext error = %v", err)
+	}
+	if len(liveSession.clientContents) != 2 {
+		t.Fatalf("client contents after second update = %d, want one additional append", len(liveSession.clientContents))
+	}
+	second := liveSession.clientContents[1]
+	if second.TurnComplete == nil || *second.TurnComplete {
+		t.Fatalf("second turn complete = %#v, want false", second.TurnComplete)
+	}
+	if len(second.Turns) != 1 || second.Turns[0].Role != "model" || second.Turns[0].Parts[0].Text != "hi" {
+		t.Fatalf("second turns = %#v, want appended model hi only", second.Turns)
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
