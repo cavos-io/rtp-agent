@@ -1500,7 +1500,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 		return
 	}
 	_ = liveSession.Close()
-	s.closeGeneration()
+	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		s.emitEvent(llm.RealtimeEvent{
@@ -1637,15 +1637,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	if message.ToolCall != nil {
 		s.ensureGeneration()
 		s.handleToolCalls(message.ToolCall)
-		s.emitEvent(llm.RealtimeEvent{
-			Type:          llm.RealtimeEventTypeSpeechStopped,
-			SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
-		})
-		if s.inputText != "" {
-			s.emitInputTranscription(true)
-		}
-		s.commitCompletedTranscripts()
-		s.closeGeneration()
+		s.finishCurrentGeneration()
 	}
 	if message.UsageMetadata != nil {
 		s.emitUsageMetrics(message.UsageMetadata)
@@ -1877,6 +1869,21 @@ func (s *googleRealtimeSession) commitCompletedTranscripts() {
 			Text: s.generation.outputText,
 		})
 	}
+}
+
+func (s *googleRealtimeSession) finishCurrentGeneration() {
+	if s.generation == nil || s.generation.closed {
+		return
+	}
+	s.emitEvent(llm.RealtimeEvent{
+		Type:          llm.RealtimeEventTypeSpeechStopped,
+		SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
+	})
+	if s.inputText != "" {
+		s.emitInputTranscription(true)
+	}
+	s.commitCompletedTranscripts()
+	s.closeGeneration()
 }
 
 func (s *googleRealtimeSession) closeGeneration() {

@@ -1736,6 +1736,53 @@ func TestGoogleRealtimeSessionReconnectReplaysReferenceCompletedTranscripts(t *t
 	}
 }
 
+func TestGoogleRealtimeSessionReceiveErrorReplaysReferencePartialTranscripts(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages: make(chan *genai.LiveServerMessage, 1),
+		recvErr:        errors.New("websocket receive failed"),
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstSession.serverMessages <- &genai.LiveServerMessage{ServerContent: &genai.LiveServerContent{
+		InputTranscription:  &genai.Transcription{Text: " hello"},
+		OutputTranscription: &genai.Transcription{Text: "checking"},
+	}}
+	_ = expectGoogleRealtimeGeneration(t, session.EventCh())
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // input transcription interim
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // output text
+
+	close(firstSession.serverMessages)
+	for {
+		event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+		if event.Type == llm.RealtimeEventTypeSessionReconnected {
+			break
+		}
+	}
+	if len(secondSession.clientContents) != 1 {
+		t.Fatalf("replayed client contents = %d, want partial transcript history replay", len(secondSession.clientContents))
+	}
+	replay := secondSession.clientContents[0]
+	if len(replay.Turns) != 2 {
+		t.Fatalf("replay turns = %#v, want user and assistant transcript turns", replay.Turns)
+	}
+	if replay.Turns[0].Role != "user" || replay.Turns[0].Parts[0].Text != "hello" {
+		t.Fatalf("first replay turn = %#v, want user hello", replay.Turns[0])
+	}
+	if replay.Turns[1].Role != "model" || replay.Turns[1].Parts[0].Text != "checking" {
+		t.Fatalf("second replay turn = %#v, want model checking", replay.Turns[1])
+	}
+}
+
 func TestGoogleRealtimeSessionReconnectUsesReferenceUpdatedInstructions(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages: make(chan *genai.LiveServerMessage),
