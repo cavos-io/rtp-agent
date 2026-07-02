@@ -1187,8 +1187,6 @@ func (s *awsRealtimeSession) CommitAudio() error {
 	return nil
 }
 func (s *awsRealtimeSession) ClearAudio() error {
-	s.audioBStream.Clear()
-	s.audioNorm.reset()
 	return nil
 }
 

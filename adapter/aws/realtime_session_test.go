@@ -627,7 +627,7 @@ func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeSessionClearAudioDropsBufferedInputTail(t *testing.T) {
+func TestAWSRealtimeSessionClearAudioIsReferenceNoop(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -642,12 +642,23 @@ func TestAWSRealtimeSessionClearAudioDropsBufferedInputTail(t *testing.T) {
 	if err := session.ClearAudio(); err != nil {
 		t.Fatalf("ClearAudio error = %v", err)
 	}
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after ClearAudio = %d, want no-op", got)
+	}
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
 
-	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
-		t.Fatalf("audioInput events after ClearAudio+Close = %d, want buffered tail dropped", got)
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events after Close = %d, want buffered tail flushed", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 256*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
 	}
 }
 
