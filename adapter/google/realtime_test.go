@@ -2059,6 +2059,38 @@ func TestGoogleRealtimeSessionCreatesReferenceGenerationForModelTurn(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionDropsInvalidReferenceAudioFrame(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{
+				InlineData: &genai.Blob{Data: []byte{1, 2, 3}, MIMEType: "audio/pcm;rate=24000"},
+			}}},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{TurnComplete: true},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("event after invalid audio = %#v, want speech_stopped without audio delta", event)
+	}
+	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
+}
+
 func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

@@ -1550,7 +1550,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 						Text: part.Text,
 					})
 				}
-				if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+				if part.InlineData != nil && googleRealtimeValidOutputAudioData(part.InlineData.Data) {
 					s.sendGenerationAudio(part.InlineData.Data)
 					s.emitEvent(llm.RealtimeEvent{
 						Type: llm.RealtimeEventTypeAudio,
@@ -1771,7 +1771,7 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 }
 
 func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
-	if s.generation == nil || s.generation.closed || s.generation.audioChClosed || len(data) == 0 {
+	if s.generation == nil || s.generation.closed || s.generation.audioChClosed || !googleRealtimeValidOutputAudioData(data) {
 		return
 	}
 	defer func() {
@@ -1790,6 +1790,10 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 	case s.generation.audioCh <- frame:
 	default:
 	}
+}
+
+func googleRealtimeValidOutputAudioData(data []byte) bool {
+	return len(data) > 0 && len(data)%(2*googleRealtimeOutputChannels) == 0
 }
 
 func (s *googleRealtimeSession) commitCompletedTranscripts() {
