@@ -590,6 +590,29 @@ func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionGenerateReplyRejectsImmutableModel(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeModel("gemini-3.1-flash-live-preview"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "reply now"})
+	if err == nil || !strings.Contains(err.Error(), "generate_reply is not compatible") {
+		t.Fatalf("GenerateReply error = %v, want incompatible model error", err)
+	}
+	if len(liveSession.clientContents) != 0 {
+		t.Fatalf("client contents = %d, want none for immutable model", len(liveSession.clientContents))
+	}
+}
+
 func TestGoogleRealtimeSessionUpdateInstructionsSendsReferenceContent(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key",

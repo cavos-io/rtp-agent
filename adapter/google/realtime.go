@@ -769,6 +769,9 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 	if s == nil || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
+	if !s.mutableChatContext {
+		return fmt.Errorf("generate_reply is not compatible with %q", s.modelName)
+	}
 	if err := s.endManualActivity(); err != nil {
 		return err
 	}
