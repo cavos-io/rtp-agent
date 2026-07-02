@@ -1118,6 +1118,13 @@ func googleRealtimeSetConfigInstructions(config *genai.LiveConnectConfig, instru
 	config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: instructions}}}
 }
 
+func googleRealtimeSetConfigSessionResumption(config *genai.LiveConnectConfig, handle string) {
+	if config == nil {
+		return
+	}
+	config.SessionResumption = &genai.SessionResumptionConfig{Handle: handle}
+}
+
 func googleRealtimeToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
@@ -1333,6 +1340,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	}
 	if update := message.SessionResumptionUpdate; update != nil && update.Resumable && update.NewHandle != "" {
 		s.sessionResumptionHandle = update.NewHandle
+		googleRealtimeSetConfigSessionResumption(s.liveConfig, update.NewHandle)
 	}
 	if message.ServerContent != nil {
 		if s.isNewGenerationMessage(message) {

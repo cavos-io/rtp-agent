@@ -673,6 +673,49 @@ func TestGoogleRealtimeSessionResumptionMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionReconnectUsesReferenceResumptionHandle(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{
+		sessions: []googleRealtimeLiveSession{firstSession, secondSession},
+	}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeSessionResumptionHandle("resume-old"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstSession.serverMessages <- &genai.LiveServerMessage{
+		SessionResumptionUpdate: &genai.LiveServerSessionResumptionUpdate{
+			Resumable: true,
+			NewHandle: "resume-new",
+		},
+	}
+	firstSession.serverMessages <- &genai.LiveServerMessage{GoAway: &genai.LiveServerGoAway{}}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(connector.configs) >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if len(connector.configs) < 2 {
+		t.Fatalf("connect calls = %d, want reconnect after go_away", len(connector.configs))
+	}
+	config := connector.configs[1]
+	if config.SessionResumption == nil || config.SessionResumption.Handle != "resume-new" {
+		t.Fatalf("reconnect session resumption = %#v, want updated resume-new handle", config.SessionResumption)
+	}
+}
+
 func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
