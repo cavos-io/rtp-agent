@@ -252,6 +252,45 @@ func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T
 	}
 }
 
+func TestGoogleRealtimeSessionTurnDetectionUpdateReconnectsReferenceSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeTurnDetection(true),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{TurnDetectionSet: true}); err != nil {
+		t.Fatalf("UpdateOptions turn detection error = %v, want reference reconnect", err)
+	}
+
+	if !firstSession.closed {
+		t.Fatal("first live session not closed after turn detection update")
+	}
+	config := connector.configs[1]
+	if config.RealtimeInputConfig == nil ||
+		config.RealtimeInputConfig.AutomaticActivityDetection == nil ||
+		!config.RealtimeInputConfig.AutomaticActivityDetection.Disabled {
+		t.Fatalf("reconnected realtime input config = %#v, want automatic activity detection disabled", config.RealtimeInputConfig)
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if !googleSession.manualActivityDetection {
+		t.Fatal("manualActivityDetection = false, want true after disabling server turn detection")
+	}
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
+	}
+}
+
 func TestGoogleRealtimeSessionRetriesReferenceUpdateReconnectFailure(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
