@@ -789,6 +789,7 @@ func (s *googleRealtimeSession) ensureGeneration() {
 		ModalitiesCh: generation.modalitiesCh,
 	}
 	s.generation = generation
+	s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 	s.emitEvent(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{

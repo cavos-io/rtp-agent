@@ -575,6 +575,34 @@ func TestGoogleRealtimeSessionReceivesReferenceModelTurnParts(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionAgentGenerationEmitsReferenceSpeechStartedFirst(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+
+	first := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if first.Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("first event = %#v, want speech_started before generation_created", first)
+	}
+	second := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if second.Type != llm.RealtimeEventTypeGenerationCreated || second.Generation == nil {
+		t.Fatalf("second event = %#v, want generation_created", second)
+	}
+}
+
 func TestGoogleRealtimeSessionCreatesReferenceGenerationForModelTurn(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -833,6 +861,9 @@ func nextGoogleRealtimeTestEvent(t *testing.T, eventCh <-chan llm.RealtimeEvent)
 func expectGoogleRealtimeGeneration(t *testing.T, eventCh <-chan llm.RealtimeEvent) llm.GenerationCreatedEvent {
 	t.Helper()
 	event := nextGoogleRealtimeTestEvent(t, eventCh)
+	if event.Type == llm.RealtimeEventTypeSpeechStarted {
+		event = nextGoogleRealtimeTestEvent(t, eventCh)
+	}
 	if event.Type != llm.RealtimeEventTypeGenerationCreated || event.Generation == nil {
 		t.Fatalf("event = %#v, want generation_created", event)
 	}
