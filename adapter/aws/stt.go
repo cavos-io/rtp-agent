@@ -472,22 +472,28 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+	if err := s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
 			AudioChunk: frame.Data,
 		},
-	})
+	}); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
+	}
+	return nil
 }
 
 func (s *awsSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	return s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+	if err := s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
 			AudioChunk: []byte{},
 		},
-	})
+	}); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
+	}
+	return nil
 }
 
 func (s *awsSTTStream) Close() error {

@@ -725,6 +725,33 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
+	writer := &fakeAWSSTTWriter{err: errors.New("transcribe write failed")}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = newFakeAWSSTTReader()
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("pcm")})
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("PushFrame error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "AWS Transcribe audio write failed") {
+		t.Fatalf("PushFrame error = %q, want write failure context", err.Error())
+	}
+
+	err = providerStream.Flush()
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestAWSSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	for range 64 {
 		providerStream := &awsSTTStream{
