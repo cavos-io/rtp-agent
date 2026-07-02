@@ -69,6 +69,7 @@ type RealtimeModel struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
 }
 
@@ -106,6 +107,7 @@ type googleRealtimeOptions struct {
 	toolBehaviorSet           bool
 	toolResponseScheduling    any
 	toolResponseSchedulingSet bool
+	sessionResumptionHandle   string
 	connector                 googleRealtimeConnector
 }
 
@@ -253,6 +255,12 @@ func WithGoogleRealtimeToolResponseScheduling(scheduling any) GoogleRealtimeOpti
 	}
 }
 
+func WithGoogleRealtimeSessionResumptionHandle(handle string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.sessionResumptionHandle = handle
+	}
+}
+
 func WithGoogleRealtimeConnector(connector googleRealtimeConnector) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.connector = connector
@@ -361,6 +369,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		toolBehaviorSet:           options.toolBehaviorSet,
 		toolResponseScheduling:    options.toolResponseScheduling,
 		toolResponseSchedulingSet: options.toolResponseSchedulingSet,
+		sessionResumptionHandle:   options.sessionResumptionHandle,
 		connector:                 options.connector,
 	}, nil
 }
@@ -465,13 +474,14 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		return nil, err
 	}
 	session := &googleRealtimeSession{
-		ctx:         ctx,
-		cancel:      cancel,
-		liveSession: liveSession,
-		modelName:   m.Model(),
-		provider:    m.Provider(),
-		eventCh:     make(chan llm.RealtimeEvent, 16),
-		audioStream: audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+		ctx:                     ctx,
+		cancel:                  cancel,
+		liveSession:             liveSession,
+		modelName:               m.Model(),
+		provider:                m.Provider(),
+		eventCh:                 make(chan llm.RealtimeEvent, 16),
+		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+		sessionResumptionHandle: m.sessionResumptionHandle,
 	}
 	go session.receiveLoop()
 	return session, nil
@@ -488,6 +498,7 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 			},
 			LanguageCode: m.language,
 		},
+		SessionResumption: &genai.SessionResumptionConfig{Handle: m.sessionResumptionHandle},
 	}
 	if m.instructions != "" {
 		config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: m.instructions}}}
@@ -555,24 +566,25 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 }
 
 type googleRealtimeSession struct {
-	ctx          context.Context
-	cancel       context.CancelFunc
-	liveSession  googleRealtimeLiveSession
-	modelName    string
-	provider     string
-	eventCh      chan llm.RealtimeEvent
-	audioStream  *audio.AudioByteStream
-	generation   *googleRealtimeGeneration
-	responseSeq  int
-	functionSeq  int
-	pendingReply bool
-	inputID      string
-	inputSeq     int
-	inputText    string
-	closeOnce    sync.Once
-	closeErr     error
-	closed       bool
-	mu           sync.Mutex
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	liveSession             googleRealtimeLiveSession
+	modelName               string
+	provider                string
+	eventCh                 chan llm.RealtimeEvent
+	audioStream             *audio.AudioByteStream
+	generation              *googleRealtimeGeneration
+	responseSeq             int
+	functionSeq             int
+	pendingReply            bool
+	sessionResumptionHandle string
+	inputID                 string
+	inputSeq                int
+	inputText               string
+	closeOnce               sync.Once
+	closeErr                error
+	closed                  bool
+	mu                      sync.Mutex
 }
 
 type googleRealtimeGeneration struct {
@@ -659,6 +671,9 @@ func (s *googleRealtimeSession) receiveLoop() {
 func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) {
 	if message == nil {
 		return
+	}
+	if update := message.SessionResumptionUpdate; update != nil && update.Resumable && update.NewHandle != "" {
+		s.sessionResumptionHandle = update.NewHandle
 	}
 	if message.ServerContent != nil {
 		if s.isNewGenerationMessage(message) {

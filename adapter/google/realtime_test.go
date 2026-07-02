@@ -307,6 +307,59 @@ func TestGoogleRealtimeSessionConnectsWithReferenceConfig(t *testing.T) {
 	var _ llm.RealtimeSession = session
 }
 
+func TestGoogleRealtimeSessionResumptionMatchesReference(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeSessionResumptionHandle("resume-old"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if connector.config == nil || connector.config.SessionResumption == nil {
+		t.Fatalf("session resumption config = %#v, want reference session resumption config", connector.config)
+	}
+	if connector.config.SessionResumption.Handle != "resume-old" {
+		t.Fatalf("session resumption handle = %q, want resume-old", connector.config.SessionResumption.Handle)
+	}
+
+	googleSession := session.(*googleRealtimeSession)
+	connector.session.serverMessages <- &genai.LiveServerMessage{
+		SessionResumptionUpdate: &genai.LiveServerSessionResumptionUpdate{
+			Resumable: true,
+			NewHandle: "resume-new",
+		},
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if googleSession.sessionResumptionHandle == "resume-new" {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if googleSession.sessionResumptionHandle != "resume-new" {
+		t.Fatalf("session resumption handle after resumable update = %q, want resume-new", googleSession.sessionResumptionHandle)
+	}
+
+	connector.session.serverMessages <- &genai.LiveServerMessage{
+		SessionResumptionUpdate: &genai.LiveServerSessionResumptionUpdate{
+			Resumable: false,
+			NewHandle: "drop-me",
+		},
+	}
+	time.Sleep(10 * time.Millisecond)
+	if googleSession.sessionResumptionHandle != "resume-new" {
+		t.Fatalf("session resumption handle after non-resumable update = %q, want unchanged resume-new", googleSession.sessionResumptionHandle)
+	}
+}
+
 func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
