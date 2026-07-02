@@ -773,6 +773,7 @@ func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
 		return nil
 	}
 	s.instructions = instructions
+	googleRealtimeSetConfigInstructions(s.liveConfig, instructions)
 	if !s.mutableInstructions || s.liveSession == nil || s.isClosed() {
 		return nil
 	}
@@ -1099,6 +1100,17 @@ func googleRealtimeSetConfigVoice(config *genai.LiveConnectConfig, voice string)
 func googleRealtimeSetConfigTemperature(config *genai.LiveConnectConfig, temperature float64) {
 	value := float32(temperature)
 	config.Temperature = &value
+}
+
+func googleRealtimeSetConfigInstructions(config *genai.LiveConnectConfig, instructions string) {
+	if config == nil {
+		return
+	}
+	if instructions == "" {
+		config.SystemInstruction = nil
+		return
+	}
+	config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: instructions}}}
 }
 
 func googleRealtimeToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
