@@ -1,6 +1,7 @@
 package google
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -619,30 +620,31 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 	capabilities := m.Capabilities()
 	session := &googleRealtimeSession{
-		owner:                   m,
-		ctx:                     ctx,
-		cancel:                  cancel,
-		connector:               connector,
-		liveSession:             liveSession,
-		liveConfig:              config,
-		modelName:               m.Model(),
-		provider:                m.Provider(),
-		instructions:            m.instructions,
-		voice:                   m.voice,
-		temperature:             m.temperature,
-		temperatureSet:          m.temperatureSet,
-		vertexAI:                m.vertexAI,
-		audioOutput:             capabilities.AudioOutput,
-		mutableInstructions:     capabilities.MutableInstructions,
-		mutableChatContext:      capabilities.MutableChatContext,
-		chatCtx:                 llm.EmptyChatContext(),
-		toolBehavior:            m.toolBehavior,
-		toolResponseScheduling:  m.toolResponseScheduling,
-		eventCh:                 make(chan llm.RealtimeEvent, 16),
-		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
-		sessionResumptionHandle: m.sessionResumptionHandle,
-		manualActivityDetection: googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
-		suppressActivityStart:   googleRealtimeNoInterruption(m.realtimeInputConfig),
+		owner:                    m,
+		ctx:                      ctx,
+		cancel:                   cancel,
+		connector:                connector,
+		liveSession:              liveSession,
+		liveConfig:               config,
+		modelName:                m.Model(),
+		provider:                 m.Provider(),
+		instructions:             m.instructions,
+		voice:                    m.voice,
+		temperature:              m.temperature,
+		temperatureSet:           m.temperatureSet,
+		vertexAI:                 m.vertexAI,
+		audioOutput:              capabilities.AudioOutput,
+		outputAudioTranscription: m.outputAudioTranscription,
+		mutableInstructions:      capabilities.MutableInstructions,
+		mutableChatContext:       capabilities.MutableChatContext,
+		chatCtx:                  llm.EmptyChatContext(),
+		toolBehavior:             m.toolBehavior,
+		toolResponseScheduling:   m.toolResponseScheduling,
+		eventCh:                  make(chan llm.RealtimeEvent, 16),
+		audioStream:              audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+		sessionResumptionHandle:  m.sessionResumptionHandle,
+		manualActivityDetection:  googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
+		suppressActivityStart:    googleRealtimeNoInterruption(m.realtimeInputConfig),
 	}
 	m.registerSession(session)
 	go session.receiveLoop(liveSession)
@@ -895,43 +897,44 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 }
 
 type googleRealtimeSession struct {
-	owner                   *RealtimeModel
-	ctx                     context.Context
-	cancel                  context.CancelFunc
-	connector               googleRealtimeConnector
-	liveSession             googleRealtimeLiveSession
-	liveConfig              *genai.LiveConnectConfig
-	modelName               string
-	provider                string
-	instructions            string
-	voice                   string
-	temperature             float64
-	temperatureSet          bool
-	vertexAI                bool
-	audioOutput             bool
-	mutableInstructions     bool
-	mutableChatContext      bool
-	chatCtx                 *llm.ChatContext
-	tools                   []llm.Tool
-	toolBehavior            any
-	toolResponseScheduling  any
-	eventCh                 chan llm.RealtimeEvent
-	audioStream             *audio.AudioByteStream
-	generation              *googleRealtimeGeneration
-	responseSeq             int
-	functionSeq             int
-	pendingReply            bool
-	pendingReplyAt          time.Time
-	sessionResumptionHandle string
-	inputID                 string
-	inputSeq                int
-	inputText               string
-	manualActivityDetection bool
-	inUserActivity          bool
-	suppressActivityStart   bool
-	closeOnce               sync.Once
-	closed                  bool
-	mu                      sync.Mutex
+	owner                    *RealtimeModel
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	connector                googleRealtimeConnector
+	liveSession              googleRealtimeLiveSession
+	liveConfig               *genai.LiveConnectConfig
+	modelName                string
+	provider                 string
+	instructions             string
+	voice                    string
+	temperature              float64
+	temperatureSet           bool
+	vertexAI                 bool
+	audioOutput              bool
+	outputAudioTranscription bool
+	mutableInstructions      bool
+	mutableChatContext       bool
+	chatCtx                  *llm.ChatContext
+	tools                    []llm.Tool
+	toolBehavior             any
+	toolResponseScheduling   any
+	eventCh                  chan llm.RealtimeEvent
+	audioStream              *audio.AudioByteStream
+	generation               *googleRealtimeGeneration
+	responseSeq              int
+	functionSeq              int
+	pendingReply             bool
+	pendingReplyAt           time.Time
+	sessionResumptionHandle  string
+	inputID                  string
+	inputSeq                 int
+	inputText                string
+	manualActivityDetection  bool
+	inUserActivity           bool
+	suppressActivityStart    bool
+	closeOnce                sync.Once
+	closed                   bool
+	mu                       sync.Mutex
 }
 
 type googleRealtimeGeneration struct {
@@ -1030,38 +1033,57 @@ func (s *googleRealtimeSession) UpdateOptions(options llm.RealtimeSessionOptions
 	if googleRealtimeSessionOptionsNoop(options) {
 		return nil
 	}
-	if options.VoiceSet &&
-		!options.SpeedSet &&
-		!options.MaxResponseOutputTokensSet &&
-		!options.TruncationSet &&
-		!options.TracingSet &&
-		!options.ReasoningSet &&
-		!options.TurnDetectionSet &&
-		!options.InputAudioTranscriptionSet &&
-		!options.InputAudioNoiseReductionSet {
-		return s.reconnectWithVoice(options.Voice)
+	voiceSet := googleRealtimeVoiceOptionGiven(options)
+	turnDetectionSet := googleRealtimeTurnDetectionOptionGiven(options)
+	if voiceSet || turnDetectionSet {
+		return s.reconnectWithVoiceTurnDetection(
+			options.Voice,
+			voiceSet,
+			googleRealtimeTurnDetectionEnabled(options.TurnDetection),
+			turnDetectionSet,
+		)
 	}
-	return errors.New("google realtime session option update is not implemented")
+	return nil
 }
 
 func googleRealtimeSessionOptionsNoop(options llm.RealtimeSessionOptions) bool {
-	return !options.VoiceSet &&
+	return !googleRealtimeVoiceOptionGiven(options) &&
 		!options.SpeedSet &&
 		!options.MaxResponseOutputTokensSet &&
 		!options.TruncationSet &&
 		!options.TracingSet &&
 		!options.ReasoningSet &&
-		!options.TurnDetectionSet &&
+		!googleRealtimeTurnDetectionOptionGiven(options) &&
 		!options.InputAudioTranscriptionSet &&
 		!options.InputAudioNoiseReductionSet
 }
 
-func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
+func googleRealtimeVoiceOptionGiven(options llm.RealtimeSessionOptions) bool {
+	return options.VoiceSet || options.Voice != ""
+}
+
+func googleRealtimeTurnDetectionOptionGiven(options llm.RealtimeSessionOptions) bool {
+	return options.TurnDetectionSet || options.TurnDetection != nil
+}
+
+func googleRealtimeTurnDetectionEnabled(value any) bool {
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	default:
+		return value != nil
+	}
+}
+
+func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, voiceSet bool, turnDetection bool, turnDetectionSet bool) error {
 	if s == nil || s.isClosed() {
 		return nil
 	}
 	s.mu.Lock()
-	if s.voice == voice {
+	manual := !turnDetection
+	voiceChanged := voiceSet && s.voice != voice
+	turnDetectionChanged := turnDetectionSet && s.manualActivityDetection != manual
+	if !voiceChanged && !turnDetectionChanged {
 		s.mu.Unlock()
 		return nil
 	}
@@ -1069,16 +1091,28 @@ func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
+	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session option update is not implemented")
 	}
-	googleRealtimeSetConfigVoice(config, voice)
+	if voiceSet {
+		googleRealtimeSetConfigVoice(config, voice)
+	}
+	if turnDetectionSet {
+		if turnDetection {
+			config.RealtimeInputConfig = nil
+		} else {
+			config.RealtimeInputConfig = &genai.RealtimeInputConfig{
+				AutomaticActivityDetection: &genai.AutomaticActivityDetection{Disabled: true},
+			}
+		}
+	}
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
 	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
 	}
@@ -1090,7 +1124,14 @@ func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
 	}
 	s.liveSession = nextSession
 	s.liveConfig = config
-	s.voice = voice
+	if voiceSet {
+		s.voice = voice
+	}
+	if turnDetectionSet {
+		s.manualActivityDetection = googleRealtimeManualActivityDetection(config.RealtimeInputConfig)
+		s.suppressActivityStart = googleRealtimeNoInterruption(config.RealtimeInputConfig)
+		s.inUserActivity = false
+	}
 	s.mu.Unlock()
 	go s.receiveLoop(nextSession)
 	return nil
@@ -1120,6 +1161,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
 	tools := append([]llm.Tool(nil), s.tools...)
+	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session option update is not implemented")
@@ -1137,7 +1179,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 		_ = oldSession.Close()
 	}
 	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
 	}
@@ -1179,6 +1221,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
 	behavior := s.toolBehavior
+	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session tool update is not implemented")
@@ -1188,7 +1231,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 		_ = oldSession.Close()
 	}
 	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
 	}
@@ -1443,6 +1486,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	connector := s.connector
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
+	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		s.emitEvent(llm.RealtimeEvent{
@@ -1453,7 +1497,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	}
 	_ = liveSession.Close()
 	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		s.emitEvent(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
@@ -1487,6 +1531,13 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
 	})
 	go s.receiveLoop(nextSession)
+}
+
+func (s *googleRealtimeSession) currentConnectOptions() llm.APIConnectOptions {
+	if s != nil && s.owner != nil {
+		return s.owner.connectOptions
+	}
+	return llm.DefaultAPIConnectOptions()
 }
 
 func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {
@@ -1537,11 +1588,11 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 						Text: part.Text,
 					})
 				}
-				if part.InlineData != nil && len(part.InlineData.Data) > 0 {
+				if part.InlineData != nil && googleRealtimeValidOutputAudioData(part.InlineData.Data) {
 					s.sendGenerationAudio(part.InlineData.Data)
 					s.emitEvent(llm.RealtimeEvent{
 						Type: llm.RealtimeEventTypeAudio,
-						Data: part.InlineData.Data,
+						Data: bytes.Clone(part.InlineData.Data),
 					})
 				}
 			}
@@ -1758,7 +1809,7 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 }
 
 func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
-	if s.generation == nil || s.generation.closed || s.generation.audioChClosed || len(data) == 0 {
+	if s.generation == nil || s.generation.closed || s.generation.audioChClosed || !googleRealtimeValidOutputAudioData(data) {
 		return
 	}
 	defer func() {
@@ -1768,7 +1819,7 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 		s.generation.firstTokenAt = time.Now()
 	}
 	frame := &model.AudioFrame{
-		Data:              data,
+		Data:              bytes.Clone(data),
 		SampleRate:        googleRealtimeOutputSampleRate,
 		NumChannels:       googleRealtimeOutputChannels,
 		SamplesPerChannel: uint32(len(data) / (2 * googleRealtimeOutputChannels)),
@@ -1777,6 +1828,10 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 	case s.generation.audioCh <- frame:
 	default:
 	}
+}
+
+func googleRealtimeValidOutputAudioData(data []byte) bool {
+	return len(data) > 0 && len(data)%(2*googleRealtimeOutputChannels) == 0
 }
 
 func (s *googleRealtimeSession) commitCompletedTranscripts() {
@@ -1810,6 +1865,12 @@ func (s *googleRealtimeSession) closeGeneration() {
 	}()
 	s.markGenerationCompleted()
 	s.generation.closed = true
+	if !s.outputAudioTranscription {
+		select {
+		case s.generation.textCh <- "":
+		default:
+		}
+	}
 	close(s.generation.textCh)
 	if !s.generation.audioChClosed {
 		close(s.generation.audioCh)
