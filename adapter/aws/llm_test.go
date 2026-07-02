@@ -116,6 +116,27 @@ func TestAWSLLMChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: context.DeadlineExceeded},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil", stream)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Chat error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSLLMChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	var captured context.Context
 	provider := &AWSLLM{
