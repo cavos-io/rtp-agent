@@ -1329,6 +1329,37 @@ func TestGoogleRealtimeSessionReconnectsAfterReferenceReceiveError(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionRetriesReferenceActiveReconnectFailure(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages: make(chan *genai.LiveServerMessage),
+		recvErr:        errors.New("websocket receive failed"),
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	connector.connectErrs = []error{errors.New("temporary reconnect failure")}
+	close(firstSession.serverMessages)
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected after retry", reconnected)
+	}
+	if len(connector.models) != 3 {
+		t.Fatalf("connect attempts = %d, want initial plus failed reconnect plus retry", len(connector.models))
+	}
+}
+
 func TestGoogleRealtimeSessionReconnectReplaysReferenceChatContext(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages: make(chan *genai.LiveServerMessage),

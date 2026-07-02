@@ -1443,6 +1443,10 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	connector := s.connector
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
+	connectOptions := llm.DefaultAPIConnectOptions()
+	if s.owner != nil {
+		connectOptions = s.owner.connectOptions
+	}
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		s.emitEvent(llm.RealtimeEvent{
@@ -1453,7 +1457,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	}
 	_ = liveSession.Close()
 	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		s.emitEvent(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
