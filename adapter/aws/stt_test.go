@@ -426,6 +426,24 @@ func TestAWSSTTStreamReturnsClientError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
+	client := &fakeAWSSTTClient{err: context.DeadlineExceeded}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil on timeout", stream)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSSTTRecognizeReportsUnsupportedOfflineMode(t *testing.T) {
 	provider := &AWSSTT{}
 
