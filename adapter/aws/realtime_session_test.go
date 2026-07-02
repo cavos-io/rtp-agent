@@ -712,6 +712,19 @@ func TestAWSRealtimeSessionInterruptClosesReferenceGeneration(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
+	transcript := "played words"
+
+	if err := session.Truncate(llm.RealtimeTruncateOptions{
+		MessageID:       "assistant-1",
+		AudioEndMillis:  250,
+		AudioTranscript: &transcript,
+	}); err != nil {
+		t.Fatalf("Truncate error = %v, want nil reference warning-only no-op", err)
+	}
+}
+
 func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

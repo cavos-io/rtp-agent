@@ -828,7 +828,7 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 }
 func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("say") }
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
-	return awsRealtimeUnsupported("truncate")
+	return nil
 }
 func (s *awsRealtimeSession) Interrupt() error {
 	s.closeGeneration()
