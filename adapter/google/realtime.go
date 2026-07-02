@@ -759,6 +759,7 @@ type googleRealtimeGeneration struct {
 	textCh       chan string
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
+	outputText   string
 	createdAt    time.Time
 	firstTokenAt time.Time
 	completedAt  time.Time
@@ -1382,9 +1383,8 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			})
 			if s.inputText != "" {
 				s.emitInputTranscription(true)
-				s.inputID = ""
-				s.inputText = ""
 			}
+			s.commitCompletedTranscripts()
 			s.closeGeneration()
 		}
 	}
@@ -1528,6 +1528,7 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 	defer func() {
 		_ = recover()
 	}()
+	s.generation.outputText += text
 	if s.generation.firstTokenAt.IsZero() {
 		s.generation.firstTokenAt = time.Now()
 	}
@@ -1556,6 +1557,28 @@ func (s *googleRealtimeSession) sendGenerationAudio(data []byte) {
 	select {
 	case s.generation.audioCh <- frame:
 	default:
+	}
+}
+
+func (s *googleRealtimeSession) commitCompletedTranscripts() {
+	if s.chatCtx == nil {
+		s.chatCtx = llm.EmptyChatContext()
+	}
+	if s.inputText != "" {
+		s.chatCtx.AddMessage(llm.ChatMessageArgs{
+			ID:   s.currentInputID(),
+			Role: llm.ChatRoleUser,
+			Text: s.inputText,
+		})
+		s.inputID = ""
+		s.inputText = ""
+	}
+	if s.generation != nil && s.generation.outputText != "" {
+		s.chatCtx.AddMessage(llm.ChatMessageArgs{
+			ID:   s.generation.responseID,
+			Role: llm.ChatRoleAssistant,
+			Text: s.generation.outputText,
+		})
 	}
 }
 
