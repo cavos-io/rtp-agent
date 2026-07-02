@@ -52,6 +52,24 @@ func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
 	assertAWSRealtimeJSONNumber(t, nestedMap(t, audioStart, "event", "contentStart", "audioInputConfiguration")["sampleRateHertz"], 16000)
 }
 
+func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	if err := session.UpdateInstructions("speak like a billing agent"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[3]), "event", "textInput", "content"); got != "speak like a billing agent" {
+		t.Fatalf("system prompt = %q, want updated instructions", got)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	stream := &fakeAWSRealtimeStream{}
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

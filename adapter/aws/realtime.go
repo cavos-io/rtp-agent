@@ -192,17 +192,18 @@ func (c *awsRealtimeSDKClient) InvokeModelWithBidirectionalStream(ctx context.Co
 }
 
 type awsRealtimeSession struct {
-	model      *AWSRealtimeModel
-	client     awsRealtimeClient
-	builder    *awsRealtimeEventBuilder
-	stream     awsRealtimeStream
-	eventCh    chan llm.RealtimeEvent
-	turns      *awsRealtimeTurnTracker
-	generation *awsRealtimeGeneration
-	pending    map[string]struct{}
-	sent       map[string]struct{}
-	mu         sync.Mutex
-	closed     bool
+	model        *AWSRealtimeModel
+	client       awsRealtimeClient
+	builder      *awsRealtimeEventBuilder
+	stream       awsRealtimeStream
+	eventCh      chan llm.RealtimeEvent
+	turns        *awsRealtimeTurnTracker
+	generation   *awsRealtimeGeneration
+	instructions string
+	pending      map[string]struct{}
+	sent         map[string]struct{}
+	mu           sync.Mutex
+	closed       bool
 }
 
 type awsRealtimeGeneration struct {
@@ -237,10 +238,16 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		return err
 	}
 	s.stream = stream
+	s.mu.Lock()
+	systemPrompt := s.instructions
+	s.mu.Unlock()
+	if systemPrompt == "" {
+		systemPrompt = defaultAWSRealtimeSystemPrompt
+	}
 	initEvents, historyEvents, err := s.builder.createPromptStartBlock(awsRealtimePromptStartOptions{
 		voiceID:                s.model.voice,
 		outputSampleRate:       defaultAWSRealtimeOutputSampleRate,
-		systemContent:          defaultAWSRealtimeSystemPrompt,
+		systemContent:          systemPrompt,
 		maxTokens:              defaultAWSRealtimeMaxTokens,
 		topP:                   defaultAWSRealtimeTopP,
 		temperature:            defaultAWSRealtimeTemperature,
@@ -608,7 +615,12 @@ func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
 	}
 }
 
-func (s *awsRealtimeSession) UpdateInstructions(string) error { return nil }
+func (s *awsRealtimeSession) UpdateInstructions(instructions string) error {
+	s.mu.Lock()
+	s.instructions = instructions
+	s.mu.Unlock()
+	return nil
+}
 func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if chatCtx == nil {
 		return nil
