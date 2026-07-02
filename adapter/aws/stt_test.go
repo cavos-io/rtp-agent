@@ -891,6 +891,31 @@ func TestAWSSTTEmptyFrameCloseDiagnosticReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestAWSSTTRequestTimeoutReturnsEOF(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	reader.err = errors.New("Your request timed out because no new audio was received")
+	close(reader.events)
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+	go providerStream.readLoop()
+
+	event, err := providerStream.Next()
+
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil", event)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF for reference silent Transcribe timeout", err)
+	}
+}
+
 func TestAWSSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}
