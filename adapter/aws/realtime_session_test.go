@@ -944,6 +944,40 @@ func TestAWSRealtimeSessionUpdateChatContextSendsInteractiveUserText(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionRetriesUserTextAfterSendFailure(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.ChatMessage{
+		ID:      "user-retry",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "try again"}},
+	})
+
+	stream.sendErr = errors.New("bedrock send failed")
+	if err := session.UpdateChatContext(ctx); err == nil {
+		t.Fatal("UpdateChatContext error = nil, want send failure")
+	}
+	stream.sendErr = nil
+	sentCount := len(stream.sent)
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext retry error = %v", err)
+	}
+	if len(stream.sent) != sentCount+3 {
+		t.Fatalf("retry sent %d events, want 3 user text events", len(stream.sent)-sentCount)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[sentCount+1]), "event", "textInput", "content"); got != "try again" {
+		t.Fatalf("retry text input = %q, want try again", got)
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

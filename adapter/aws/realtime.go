@@ -714,9 +714,6 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 	}
 	s.mu.Lock()
 	_, alreadySent := s.sent[msg.ID]
-	if !alreadySent {
-		s.sent[msg.ID] = struct{}{}
-	}
 	s.mu.Unlock()
 	if alreadySent {
 		return nil
@@ -730,6 +727,9 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 			return err
 		}
 	}
+	s.mu.Lock()
+	s.sent[msg.ID] = struct{}{}
+	s.mu.Unlock()
 	return nil
 }
 
