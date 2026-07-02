@@ -233,6 +233,14 @@ func TestGoogleSTTStreamingCapabilityMatchesReferenceOption(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTInterimCapabilityMatchesReferenceOption(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTInterimResults(false))
+
+	if provider.Capabilities().InterimResults {
+		t.Fatal("InterimResults capability = true, want false from reference interim_results option")
+	}
+}
+
 func TestGoogleSTTChirp3CapabilitiesDisableWordAlignment(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTModel("chirp_3"))
 
