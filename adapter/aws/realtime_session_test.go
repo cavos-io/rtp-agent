@@ -499,6 +499,31 @@ func TestAWSRealtimeSessionMapsReferenceResponseEvents(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionEmitsErrorOnReferenceReadFailure(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	stream.err = errors.New("bedrock output stream failed")
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	close(stream.events)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeError)
+	if event.Error == nil {
+		t.Fatal("Error = nil, want stream failure")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(event.Error, &connectionErr) {
+		t.Fatalf("Error = %T %v, want APIConnectionError", event.Error, event.Error)
+	}
+	if !strings.Contains(event.Error.Error(), "AWS Nova Sonic realtime stream failed") {
+		t.Fatalf("Error = %q, want stream failure context", event.Error.Error())
+	}
+}
+
 func TestAWSRealtimeSessionCreatesReferenceGenerationStreams(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -1333,6 +1358,7 @@ type fakeAWSRealtimeStream struct {
 	sent    []string
 	closed  bool
 	sendErr error
+	err     error
 	events  chan awstypes.InvokeModelWithBidirectionalStreamOutput
 }
 
@@ -1420,6 +1446,10 @@ func (s *fakeAWSRealtimeStream) Events() <-chan awstypes.InvokeModelWithBidirect
 func (s *fakeAWSRealtimeStream) Close() error {
 	s.closed = true
 	return nil
+}
+
+func (s *fakeAWSRealtimeStream) Err() error {
+	return s.err
 }
 
 type awsSecondRequestTestTool struct{}

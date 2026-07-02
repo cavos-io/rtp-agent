@@ -172,6 +172,7 @@ type awsRealtimeStream interface {
 	Send(context.Context, awstypes.InvokeModelWithBidirectionalStreamInput) error
 	Events() <-chan awstypes.InvokeModelWithBidirectionalStreamOutput
 	Close() error
+	Err() error
 }
 
 type awsRealtimeSDKClient struct {
@@ -319,10 +320,11 @@ func sendAWSRealtimeRawEvent(ctx context.Context, stream awsRealtimeStream, even
 }
 
 func (s *awsRealtimeSession) readResponses() {
-	if s.stream == nil {
+	stream := s.stream
+	if stream == nil {
 		return
 	}
-	for event := range s.stream.Events() {
+	for event := range stream.Events() {
 		chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamOutputMemberChunk)
 		if !ok || len(chunk.Value.Bytes) == 0 {
 			continue
@@ -336,6 +338,12 @@ func (s *awsRealtimeSession) readResponses() {
 			continue
 		}
 		s.handleResponseEvent(payload)
+	}
+	if err := stream.Err(); err != nil {
+		s.emit(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err)),
+		})
 	}
 }
 
