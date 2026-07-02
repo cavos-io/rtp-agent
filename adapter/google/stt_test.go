@@ -3514,6 +3514,42 @@ func TestGoogleSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTReadLoopIgnoresLateTranscriptAfterCloseLikeReference(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		responses: []*speechpb.StreamingRecognizeResponse{{
+			Results: []*speechpb.StreamingRecognitionResult{{
+				IsFinal: true,
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+					Transcript: "stale final",
+				}},
+			}},
+		}},
+	}
+	stream := &googleSTTStream{
+		stream: streamClient,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+	stream.events <- &stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		stream.readLoop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(20 * time.Millisecond):
+		<-stream.events
+		<-done
+		t.Fatal("readLoop blocked on late transcript after Close")
+	}
+}
+
 func TestGoogleSTTStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
 	stream := &googleSTTStream{
 		stream: &fakeGoogleStreamingRecognizeClient{},

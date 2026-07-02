@@ -1314,6 +1314,10 @@ func (s *googleSTTStream) readLoop() {
 			s.terminate()
 			return
 		}
+		if s.isClosed() {
+			s.terminate()
+			return
+		}
 
 		switch resp.GetSpeechEventType() {
 		case speechpb.StreamingRecognizeResponse_SPEECH_ACTIVITY_BEGIN:
@@ -1395,6 +1399,10 @@ func (s *googleSTTStream) readLoopV2() {
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
 			}
+			s.terminate()
+			return
+		}
+		if s.isClosed() {
 			s.terminate()
 			return
 		}
