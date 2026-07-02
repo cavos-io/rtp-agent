@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"testing"
+	"time"
 
 	bedrockruntime "github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
@@ -82,6 +84,44 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionMapsReferenceResponseEvents(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"textOutput":{"role":"USER","content":"hello","contentId":"user-1"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+	transcript := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if transcript.InputTranscription == nil || transcript.InputTranscription.Transcript != "hello" || transcript.InputTranscription.IsFinal {
+		t.Fatalf("transcript event = %#v, want interim hello", transcript)
+	}
+
+	audioBytes := []byte{1, 2, 3, 4}
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-1","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	audio := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	if string(audio.Data) != string(audioBytes) {
+		t.Fatalf("audio data = %v, want %v", audio.Data, audioBytes)
+	}
+}
+
+func assertAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
+	t.Helper()
+	select {
+	case event := <-ch:
+		if event.Type != want {
+			t.Fatalf("event type = %s, want %s: %#v", event.Type, want, event)
+		}
+		return event
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for %s", want)
+		return llm.RealtimeEvent{}
+	}
+}
+
 type fakeAWSRealtimeClient struct {
 	input  *bedrockruntime.InvokeModelWithBidirectionalStreamInput
 	stream awsRealtimeStream
@@ -99,6 +139,17 @@ func (c *fakeAWSRealtimeClient) InvokeModelWithBidirectionalStream(ctx context.C
 type fakeAWSRealtimeStream struct {
 	sent   []string
 	closed bool
+	events chan awstypes.InvokeModelWithBidirectionalStreamOutput
+}
+
+func newFakeAWSRealtimeStream() *fakeAWSRealtimeStream {
+	return &fakeAWSRealtimeStream{events: make(chan awstypes.InvokeModelWithBidirectionalStreamOutput, 8)}
+}
+
+func (s *fakeAWSRealtimeStream) emitJSON(raw string) {
+	s.events <- &awstypes.InvokeModelWithBidirectionalStreamOutputMemberChunk{
+		Value: awstypes.BidirectionalOutputPayloadPart{Bytes: []byte(raw)},
+	}
 }
 
 func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeModelWithBidirectionalStreamInput) error {
@@ -117,9 +168,11 @@ func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeMod
 }
 
 func (s *fakeAWSRealtimeStream) Events() <-chan awstypes.InvokeModelWithBidirectionalStreamOutput {
-	ch := make(chan awstypes.InvokeModelWithBidirectionalStreamOutput)
-	close(ch)
-	return ch
+	if s.events == nil {
+		s.events = make(chan awstypes.InvokeModelWithBidirectionalStreamOutput)
+		close(s.events)
+	}
+	return s.events
 }
 
 func (s *fakeAWSRealtimeStream) Close() error {

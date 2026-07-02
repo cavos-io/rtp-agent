@@ -3,6 +3,7 @@ package aws
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -191,17 +192,27 @@ type awsRealtimeSession struct {
 	builder *awsRealtimeEventBuilder
 	stream  awsRealtimeStream
 	eventCh chan llm.RealtimeEvent
+	turns   *awsRealtimeTurnTracker
 	mu      sync.Mutex
 	closed  bool
 }
 
 func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
-	return &awsRealtimeSession{
+	session := &awsRealtimeSession{
 		model:   model,
 		client:  client,
 		builder: newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString()),
 		eventCh: make(chan llm.RealtimeEvent, 16),
 	}
+	session.turns = newAWSRealtimeTurnTracker(session.emit, func() {
+		session.emit(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeGenerationCreated,
+			Generation: &llm.GenerationCreatedEvent{
+				ResponseID: uuid.NewString(),
+			},
+		})
+	})
+	return session
 }
 
 func (s *awsRealtimeSession) start(ctx context.Context) error {
@@ -233,7 +244,11 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return s.sendRawEvent(ctx, audioStart)
+	if err := s.sendRawEvent(ctx, audioStart); err != nil {
+		return err
+	}
+	go s.readResponses()
+	return nil
 }
 
 func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) error {
@@ -243,6 +258,68 @@ func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) err
 	return s.stream.Send(ctx, &awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk{
 		Value: awstypes.BidirectionalInputPayloadPart{Bytes: []byte(event)},
 	})
+}
+
+func (s *awsRealtimeSession) readResponses() {
+	if s.stream == nil {
+		return
+	}
+	for event := range s.stream.Events() {
+		chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamOutputMemberChunk)
+		if !ok || len(chunk.Value.Bytes) == 0 {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(chunk.Value.Bytes, &payload); err != nil {
+			s.emit(llm.RealtimeEvent{
+				Type:  llm.RealtimeEventTypeError,
+				Error: llm.NewRealtimeError("failed to decode AWS Nova Sonic realtime event", err),
+			})
+			continue
+		}
+		s.handleResponseEvent(payload)
+	}
+}
+
+func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
+	if s.turns != nil {
+		s.turns.feed(payload)
+	}
+	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
+		data, err := base64.StdEncoding.DecodeString(audioContent)
+		if err != nil {
+			s.emit(llm.RealtimeEvent{
+				Type:  llm.RealtimeEventTypeError,
+				Error: llm.NewRealtimeError("failed to decode AWS Nova Sonic audio output", err),
+			})
+			return
+		}
+		s.emit(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeAudio,
+			Data: data,
+		})
+	}
+	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
+		if awsRealtimeNestedString(payload, "event", "textOutput", "role") == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeText,
+				Text: textContent,
+			})
+		}
+	}
+}
+
+func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return
+	}
+	select {
+	case s.eventCh <- event:
+	default:
+	}
 }
 
 func (s *awsRealtimeSession) UpdateInstructions(string) error { return nil }
