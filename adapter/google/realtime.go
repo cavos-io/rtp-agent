@@ -1069,6 +1069,7 @@ func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
+	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session option update is not implemented")
@@ -1078,7 +1079,7 @@ func (s *googleRealtimeSession) reconnectWithVoice(voice string) error {
 		_ = oldSession.Close()
 	}
 	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
 	}
@@ -1120,6 +1121,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
 	tools := append([]llm.Tool(nil), s.tools...)
+	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session option update is not implemented")
@@ -1137,7 +1139,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 		_ = oldSession.Close()
 	}
 	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
 	}
@@ -1179,6 +1181,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
 	behavior := s.toolBehavior
+	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session tool update is not implemented")
@@ -1188,7 +1191,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 		_ = oldSession.Close()
 	}
 	s.closeGeneration()
-	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
 	}
@@ -1443,10 +1446,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	connector := s.connector
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
-	connectOptions := llm.DefaultAPIConnectOptions()
-	if s.owner != nil {
-		connectOptions = s.owner.connectOptions
-	}
+	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		s.emitEvent(llm.RealtimeEvent{
@@ -1491,6 +1491,13 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
 	})
 	go s.receiveLoop(nextSession)
+}
+
+func (s *googleRealtimeSession) currentConnectOptions() llm.APIConnectOptions {
+	if s != nil && s.owner != nil {
+		return s.owner.connectOptions
+	}
+	return llm.DefaultAPIConnectOptions()
 }
 
 func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {

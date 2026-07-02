@@ -252,6 +252,37 @@ func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T
 	}
 }
 
+func TestGoogleRealtimeSessionRetriesReferenceUpdateReconnectFailure(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	connector.connectErrs = []error{errors.New("temporary voice reconnect failure")}
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true}); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v, want retry success", err)
+	}
+	if len(connector.models) != 3 {
+		t.Fatalf("connect attempts = %d, want initial plus failed reconnect plus retry", len(connector.models))
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second session after retry", googleSession.liveSession)
+	}
+}
+
 func TestGoogleRealtimeModelVoiceUpdatePropagatesReferenceActiveSession(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
