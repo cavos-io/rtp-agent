@@ -227,13 +227,14 @@ func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type awsTTSChunkedStream struct {
-	stream    io.ReadCloser
-	decoder   codecs.AudioStreamDecoder
-	readErr   chan error
-	started   bool
-	hasAudio  bool
-	finalSent bool
-	provider  *AWSTTS
+	stream       io.ReadCloser
+	decoder      codecs.AudioStreamDecoder
+	readErr      chan error
+	started      bool
+	hasAudio     bool
+	emittedAudio bool
+	finalSent    bool
+	provider     *AWSTTS
 }
 
 func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -282,6 +283,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS audio decode failed: %v", err))
 	}
 
+	s.emittedAudio = true
 	return &tts.SynthesizedAudio{
 		Frame: frame,
 	}, nil
@@ -325,7 +327,7 @@ func (s *awsTTSChunkedStream) recordReadErr(err error) {
 		return
 	}
 	select {
-	case s.readErr <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS response read failed: %v", err)):
+	case s.readErr <- err:
 	default:
 	}
 }
@@ -336,7 +338,7 @@ func (s *awsTTSChunkedStream) popReadErr() error {
 	}
 	select {
 	case err := <-s.readErr:
-		return err
+		return llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("AWS Polly TTS response read failed: %v", err), !s.emittedAudio)
 	default:
 		return nil
 	}

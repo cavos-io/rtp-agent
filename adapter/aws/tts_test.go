@@ -264,6 +264,45 @@ func TestAWSTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamReadFailureAfterAudioIsReferenceNonRetryable(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	stream := &awsTTSChunkedStream{
+		stream: &dataThenErrorAWSReadCloser{
+			data: mp3Data,
+			err:  errors.New("polly read failed"),
+		},
+	}
+	defer stream.Close()
+
+	var frames int
+	for range 1000 {
+		audio, err := stream.Next()
+		if err != nil {
+			var connectionErr *llm.APIConnectionError
+			if !errors.As(err, &connectionErr) {
+				t.Fatalf("Next error after %d frames = %T %v, want APIConnectionError", frames, err, err)
+			}
+			if frames == 0 {
+				t.Fatal("read failure arrived before audio, want partial-audio failure")
+			}
+			if connectionErr.Retryable {
+				t.Fatal("Retryable = true, want false after partial reference audio")
+			}
+			return
+		}
+		if audio == nil {
+			t.Fatalf("Next returned nil audio after %d frames", frames)
+		}
+		if audio.Frame != nil {
+			frames++
+		}
+	}
+	t.Fatal("stream did not surface read failure")
+}
+
 func TestAWSTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *testing.T) {
 	stream := &awsTTSChunkedStream{
 		stream: io.NopCloser(bytes.NewReader([]byte("not mp3 audio"))),
@@ -459,6 +498,24 @@ func (c erroringAWSReadCloser) Read([]byte) (int, error) {
 }
 
 func (c erroringAWSReadCloser) Close() error {
+	return nil
+}
+
+type dataThenErrorAWSReadCloser struct {
+	data []byte
+	err  error
+	sent bool
+}
+
+func (c *dataThenErrorAWSReadCloser) Read(p []byte) (int, error) {
+	if c.sent {
+		return 0, c.err
+	}
+	c.sent = true
+	return copy(p, c.data), nil
+}
+
+func (c *dataThenErrorAWSReadCloser) Close() error {
 	return nil
 }
 
