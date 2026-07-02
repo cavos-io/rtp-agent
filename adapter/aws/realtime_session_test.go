@@ -451,6 +451,54 @@ func TestAWSRealtimeSessionPushAudioChunksReferenceInput(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	sentCount := len(stream.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio error = %v", err)
+	}
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events before Close = %d, want none until chunk flush", got)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events after Close = %d, want flushed tail", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 256*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
+	}
+	audioIndex := -1
+	contentEndIndex := -1
+	for i, raw := range stream.sent[sentCount:] {
+		event := mustAWSRealtimeJSONEvent(t, raw)
+		if awsRealtimeNestedString(event, "event", "audioInput", "content") != "" {
+			audioIndex = i
+		}
+		if awsRealtimeNestedString(event, "event", "contentEnd", "contentName") != "" {
+			contentEndIndex = i
+			break
+		}
+	}
+	if audioIndex < 0 || contentEndIndex < 0 || audioIndex > contentEndIndex {
+		t.Fatalf("audioInput/contentEnd order = %d/%d, want audio tail before contentEnd", audioIndex, contentEndIndex)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioPreservesResampleDurationAcrossFrames(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
