@@ -479,6 +479,9 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		liveSession:             liveSession,
 		modelName:               m.Model(),
 		provider:                m.Provider(),
+		instructions:            m.instructions,
+		vertexAI:                m.vertexAI,
+		mutableInstructions:     m.Capabilities().MutableInstructions,
 		eventCh:                 make(chan llm.RealtimeEvent, 16),
 		audioStream:             audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
 		sessionResumptionHandle: m.sessionResumptionHandle,
@@ -571,6 +574,9 @@ type googleRealtimeSession struct {
 	liveSession             googleRealtimeLiveSession
 	modelName               string
 	provider                string
+	instructions            string
+	vertexAI                bool
+	mutableInstructions     bool
 	eventCh                 chan llm.RealtimeEvent
 	audioStream             *audio.AudioByteStream
 	generation              *googleRealtimeGeneration
@@ -600,8 +606,29 @@ type googleRealtimeGeneration struct {
 	closed       bool
 }
 
-func (s *googleRealtimeSession) UpdateInstructions(string) error {
-	return errors.New("google realtime session instruction update is not implemented")
+func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
+	if s == nil {
+		return nil
+	}
+	if s.instructions == instructions {
+		return nil
+	}
+	s.instructions = instructions
+	if !s.mutableInstructions || s.liveSession == nil || s.isClosed() {
+		return nil
+	}
+	role := ""
+	if s.vertexAI {
+		role = "model"
+	}
+	turnComplete := false
+	return s.liveSession.SendClientContent(genai.LiveClientContentInput{
+		Turns: []*genai.Content{{
+			Role:  role,
+			Parts: []*genai.Part{{Text: instructions}},
+		}},
+		TurnComplete: &turnComplete,
+	})
 }
 func (s *googleRealtimeSession) UpdateChatContext(*llm.ChatContext) error {
 	return errors.New("google realtime session chat context update is not implemented")

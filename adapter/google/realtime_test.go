@@ -480,6 +480,49 @@ func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateInstructionsSendsReferenceContent(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeInstructions("old"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateInstructions("new system prompt"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client contents = %d, want one instruction update", len(liveSession.clientContents))
+	}
+	update := liveSession.clientContents[0]
+	if update.TurnComplete == nil || *update.TurnComplete {
+		t.Fatalf("turn complete = %#v, want false", update.TurnComplete)
+	}
+	if len(update.Turns) != 1 || len(update.Turns[0].Parts) != 1 {
+		t.Fatalf("instruction update turns = %#v, want one text turn", update.Turns)
+	}
+	if update.Turns[0].Role != "" {
+		t.Fatalf("instruction role = %q, want empty Gemini role", update.Turns[0].Role)
+	}
+	if update.Turns[0].Parts[0].Text != "new system prompt" {
+		t.Fatalf("instruction text = %q, want new system prompt", update.Turns[0].Parts[0].Text)
+	}
+
+	if err := session.UpdateInstructions("new system prompt"); err != nil {
+		t.Fatalf("second UpdateInstructions error = %v", err)
+	}
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client contents after unchanged update = %d, want still one", len(liveSession.clientContents))
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
