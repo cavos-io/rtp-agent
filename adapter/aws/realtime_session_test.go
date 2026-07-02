@@ -103,6 +103,49 @@ func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
 	assertAWSRealtimeJSONNumber(t, inference["temperature"], 1.0)
 }
 
+func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "hi"})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+	if len(stream.sent) != 0 {
+		t.Fatalf("UpdateChatContext before start sent %d events, want none", len(stream.sent))
+	}
+
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	if len(stream.sent) != 12 {
+		t.Fatalf("sent event count = %d, want 12 with two history messages", len(stream.sent))
+	}
+	firstHistoryStart := mustAWSRealtimeJSONEvent(t, stream.sent[5])
+	if got := awsRealtimeNestedString(firstHistoryStart, "event", "contentStart", "role"); got != "USER" {
+		t.Fatalf("first history role = %q, want USER", got)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[6]), "event", "textInput", "content"); got != "hello" {
+		t.Fatalf("first history text = %q, want hello", got)
+	}
+	secondHistoryStart := mustAWSRealtimeJSONEvent(t, stream.sent[8])
+	if got := awsRealtimeNestedString(secondHistoryStart, "event", "contentStart", "role"); got != "ASSISTANT" {
+		t.Fatalf("second history role = %q, want ASSISTANT", got)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[9]), "event", "textInput", "content"); got != "hi" {
+		t.Fatalf("second history text = %q, want hi", got)
+	}
+	audioStart := mustAWSRealtimeJSONEvent(t, stream.sent[11])
+	if got := awsRealtimeNestedString(audioStart, "event", "contentStart", "type"); got != "AUDIO" {
+		t.Fatalf("event[11] type = %q, want AUDIO", got)
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	stream := &fakeAWSRealtimeStream{}
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

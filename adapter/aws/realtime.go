@@ -199,6 +199,7 @@ type awsRealtimeSession struct {
 	eventCh      chan llm.RealtimeEvent
 	turns        *awsRealtimeTurnTracker
 	generation   *awsRealtimeGeneration
+	chatCtx      *llm.ChatContext
 	instructions string
 	tools        []llm.Tool
 	pending      map[string]struct{}
@@ -241,6 +242,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	s.stream = stream
 	s.mu.Lock()
 	systemPrompt := s.instructions
+	chatCtx := s.chatCtx
 	tools := append([]llm.Tool(nil), s.tools...)
 	s.mu.Unlock()
 	if systemPrompt == "" {
@@ -250,6 +252,7 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		voiceID:                s.model.voice,
 		outputSampleRate:       defaultAWSRealtimeOutputSampleRate,
 		systemContent:          systemPrompt,
+		chatCtx:                chatCtx,
 		tools:                  tools,
 		maxTokens:              defaultAWSRealtimeMaxTokens,
 		topP:                   defaultAWSRealtimeTopP,
@@ -630,8 +633,14 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	}
 	s.mu.Lock()
 	closed := s.closed
-	s.mu.Unlock()
 	if closed {
+		s.mu.Unlock()
+		return nil
+	}
+	started := s.stream != nil
+	s.chatCtx = chatCtx.Copy()
+	s.mu.Unlock()
+	if !started {
 		return nil
 	}
 	for _, item := range chatCtx.Items {
