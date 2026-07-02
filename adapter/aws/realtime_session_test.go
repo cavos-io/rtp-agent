@@ -97,6 +97,10 @@ func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
 	if !strings.Contains(schema, `"query"`) {
 		t.Fatalf("tool schema = %q, want query property", schema)
 	}
+	sessionStart := mustAWSRealtimeJSONEvent(t, stream.sent[0])
+	inference := nestedMap(t, sessionStart, "event", "sessionStart", "inferenceConfiguration")
+	assertAWSRealtimeJSONNumber(t, inference["topP"], 1.0)
+	assertAWSRealtimeJSONNumber(t, inference["temperature"], 1.0)
 }
 
 func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
