@@ -224,6 +224,35 @@ func TestAWSTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamReadFailureClosesReferenceStream(t *testing.T) {
+	body := &countingErrorAWSReadCloser{err: errors.New("polly read failed")}
+	provider := newAWSTTSWithClient(nil, "")
+	stream := &awsTTSChunkedStream{
+		stream:   body,
+		provider: provider,
+	}
+	provider.registerStream(stream)
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read failure", audio)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after read failure", body.closed)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("registered streams = %d, want stream unregistered after read failure", len(provider.streams))
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after read failure err = %v, want EOF", err)
+	}
+}
+
 func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 
@@ -360,6 +389,20 @@ func (c erroringAWSReadCloser) Read([]byte) (int, error) {
 }
 
 func (c erroringAWSReadCloser) Close() error {
+	return nil
+}
+
+type countingErrorAWSReadCloser struct {
+	err    error
+	closed int
+}
+
+func (c *countingErrorAWSReadCloser) Read([]byte) (int, error) {
+	return 0, c.err
+}
+
+func (c *countingErrorAWSReadCloser) Close() error {
+	c.closed++
 	return nil
 }
 
