@@ -91,6 +91,21 @@ func TestAWSRealtimeSessionStartErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionStartDeadlineReturnsAPITimeoutError(t *testing.T) {
+	client := &fakeAWSRealtimeClient{err: context.DeadlineExceeded}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+
+	session, err := provider.Session()
+
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Session error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSRealtimeSessionStartSendErrorClosesStream(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	stream.sendErr = errors.New("bedrock send failed")
