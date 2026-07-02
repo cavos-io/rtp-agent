@@ -348,6 +348,48 @@ func TestGoogleRealtimeModelToolResponseSchedulingUpdatePropagatesReferenceActiv
 	}
 }
 
+func TestGoogleRealtimeModelToolBehaviorUpdatePropagatesReferenceActiveSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	thirdSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession, thirdSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeToolBehavior(genai.BehaviorBlocking),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{googleRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+	model.UpdateOptions(WithGoogleRealtimeToolBehavior(genai.BehaviorNonBlocking))
+
+	if !secondSession.closed {
+		t.Fatal("tool session not closed after model tool behavior update")
+	}
+	if len(connector.configs) != 3 {
+		t.Fatalf("connect calls = %d, want initial session plus tool and behavior reconnects", len(connector.configs))
+	}
+	tools := connector.configs[2].Tools
+	if len(tools) != 1 || len(tools[0].FunctionDeclarations) != 1 {
+		t.Fatalf("tools = %#v, want one function declaration", tools)
+	}
+	if got := tools[0].FunctionDeclarations[0].Behavior; got != genai.BehaviorNonBlocking {
+		t.Fatalf("tool behavior = %q, want NON_BLOCKING after model update", got)
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != thirdSession {
+		t.Fatalf("active live session = %#v, want third reconnected session", googleSession.liveSession)
+	}
+}
+
 func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeVoice(""))
 	if err != nil {

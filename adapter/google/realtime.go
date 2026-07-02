@@ -417,6 +417,9 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 	if options.toolBehaviorSet {
 		m.toolBehavior = options.toolBehavior
 		m.toolBehaviorSet = true
+		for session := range m.sessions {
+			sessions[session] = struct{}{}
+		}
 	}
 	if options.toolResponseSchedulingSet {
 		m.toolResponseScheduling = options.toolResponseScheduling
@@ -432,6 +435,9 @@ func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
 		}
 		if options.temperatureSet {
 			_ = session.reconnectWithTemperature(options.temperature)
+		}
+		if options.toolBehaviorSet {
+			_ = session.reconnectWithToolBehavior(options.toolBehavior)
 		}
 		if options.toolResponseSchedulingSet {
 			session.updateToolResponseScheduling(options.toolResponseScheduling)
@@ -973,6 +979,47 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	s.liveSession = nextSession
 	s.liveConfig = config
 	s.tools = tools
+	s.mu.Unlock()
+	go s.receiveLoop(nextSession)
+	return nil
+}
+
+func (s *googleRealtimeSession) reconnectWithToolBehavior(behavior any) error {
+	if s == nil || s.isClosed() {
+		return nil
+	}
+	s.mu.Lock()
+	if googleRealtimeToolBehavior(s.toolBehavior) == googleRealtimeToolBehavior(behavior) {
+		s.mu.Unlock()
+		return nil
+	}
+	connector := s.connector
+	modelName := s.modelName
+	config := googleRealtimeCloneLiveConfig(s.liveConfig)
+	oldSession := s.liveSession
+	tools := append([]llm.Tool(nil), s.tools...)
+	s.mu.Unlock()
+	if connector == nil || config == nil {
+		return errors.New("google realtime session tool behavior update is not implemented")
+	}
+	config.Tools = googleRealtimeToolsConfig(tools, behavior)
+	if oldSession != nil {
+		_ = oldSession.Close()
+	}
+	s.closeGeneration()
+	nextSession, err := connector.Connect(s.ctx, modelName, config)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = nextSession.Close()
+		return nil
+	}
+	s.liveSession = nextSession
+	s.liveConfig = config
+	s.toolBehavior = behavior
 	s.mu.Unlock()
 	go s.receiveLoop(nextSession)
 	return nil
