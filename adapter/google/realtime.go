@@ -1133,6 +1133,9 @@ func (s *googleRealtimeSession) emitEvent(event llm.RealtimeEvent) {
 	if s == nil || s.isClosed() {
 		return
 	}
+	defer func() {
+		_ = recover()
+	}()
 	select {
 	case s.eventCh <- event:
 	case <-s.ctx.Done():

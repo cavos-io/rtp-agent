@@ -976,6 +976,21 @@ func TestGoogleRealtimeSessionCloseSuppressesLiveSessionCloseError(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionSuppressesLateEventAfterEventChannelClose(t *testing.T) {
+	session := &googleRealtimeSession{
+		ctx:     context.Background(),
+		eventCh: make(chan llm.RealtimeEvent),
+	}
+	close(session.eventCh)
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("emitEvent panicked after event channel close: %v", recovered)
+		}
+	}()
+	session.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeError})
+}
+
 func TestGoogleRealtimeSessionCloseClosesActiveGeneration(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
