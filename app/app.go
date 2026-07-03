@@ -528,6 +528,8 @@ type AppConfig struct {
 	RealtimeModel                           string
 	RealtimeVoice                           string
 	RealtimeTurnDetection                   string
+	RealtimeGenerateReplyTimeoutSeconds     *float64
+	RealtimeModelOptions                    map[string]any
 
 	OpenAIAPIKey                string
 	AnamAPIKey                  string
@@ -914,6 +916,8 @@ func DefaultConfigFromEnv() AppConfig {
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		RealtimeVoice:                           os.Getenv("RTP_AGENT_REALTIME_VOICE"),
 		RealtimeTurnDetection:                   os.Getenv("RTP_AGENT_REALTIME_TURN_DETECTION"),
+		RealtimeGenerateReplyTimeoutSeconds:     getenvOptionalFloat("RTP_AGENT_REALTIME_GENERATE_REPLY_TIMEOUT_SECONDS"),
+		RealtimeModelOptions:                    splitEnvMap("RTP_AGENT_REALTIME_MODEL_OPTIONS"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
 		AnamAPIKey:                              os.Getenv("ANAM_API_KEY"),
 		AnthropicAPIKey:                         os.Getenv("ANTHROPIC_API_KEY"),
@@ -2356,10 +2360,40 @@ func configureLLMFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func awsLLMFromConfig(cfg AppConfig) (*adapteraws.AWSLLM, error) {
+	return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel, awsLLMOptionsFromConfig(cfg)...)
+}
+
+func awsLLMOptionsFromConfig(cfg AppConfig) []adapteraws.AWSLLMOption {
+	llmOpts := []adapteraws.AWSLLMOption{}
+	if maxOutputTokens := modelOptionInt(cfg.LLMModelOptions, "max_output_tokens"); maxOutputTokens > 0 {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMMaxOutputTokens(int32(maxOutputTokens)))
+	}
+	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMTemperature(float32(*temperature)))
+	}
+	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMTopP(float32(*topP)))
+	}
+	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	if fields, ok := cfg.LLMModelOptions["additional_request_fields"]; ok {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMAdditionalRequestFields(fields))
+	}
+	if cacheSystem := modelOptionBool(cfg.LLMModelOptions, "cache_system"); cacheSystem != nil {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMCacheSystem(*cacheSystem))
+	}
+	if cacheTools := modelOptionBool(cfg.LLMModelOptions, "cache_tools"); cacheTools != nil {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMCacheTools(*cacheTools))
+	}
+	return llmOpts
+}
+
 func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
 	case providerAWS:
-		return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
+		return awsLLMFromConfig(cfg)
 	case providerAzure:
 		return azureLLMFromConfig(cfg)
 	case providerCerebras:
@@ -3623,6 +3657,9 @@ func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
 	if cfg.STTSampleRate != nil {
 		sttOpts = append(sttOpts, adapteraws.WithAWSSTTSampleRate(int32(*cfg.STTSampleRate)))
 	}
+	if cfg.STTLanguage != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTLanguage(awstranscribetypes.LanguageCode(cfg.STTLanguage)))
+	}
 	if cfg.STTVocabularyName != "" {
 		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyName(cfg.STTVocabularyName))
 	}
@@ -4719,7 +4756,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	switch normalizeProvider(cfg.LLMProvider) {
 	case "":
 	case providerAWS:
-		provider, err := adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
+		provider, err := awsLLMFromConfig(cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -6537,19 +6574,39 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerPhonic:
 		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
 	case providerAWS:
-		opts := []adapteraws.AWSRealtimeOption{
-			adapteraws.WithAWSRealtimeRegion(cfg.AWSRegion),
-		}
+		opts := awsRealtimeOptionsFromConfig(cfg)
 		if cfg.RealtimeVoice != "" {
 			opts = append(opts, adapteraws.WithAWSRealtimeVoice(cfg.RealtimeVoice))
 		}
 		if cfg.RealtimeTurnDetection != "" {
 			opts = append(opts, adapteraws.WithAWSRealtimeTurnDetection(cfg.RealtimeTurnDetection))
 		}
+		if cfg.RealtimeGenerateReplyTimeoutSeconds != nil {
+			opts = append(opts, adapteraws.WithAWSRealtimeGenerateReplyTimeout(time.Duration(*cfg.RealtimeGenerateReplyTimeoutSeconds*float64(time.Second))))
+		}
 		return adapteraws.NewAWSRealtimeModel(cfg.RealtimeModel, opts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}
+}
+
+func awsRealtimeOptionsFromConfig(cfg AppConfig) []adapteraws.AWSRealtimeOption {
+	opts := []adapteraws.AWSRealtimeOption{
+		adapteraws.WithAWSRealtimeRegion(cfg.AWSRegion),
+	}
+	if maxTokens := modelOptionInt(cfg.RealtimeModelOptions, "max_tokens"); maxTokens > 0 {
+		opts = append(opts, adapteraws.WithAWSRealtimeMaxTokens(maxTokens))
+	}
+	if topP := modelOptionFloat(cfg.RealtimeModelOptions, "top_p"); topP != nil {
+		opts = append(opts, adapteraws.WithAWSRealtimeTopP(*topP))
+	}
+	if temperature := modelOptionFloat(cfg.RealtimeModelOptions, "temperature"); temperature != nil {
+		opts = append(opts, adapteraws.WithAWSRealtimeTemperature(*temperature))
+	}
+	if toolChoice := modelOptionString(cfg.RealtimeModelOptions, "tool_choice"); toolChoice != "" {
+		opts = append(opts, adapteraws.WithAWSRealtimeToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	return opts
 }
 
 func nvidiaSTTOptionsFromConfig(cfg AppConfig) []nvidia.NvidiaSTTOption {

@@ -38,6 +38,7 @@ const (
 	defaultAWSRealtimeMaxSession     = 6 * time.Minute
 	defaultAWSRealtimeRecycleQuiet   = time.Second
 	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
+	defaultAWSRealtimeGenerateReply  = 10 * time.Second
 	awsRealtimeCredentialExpirySlack = 3 * time.Minute
 	awsRealtimeMinRecycleDuration    = 10 * time.Second
 	awsRealtimeAudioModalities       = "audio"
@@ -72,36 +73,39 @@ var awsRealtimeRecoverableReadErrorMessages = []string{
 }
 
 type AWSRealtimeModel struct {
-	model              string
-	region             string
-	voice              string
-	modalities         string
-	turnDetection      string
-	maxTokens          int
-	topP               float64
-	temperature        float64
-	maxSession         time.Duration
-	recycleQuietPeriod time.Duration
-	toolRecycleDelay   time.Duration
-	credentialExpiry   func() (time.Time, bool)
-	maxTokensSet       bool
-	topPSet            bool
-	temperatureSet     bool
-	client             awsRealtimeClient
+	model                string
+	region               string
+	voice                string
+	modalities           string
+	turnDetection        string
+	maxTokens            int
+	topP                 float64
+	temperature          float64
+	toolChoice           llm.ToolChoice
+	maxSession           time.Duration
+	recycleQuietPeriod   time.Duration
+	toolRecycleDelay     time.Duration
+	generateReplyTimeout time.Duration
+	credentialExpiry     func() (time.Time, bool)
+	maxTokensSet         bool
+	topPSet              bool
+	temperatureSet       bool
+	client               awsRealtimeClient
 }
 
 type AWSRealtimeOption func(*AWSRealtimeModel)
 
 func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeModel {
 	provider := &AWSRealtimeModel{
-		model:              awsRealtimeModelOrDefault(model),
-		region:             awsRegionOrDefault(""),
-		voice:              defaultAWSRealtimeVoice,
-		modalities:         defaultAWSRealtimeModalities,
-		turnDetection:      defaultAWSRealtimeTurnDetection,
-		maxSession:         awsRealtimeMaxSessionFromEnv(),
-		recycleQuietPeriod: defaultAWSRealtimeRecycleQuiet,
-		toolRecycleDelay:   defaultAWSRealtimeToolRecycle,
+		model:                awsRealtimeModelOrDefault(model),
+		region:               awsRegionOrDefault(""),
+		voice:                defaultAWSRealtimeVoice,
+		modalities:           defaultAWSRealtimeModalities,
+		turnDetection:        defaultAWSRealtimeTurnDetection,
+		maxSession:           awsRealtimeMaxSessionFromEnv(),
+		recycleQuietPeriod:   defaultAWSRealtimeRecycleQuiet,
+		toolRecycleDelay:     defaultAWSRealtimeToolRecycle,
+		generateReplyTimeout: defaultAWSRealtimeGenerateReply,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -178,6 +182,18 @@ func WithAWSRealtimeTemperature(temperature float64) AWSRealtimeOption {
 	}
 }
 
+func WithAWSRealtimeToolChoice(toolChoice llm.ToolChoice) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.toolChoice = toolChoice
+	}
+}
+
+func WithAWSRealtimeGenerateReplyTimeout(timeout time.Duration) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.generateReplyTimeout = timeout
+	}
+}
+
 func WithAWSRealtimeClient(client awsRealtimeClient) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
 		provider.client = client
@@ -241,6 +257,36 @@ func (m *AWSRealtimeModel) Region() string        { return m.region }
 func (m *AWSRealtimeModel) Voice() string         { return m.voice }
 func (m *AWSRealtimeModel) Modalities() string    { return m.modalities }
 func (m *AWSRealtimeModel) TurnDetection() string { return m.turnDetection }
+func (m *AWSRealtimeModel) MaxTokens() (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	return m.maxTokens, m.maxTokensSet
+}
+func (m *AWSRealtimeModel) TopP() (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	return m.topP, m.topPSet
+}
+func (m *AWSRealtimeModel) Temperature() (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	return m.temperature, m.temperatureSet
+}
+func (m *AWSRealtimeModel) ToolChoice() llm.ToolChoice {
+	if m == nil {
+		return nil
+	}
+	return m.toolChoice
+}
+func (m *AWSRealtimeModel) GenerateReplyTimeout() time.Duration {
+	if m == nil {
+		return 0
+	}
+	return m.generateReplyTimeout
+}
 
 func (m *AWSRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return llm.RealtimeCapabilities{
@@ -434,6 +480,7 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 		maxTokens:              s.model.maxTokens,
 		topP:                   s.model.topP,
 		temperature:            s.model.temperature,
+		toolChoice:             s.model.toolChoice,
 		maxTokensSet:           s.model.maxTokensSet,
 		topPSet:                s.model.topPSet,
 		temperatureSet:         s.model.temperatureSet,
@@ -770,6 +817,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		contentID := awsRealtimeNestedString(payload, "event", "textOutput", "contentId")
 		role := awsRealtimeNestedString(payload, "event", "textOutput", "role")
 		if textContent == awsRealtimeBargeInContent {
+			s.markLastAssistantMessageInterrupted()
 			if !s.hasPendingTools() {
 				s.closeGeneration()
 			}
@@ -954,6 +1002,24 @@ func (s *awsRealtimeSession) updateProviderTextHistory(role llm.ChatRole, text s
 		s.audioMessages[msg.ID] = struct{}{}
 	}
 	s.chatCtx.Truncate(defaultAWSRealtimeMaxMessages)
+}
+
+func (s *awsRealtimeSession) markLastAssistantMessageInterrupted() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.chatCtx == nil {
+		return
+	}
+	for i := len(s.chatCtx.Items) - 1; i >= 0; i-- {
+		msg, ok := s.chatCtx.Items[i].(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		if msg.Role == llm.ChatRoleAssistant {
+			msg.Interrupted = true
+		}
+		return
+	}
 }
 
 func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) bool {
@@ -1417,7 +1483,14 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		Role:    llm.ChatRoleUser,
 		Content: []llm.ChatContent{{Text: options.Instructions}},
 	}
-	return s.sendInteractiveUserText(context.Background(), msg)
+	timeout := s.model.generateReplyTimeout
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if timeout >= 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	return s.sendInteractiveUserText(ctx, msg)
 }
 
 func (s *awsRealtimeSession) emitEmptyGenerationCreated(userInitiated bool) {

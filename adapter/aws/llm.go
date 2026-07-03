@@ -22,15 +22,72 @@ const (
 )
 
 type AWSLLM struct {
-	client awsLLMClient
-	model  string
+	client             awsLLMClient
+	model              string
+	toolChoice         llm.ToolChoice
+	maxOutputTokens    int32
+	maxOutputTokensSet bool
+	temperature        float32
+	temperatureSet     bool
+	topP               float32
+	topPSet            bool
+	additionalFields   any
+	cacheSystem        bool
+	cacheTools         bool
 }
+
+type AWSLLMOption func(*AWSLLM)
 
 type awsLLMClient interface {
 	ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
 }
 
-func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error) {
+func WithAWSLLMToolChoice(toolChoice llm.ToolChoice) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.toolChoice = toolChoice
+	}
+}
+
+func WithAWSLLMMaxOutputTokens(maxOutputTokens int32) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.maxOutputTokens = maxOutputTokens
+		l.maxOutputTokensSet = true
+	}
+}
+
+func WithAWSLLMTemperature(temperature float32) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.temperature = temperature
+		l.temperatureSet = true
+	}
+}
+
+func WithAWSLLMTopP(topP float32) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.topP = topP
+		l.topPSet = true
+	}
+}
+
+func WithAWSLLMAdditionalRequestFields(fields any) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.additionalFields = fields
+	}
+}
+
+func WithAWSLLMCacheSystem(cache bool) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.cacheSystem = cache
+	}
+}
+
+func WithAWSLLMCacheTools(cache bool) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.cacheTools = cache
+	}
+}
+
+func NewAWSLLM(ctx context.Context, region string, model string, providerOpts ...AWSLLMOption) (*AWSLLM, error) {
 	model = awsLLMModelOrDefault(model)
 	region = awsRegionOrDefault(region)
 
@@ -42,10 +99,14 @@ func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error
 		return nil, err
 	}
 
-	return &AWSLLM{
+	provider := &AWSLLM{
 		client: bedrockruntime.NewFromConfig(cfg),
 		model:  model,
-	}, nil
+	}
+	for _, opt := range providerOpts {
+		opt(provider)
+	}
+	return provider, nil
 }
 
 func awsLLMModelOrDefault(model string) string {
@@ -67,6 +128,42 @@ func (l *AWSLLM) Model() string { return l.model }
 func (l *AWSLLM) Provider() string {
 	return "AWS Bedrock"
 }
+func (l *AWSLLM) ToolChoice() llm.ToolChoice {
+	if l == nil {
+		return nil
+	}
+	return l.toolChoice
+}
+func (l *AWSLLM) MaxOutputTokens() (int32, bool) {
+	if l == nil {
+		return 0, false
+	}
+	return l.maxOutputTokens, l.maxOutputTokensSet
+}
+func (l *AWSLLM) Temperature() (float32, bool) {
+	if l == nil {
+		return 0, false
+	}
+	return l.temperature, l.temperatureSet
+}
+func (l *AWSLLM) TopP() (float32, bool) {
+	if l == nil {
+		return 0, false
+	}
+	return l.topP, l.topPSet
+}
+func (l *AWSLLM) AdditionalRequestFields() any {
+	if l == nil {
+		return nil
+	}
+	return l.additionalFields
+}
+func (l *AWSLLM) CacheSystem() bool {
+	return l != nil && l.cacheSystem
+}
+func (l *AWSLLM) CacheTools() bool {
+	return l != nil && l.cacheTools
+}
 
 func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.client == nil {
@@ -77,6 +174,10 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	for _, opt := range opts {
 		opt(options)
 	}
+	requestOptions := *options
+	if requestOptions.ToolChoice == nil {
+		requestOptions.ToolChoice = l.toolChoice
+	}
 	connectOptions, err := options.EffectiveConnectOptions()
 	if err != nil {
 		return nil, err
@@ -86,27 +187,39 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
 	}
 
+	toolConfig := (*types.ToolConfiguration)(nil)
+	if len(requestOptions.Tools) > 0 {
+		toolConfig = buildAWSToolConfigWithCache(&requestOptions, l.cacheTools)
+	}
+	if toolConfig == nil {
+		chatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{ExcludeFunctionCall: true})
+	}
 	messages, systemText := buildAWSMessages(chatCtx)
 
 	req := &bedrockruntime.ConverseStreamInput{
 		ModelId:  aws.String(l.model),
 		Messages: messages,
 	}
-	if inferenceConfig := buildAWSInferenceConfig(options.ExtraParams); inferenceConfig != nil {
+	if inferenceConfig := l.buildAWSInferenceConfig(options.ExtraParams); inferenceConfig != nil {
 		req.InferenceConfig = inferenceConfig
 	}
 	if fields, ok := options.ExtraParams["additional_request_fields"]; ok {
 		req.AdditionalModelRequestFields = document.NewLazyDocument(fields)
+	} else if l.additionalFields != nil {
+		req.AdditionalModelRequestFields = document.NewLazyDocument(l.additionalFields)
 	}
 
 	if systemText != "" {
 		req.System = []types.SystemContentBlock{
 			&types.SystemContentBlockMemberText{Value: systemText},
 		}
+		if l.cacheSystem {
+			req.System = append(req.System, awsCachePointSystemBlock())
+		}
 	}
 
-	if len(options.Tools) > 0 {
-		req.ToolConfig = buildAWSToolConfig(options)
+	if toolConfig != nil {
+		req.ToolConfig = toolConfig
 	}
 
 	out, err := l.client.ConverseStream(ctx, req)
@@ -141,6 +254,26 @@ func buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguratio
 	}
 	if topP, ok := awsFloat32Param(params, "top_p"); ok {
 		config.TopP = aws.Float32(topP)
+	}
+	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
+		return nil
+	}
+	return config
+}
+
+func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
+	config := buildAWSInferenceConfig(params)
+	if config == nil {
+		config = &types.InferenceConfiguration{}
+	}
+	if config.MaxTokens == nil && l.maxOutputTokensSet {
+		config.MaxTokens = aws.Int32(l.maxOutputTokens)
+	}
+	if config.Temperature == nil && l.temperatureSet {
+		config.Temperature = aws.Float32(l.temperature)
+	}
+	if config.TopP == nil && l.topPSet {
+		config.TopP = aws.Float32(l.topP)
 	}
 	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
 		return nil
@@ -183,6 +316,10 @@ func awsFloat32Param(params map[string]any, key string) (float32, bool) {
 }
 
 func buildAWSToolConfig(options *llm.ChatOptions) *types.ToolConfiguration {
+	return buildAWSToolConfigWithCache(options, false)
+}
+
+func buildAWSToolConfigWithCache(options *llm.ChatOptions, cacheTools bool) *types.ToolConfiguration {
 	if len(options.Tools) == 0 || options.ToolChoice == "none" {
 		return nil
 	}
@@ -203,10 +340,25 @@ func buildAWSToolConfig(options *llm.ChatOptions) *types.ToolConfiguration {
 			Value: spec,
 		})
 	}
+	if cacheTools {
+		toolSpecs = append(toolSpecs, awsCachePointToolBlock())
+	}
 
 	return &types.ToolConfiguration{
 		Tools:      toolSpecs,
 		ToolChoice: buildAWSToolChoice(options.ToolChoice),
+	}
+}
+
+func awsCachePointSystemBlock() types.SystemContentBlock {
+	return &types.SystemContentBlockMemberCachePoint{
+		Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
+	}
+}
+
+func awsCachePointToolBlock() types.Tool {
+	return &types.ToolMemberCachePoint{
+		Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
 	}
 }
 

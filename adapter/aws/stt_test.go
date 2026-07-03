@@ -160,6 +160,19 @@ func TestAWSSTTStreamInputDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamInputUsesReferenceConfiguredLanguage(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil, WithAWSSTTLanguage(types.LanguageCodeIdId))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.LanguageCode != types.LanguageCodeIdId {
+		t.Fatalf("language = %q, want configured id-ID", input.LanguageCode)
+	}
+}
+
 func TestAWSSTTExposesReferenceInputSampleRate(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil)
 	if err != nil {

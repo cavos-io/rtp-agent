@@ -74,6 +74,14 @@ func WithAWSSTTSampleRate(sampleRate int32) AWSSTTOption {
 	}
 }
 
+func WithAWSSTTLanguage(language types.LanguageCode) AWSSTTOption {
+	return func(s *AWSSTT) {
+		if language != "" {
+			s.language = language
+		}
+	}
+}
+
 func WithAWSSTTVocabularyName(name string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.vocabularyName = name
@@ -212,6 +220,12 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 }
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
+func (s *AWSSTT) Language() string {
+	if s == nil {
+		return ""
+	}
+	return string(s.language)
+}
 func (s *AWSSTT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return 24000

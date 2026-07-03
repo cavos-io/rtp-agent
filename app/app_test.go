@@ -13011,9 +13011,10 @@ func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("AWS_REGION", "us-west-2")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "aws")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "amazon.nova-test")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `temperature=0.2,top_p=0.8,max_output_tokens=128,tool_choice=required,cache_system=true,cache_tools=true,additional_request_fields={"thinking":{"type":"disabled"}}`)
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "aws")
 	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
-	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_STT_SPEAKER_LABELS", "true")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "aws")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "Joanna")
@@ -13031,8 +13032,40 @@ func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	if got := llm.Provider(app.Session.LLM); got != "AWS Bedrock" {
 		t.Fatalf("LLM provider = %q, want AWS Bedrock", got)
 	}
+	awsLLM, ok := app.Session.LLM.(*adapteraws.AWSLLM)
+	if !ok {
+		t.Fatalf("LLM = %T, want *aws.AWSLLM", app.Session.LLM)
+	}
+	if got := awsLLM.ToolChoice(); got != llm.ToolChoice("required") {
+		t.Fatalf("LLM tool choice = %q, want required", got)
+	}
+	if got, ok := awsLLM.MaxOutputTokens(); !ok || got != 128 {
+		t.Fatalf("LLM max output tokens = %d/%v, want 128/true", got, ok)
+	}
+	if got, ok := awsLLM.Temperature(); !ok || got != 0.2 {
+		t.Fatalf("LLM temperature = %v/%v, want 0.2/true", got, ok)
+	}
+	if got, ok := awsLLM.TopP(); !ok || got != 0.8 {
+		t.Fatalf("LLM top_p = %v/%v, want 0.8/true", got, ok)
+	}
+	if !awsLLM.CacheSystem() {
+		t.Fatal("LLM cache system = false, want true")
+	}
+	if !awsLLM.CacheTools() {
+		t.Fatal("LLM cache tools = false, want true")
+	}
+	if got := awsLLM.AdditionalRequestFields(); !reflect.DeepEqual(got, map[string]any{"thinking": map[string]any{"type": "disabled"}}) {
+		t.Fatalf("LLM additional request fields = %#v, want thinking disabled", got)
+	}
 	if got := app.Session.STT.Label(); got != "aws.STT" {
 		t.Fatalf("STT label = %q, want aws.STT", got)
+	}
+	awsSTT, ok := app.Session.STT.(*adapteraws.AWSSTT)
+	if !ok {
+		t.Fatalf("STT = %T, want *aws.AWSSTT", app.Session.STT)
+	}
+	if got := awsSTT.Language(); got != "id-ID" {
+		t.Fatalf("STT language = %q, want id-ID", got)
 	}
 	if got := app.Session.TTS.Label(); got != "aws.TTS" {
 		t.Fatalf("TTS label = %q, want aws.TTS", got)
@@ -14303,6 +14336,8 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	t.Setenv("RTP_AGENT_REALTIME_MODEL", "amazon.nova-sonic-v1:0")
 	t.Setenv("RTP_AGENT_REALTIME_VOICE", "matthew")
 	t.Setenv("RTP_AGENT_REALTIME_TURN_DETECTION", "HIGH")
+	t.Setenv("RTP_AGENT_REALTIME_GENERATE_REPLY_TIMEOUT_SECONDS", "2.5")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "max_tokens=4096,top_p=0.25,temperature=0.5,tool_choice=required")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -14329,6 +14364,21 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	}
 	if got := model.TurnDetection(); got != "HIGH" {
 		t.Fatalf("Realtime turn detection = %q, want HIGH", got)
+	}
+	if got := model.GenerateReplyTimeout(); got != 2500*time.Millisecond {
+		t.Fatalf("Realtime generate reply timeout = %s, want 2.5s", got)
+	}
+	if got, ok := model.MaxTokens(); !ok || got != 4096 {
+		t.Fatalf("Realtime max tokens = %d/%v, want 4096/true", got, ok)
+	}
+	if got, ok := model.TopP(); !ok || got != 0.25 {
+		t.Fatalf("Realtime top_p = %v/%v, want 0.25/true", got, ok)
+	}
+	if got, ok := model.Temperature(); !ok || got != 0.5 {
+		t.Fatalf("Realtime temperature = %v/%v, want 0.5/true", got, ok)
+	}
+	if got := model.ToolChoice(); got != llm.ToolChoice("required") {
+		t.Fatalf("Realtime tool choice = %q, want required", got)
 	}
 	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
 		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
