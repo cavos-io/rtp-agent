@@ -708,6 +708,19 @@ func (s *awsRealtimeSession) readResponses() {
 		s.handleResponseEvent(payload)
 	}
 	if err := stream.Err(); err != nil {
+		if isAWSRealtimeToolResponseParsingError(err) {
+			s.closeGeneration()
+			s.clearPendingTools()
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeError,
+				Error: llm.NewRealtimeModelError(
+					s.model.Label(),
+					llm.NewAPIStatusErrorWithRetryable(err.Error(), 400, "", err, false),
+					true,
+				),
+			})
+			return
+		}
 		if s.restartAfterRecoverableReadError(stream, err) {
 			return
 		}
@@ -786,6 +799,16 @@ func isAWSRealtimeRecoverableReadError(err error) bool {
 		}
 	}
 	return false
+}
+
+func isAWSRealtimeToolResponseParsingError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Tool Response parsing error")
+}
+
+func (s *awsRealtimeSession) clearPendingTools() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = make(map[string]struct{})
 }
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {

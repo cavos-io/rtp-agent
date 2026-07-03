@@ -1223,6 +1223,57 @@ func TestAWSRealtimeSessionReadFailureClosesReferenceGeneration(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionToolResponseParsingErrorIsReferenceRecoverable(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	stream.err = errors.New("ValidationException: Tool Response parsing error: malformed tool result")
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-parse","toolName":"lookup","content":"{}"}}}`)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
+
+	close(stream.events)
+	var event llm.RealtimeEvent
+	for {
+		select {
+		case event = <-session.EventCh():
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for tool parsing error")
+		}
+		if event.Type == llm.RealtimeEventTypeError {
+			break
+		}
+	}
+	modelErr, ok := event.Error.(*llm.RealtimeModelError)
+	if !ok {
+		t.Fatalf("Error = %T %v, want RealtimeModelError", event.Error, event.Error)
+	}
+	if !modelErr.Recoverable {
+		t.Fatal("Recoverable = false, want reference recoverable tool parsing error")
+	}
+
+	awsSession.mu.Lock()
+	pendingCount := len(awsSession.pending)
+	awsSession.mu.Unlock()
+	if pendingCount != 0 {
+		t.Fatalf("pending tools = %d, want cleared after tool parsing error", pendingCount)
+	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+}
+
 func TestAWSRealtimeSessionReadEOFClosesReferenceGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
