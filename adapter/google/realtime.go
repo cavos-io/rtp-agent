@@ -1630,15 +1630,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 		}
 		if message.ServerContent.TurnComplete {
-			s.emitEvent(llm.RealtimeEvent{
-				Type:          llm.RealtimeEventTypeSpeechStopped,
-				SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
-			})
-			if s.inputText != "" {
-				s.emitInputTranscription(true)
-			}
-			s.commitCompletedTranscripts()
-			s.closeGeneration()
+			s.finishCurrentGeneration()
 		}
 	}
 	if message.ToolCall != nil {

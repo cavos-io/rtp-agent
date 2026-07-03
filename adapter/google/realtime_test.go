@@ -3613,6 +3613,31 @@ func TestGoogleRealtimeSessionPendingReplySuppressesReferenceInterruptedSpeechSt
 	assertNoGoogleRealtimeEvent(t, session.EventCh())
 }
 
+func TestGoogleRealtimeSessionPendingReplySuppressesInterruptedTurnCompleteStop(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			Interrupted:  true,
+			TurnComplete: true,
+		},
+	}
+
+	assertNoGoogleRealtimeEvent(t, session.EventCh())
+}
+
 func TestGoogleRealtimeSessionPendingReplySuppressesInterruptedModelTurnSpeechStarted(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
