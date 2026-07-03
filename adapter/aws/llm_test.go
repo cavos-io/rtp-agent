@@ -199,6 +199,40 @@ func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatAppliesReferenceProviderInferenceDefaults(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	client := fakeAWSLLMClient{
+		err:          errors.New("stop after capture"),
+		inputCapture: &captured,
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	WithAWSLLMMaxOutputTokens(256)(provider)
+	WithAWSLLMTemperature(0.3)(provider)
+	WithAWSLLMTopP(0.8)(provider)
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, _ = provider.Chat(context.Background(), ctx)
+
+	if captured == nil || captured.InferenceConfig == nil {
+		t.Fatalf("InferenceConfig = %#v, want provider defaults", captured)
+	}
+	if captured.InferenceConfig.MaxTokens == nil || *captured.InferenceConfig.MaxTokens != 256 {
+		t.Fatalf("max tokens = %#v, want 256", captured.InferenceConfig.MaxTokens)
+	}
+	if captured.InferenceConfig.Temperature == nil || *captured.InferenceConfig.Temperature != 0.3 {
+		t.Fatalf("temperature = %#v, want 0.3", captured.InferenceConfig.Temperature)
+	}
+	if captured.InferenceConfig.TopP == nil || *captured.InferenceConfig.TopP != 0.8 {
+		t.Fatalf("topP = %#v, want 0.8", captured.InferenceConfig.TopP)
+	}
+}
+
 func TestAWSLLMChatForwardsReferenceAdditionalRequestFields(t *testing.T) {
 	var captured *bedrockruntime.ConverseStreamInput
 	client := fakeAWSLLMClient{

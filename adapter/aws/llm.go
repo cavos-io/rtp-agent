@@ -22,9 +22,15 @@ const (
 )
 
 type AWSLLM struct {
-	client     awsLLMClient
-	model      string
-	toolChoice llm.ToolChoice
+	client             awsLLMClient
+	model              string
+	toolChoice         llm.ToolChoice
+	maxOutputTokens    int32
+	maxOutputTokensSet bool
+	temperature        float32
+	temperatureSet     bool
+	topP               float32
+	topPSet            bool
 }
 
 type AWSLLMOption func(*AWSLLM)
@@ -36,6 +42,27 @@ type awsLLMClient interface {
 func WithAWSLLMToolChoice(toolChoice llm.ToolChoice) AWSLLMOption {
 	return func(l *AWSLLM) {
 		l.toolChoice = toolChoice
+	}
+}
+
+func WithAWSLLMMaxOutputTokens(maxOutputTokens int32) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.maxOutputTokens = maxOutputTokens
+		l.maxOutputTokensSet = true
+	}
+}
+
+func WithAWSLLMTemperature(temperature float32) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.temperature = temperature
+		l.temperatureSet = true
+	}
+}
+
+func WithAWSLLMTopP(topP float32) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.topP = topP
+		l.topPSet = true
 	}
 }
 
@@ -116,7 +143,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		ModelId:  aws.String(l.model),
 		Messages: messages,
 	}
-	if inferenceConfig := buildAWSInferenceConfig(options.ExtraParams); inferenceConfig != nil {
+	if inferenceConfig := l.buildAWSInferenceConfig(options.ExtraParams); inferenceConfig != nil {
 		req.InferenceConfig = inferenceConfig
 	}
 	if fields, ok := options.ExtraParams["additional_request_fields"]; ok {
@@ -165,6 +192,26 @@ func buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguratio
 	}
 	if topP, ok := awsFloat32Param(params, "top_p"); ok {
 		config.TopP = aws.Float32(topP)
+	}
+	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
+		return nil
+	}
+	return config
+}
+
+func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
+	config := buildAWSInferenceConfig(params)
+	if config == nil {
+		config = &types.InferenceConfiguration{}
+	}
+	if config.MaxTokens == nil && l.maxOutputTokensSet {
+		config.MaxTokens = aws.Int32(l.maxOutputTokens)
+	}
+	if config.Temperature == nil && l.temperatureSet {
+		config.Temperature = aws.Float32(l.temperature)
+	}
+	if config.TopP == nil && l.topPSet {
+		config.TopP = aws.Float32(l.topP)
 	}
 	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
 		return nil
