@@ -32,6 +32,10 @@ const (
 	defaultAWSRealtimeModalities     = "mixed"
 	defaultAWSRealtimeMaxMessages    = 40
 	defaultAWSRealtimeMaxMessageSize = 1024
+	defaultAWSRealtimeMaxRestarts    = 3
+	defaultAWSRealtimeMaxSession     = 6 * time.Minute
+	defaultAWSRealtimeRecycleQuiet   = time.Second
+	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
 	awsRealtimeAudioModalities       = "audio"
 	awsRealtimeProvider              = "Amazon"
 	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
@@ -52,30 +56,47 @@ const (
 		"- Ensure that our communication remains in the same language as the user."
 )
 
+var awsRealtimeRecoverableReadErrorMessages = []string{
+	"InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
+	"System instability detected. Please retry your request.",
+	"ThrottlingException",
+	"ModelNotReadyException",
+	"ModelErrorException",
+	"ModelStreamErrorException",
+	"ModelTimeoutException",
+	"InvalidEventBytes",
+}
+
 type AWSRealtimeModel struct {
-	model          string
-	region         string
-	voice          string
-	modalities     string
-	turnDetection  string
-	maxTokens      int
-	topP           float64
-	temperature    float64
-	maxTokensSet   bool
-	topPSet        bool
-	temperatureSet bool
-	client         awsRealtimeClient
+	model              string
+	region             string
+	voice              string
+	modalities         string
+	turnDetection      string
+	maxTokens          int
+	topP               float64
+	temperature        float64
+	maxSession         time.Duration
+	recycleQuietPeriod time.Duration
+	toolRecycleDelay   time.Duration
+	maxTokensSet       bool
+	topPSet            bool
+	temperatureSet     bool
+	client             awsRealtimeClient
 }
 
 type AWSRealtimeOption func(*AWSRealtimeModel)
 
 func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeModel {
 	provider := &AWSRealtimeModel{
-		model:         awsRealtimeModelOrDefault(model),
-		region:        awsRegionOrDefault(""),
-		voice:         defaultAWSRealtimeVoice,
-		modalities:    defaultAWSRealtimeModalities,
-		turnDetection: defaultAWSRealtimeTurnDetection,
+		model:              awsRealtimeModelOrDefault(model),
+		region:             awsRegionOrDefault(""),
+		voice:              defaultAWSRealtimeVoice,
+		modalities:         defaultAWSRealtimeModalities,
+		turnDetection:      defaultAWSRealtimeTurnDetection,
+		maxSession:         defaultAWSRealtimeMaxSession,
+		recycleQuietPeriod: defaultAWSRealtimeRecycleQuiet,
+		toolRecycleDelay:   defaultAWSRealtimeToolRecycle,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -155,6 +176,12 @@ func WithAWSRealtimeTemperature(temperature float64) AWSRealtimeOption {
 func WithAWSRealtimeClient(client awsRealtimeClient) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
 		provider.client = client
+	}
+}
+
+func WithAWSRealtimeMaxSessionDuration(duration time.Duration) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.maxSession = duration
 	}
 }
 
@@ -255,6 +282,10 @@ type awsRealtimeSession struct {
 	audioMessages            map[string]struct{}
 	noGenerationContentRoles map[string]string
 	recycleToolsAfterPending bool
+	toolRecycleVersion       int
+	recycleTimer             *time.Timer
+	recycleVersion           int
+	lastAudioOutput          time.Time
 	currentUserContentID     string
 	audioBStream             *coreaudio.AudioByteStream
 	audioNorm                awsRealtimeInputAudioNormalizer
@@ -270,7 +301,12 @@ type awsRealtimeGeneration struct {
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
 	contentTypes map[string]string
+	restarts     int
 	closeOnce    sync.Once
+}
+
+type awsRealtimeStartOptions struct {
+	restart bool
 }
 
 func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
@@ -294,6 +330,10 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 }
 
 func (s *awsRealtimeSession) start(ctx context.Context) error {
+	return s.startWithOptions(ctx, awsRealtimeStartOptions{})
+}
+
+func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRealtimeStartOptions) error {
 	stream, err := s.client.InvokeModelWithBidirectionalStream(ctx, &bedrockruntime.InvokeModelWithBidirectionalStreamInput{
 		ModelId: aws.String(s.model.model),
 	})
@@ -318,6 +358,10 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		s.mu.Lock()
 		s.chatCtx = chatCtx
 		s.mu.Unlock()
+	}
+	interactiveUserText := ""
+	if options.restart {
+		chatCtx, interactiveUserText = awsRealtimeRestartChatContext(chatCtx)
 	}
 	initEvents, historyEvents, err := s.builder.createPromptStartBlock(awsRealtimePromptStartOptions{
 		voiceID:                s.model.voice,
@@ -351,8 +395,147 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		s.closeStartupStream()
 		return awsRealtimeStartupSendError(err)
 	}
+	if interactiveUserText != "" {
+		if err := s.sendInteractiveUserText(ctx, &llm.ChatMessage{
+			ID:      uuid.NewString(),
+			Role:    llm.ChatRoleUser,
+			Content: []llm.ChatContent{{Text: interactiveUserText}},
+		}); err != nil {
+			s.closeStartupStream()
+			return awsRealtimeStartupSendError(err)
+		}
+	}
+	s.startSessionRecycleTimer()
 	go s.readResponses()
 	return nil
+}
+
+func (s *awsRealtimeSession) startSessionRecycleTimer() {
+	if s.model == nil || s.model.maxSession <= 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.recycleTimer != nil {
+		s.recycleTimer.Stop()
+	}
+	s.recycleVersion++
+	version := s.recycleVersion
+	duration := s.model.maxSession
+	s.recycleTimer = time.AfterFunc(duration, func() {
+		s.recycleAfterSessionDuration(context.Background(), version)
+	})
+	s.mu.Unlock()
+}
+
+func (s *awsRealtimeSession) recycleAfterSessionDuration(ctx context.Context, version int) {
+	if !s.waitForSessionRecycleTurnBoundary(ctx, version) {
+		return
+	}
+	if !s.waitForSessionRecycleAudioQuiet(ctx, version) {
+		return
+	}
+	s.mu.Lock()
+	if s.closed || version != s.recycleVersion || s.stream == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	if err := s.recycleForUpdatedTools(ctx); err != nil {
+		s.emit(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: err,
+		})
+		return
+	}
+	s.emit(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
+}
+
+func (s *awsRealtimeSession) waitForSessionRecycleTurnBoundary(ctx context.Context, version int) bool {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.mu.Lock()
+		done := s.closed || version != s.recycleVersion
+		activeGeneration := s.generation != nil
+		s.mu.Unlock()
+		if done {
+			return false
+		}
+		if !activeGeneration {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *awsRealtimeSession) waitForSessionRecycleAudioQuiet(ctx context.Context, version int) bool {
+	for {
+		s.mu.Lock()
+		done := s.closed || version != s.recycleVersion
+		lastAudioOutput := s.lastAudioOutput
+		quietPeriod := time.Duration(0)
+		if s.model != nil {
+			quietPeriod = s.model.recycleQuietPeriod
+		}
+		s.mu.Unlock()
+		if done {
+			return false
+		}
+		if lastAudioOutput.IsZero() || quietPeriod <= 0 {
+			return true
+		}
+		wait := quietPeriod - time.Since(lastAudioOutput)
+		if wait <= 0 {
+			return true
+		}
+		if wait > 10*time.Millisecond {
+			wait = 10 * time.Millisecond
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
+}
+
+func awsRealtimeRestartChatContext(chatCtx *llm.ChatContext) (*llm.ChatContext, string) {
+	if chatCtx == nil || len(chatCtx.Items) == 0 {
+		return chatCtx, ""
+	}
+	restartCtx := chatCtx
+	if first, ok := restartCtx.Items[0].(*llm.ChatMessage); ok && first.Role == llm.ChatRoleAssistant {
+		restartCtx = restartCtx.Copy()
+		dummy := &llm.ChatMessage{
+			ID:      uuid.NewString(),
+			Role:    llm.ChatRoleUser,
+			Content: []llm.ChatContent{{Text: "[Resuming conversation]"}},
+		}
+		restartCtx.Items = append([]llm.ChatItem{dummy}, restartCtx.Items...)
+	}
+	last, ok := restartCtx.Items[len(restartCtx.Items)-1].(*llm.ChatMessage)
+	if !ok || last.Role != llm.ChatRoleUser {
+		return restartCtx, ""
+	}
+	text := strings.TrimSpace(last.TextContent())
+	if text == "" {
+		return restartCtx, ""
+	}
+	if restartCtx == chatCtx {
+		restartCtx = restartCtx.Copy()
+	}
+	restartCtx.Items = restartCtx.Items[:len(restartCtx.Items)-1]
+	return restartCtx, text
 }
 
 func awsRealtimeStartupSendError(err error) error {
@@ -415,8 +598,11 @@ func (s *awsRealtimeSession) readResponses() {
 		}
 		s.handleResponseEvent(payload)
 	}
-	s.closeGeneration()
 	if err := stream.Err(); err != nil {
+		if s.restartAfterRecoverableReadError(stream, err) {
+			return
+		}
+		s.closeGeneration()
 		var apiErr error = llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err))
 		if errors.Is(err, context.DeadlineExceeded) {
 			apiErr = llm.NewAPITimeoutError(err.Error())
@@ -425,7 +611,72 @@ func (s *awsRealtimeSession) readResponses() {
 			Type:  llm.RealtimeEventTypeError,
 			Error: apiErr,
 		})
+		return
 	}
+	s.closeGeneration()
+}
+
+func (s *awsRealtimeSession) restartAfterRecoverableReadError(stream awsRealtimeStream, err error) bool {
+	if !isAWSRealtimeRecoverableReadError(err) {
+		return false
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
+	if s.generation != nil {
+		if s.generation.restarts >= defaultAWSRealtimeMaxRestarts {
+			s.mu.Unlock()
+			_ = stream.Close()
+			s.closeGeneration()
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeError,
+				Error: llm.NewAPIStatusErrorWithRetryable(
+					fmt.Sprintf("Max restart attempts exceeded: %v", err),
+					500,
+					"",
+					err,
+					false,
+				),
+			})
+			return true
+		}
+		s.generation.restarts++
+	}
+	if s.stream == stream {
+		s.stream = nil
+	}
+	s.builder = newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString())
+	s.mu.Unlock()
+
+	_ = stream.Close()
+	if startErr := s.startWithOptions(context.Background(), awsRealtimeStartOptions{restart: true}); startErr != nil {
+		s.closeGeneration()
+		s.emit(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: startErr,
+		})
+		return true
+	}
+	s.emit(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
+	return true
+}
+
+func isAWSRealtimeRecoverableReadError(err error) bool {
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	message := err.Error()
+	for _, recoverable := range awsRealtimeRecoverableReadErrorMessages {
+		if strings.Contains(message, recoverable) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
@@ -446,6 +697,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			return
 		}
 		if s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data) {
+			s.markLastAudioOutput()
 			s.emit(llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeAudio,
 				Data: data,
@@ -664,6 +916,12 @@ func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) 
 	default:
 	}
 	return true
+}
+
+func (s *awsRealtimeSession) markLastAudioOutput() {
+	s.mu.Lock()
+	s.lastAudioOutput = time.Now()
+	s.mu.Unlock()
 }
 
 func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
@@ -972,6 +1230,18 @@ func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	hasPendingTools := len(s.pending) > 0
 	if started && changed && hasPendingTools {
 		s.recycleToolsAfterPending = true
+		s.toolRecycleVersion++
+		version := s.toolRecycleVersion
+		delay := defaultAWSRealtimeToolRecycle
+		if s.model != nil {
+			delay = s.model.toolRecycleDelay
+		}
+		if delay <= 0 {
+			delay = defaultAWSRealtimeToolRecycle
+		}
+		time.AfterFunc(delay, func() {
+			s.recycleAfterStalePendingTools(context.Background(), version)
+		})
 	}
 	s.mu.Unlock()
 	if started && changed && hasPendingTools {
@@ -999,6 +1269,29 @@ func awsRealtimeToolNamesChanged(oldTools []llm.Tool, newTools []llm.Tool) bool 
 		}
 	}
 	return false
+}
+
+func (s *awsRealtimeSession) recycleAfterStalePendingTools(ctx context.Context, version int) {
+	s.mu.Lock()
+	if s.closed || !s.recycleToolsAfterPending || version != s.toolRecycleVersion {
+		s.mu.Unlock()
+		return
+	}
+	s.pending = make(map[string]struct{})
+	s.recycleToolsAfterPending = false
+	s.mu.Unlock()
+
+	if err := s.recycleForUpdatedTools(ctx); err != nil {
+		s.emit(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: err,
+		})
+		return
+	}
+	s.emit(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
 }
 
 func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
@@ -1087,6 +1380,10 @@ func (s *awsRealtimeSession) Close() error {
 	}
 	s.closed = true
 	stream := s.stream
+	if s.recycleTimer != nil {
+		s.recycleTimer.Stop()
+		s.recycleTimer = nil
+	}
 	s.mu.Unlock()
 
 	s.closeGeneration()

@@ -1093,6 +1093,12 @@ func TestAWSSTTRestartsReferenceStreamAfterIdleTimeout(t *testing.T) {
 	if string(firstWriter.lastChunk) == "after-timeout" {
 		t.Fatalf("first stream received post-timeout audio, want restarted stream")
 	}
+	if !firstWriter.closed {
+		t.Fatal("first stream writer closed = false, want closed during reference timeout restart cleanup")
+	}
+	if len(firstWriter.chunks) == 0 || len(firstWriter.chunks[len(firstWriter.chunks)-1]) != 0 {
+		t.Fatalf("first stream close chunks = %#v, want empty sentinel before restart cleanup", firstWriter.chunks)
+	}
 	if string(secondWriter.lastChunk) != "after-timeout" {
 		t.Fatalf("second stream last chunk = %q, want post-timeout audio", string(secondWriter.lastChunk))
 	}

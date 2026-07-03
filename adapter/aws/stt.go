@@ -336,6 +336,7 @@ func (s *awsSTTStream) readLoop() {
 		if event == nil {
 			if err := stream.Err(); err != nil {
 				if isAWSSTTRequestTimeout(err) {
+					closeAWSSTTEventStream(stream)
 					if s.restartAfterTimeout() {
 						continue
 					}
@@ -390,6 +391,18 @@ func isHarmlessAWSSTTStreamCloseError(err error) bool {
 
 func isAWSSTTRequestTimeout(err error) bool {
 	return strings.HasPrefix(err.Error(), "Your request timed out")
+}
+
+func closeAWSSTTEventStream(stream awsSTTEventStream) {
+	if stream == nil {
+		return
+	}
+	_ = stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+		Value: types.AudioEvent{
+			AudioChunk: []byte{},
+		},
+	})
+	_ = stream.Close()
 }
 
 func (s *awsSTTStream) currentStream() awsSTTEventStream {

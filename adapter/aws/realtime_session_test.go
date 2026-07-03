@@ -853,6 +853,245 @@ func TestAWSRealtimeSessionReadDeadlineEmitsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	first.err = errors.New("ValidationException: System instability detected. Please retry your request.")
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	awsSession := newAWSRealtimeSession(provider, client)
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "assistant opener"})
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "please continue"})
+	if err := awsSession.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	close(first.events)
+
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference restart notification")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want stale recoverable stream closed")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want restarted Nova Sonic session")
+	}
+	texts := awsRealtimeSentTextInputContents(t, second.sent)
+	if len(texts) < 4 {
+		t.Fatalf("restart text inputs = %v, want system, dummy user, assistant history, interactive user", texts)
+	}
+	if got := texts[1]; got != "[Resuming conversation]" {
+		t.Fatalf("restart first history text = %q, want dummy user", got)
+	}
+	if got := texts[2]; got != "assistant opener" {
+		t.Fatalf("restart assistant history text = %q, want preserved assistant opener", got)
+	}
+	if got := texts[len(texts)-1]; got != "please continue" {
+		t.Fatalf("restart interactive text = %q, want last user turn", got)
+	}
+	lastStart := mustAWSRealtimeJSONEvent(t, second.sent[len(second.sent)-3])
+	if got := nestedMap(t, lastStart, "event", "contentStart")["interactive"]; got != true {
+		t.Fatalf("restart last user interactive = %v, want true", got)
+	}
+	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
+}
+
+func TestAWSRealtimeSessionRestartsAfterReferenceModelTimeoutReadFailure(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	first.err = errors.New("ModelTimeoutException: model stream timed out")
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	close(first.events)
+
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference restart for model timeout")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want stale timeout stream closed")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want restarted Nova Sonic session")
+	}
+	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
+}
+
+func TestAWSRealtimeSessionRecyclesIdleStreamAfterReferenceDuration(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(client),
+		WithAWSRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference session recycle notification")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want stale duration-limited stream closed")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
+	}
+}
+
+func TestAWSRealtimeSessionRecycleWaitsForReferenceTurnBoundary(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(client),
+		WithAWSRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	first.emitJSON(`{"event":{"contentStart":{"contentId":"audio-1","type":"AUDIO"}}}`)
+	assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+
+	select {
+	case event := <-awsSession.EventCh():
+		if event.Type == llm.RealtimeEventTypeSessionReconnected {
+			t.Fatalf("got reconnect before AUDIO END_TURN: %#v", event)
+		}
+	case <-time.After(50 * time.Millisecond):
+	}
+	if first.closed {
+		t.Fatal("first stream closed before AUDIO END_TURN")
+	}
+
+	first.emitJSON(`{"event":{"contentEnd":{"contentId":"audio-1","type":"AUDIO","stopReason":"END_TURN"}}}`)
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference session recycle after turn boundary")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want recycle after AUDIO END_TURN")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
+	}
+}
+
+func TestAWSRealtimeSessionRecycleWaitsForReferenceAudioQuiet(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(client),
+		WithAWSRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	provider.recycleQuietPeriod = 30 * time.Millisecond
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	audioBytes := []byte{1, 0, 2, 0}
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	first.emitJSON(`{"event":{"contentStart":{"contentId":"audio-1","type":"AUDIO"}}}`)
+	assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	first.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-1","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	first.emitJSON(`{"event":{"contentEnd":{"contentId":"audio-1","type":"AUDIO","stopReason":"END_TURN"}}}`)
+
+	deadline := time.After(20 * time.Millisecond)
+	for {
+		select {
+		case event := <-awsSession.EventCh():
+			if event.Type == llm.RealtimeEventTypeSessionReconnected {
+				t.Fatalf("got reconnect before reference audio quiet period: %#v", event)
+			}
+		case <-deadline:
+			goto waited
+		}
+	}
+
+waited:
+	if first.closed {
+		t.Fatal("first stream closed before reference audio quiet period")
+	}
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference session recycle after audio quiet")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want recycle after audio quiet")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
+	}
+}
+
+func TestAWSRealtimeSessionCapsReferenceRecoverableRestartsPerGeneration(t *testing.T) {
+	streams := []*fakeAWSRealtimeStream{
+		newFakeAWSRealtimeStream(),
+		newFakeAWSRealtimeStream(),
+		newFakeAWSRealtimeStream(),
+		newFakeAWSRealtimeStream(),
+		newFakeAWSRealtimeStream(),
+	}
+	for _, stream := range streams[:4] {
+		stream.err = errors.New("ValidationException: System instability detected. Please retry your request.")
+	}
+	clientStreams := make([]awsRealtimeStream, 0, len(streams))
+	for _, stream := range streams {
+		clientStreams = append(clientStreams, stream)
+	}
+	client := &fakeAWSRealtimeClient{streams: clientStreams}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	streams[0].emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+
+	for i := 0; i < 3; i++ {
+		close(streams[i].events)
+		assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	}
+
+	close(streams[3].events)
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
+	if event.Error == nil {
+		t.Fatal("Error = nil, want max restart attempts error")
+	}
+	if !strings.Contains(event.Error.Error(), "Max restart attempts exceeded") {
+		t.Fatalf("Error = %q, want max restart attempts exceeded", event.Error.Error())
+	}
+	if len(streams[4].sent) != 0 {
+		t.Fatalf("fifth stream sent %d events, want no restart after max attempts", len(streams[4].sent))
+	}
+}
+
 func TestAWSRealtimeSessionReadFailureClosesReferenceGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	stream.err = errors.New("bedrock output stream failed")
@@ -1576,6 +1815,56 @@ func TestAWSRealtimeSessionDefersToolUpdateRecycleUntilPendingToolResult(t *test
 	}
 }
 
+func TestAWSRealtimeSessionToolUpdateRecycleClearsStalePendingTool(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	provider.toolRecycleDelay = 10 * time.Millisecond
+	session := newAWSRealtimeSession(provider, client)
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	first.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	first.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-stale","toolName":"lookup","content":"{\"query\":\"weather\"}"}}}`)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function call")
+	}
+
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools with pending tool error = %v", err)
+	}
+	event := assertAWSRealtimeEventEventually(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference tool recycle")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want stale pending tool recycle")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no events, want restarted prompt with new tools")
+	}
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, second.sent[1]), "event", "promptStart", "toolConfiguration")
+	tools, ok := toolConfig["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("recycled tools = %#v, want one tool", toolConfig["tools"])
+	}
+	spec := nestedMap(t, map[string]any{"tool": tools[0]}, "tool", "toolSpec")
+	if spec["name"] != "lookup_order" {
+		t.Fatalf("recycled tool name = %#v, want lookup_order", spec["name"])
+	}
+}
+
 func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -1939,6 +2228,22 @@ func assertAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for %s", want)
 		return llm.RealtimeEvent{}
+	}
+}
+
+func assertAWSRealtimeEventEventually(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-ch:
+			if event.Type == want {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", want)
+			return llm.RealtimeEvent{}
+		}
 	}
 }
 

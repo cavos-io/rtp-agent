@@ -319,7 +319,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		_ = s.Close()
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS audio decode failed: %v", err))
 	}
-	frame, err = normalizeAWSTTSFrame(frame, s.provider)
+	frame, err = normalizeAWSTTSFrame(frame, s.effectiveSampleRate())
 	if err != nil {
 		_ = s.Close()
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS audio decode failed: %v", err))
@@ -352,6 +352,18 @@ func (s *awsTTSChunkedStream) open() error {
 	s.stream = out.AudioStream
 	s.requestID = requestID
 	return nil
+}
+
+func (s *awsTTSChunkedStream) effectiveSampleRate() int {
+	if s.options.sampleRate > 0 {
+		return s.options.sampleRate
+	}
+	if s.provider == nil {
+		return 0
+	}
+	s.provider.mu.Lock()
+	defer s.provider.mu.Unlock()
+	return s.provider.sampleRate
 }
 
 func readAWSTTSChunk(stream io.Reader) ([]byte, error) {
@@ -412,15 +424,15 @@ func (s *awsTTSChunkedStream) popReadErr() error {
 	}
 }
 
-func normalizeAWSTTSFrame(frame *model.AudioFrame, provider *AWSTTS) (*model.AudioFrame, error) {
-	if frame == nil || provider == nil {
+func normalizeAWSTTSFrame(frame *model.AudioFrame, sampleRate int) (*model.AudioFrame, error) {
+	if frame == nil {
 		return frame, nil
 	}
 	frame = downmixAWSTTSFrameToMono(frame)
-	if provider.sampleRate <= 0 {
+	if sampleRate <= 0 {
 		return frame, nil
 	}
-	return coreaudio.ResampleAudioFrame(frame, uint32(provider.sampleRate))
+	return coreaudio.ResampleAudioFrame(frame, uint32(sampleRate))
 }
 
 func downmixAWSTTSFrameToMono(frame *model.AudioFrame) *model.AudioFrame {
