@@ -436,6 +436,38 @@ func TestBuildGoogleGenerateContentConfigMapsReferenceCodeExecutionTool(t *testi
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceVertexRAGTool(t *testing.T) {
+	threshold := 0.42
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&VertexRAGRetrievalTool{
+			RAGResources:            []string{"projects/p/locations/l/ragCorpora/c"},
+			SimilarityTopK:          5,
+			VectorDistanceThreshold: &threshold,
+		}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Vertex RAG tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.Retrieval == nil || tool.Retrieval.VertexRAGStore == nil {
+		t.Fatalf("vertex rag retrieval = nil, config tools = %#v", config.Tools)
+	}
+	store := tool.Retrieval.VertexRAGStore
+	if len(store.RAGResources) != 1 || store.RAGResources[0].RAGCorpus != "projects/p/locations/l/ragCorpora/c" {
+		t.Fatalf("rag resources = %#v, want corpus resource", store.RAGResources)
+	}
+	if store.SimilarityTopK == nil || *store.SimilarityTopK != 5 {
+		t.Fatalf("similarity top k = %#v, want 5", store.SimilarityTopK)
+	}
+	if store.VectorDistanceThreshold == nil || *store.VectorDistanceThreshold != threshold {
+		t.Fatalf("vector distance threshold = %#v, want %v", store.VectorDistanceThreshold, threshold)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Vertex RAG tool", tool.FunctionDeclarations)
+	}
+}
+
 func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
 	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
 		"type": "function",

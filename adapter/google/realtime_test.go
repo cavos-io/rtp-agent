@@ -1879,6 +1879,54 @@ func TestGoogleRealtimeSessionUpdateToolsMapsReferenceCodeExecutionTool(t *testi
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceVertexRAGTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	threshold := 0.42
+	if err := session.UpdateTools([]llm.Tool{&VertexRAGRetrievalTool{
+		RAGResources:            []string{"projects/p/locations/l/ragCorpora/c"},
+		SimilarityTopK:          5,
+		VectorDistanceThreshold: &threshold,
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Vertex RAG tool", tools)
+	}
+	if tools[0].Retrieval == nil || tools[0].Retrieval.VertexRAGStore == nil {
+		t.Fatalf("vertex rag retrieval = nil, tools = %#v", tools)
+	}
+	store := tools[0].Retrieval.VertexRAGStore
+	if len(store.RAGResources) != 1 || store.RAGResources[0].RAGCorpus != "projects/p/locations/l/ragCorpora/c" {
+		t.Fatalf("rag resources = %#v, want corpus resource", store.RAGResources)
+	}
+	if store.SimilarityTopK == nil || *store.SimilarityTopK != 5 {
+		t.Fatalf("similarity top k = %#v, want 5", store.SimilarityTopK)
+	}
+	if store.VectorDistanceThreshold == nil || *store.VectorDistanceThreshold != threshold {
+		t.Fatalf("vector distance threshold = %#v, want %v", store.VectorDistanceThreshold, threshold)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Vertex RAG tool", tools[0].FunctionDeclarations)
+	}
+}
+
 func TestGoogleRealtimeSessionUpdateToolsSameValueNoopsLikeReference(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
