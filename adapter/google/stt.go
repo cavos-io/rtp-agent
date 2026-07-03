@@ -369,7 +369,6 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
-	wantV2 := googleSTTUsesV2(s.model)
 	if oldLocation != s.location {
 		if s.newClient != nil {
 			s.client = nil
@@ -390,7 +389,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	for _, stream := range streams {
 		stream.updateConfig(minConfidence, language, languageChanged)
 		go func(stream *googleSTTStream) {
-			if err := stream.reconnectForUpdatedConfig(wantV2); err != nil {
+			if err := stream.reconnectForUpdatedConfig(); err != nil {
 				stream.failWithError(err)
 			}
 		}(stream)
@@ -1603,7 +1602,8 @@ func (s *googleSTTStream) restartFromV1ToV2WithError(old speechpb.Speech_Streami
 	return true, nil
 }
 
-func (s *googleSTTStream) reconnectForUpdatedConfig(wantV2 bool) error {
+func (s *googleSTTStream) reconnectForUpdatedConfig() error {
+	wantV2 := s.owner != nil && s.owner.usesCurrentModelV2()
 	haveV2 := s.usesV2()
 	if wantV2 && haveV2 {
 		_, err := s.restartStreamV2WithError(s.currentStreamV2())
@@ -1619,6 +1619,15 @@ func (s *googleSTTStream) reconnectForUpdatedConfig(wantV2 bool) error {
 	}
 	_, err := s.restartStreamWithError(s.currentStream())
 	return err
+}
+
+func (s *GoogleSTT) usesCurrentModelV2() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return googleSTTUsesV2(s.model)
 }
 
 func (s *googleSTTStream) failWithError(err error) {

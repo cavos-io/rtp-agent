@@ -1731,7 +1731,8 @@ func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
 }
 
 func TestGoogleSTTUpdateOptionsReportsReferenceReconnectError(t *testing.T) {
-	firstStream := &fakeGoogleStreamingRecognizeClient{}
+	releaseFirst := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: releaseFirst}
 	client := &fakeGoogleSpeechClient{
 		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
 		streamErrs:   []error{nil, status.Error(codes.Unavailable, "restart failed")},
@@ -1759,6 +1760,7 @@ func TestGoogleSTTUpdateOptionsReportsReferenceReconnectError(t *testing.T) {
 	if statusErr.StatusCode != int(codes.Unavailable) {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
 	}
+	close(releaseFirst)
 }
 
 func TestGoogleSTTUpdateOptionsNoopPreservesReferenceActiveStream(t *testing.T) {
@@ -2134,6 +2136,59 @@ func TestGoogleSTTUpdateOptionsSwitchesActiveStreamToReferenceV2(t *testing.T) {
 	}
 	close(firstRelease)
 	close(secondRelease)
+}
+
+func TestGoogleSTTUpdateReconnectUsesLatestReferenceModel(t *testing.T) {
+	oldV2 := &fakeGoogleV2StreamingRecognizeClient{recvBlock: make(chan struct{})}
+	nextV2 := &fakeGoogleV2StreamingRecognizeClient{recvBlock: make(chan struct{})}
+	v2Client := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{nextV2},
+		streamCallCh: make(chan int, 1),
+	}
+	staleV1 := &fakeGoogleStreamingRecognizeClient{}
+	v1Client := &fakeGoogleSpeechClient{
+		stream:       staleV1,
+		streamCallCh: make(chan int, 1),
+	}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation("us-central1"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+	provider.clientV2 = v2Client
+	googleStream := &googleSTTStream{
+		owner:                       provider,
+		ctx:                         context.Background(),
+		streamV2:                    oldV2,
+		language:                    "en-US",
+		includeAlternativeLanguages: true,
+		events:                      make(chan *stt.SpeechEvent, 1),
+		errCh:                       make(chan error, 1),
+	}
+
+	if err := googleStream.reconnectForUpdatedConfig(); err != nil {
+		t.Fatalf("reconnectForUpdatedConfig returned error: %v", err)
+	}
+
+	select {
+	case calls := <-v2Client.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("v2 stream calls = %d, want latest chirp_3 reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for latest chirp_3 reconnect")
+	}
+	if v1Client.streamCalls != 0 {
+		t.Fatalf("v1 stream calls = %d, want no stale v1 reconnect", v1Client.streamCalls)
+	}
+	if !oldV2.closed {
+		t.Fatal("old v2 stream closed = false after latest-model reconnect")
+	}
+	if len(nextV2.sent) != 1 || nextV2.sent[0].GetStreamingConfig().GetConfig().GetModel() != "chirp_3" {
+		t.Fatalf("next v2 stream sent = %#v, want chirp_3 config", nextV2.sent)
+	}
+	close(oldV2.recvBlock)
+	close(nextV2.recvBlock)
 }
 
 func TestGoogleSTTUpdateOptionsReplacesReferenceAdaptationOnVersionSwitch(t *testing.T) {
