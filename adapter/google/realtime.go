@@ -1431,7 +1431,6 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		Turns:        turns,
 		TurnComplete: &turnComplete,
 	}); err != nil {
-		s.setPendingReply(false)
 		return err
 	}
 	return nil

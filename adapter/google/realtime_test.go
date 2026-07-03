@@ -1413,6 +1413,40 @@ func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionGenerateReplySendFailureKeepsReferencePending(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages:       make(chan *genai.LiveServerMessage, 1),
+		sendClientContentErr: errors.New("send failed"),
+	}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{})
+	if err == nil || !strings.Contains(err.Error(), "send failed") {
+		t.Fatalf("GenerateReply error = %v, want send failure", err)
+	}
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "late reply"}}},
+		},
+	}
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type == llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("first event = %#v, want pending send-failed reply to suppress speech_started", event)
+	}
+	if event.Type != llm.RealtimeEventTypeGenerationCreated || event.Generation == nil || !event.Generation.UserInitiated {
+		t.Fatalf("first event = %#v, want user-initiated generation after send-failed GenerateReply", event)
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplyRejectsImmutableModel(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key",
