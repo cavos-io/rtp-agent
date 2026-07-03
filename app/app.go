@@ -528,6 +528,7 @@ type AppConfig struct {
 	RealtimeModel                           string
 	RealtimeVoice                           string
 	RealtimeTurnDetection                   string
+	RealtimeGenerateReplyTimeoutSeconds     *float64
 
 	OpenAIAPIKey                string
 	AnamAPIKey                  string
@@ -914,6 +915,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
 		RealtimeVoice:                           os.Getenv("RTP_AGENT_REALTIME_VOICE"),
 		RealtimeTurnDetection:                   os.Getenv("RTP_AGENT_REALTIME_TURN_DETECTION"),
+		RealtimeGenerateReplyTimeoutSeconds:     getenvOptionalFloat("RTP_AGENT_REALTIME_GENERATE_REPLY_TIMEOUT_SECONDS"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
 		AnamAPIKey:                              os.Getenv("ANAM_API_KEY"),
 		AnthropicAPIKey:                         os.Getenv("ANTHROPIC_API_KEY"),
@@ -6545,6 +6547,9 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		if cfg.RealtimeTurnDetection != "" {
 			opts = append(opts, adapteraws.WithAWSRealtimeTurnDetection(cfg.RealtimeTurnDetection))
+		}
+		if cfg.RealtimeGenerateReplyTimeoutSeconds != nil {
+			opts = append(opts, adapteraws.WithAWSRealtimeGenerateReplyTimeout(time.Duration(*cfg.RealtimeGenerateReplyTimeoutSeconds*float64(time.Second))))
 		}
 		return adapteraws.NewAWSRealtimeModel(cfg.RealtimeModel, opts...), nil
 	default:

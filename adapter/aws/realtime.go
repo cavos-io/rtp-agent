@@ -257,6 +257,12 @@ func (m *AWSRealtimeModel) Region() string        { return m.region }
 func (m *AWSRealtimeModel) Voice() string         { return m.voice }
 func (m *AWSRealtimeModel) Modalities() string    { return m.modalities }
 func (m *AWSRealtimeModel) TurnDetection() string { return m.turnDetection }
+func (m *AWSRealtimeModel) GenerateReplyTimeout() time.Duration {
+	if m == nil {
+		return 0
+	}
+	return m.generateReplyTimeout
+}
 
 func (m *AWSRealtimeModel) Capabilities() llm.RealtimeCapabilities {
 	return llm.RealtimeCapabilities{

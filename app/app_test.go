@@ -14303,6 +14303,7 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	t.Setenv("RTP_AGENT_REALTIME_MODEL", "amazon.nova-sonic-v1:0")
 	t.Setenv("RTP_AGENT_REALTIME_VOICE", "matthew")
 	t.Setenv("RTP_AGENT_REALTIME_TURN_DETECTION", "HIGH")
+	t.Setenv("RTP_AGENT_REALTIME_GENERATE_REPLY_TIMEOUT_SECONDS", "2.5")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -14329,6 +14330,9 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	}
 	if got := model.TurnDetection(); got != "HIGH" {
 		t.Fatalf("Realtime turn detection = %q, want HIGH", got)
+	}
+	if got := model.GenerateReplyTimeout(); got != 2500*time.Millisecond {
+		t.Fatalf("Realtime generate reply timeout = %s, want 2.5s", got)
 	}
 	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
 		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
