@@ -14,7 +14,7 @@ Use this table to decide whether a provider can be documented for a capability. 
 | anthropic | yes |  |  |  |  |  |
 | assemblyai |  | yes |  |  |  |  |
 | asyncai |  |  | yes |  |  |  |
-| aws | yes | yes | yes |  |  |  |
+| aws | yes | yes | yes | yes |  |  |
 | azure |  | yes | yes |  |  |  |
 | baseten | yes | yes | yes |  |  |  |
 | bey |  |  |  |  | yes |  |
@@ -79,7 +79,7 @@ Source-backed constructors include:
 - `openai.NewOpenAILLM`, `openai.NewOpenAISTT`, `openai.NewOpenAITTS`, `openai.NewRealtimeModel`
 - `deepgram.NewDeepgramSTT`, `deepgram.NewDeepgramTTS`
 - `google.NewGoogleLLM`, `google.NewGoogleSTT`, `google.NewGoogleTTS`
-- `aws.NewAWSLLM`, `aws.NewAWSSTT`, `aws.NewAWSTTS`
+- `aws.NewAWSLLM`, `aws.NewAWSSTT`, `aws.NewAWSTTS`, `aws.NewAWSRealtimeModel`
 - `anthropic.NewAnthropicLLM`
 - `livekit.NewLiveKitInferenceLLM`, `livekit.NewSTT`, `livekit.NewTTS`
 - `silero.NewSileroVAD`, `ten.NewVAD`
