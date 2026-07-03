@@ -938,6 +938,7 @@ type googleRealtimeSession struct {
 	suppressActivityStart    bool
 	closeOnce                sync.Once
 	closed                   bool
+	sendMu                   sync.Mutex
 	mu                       sync.Mutex
 }
 
@@ -1630,15 +1631,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 		}
 		if message.ServerContent.TurnComplete {
-			s.emitEvent(llm.RealtimeEvent{
-				Type:          llm.RealtimeEventTypeSpeechStopped,
-				SpeechStopped: &llm.InputSpeechStoppedEvent{UserTranscriptionEnabled: false},
-			})
-			if s.inputText != "" {
-				s.emitInputTranscription(true)
-			}
-			s.commitCompletedTranscripts()
-			s.closeGeneration()
+			s.finishCurrentGeneration()
 		}
 	}
 	if message.ToolCall != nil {
@@ -1808,9 +1801,6 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 		_ = recover()
 	}()
 	s.generation.outputText += text
-	if s.generation.firstTokenAt.IsZero() {
-		s.generation.firstTokenAt = time.Now()
-	}
 	select {
 	case s.generation.textCh <- text:
 	case <-s.doneCh():
@@ -2074,10 +2064,18 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if err != nil {
 		return err
 	}
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, chunk := range s.audioStream.Write(resampled.Data) {
-		if err := s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+	if s.closed || s.liveSession == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	liveSession := s.liveSession
+	chunks := s.audioStream.Write(resampled.Data)
+	s.mu.Unlock()
+	for _, chunk := range chunks {
+		if err := liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
 			Audio: &genai.Blob{
 				Data:     chunk.Data,
 				MIMEType: "audio/pcm;rate=16000",

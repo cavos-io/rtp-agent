@@ -3645,6 +3645,112 @@ func TestGoogleSTTStreamReportsInputEndedAfterCloseLikeReference(t *testing.T) {
 	checkInputEnded("EndInput", stream.EndInput())
 }
 
+func TestGoogleSTTStreamCloseUnblocksBlockedReferenceSend(t *testing.T) {
+	sendStarted := make(chan struct{})
+	sendRelease := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		sendBlock:   sendStarted,
+		sendRelease: sendRelease,
+	}
+	stream := &googleSTTStream{
+		owner:  &GoogleSTT{sampleRate: 16000},
+		stream: streamClient,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+
+	pushErrCh := make(chan error, 1)
+	go func() {
+		pushErrCh <- stream.PushFrame(&model.AudioFrame{
+			Data:              []byte{1, 2},
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		})
+	}()
+
+	select {
+	case <-sendStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("provider Send did not start")
+	}
+
+	closeErrCh := make(chan error, 1)
+	go func() {
+		closeErrCh <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeErrCh:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(sendRelease)
+		<-pushErrCh
+		<-closeErrCh
+		t.Fatal("Close did not unblock blocked provider Send")
+	}
+
+	close(sendRelease)
+	if err := <-pushErrCh; err == nil {
+		t.Fatal("PushFrame error = nil, want closed send error after Close")
+	}
+	if !streamClient.closed {
+		t.Fatal("provider stream closed = false")
+	}
+}
+
+func TestGoogleSTTStreamCloseUnblocksBlockedReferenceEndInput(t *testing.T) {
+	closeStarted := make(chan struct{})
+	closeRelease := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{
+		closeBlock:   closeStarted,
+		closeRelease: closeRelease,
+	}
+	stream := &googleSTTStream{
+		owner:  &GoogleSTT{sampleRate: 16000},
+		stream: streamClient,
+		events: make(chan *stt.SpeechEvent, 1),
+		errCh:  make(chan error, 1),
+	}
+
+	endErrCh := make(chan error, 1)
+	go func() {
+		endErrCh <- stream.EndInput()
+	}()
+
+	select {
+	case <-closeStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("provider CloseSend did not start")
+	}
+
+	closeErrCh := make(chan error, 1)
+	go func() {
+		closeErrCh <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeErrCh:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		closeRelease <- struct{}{}
+		<-endErrCh
+		<-closeErrCh
+		t.Fatal("Close did not unblock blocked provider CloseSend")
+	}
+
+	if err := <-endErrCh; err == nil {
+		t.Fatal("EndInput error = nil, want closed send error after Close")
+	}
+	if !streamClient.closed {
+		t.Fatal("provider stream closed = false")
+	}
+}
+
 func TestGoogleSTTRegisterStreamAfterCloseClosesStream(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{})
@@ -3833,6 +3939,10 @@ type fakeGoogleStreamingRecognizeClient struct {
 	closeErr           error
 	sendErrOnConfig    error
 	sendErrAfterConfig error
+	sendBlock          chan struct{}
+	sendRelease        chan struct{}
+	closeBlock         chan struct{}
+	closeRelease       chan struct{}
 }
 
 func (c *fakeGoogleStreamingRecognizeClient) Send(req *speechpb.StreamingRecognizeRequest) error {
@@ -3842,6 +3952,13 @@ func (c *fakeGoogleStreamingRecognizeClient) Send(req *speechpb.StreamingRecogni
 	}
 	if req.GetAudioContent() != nil && c.sendErrAfterConfig != nil {
 		return c.sendErrAfterConfig
+	}
+	if req.GetAudioContent() != nil && c.sendBlock != nil {
+		close(c.sendBlock)
+		<-c.sendRelease
+		if c.closed {
+			return io.ErrClosedPipe
+		}
 	}
 	return nil
 }
@@ -3863,6 +3980,23 @@ func (c *fakeGoogleStreamingRecognizeClient) Recv() (*speechpb.StreamingRecogniz
 }
 
 func (c *fakeGoogleStreamingRecognizeClient) CloseSend() error {
+	if c.closeBlock != nil {
+		closeBlock := c.closeBlock
+		c.closeBlock = nil
+		select {
+		case closeBlock <- struct{}{}:
+			<-c.closeRelease
+		case c.closeRelease <- struct{}{}:
+		}
+	} else if c.closeRelease != nil {
+		select {
+		case c.closeRelease <- struct{}{}:
+		default:
+		}
+	}
+	if c.closed {
+		return io.ErrClosedPipe
+	}
 	c.closed = true
 	return c.closeErr
 }

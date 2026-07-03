@@ -453,6 +453,12 @@ func googleTTSSynthesisError(err error) error {
 	if errors.As(err, &apiStatusErr) && apiStatusErr.StatusCode == 499 {
 		return io.EOF
 	}
+	if errors.Is(err, context.Canceled) {
+		return io.EOF
+	}
+	if status.Code(err) == codes.Canceled {
+		return io.EOF
+	}
 	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
 		return llm.NewAPITimeoutError(err.Error())
 	}
@@ -743,106 +749,177 @@ type googleTTSSegmentState struct {
 
 func (s *googleTTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		if s.ignoreInput {
 			return nil
 		}
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
+		s.mu.Unlock()
 		return nil
 	}
 	if s.flushed > 0 {
+		s.mu.Unlock()
 		return nil
 	}
 	if _, err := s.buffer.WriteString(text); err != nil {
+		s.mu.Unlock()
 		return err
 	}
+	s.mu.Unlock()
 	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			if s.ignoreInput {
+				return nil
+			}
+			return io.ErrClosedPipe
+		}
+		if s.inputEnded || s.flushed > 0 {
+			s.mu.Unlock()
+			return nil
+		}
 		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.buffer.String(), "")
 		if len(tokens) <= 1 {
+			s.mu.Unlock()
 			return nil
 		}
 		sentence := tokens[0]
-		if err := s.sendTextLocked(sentence); err != nil {
-			s.closeActiveLocked()
-			s.markClosedLocked()
-			return err
-		}
 		current := s.buffer.String()
 		tokenIdx := strings.Index(current, sentence)
 		if tokenIdx < 0 {
 			s.buffer.Reset()
 			s.buffer.WriteString(strings.TrimSpace(strings.TrimPrefix(current, sentence)))
+			s.mu.Unlock()
+			if err := s.sendText(sentence); err != nil {
+				return err
+			}
 			continue
 		}
 		s.buffer.Reset()
 		s.buffer.WriteString(strings.TrimLeftFunc(current[tokenIdx+len(sentence):], func(r rune) bool {
 			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
 		}))
+		s.mu.Unlock()
+		if err := s.sendText(sentence); err != nil {
+			return err
+		}
 	}
 }
 
 func (s *googleTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		if s.ignoreInput {
 			return nil
 		}
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
+		s.mu.Unlock()
 		return nil
 	}
 	text := s.buffer.String()
 	s.buffer.Reset()
+	s.mu.Unlock()
 	if text != "" {
 		text = strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(text, ""), " ")
-		if err := s.sendTextLocked(text); err != nil {
-			s.closeActiveLocked()
-			s.markClosedLocked()
+		if err := s.sendText(text); err != nil {
 			return err
 		}
 	}
-	if s.active == nil {
-		return nil
-	}
-	if err := s.active.CloseSend(); err != nil {
-		s.markClosedLocked()
-		return googleTTSSynthesisError(err)
-	}
-	s.active = nil
-	s.flushed++
-	return nil
+	return s.closeActive()
 }
 
-func (s *googleTTSSynthesizeStream) closeActiveLocked() {
-	if s.active == nil {
-		return
-	}
-	_ = s.active.CloseSend()
-	s.active = nil
-}
-
-func (s *googleTTSSynthesizeStream) sendTextLocked(text string) error {
+func (s *googleTTSSynthesizeStream) sendText(text string) error {
 	if text == "" {
 		return nil
 	}
+	s.mu.Lock()
+	if s.closed || s.inputEnded {
+		s.mu.Unlock()
+		if s.ignoreInput {
+			return nil
+		}
+		return io.ErrClosedPipe
+	}
 	stream, err := s.ensureActiveStreamLocked()
 	if err != nil {
+		s.mu.Unlock()
 		return googleTTSSynthesisError(err)
 	}
+	prompt := s.nextPromptLocked()
+	s.mu.Unlock()
 	if err := stream.Send(&texttospeechpb.StreamingSynthesizeRequest{
 		StreamingRequest: &texttospeechpb.StreamingSynthesizeRequest_Input{
-			Input: googleTTSStreamingInput(text, s.nextPromptLocked(), s.markup),
+			Input: googleTTSStreamingInput(text, prompt, s.markup),
 		},
 	}); err != nil {
+		_ = stream.CloseSend()
+		s.mu.Lock()
+		if s.active == stream {
+			s.active = nil
+		}
+		if !s.closed {
+			s.markClosedLocked()
+		}
+		s.mu.Unlock()
 		return googleTTSSynthesisError(err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputEnded {
+		if s.ignoreInput {
+			return io.EOF
+		}
+		return io.ErrClosedPipe
 	}
 	if state := s.segments[stream]; state != nil {
 		state.text.WriteString(text)
+	}
+	return nil
+}
+
+func (s *googleTTSSynthesizeStream) closeActive() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		if s.ignoreInput {
+			return io.EOF
+		}
+		return io.ErrClosedPipe
+	}
+	stream := s.active
+	if stream == nil {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	if err := stream.CloseSend(); err != nil {
+		s.mu.Lock()
+		if !s.closed {
+			s.markClosedLocked()
+		}
+		s.mu.Unlock()
+		return googleTTSSynthesisError(err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		if s.ignoreInput {
+			return io.EOF
+		}
+		return io.ErrClosedPipe
+	}
+	if s.active == stream {
+		s.active = nil
+		s.flushed++
 	}
 	return nil
 }
@@ -913,6 +990,9 @@ func (s *googleTTSSynthesizeStream) EndInput() error {
 
 func (s *googleTTSSynthesizeStream) Close() error {
 	s.closeOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
 		s.mu.Lock()
 		s.closed = true
 		s.ignoreInput = true
@@ -920,9 +1000,6 @@ func (s *googleTTSSynthesizeStream) Close() error {
 		s.streams = nil
 		s.active = nil
 		s.cond.Broadcast()
-		if s.cancel != nil {
-			s.cancel()
-		}
 		s.mu.Unlock()
 		s.unregister()
 		for _, stream := range streams {

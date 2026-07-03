@@ -1250,6 +1250,23 @@ func TestGoogleLLMStreamTreatsReference499AsEOF(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamCallerCancelReturnsContextCanceled(t *testing.T) {
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			return nil, context.Canceled, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil", chunk)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next error = %T %v, want context.Canceled", err, err)
+	}
+}
+
 func TestGoogleLLMStreamPreservesProviderFunctionCallID(t *testing.T) {
 	read := false
 	stream := &googleLLMStream{
