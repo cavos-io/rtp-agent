@@ -959,6 +959,25 @@ func TestGoogleTTSSynthesizeTreatsReference499AsEOF(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSSynthesizeTreatsGRPCCanceledAsReferenceEOF(t *testing.T) {
+	client := &fakeGoogleTTSClient{err: status.Error(codes.Canceled, "context canceled")}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF for reference client-closed gRPC cancel", err)
+	}
+}
+
 func TestGoogleTTSOptionsOverrideReferenceVoiceFields(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
@@ -1572,6 +1591,31 @@ func TestGoogleTTSStreamNextTreatsReference499AsEOF(t *testing.T) {
 	}
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %v, want EOF for reference client-closed 499", err)
+	}
+}
+
+func TestGoogleTTSStreamNextTreatsGRPCCanceledAsReferenceEOF(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{recvErr: status.Error(codes.Canceled, "context canceled")}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF for reference client-closed gRPC cancel", err)
 	}
 }
 

@@ -453,6 +453,9 @@ func googleTTSSynthesisError(err error) error {
 	if errors.As(err, &apiStatusErr) && apiStatusErr.StatusCode == 499 {
 		return io.EOF
 	}
+	if status.Code(err) == codes.Canceled {
+		return io.EOF
+	}
 	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
 		return llm.NewAPITimeoutError(err.Error())
 	}
