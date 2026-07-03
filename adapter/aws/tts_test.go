@@ -163,6 +163,50 @@ func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestAWSTTSLazySynthesizeSnapshotsReferenceOptions(t *testing.T) {
+	var requestBody string
+	client := polly.New(polly.Options{
+		Region:           "us-east-1",
+		RetryMaxAttempts: 1,
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			data, _ := io.ReadAll(req.Body)
+			requestBody = string(data)
+			return nil, errors.New("stop after capture")
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "Ruth",
+		WithAWSTTSEngine(types.EngineGenerative),
+		WithAWSTTSTextType(types.TextTypeText),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want lazy stream", err)
+	}
+	provider.UpdateOptions(
+		WithAWSTTSVoice(types.VoiceIdJoanna),
+		WithAWSTTSEngine(types.EngineStandard),
+		WithAWSTTSTextType(types.TextTypeSsml),
+	)
+
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want captured APIConnectionError", err, err)
+	}
+	if !strings.Contains(requestBody, "Ruth") || !strings.Contains(requestBody, "generative") || !strings.Contains(requestBody, "text") {
+		t.Fatalf("request body = %s, want original voice/engine/text type", requestBody)
+	}
+	if strings.Contains(requestBody, "Joanna") || strings.Contains(requestBody, "standard") || strings.Contains(requestBody, "ssml") {
+		t.Fatalf("request body = %s, want no updated options", requestBody)
+	}
+}
+
 func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {

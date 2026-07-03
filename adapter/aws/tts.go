@@ -129,6 +129,7 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	stream := &awsTTSChunkedStream{
 		ctx:      ctx,
 		text:     text,
+		options:  t.snapshotOptions(),
 		lazy:     true,
 		provider: t,
 	}
@@ -139,22 +140,53 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	return stream, nil
 }
 
-func buildAWSSynthesizeSpeechInput(t *AWSTTS, text string) *polly.SynthesizeSpeechInput {
-	input := &polly.SynthesizeSpeechInput{
-		OutputFormat: t.outputFormat,
-		Text:         aws.String(text),
-		VoiceId:      t.voice,
-		SampleRate:   aws.String(fmt.Sprintf("%d", t.sampleRate)),
-		Engine:       t.engine,
-		TextType:     t.textType,
+type awsTTSRequestOptions struct {
+	voice        types.VoiceId
+	engine       types.Engine
+	outputFormat types.OutputFormat
+	textType     types.TextType
+	language     types.LanguageCode
+	sampleRate   int
+}
+
+func (t *AWSTTS) snapshotOptions() awsTTSRequestOptions {
+	if t == nil {
+		return awsTTSRequestOptions{}
 	}
-	if t.language != "" {
-		input.LanguageCode = t.language
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return awsTTSRequestOptions{
+		voice:        t.voice,
+		engine:       t.engine,
+		outputFormat: t.outputFormat,
+		textType:     t.textType,
+		language:     t.language,
+		sampleRate:   t.sampleRate,
+	}
+}
+
+func buildAWSSynthesizeSpeechInput(t *AWSTTS, text string) *polly.SynthesizeSpeechInput {
+	return buildAWSSynthesizeSpeechInputFromOptions(t.snapshotOptions(), text)
+}
+
+func buildAWSSynthesizeSpeechInputFromOptions(opts awsTTSRequestOptions, text string) *polly.SynthesizeSpeechInput {
+	input := &polly.SynthesizeSpeechInput{
+		OutputFormat: opts.outputFormat,
+		Text:         aws.String(text),
+		VoiceId:      opts.voice,
+		SampleRate:   aws.String(fmt.Sprintf("%d", opts.sampleRate)),
+		Engine:       opts.engine,
+		TextType:     opts.textType,
+	}
+	if opts.language != "" {
+		input.LanguageCode = opts.language
 	}
 	return input
 }
 
 func (t *AWSTTS) UpdateOptions(opts ...AWSTTSOption) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -221,6 +253,7 @@ func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 type awsTTSChunkedStream struct {
 	ctx          context.Context
 	text         string
+	options      awsTTSRequestOptions
 	stream       io.ReadCloser
 	decoder      codecs.AudioStreamDecoder
 	readErr      chan error
@@ -308,7 +341,7 @@ func (s *awsTTSChunkedStream) open() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	out, err := s.provider.client.SynthesizeSpeech(ctx, buildAWSSynthesizeSpeechInput(s.provider, s.text))
+	out, err := s.provider.client.SynthesizeSpeech(ctx, buildAWSSynthesizeSpeechInputFromOptions(s.options, s.text))
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
