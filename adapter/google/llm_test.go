@@ -330,6 +330,144 @@ func TestBuildGoogleFunctionDeclarationPreservesNestedSchema(t *testing.T) {
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceGoogleSearchTool(t *testing.T) {
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&GoogleSearchTool{ExcludeDomains: []string{"example.com"}}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Google Search tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.GoogleSearch == nil {
+		t.Fatalf("google search tool = nil, config tools = %#v", config.Tools)
+	}
+	if got := tool.GoogleSearch.ExcludeDomains; !reflect.DeepEqual(got, []string{"example.com"}) {
+		t.Fatalf("exclude domains = %#v, want example.com", got)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Google Search tool", tool.FunctionDeclarations)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceGoogleMapsTool(t *testing.T) {
+	enableWidget := true
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&GoogleMapsTool{EnableWidget: &enableWidget}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Google Maps tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.GoogleMaps == nil {
+		t.Fatalf("google maps tool = nil, config tools = %#v", config.Tools)
+	}
+	if tool.GoogleMaps.EnableWidget == nil || !*tool.GoogleMaps.EnableWidget {
+		t.Fatalf("enable widget = %#v, want true", tool.GoogleMaps.EnableWidget)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Google Maps tool", tool.FunctionDeclarations)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceFileSearchTool(t *testing.T) {
+	topK := int32(4)
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&FileSearchTool{
+			FileSearchStoreNames: []string{"fileSearchStores/store-1"},
+			TopK:                 &topK,
+			MetadataFilter:       `category = "voice"`,
+		}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider File Search tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.FileSearch == nil {
+		t.Fatalf("file search tool = nil, config tools = %#v", config.Tools)
+	}
+	if got := tool.FileSearch.FileSearchStoreNames; !reflect.DeepEqual(got, []string{"fileSearchStores/store-1"}) {
+		t.Fatalf("file search stores = %#v, want store-1", got)
+	}
+	if tool.FileSearch.TopK == nil || *tool.FileSearch.TopK != 4 {
+		t.Fatalf("top_k = %#v, want 4", tool.FileSearch.TopK)
+	}
+	if tool.FileSearch.MetadataFilter != `category = "voice"` {
+		t.Fatalf("metadata filter = %q, want category voice", tool.FileSearch.MetadataFilter)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider File Search tool", tool.FunctionDeclarations)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceURLContextTool(t *testing.T) {
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&URLContextTool{}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider URL Context tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.URLContext == nil {
+		t.Fatalf("url context tool = nil, config tools = %#v", config.Tools)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider URL Context tool", tool.FunctionDeclarations)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceCodeExecutionTool(t *testing.T) {
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&CodeExecutionTool{}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Code Execution tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.CodeExecution == nil {
+		t.Fatalf("code execution tool = nil, config tools = %#v", config.Tools)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Code Execution tool", tool.FunctionDeclarations)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceVertexRAGTool(t *testing.T) {
+	threshold := 0.42
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&VertexRAGRetrievalTool{
+			RAGResources:            []string{"projects/p/locations/l/ragCorpora/c"},
+			SimilarityTopK:          5,
+			VectorDistanceThreshold: &threshold,
+		}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Vertex RAG tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.Retrieval == nil || tool.Retrieval.VertexRAGStore == nil {
+		t.Fatalf("vertex rag retrieval = nil, config tools = %#v", config.Tools)
+	}
+	store := tool.Retrieval.VertexRAGStore
+	if len(store.RAGResources) != 1 || store.RAGResources[0].RAGCorpus != "projects/p/locations/l/ragCorpora/c" {
+		t.Fatalf("rag resources = %#v, want corpus resource", store.RAGResources)
+	}
+	if store.SimilarityTopK == nil || *store.SimilarityTopK != 5 {
+		t.Fatalf("similarity top k = %#v, want 5", store.SimilarityTopK)
+	}
+	if store.VectorDistanceThreshold == nil || *store.VectorDistanceThreshold != threshold {
+		t.Fatalf("vector distance threshold = %#v, want %v", store.VectorDistanceThreshold, threshold)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Vertex RAG tool", tool.FunctionDeclarations)
+	}
+}
+
 func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
 	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
 		"type": "function",

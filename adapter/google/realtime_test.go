@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1692,6 +1693,240 @@ func TestGoogleRealtimeSessionUpdateToolsReconnectsReferenceSession(t *testing.T
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceGoogleSearchTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{&GoogleSearchTool{ExcludeDomains: []string{"example.com"}}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Google Search tool", tools)
+	}
+	if tools[0].GoogleSearch == nil {
+		t.Fatalf("google search tool = nil, tools = %#v", tools)
+	}
+	if got := tools[0].GoogleSearch.ExcludeDomains; !reflect.DeepEqual(got, []string{"example.com"}) {
+		t.Fatalf("exclude domains = %#v, want example.com", got)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Google Search tool", tools[0].FunctionDeclarations)
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceGoogleMapsTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	enableWidget := true
+	if err := session.UpdateTools([]llm.Tool{&GoogleMapsTool{EnableWidget: &enableWidget}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Google Maps tool", tools)
+	}
+	if tools[0].GoogleMaps == nil {
+		t.Fatalf("google maps tool = nil, tools = %#v", tools)
+	}
+	if tools[0].GoogleMaps.EnableWidget == nil || !*tools[0].GoogleMaps.EnableWidget {
+		t.Fatalf("enable widget = %#v, want true", tools[0].GoogleMaps.EnableWidget)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Google Maps tool", tools[0].FunctionDeclarations)
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceFileSearchTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	topK := int32(4)
+	if err := session.UpdateTools([]llm.Tool{&FileSearchTool{
+		FileSearchStoreNames: []string{"fileSearchStores/store-1"},
+		TopK:                 &topK,
+		MetadataFilter:       `category = "voice"`,
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider File Search tool", tools)
+	}
+	if tools[0].FileSearch == nil {
+		t.Fatalf("file search tool = nil, tools = %#v", tools)
+	}
+	if got := tools[0].FileSearch.FileSearchStoreNames; !reflect.DeepEqual(got, []string{"fileSearchStores/store-1"}) {
+		t.Fatalf("file search stores = %#v, want store-1", got)
+	}
+	if tools[0].FileSearch.TopK == nil || *tools[0].FileSearch.TopK != 4 {
+		t.Fatalf("top_k = %#v, want 4", tools[0].FileSearch.TopK)
+	}
+	if tools[0].FileSearch.MetadataFilter != `category = "voice"` {
+		t.Fatalf("metadata filter = %q, want category voice", tools[0].FileSearch.MetadataFilter)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider File Search tool", tools[0].FunctionDeclarations)
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceURLContextTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{&URLContextTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider URL Context tool", tools)
+	}
+	if tools[0].URLContext == nil {
+		t.Fatalf("url context tool = nil, tools = %#v", tools)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider URL Context tool", tools[0].FunctionDeclarations)
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceCodeExecutionTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{&CodeExecutionTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Code Execution tool", tools)
+	}
+	if tools[0].CodeExecution == nil {
+		t.Fatalf("code execution tool = nil, tools = %#v", tools)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Code Execution tool", tools[0].FunctionDeclarations)
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceVertexRAGTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	threshold := 0.42
+	if err := session.UpdateTools([]llm.Tool{&VertexRAGRetrievalTool{
+		RAGResources:            []string{"projects/p/locations/l/ragCorpora/c"},
+		SimilarityTopK:          5,
+		VectorDistanceThreshold: &threshold,
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Vertex RAG tool", tools)
+	}
+	if tools[0].Retrieval == nil || tools[0].Retrieval.VertexRAGStore == nil {
+		t.Fatalf("vertex rag retrieval = nil, tools = %#v", tools)
+	}
+	store := tools[0].Retrieval.VertexRAGStore
+	if len(store.RAGResources) != 1 || store.RAGResources[0].RAGCorpus != "projects/p/locations/l/ragCorpora/c" {
+		t.Fatalf("rag resources = %#v, want corpus resource", store.RAGResources)
+	}
+	if store.SimilarityTopK == nil || *store.SimilarityTopK != 5 {
+		t.Fatalf("similarity top k = %#v, want 5", store.SimilarityTopK)
+	}
+	if store.VectorDistanceThreshold == nil || *store.VectorDistanceThreshold != threshold {
+		t.Fatalf("vector distance threshold = %#v, want %v", store.VectorDistanceThreshold, threshold)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Vertex RAG tool", tools[0].FunctionDeclarations)
+	}
+}
+
 func TestGoogleRealtimeSessionUpdateToolsSameValueNoopsLikeReference(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
@@ -2406,6 +2641,66 @@ func TestGoogleRealtimeSessionCloseClosesActiveGeneration(t *testing.T) {
 	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
 }
 
+func TestGoogleRealtimeSessionCloseFinalizesReferenceGeneration(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	rawSession, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := rawSession.(*googleRealtimeSession)
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn:          &genai.Content{Parts: []*genai.Part{{Text: "checking"}}},
+			InputTranscription: &genai.Transcription{Text: " question"},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "checking" {
+		t.Fatalf("text delta = %q, want checking", text)
+	}
+	textEvent := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "checking" {
+		t.Fatalf("text event = %#v, want checking text delta", textEvent)
+	}
+	input := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if input.InputTranscription == nil || input.InputTranscription.Transcript != "question" || input.InputTranscription.IsFinal {
+		t.Fatalf("input transcript = %#v, want interim question", input.InputTranscription)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped || stopped.SpeechStopped == nil || stopped.SpeechStopped.UserTranscriptionEnabled {
+		t.Fatalf("close event = %#v, want reference speech_stopped before final transcript", stopped)
+	}
+	final := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if final.InputTranscription == nil || final.InputTranscription.Transcript != "question" || !final.InputTranscription.IsFinal {
+		t.Fatalf("final transcript = %#v, want final question transcript on close", final.InputTranscription)
+	}
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+
+	messages := session.chatCtx.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("chat context messages = %d, want committed user and assistant transcripts", len(messages))
+	}
+	if messages[0].Role != llm.ChatRoleUser || messages[0].TextContent() != "question" {
+		t.Fatalf("user transcript message = %#v, want question", messages[0])
+	}
+	if messages[1].Role != llm.ChatRoleAssistant || messages[1].TextContent() != "checking" {
+		t.Fatalf("assistant transcript message = %#v, want checking", messages[1])
+	}
+}
+
 func TestGoogleRealtimeSessionSuppressesLateGenerationDeltasAfterClose(t *testing.T) {
 	textCh := make(chan string)
 	audioCh := make(chan *audiomodel.AudioFrame)
@@ -3084,6 +3379,63 @@ func TestGoogleRealtimeSessionReceiveErrorClosesReferenceGeneration(t *testing.T
 	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
 	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
 	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+}
+
+func TestGoogleRealtimeSessionReceiveCloseFinalizesReferenceGeneration(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	rawSession, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer rawSession.Close()
+	session := rawSession.(*googleRealtimeSession)
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn:          &genai.Content{Parts: []*genai.Part{{Text: "checking"}}},
+			InputTranscription: &genai.Transcription{Text: " question"},
+		},
+	}
+	close(liveSession.serverMessages)
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "checking" {
+		t.Fatalf("text delta = %q, want checking", text)
+	}
+	textEvent := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "checking" {
+		t.Fatalf("text event = %#v, want checking delta", textEvent)
+	}
+	interim := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if interim.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || interim.InputTranscription == nil || interim.InputTranscription.Transcript != "question" || interim.InputTranscription.IsFinal {
+		t.Fatalf("interim input transcription = %#v, want non-final question", interim)
+	}
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("receive close event = %#v, want speech_stopped", stopped)
+	}
+	final := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if final.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || final.InputTranscription == nil || final.InputTranscription.Transcript != "question" || !final.InputTranscription.IsFinal {
+		t.Fatalf("final input transcription = %#v, want final question", final)
+	}
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+
+	messages := session.chatCtx.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("chat context messages = %d, want committed user and assistant transcripts", len(messages))
+	}
+	if messages[0].Role != llm.ChatRoleUser || messages[0].TextContent() != "question" {
+		t.Fatalf("user transcript message = %#v, want trimmed question", messages[0])
+	}
+	if messages[1].Role != llm.ChatRoleAssistant || messages[1].TextContent() != "checking" {
+		t.Fatalf("assistant transcript message = %#v, want checking", messages[1])
+	}
 }
 
 func TestGoogleRealtimeSessionOrdersInputBeforeOutputTranscription(t *testing.T) {

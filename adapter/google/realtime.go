@@ -1358,18 +1358,7 @@ func googleRealtimeSetConfigSessionResumption(config *genai.LiveConnectConfig, h
 }
 
 func googleRealtimeToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
-	if len(tools) == 0 {
-		return nil
-	}
-	declarations := make([]*genai.FunctionDeclaration, 0, len(tools))
-	for _, tool := range tools {
-		declaration := buildGoogleFunctionDeclaration(tool)
-		if behavior := googleRealtimeToolBehavior(behavior); behavior != "" {
-			declaration.Behavior = behavior
-		}
-		declarations = append(declarations, declaration)
-	}
-	return []*genai.Tool{{FunctionDeclarations: declarations}}
+	return googleToolsConfig(tools, behavior)
 }
 
 func googleRealtimeToolBehavior(value any) genai.Behavior {
@@ -1462,7 +1451,7 @@ func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.ev
 func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSession) {
 	defer func() {
 		if s != nil && s.activeLiveSession() == liveSession {
-			s.closeGeneration()
+			s.finishCurrentGeneration()
 		}
 	}()
 	for {
@@ -2049,10 +2038,12 @@ func (s *googleRealtimeSession) Close() error {
 			s.owner.unregisterSession(s)
 		}
 		s.mu.Lock()
-		s.closed = true
 		liveSession := s.liveSession
 		s.liveSession = nil
-		s.closeGeneration()
+		s.mu.Unlock()
+		s.finishCurrentGeneration()
+		s.mu.Lock()
+		s.closed = true
 		s.mu.Unlock()
 		if s.cancel != nil {
 			s.cancel()
