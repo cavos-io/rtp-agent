@@ -529,6 +529,7 @@ type AppConfig struct {
 	RealtimeVoice                           string
 	RealtimeTurnDetection                   string
 	RealtimeGenerateReplyTimeoutSeconds     *float64
+	RealtimeModelOptions                    map[string]any
 
 	OpenAIAPIKey                string
 	AnamAPIKey                  string
@@ -916,6 +917,7 @@ func DefaultConfigFromEnv() AppConfig {
 		RealtimeVoice:                           os.Getenv("RTP_AGENT_REALTIME_VOICE"),
 		RealtimeTurnDetection:                   os.Getenv("RTP_AGENT_REALTIME_TURN_DETECTION"),
 		RealtimeGenerateReplyTimeoutSeconds:     getenvOptionalFloat("RTP_AGENT_REALTIME_GENERATE_REPLY_TIMEOUT_SECONDS"),
+		RealtimeModelOptions:                    splitEnvMap("RTP_AGENT_REALTIME_MODEL_OPTIONS"),
 		OpenAIAPIKey:                            os.Getenv("OPENAI_API_KEY"),
 		AnamAPIKey:                              os.Getenv("ANAM_API_KEY"),
 		AnthropicAPIKey:                         os.Getenv("ANTHROPIC_API_KEY"),
@@ -6572,9 +6574,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerPhonic:
 		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
 	case providerAWS:
-		opts := []adapteraws.AWSRealtimeOption{
-			adapteraws.WithAWSRealtimeRegion(cfg.AWSRegion),
-		}
+		opts := awsRealtimeOptionsFromConfig(cfg)
 		if cfg.RealtimeVoice != "" {
 			opts = append(opts, adapteraws.WithAWSRealtimeVoice(cfg.RealtimeVoice))
 		}
@@ -6588,6 +6588,25 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	default:
 		return nil, fmt.Errorf("unsupported RTP_AGENT_REALTIME_PROVIDER %q", cfg.RealtimeProvider)
 	}
+}
+
+func awsRealtimeOptionsFromConfig(cfg AppConfig) []adapteraws.AWSRealtimeOption {
+	opts := []adapteraws.AWSRealtimeOption{
+		adapteraws.WithAWSRealtimeRegion(cfg.AWSRegion),
+	}
+	if maxTokens := modelOptionInt(cfg.RealtimeModelOptions, "max_tokens"); maxTokens > 0 {
+		opts = append(opts, adapteraws.WithAWSRealtimeMaxTokens(maxTokens))
+	}
+	if topP := modelOptionFloat(cfg.RealtimeModelOptions, "top_p"); topP != nil {
+		opts = append(opts, adapteraws.WithAWSRealtimeTopP(*topP))
+	}
+	if temperature := modelOptionFloat(cfg.RealtimeModelOptions, "temperature"); temperature != nil {
+		opts = append(opts, adapteraws.WithAWSRealtimeTemperature(*temperature))
+	}
+	if toolChoice := modelOptionString(cfg.RealtimeModelOptions, "tool_choice"); toolChoice != "" {
+		opts = append(opts, adapteraws.WithAWSRealtimeToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	return opts
 }
 
 func nvidiaSTTOptionsFromConfig(cfg AppConfig) []nvidia.NvidiaSTTOption {

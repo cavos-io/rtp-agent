@@ -14337,6 +14337,7 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	t.Setenv("RTP_AGENT_REALTIME_VOICE", "matthew")
 	t.Setenv("RTP_AGENT_REALTIME_TURN_DETECTION", "HIGH")
 	t.Setenv("RTP_AGENT_REALTIME_GENERATE_REPLY_TIMEOUT_SECONDS", "2.5")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "max_tokens=4096,top_p=0.25,temperature=0.5,tool_choice=required")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -14366,6 +14367,18 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	}
 	if got := model.GenerateReplyTimeout(); got != 2500*time.Millisecond {
 		t.Fatalf("Realtime generate reply timeout = %s, want 2.5s", got)
+	}
+	if got, ok := model.MaxTokens(); !ok || got != 4096 {
+		t.Fatalf("Realtime max tokens = %d/%v, want 4096/true", got, ok)
+	}
+	if got, ok := model.TopP(); !ok || got != 0.25 {
+		t.Fatalf("Realtime top_p = %v/%v, want 0.25/true", got, ok)
+	}
+	if got, ok := model.Temperature(); !ok || got != 0.5 {
+		t.Fatalf("Realtime temperature = %v/%v, want 0.5/true", got, ok)
+	}
+	if got := model.ToolChoice(); got != llm.ToolChoice("required") {
+		t.Fatalf("Realtime tool choice = %q, want required", got)
 	}
 	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
 		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)

@@ -257,6 +257,30 @@ func (m *AWSRealtimeModel) Region() string        { return m.region }
 func (m *AWSRealtimeModel) Voice() string         { return m.voice }
 func (m *AWSRealtimeModel) Modalities() string    { return m.modalities }
 func (m *AWSRealtimeModel) TurnDetection() string { return m.turnDetection }
+func (m *AWSRealtimeModel) MaxTokens() (int, bool) {
+	if m == nil {
+		return 0, false
+	}
+	return m.maxTokens, m.maxTokensSet
+}
+func (m *AWSRealtimeModel) TopP() (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	return m.topP, m.topPSet
+}
+func (m *AWSRealtimeModel) Temperature() (float64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	return m.temperature, m.temperatureSet
+}
+func (m *AWSRealtimeModel) ToolChoice() llm.ToolChoice {
+	if m == nil {
+		return nil
+	}
+	return m.toolChoice
+}
 func (m *AWSRealtimeModel) GenerateReplyTimeout() time.Duration {
 	if m == nil {
 		return 0
