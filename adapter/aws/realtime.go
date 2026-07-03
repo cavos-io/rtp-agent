@@ -1264,6 +1264,7 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if chatCtx == nil {
 		return nil
 	}
+	chatCtx = awsRealtimeSanitizeChatContext(chatCtx)
 	s.mu.Lock()
 	closed := s.closed
 	if closed {
@@ -1325,6 +1326,15 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 	}
 	return nil
+}
+
+func awsRealtimeSanitizeChatContext(chatCtx *llm.ChatContext) *llm.ChatContext {
+	return chatCtx.Copy(llm.ChatContextCopyOptions{
+		ExcludeHandoff:      true,
+		ExcludeInstructions: true,
+		ExcludeEmptyMessage: true,
+		ExcludeConfigUpdate: true,
+	})
 }
 
 func awsRealtimeStripLeadingAssistant(chatCtx *llm.ChatContext) *llm.ChatContext {

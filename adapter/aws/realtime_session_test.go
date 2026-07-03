@@ -464,6 +464,38 @@ func TestAWSRealtimeSessionTruncatesReferenceChatContextOnStart(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionExcludesReferenceEmptyMessagesBeforeTruncation(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "keep this turn"})
+	for i := 0; i < defaultAWSRealtimeMaxMessages+6; i++ {
+		ctx.Append(&llm.ChatMessage{
+			ID:      fmt.Sprintf("empty-%02d", i),
+			Role:    llm.ChatRoleUser,
+			Content: []llm.ChatContent{},
+		})
+	}
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	texts := awsRealtimeSentTextInputContents(t, stream.sent)
+	for _, text := range texts {
+		if text == "keep this turn" {
+			return
+		}
+	}
+	t.Fatalf("text inputs = %v, want non-empty reference turn preserved before truncation", texts)
+}
+
 func TestAWSRealtimeSessionDoesNotReplaySeededUserHistory(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
