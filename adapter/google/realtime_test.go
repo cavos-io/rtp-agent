@@ -1293,6 +1293,64 @@ func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionCloseUnblocksBlockedReferenceAudioSend(t *testing.T) {
+	sendStarted := make(chan struct{})
+	sendRelease := make(chan struct{})
+	liveSession := &fakeGoogleRealtimeLiveSession{
+		sendRealtimeBlock:   sendStarted,
+		sendRealtimeRelease: sendRelease,
+		closedCh:            make(chan struct{}),
+	}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	pushErrCh := make(chan error, 1)
+	go func() {
+		pushErrCh <- session.PushAudio(&audiomodel.AudioFrame{
+			Data:              bytes.Repeat([]byte{1, 2}, 800),
+			SampleRate:        16000,
+			NumChannels:       1,
+			SamplesPerChannel: 800,
+		})
+	}()
+
+	select {
+	case <-sendStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("realtime audio send did not start")
+	}
+
+	closeErrCh := make(chan error, 1)
+	go func() {
+		closeErrCh <- session.Close()
+	}()
+
+	select {
+	case err := <-closeErrCh:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(sendRelease)
+		<-pushErrCh
+		<-closeErrCh
+		t.Fatal("Close did not unblock blocked realtime audio send")
+	}
+
+	if err := <-pushErrCh; err == nil {
+		t.Fatal("PushAudio error = nil, want closed send error after Close")
+	}
+	if !liveSession.closed {
+		t.Fatal("live session closed = false")
+	}
+}
+
 func TestGoogleRealtimeSessionPushAudioDownmixesStereoLikeReference(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -3977,12 +4035,25 @@ type fakeGoogleRealtimeLiveSession struct {
 	toolResponses        []genai.LiveToolResponseInput
 	serverMessages       chan *genai.LiveServerMessage
 	closed               bool
+	closedCh             chan struct{}
 	closeErr             error
 	recvErr              error
 	sendClientContentErr error
+	sendRealtimeBlock    chan struct{}
+	sendRealtimeRelease  chan struct{}
 }
 
 func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealtimeInput) error {
+	if input.Audio != nil && s.sendRealtimeBlock != nil {
+		close(s.sendRealtimeBlock)
+		select {
+		case <-s.sendRealtimeRelease:
+		case <-s.closedCh:
+		}
+		if s.closed {
+			return context.Canceled
+		}
+	}
 	s.inputs = append(s.inputs, input)
 	return nil
 }
@@ -4015,6 +4086,10 @@ func (s *fakeGoogleRealtimeLiveSession) Receive() (*genai.LiveServerMessage, err
 }
 
 func (s *fakeGoogleRealtimeLiveSession) Close() error {
+	wasClosed := s.closed
 	s.closed = true
+	if !wasClosed && s.closedCh != nil {
+		close(s.closedCh)
+	}
 	return s.closeErr
 }
