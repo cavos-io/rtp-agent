@@ -70,6 +70,9 @@ func TestNewAWSTTSUsesReferenceDefaults(t *testing.T) {
 	if provider.Model() != "generative" {
 		t.Fatalf("Model = %q, want generative", provider.Model())
 	}
+	if provider.client == nil || provider.client.Options().RetryMaxAttempts != 1 {
+		t.Fatalf("RetryMaxAttempts = %v, want reference single provider attempt", provider.client.Options().RetryMaxAttempts)
+	}
 }
 
 func TestAWSTTSSynthesizeInputUsesProviderOptions(t *testing.T) {
