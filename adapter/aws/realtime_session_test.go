@@ -1815,6 +1815,56 @@ func TestAWSRealtimeSessionDefersToolUpdateRecycleUntilPendingToolResult(t *test
 	}
 }
 
+func TestAWSRealtimeSessionToolUpdateRecycleClearsStalePendingTool(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	provider.toolRecycleDelay = 10 * time.Millisecond
+	session := newAWSRealtimeSession(provider, client)
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	first.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	first.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-stale","toolName":"lookup","content":"{\"query\":\"weather\"}"}}}`)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function call")
+	}
+
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools with pending tool error = %v", err)
+	}
+	event := assertAWSRealtimeEventEventually(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference tool recycle")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want stale pending tool recycle")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no events, want restarted prompt with new tools")
+	}
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, second.sent[1]), "event", "promptStart", "toolConfiguration")
+	tools, ok := toolConfig["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("recycled tools = %#v, want one tool", toolConfig["tools"])
+	}
+	spec := nestedMap(t, map[string]any{"tool": tools[0]}, "tool", "toolSpec")
+	if spec["name"] != "lookup_order" {
+		t.Fatalf("recycled tool name = %#v, want lookup_order", spec["name"])
+	}
+}
+
 func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -2178,6 +2228,22 @@ func assertAWSRealtimeEvent(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for %s", want)
 		return llm.RealtimeEvent{}
+	}
+}
+
+func assertAWSRealtimeEventEventually(t *testing.T, ch <-chan llm.RealtimeEvent, want llm.RealtimeEventType) llm.RealtimeEvent {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case event := <-ch:
+			if event.Type == want {
+				return event
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %s", want)
+			return llm.RealtimeEvent{}
+		}
 	}
 }
 

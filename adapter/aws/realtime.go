@@ -35,6 +35,7 @@ const (
 	defaultAWSRealtimeMaxRestarts    = 3
 	defaultAWSRealtimeMaxSession     = 6 * time.Minute
 	defaultAWSRealtimeRecycleQuiet   = time.Second
+	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
 	awsRealtimeAudioModalities       = "audio"
 	awsRealtimeProvider              = "Amazon"
 	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
@@ -77,6 +78,7 @@ type AWSRealtimeModel struct {
 	temperature        float64
 	maxSession         time.Duration
 	recycleQuietPeriod time.Duration
+	toolRecycleDelay   time.Duration
 	maxTokensSet       bool
 	topPSet            bool
 	temperatureSet     bool
@@ -94,6 +96,7 @@ func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeMo
 		turnDetection:      defaultAWSRealtimeTurnDetection,
 		maxSession:         defaultAWSRealtimeMaxSession,
 		recycleQuietPeriod: defaultAWSRealtimeRecycleQuiet,
+		toolRecycleDelay:   defaultAWSRealtimeToolRecycle,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -279,6 +282,7 @@ type awsRealtimeSession struct {
 	audioMessages            map[string]struct{}
 	noGenerationContentRoles map[string]string
 	recycleToolsAfterPending bool
+	toolRecycleVersion       int
 	recycleTimer             *time.Timer
 	recycleVersion           int
 	lastAudioOutput          time.Time
@@ -1226,6 +1230,18 @@ func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	hasPendingTools := len(s.pending) > 0
 	if started && changed && hasPendingTools {
 		s.recycleToolsAfterPending = true
+		s.toolRecycleVersion++
+		version := s.toolRecycleVersion
+		delay := defaultAWSRealtimeToolRecycle
+		if s.model != nil {
+			delay = s.model.toolRecycleDelay
+		}
+		if delay <= 0 {
+			delay = defaultAWSRealtimeToolRecycle
+		}
+		time.AfterFunc(delay, func() {
+			s.recycleAfterStalePendingTools(context.Background(), version)
+		})
 	}
 	s.mu.Unlock()
 	if started && changed && hasPendingTools {
@@ -1253,6 +1269,29 @@ func awsRealtimeToolNamesChanged(oldTools []llm.Tool, newTools []llm.Tool) bool 
 		}
 	}
 	return false
+}
+
+func (s *awsRealtimeSession) recycleAfterStalePendingTools(ctx context.Context, version int) {
+	s.mu.Lock()
+	if s.closed || !s.recycleToolsAfterPending || version != s.toolRecycleVersion {
+		s.mu.Unlock()
+		return
+	}
+	s.pending = make(map[string]struct{})
+	s.recycleToolsAfterPending = false
+	s.mu.Unlock()
+
+	if err := s.recycleForUpdatedTools(ctx); err != nil {
+		s.emit(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: err,
+		})
+		return
+	}
+	s.emit(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
 }
 
 func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
