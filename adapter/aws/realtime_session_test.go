@@ -1508,6 +1508,59 @@ func TestAWSRealtimeSessionClosesReferenceGenerationOnBargeIn(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionMarksReferenceAssistantMessageInterruptedOnBargeIn(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	awsSession.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"contentStart": map[string]any{
+				"type":                  "TEXT",
+				"role":                  "ASSISTANT",
+				"contentId":             "text-1",
+				"additionalModelFields": "{\"generationStage\":\"SPECULATIVE\"}",
+			},
+		},
+	})
+	awsSession.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{
+				"role":      "ASSISTANT",
+				"content":   "hello",
+				"contentId": "text-1",
+			},
+		},
+	})
+	awsSession.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{
+				"role":      "ASSISTANT",
+				"content":   awsRealtimeBargeInContent,
+				"contentId": "barge-1",
+			},
+		},
+	})
+
+	awsSession.mu.Lock()
+	defer awsSession.mu.Unlock()
+	if len(awsSession.chatCtx.Items) == 0 {
+		t.Fatal("chat context empty, want assistant message")
+	}
+	msg, ok := awsSession.chatCtx.Items[len(awsSession.chatCtx.Items)-1].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant {
+		t.Fatalf("last chat item = %#v, want assistant message", awsSession.chatCtx.Items[len(awsSession.chatCtx.Items)-1])
+	}
+	if !msg.Interrupted {
+		t.Fatal("assistant message Interrupted = false, want reference barge-in marker")
+	}
+}
+
 func TestAWSRealtimeSessionInterruptIsReferenceNoop(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

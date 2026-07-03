@@ -787,6 +787,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		contentID := awsRealtimeNestedString(payload, "event", "textOutput", "contentId")
 		role := awsRealtimeNestedString(payload, "event", "textOutput", "role")
 		if textContent == awsRealtimeBargeInContent {
+			s.markLastAssistantMessageInterrupted()
 			if !s.hasPendingTools() {
 				s.closeGeneration()
 			}
@@ -971,6 +972,24 @@ func (s *awsRealtimeSession) updateProviderTextHistory(role llm.ChatRole, text s
 		s.audioMessages[msg.ID] = struct{}{}
 	}
 	s.chatCtx.Truncate(defaultAWSRealtimeMaxMessages)
+}
+
+func (s *awsRealtimeSession) markLastAssistantMessageInterrupted() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.chatCtx == nil {
+		return
+	}
+	for i := len(s.chatCtx.Items) - 1; i >= 0; i-- {
+		msg, ok := s.chatCtx.Items[i].(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		if msg.Role == llm.ChatRoleAssistant {
+			msg.Interrupted = true
+		}
+		return
+	}
 }
 
 func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) bool {
