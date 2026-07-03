@@ -32,6 +32,7 @@ const (
 	defaultAWSRealtimeModalities     = "mixed"
 	defaultAWSRealtimeMaxMessages    = 40
 	defaultAWSRealtimeMaxMessageSize = 1024
+	defaultAWSRealtimeMaxRestarts    = 3
 	awsRealtimeAudioModalities       = "audio"
 	awsRealtimeProvider              = "Amazon"
 	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
@@ -275,6 +276,7 @@ type awsRealtimeGeneration struct {
 	audioCh      chan *model.AudioFrame
 	modalitiesCh chan []string
 	contentTypes map[string]string
+	restarts     int
 	closeOnce    sync.Once
 }
 
@@ -497,6 +499,25 @@ func (s *awsRealtimeSession) restartAfterRecoverableReadError(stream awsRealtime
 	if s.closed {
 		s.mu.Unlock()
 		return false
+	}
+	if s.generation != nil {
+		if s.generation.restarts >= defaultAWSRealtimeMaxRestarts {
+			s.mu.Unlock()
+			_ = stream.Close()
+			s.closeGeneration()
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeError,
+				Error: llm.NewAPIStatusErrorWithRetryable(
+					fmt.Sprintf("Max restart attempts exceeded: %v", err),
+					500,
+					"",
+					err,
+					false,
+				),
+			})
+			return true
+		}
+		s.generation.restarts++
 	}
 	if s.stream == stream {
 		s.stream = nil

@@ -903,6 +903,50 @@ func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testi
 	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
 }
 
+func TestAWSRealtimeSessionCapsReferenceRecoverableRestartsPerGeneration(t *testing.T) {
+	streams := []*fakeAWSRealtimeStream{
+		newFakeAWSRealtimeStream(),
+		newFakeAWSRealtimeStream(),
+		newFakeAWSRealtimeStream(),
+		newFakeAWSRealtimeStream(),
+		newFakeAWSRealtimeStream(),
+	}
+	for _, stream := range streams[:4] {
+		stream.err = errors.New("ValidationException: System instability detected. Please retry your request.")
+	}
+	clientStreams := make([]awsRealtimeStream, 0, len(streams))
+	for _, stream := range streams {
+		clientStreams = append(clientStreams, stream)
+	}
+	client := &fakeAWSRealtimeClient{streams: clientStreams}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	streams[0].emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+
+	for i := 0; i < 3; i++ {
+		close(streams[i].events)
+		assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	}
+
+	close(streams[3].events)
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
+	if event.Error == nil {
+		t.Fatal("Error = nil, want max restart attempts error")
+	}
+	if !strings.Contains(event.Error.Error(), "Max restart attempts exceeded") {
+		t.Fatalf("Error = %q, want max restart attempts exceeded", event.Error.Error())
+	}
+	if len(streams[4].sent) != 0 {
+		t.Fatalf("fifth stream sent %d events, want no restart after max attempts", len(streams[4].sent))
+	}
+}
+
 func TestAWSRealtimeSessionReadFailureClosesReferenceGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	stream.err = errors.New("bedrock output stream failed")
