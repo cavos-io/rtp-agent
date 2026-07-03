@@ -163,6 +163,42 @@ func TestAWSLLMChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	client := fakeAWSLLMClient{
+		err:          errors.New("stop after capture"),
+		inputCapture: &captured,
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, _ = provider.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
+		"max_output_tokens": 128,
+		"temperature":       0.2,
+		"top_p":             0.7,
+	}))
+
+	input := captured
+	if input == nil || input.InferenceConfig == nil {
+		t.Fatalf("InferenceConfig = %#v, want reference Bedrock inference config", input)
+	}
+	if input.InferenceConfig.MaxTokens == nil || *input.InferenceConfig.MaxTokens != 128 {
+		t.Fatalf("max tokens = %#v, want 128", input.InferenceConfig.MaxTokens)
+	}
+	if input.InferenceConfig.Temperature == nil || *input.InferenceConfig.Temperature != 0.2 {
+		t.Fatalf("temperature = %#v, want 0.2", input.InferenceConfig.Temperature)
+	}
+	if input.InferenceConfig.TopP == nil || *input.InferenceConfig.TopP != 0.7 {
+		t.Fatalf("topP = %#v, want 0.7", input.InferenceConfig.TopP)
+	}
+}
+
 func TestAWSLLMStreamClosedState(t *testing.T) {
 	stream := &awsLLMStream{closed: true}
 
@@ -784,14 +820,18 @@ type fakeAWSLLMReader struct {
 }
 
 type fakeAWSLLMClient struct {
-	out        *bedrockruntime.ConverseStreamOutput
-	err        error
-	ctxCapture *context.Context
+	out          *bedrockruntime.ConverseStreamOutput
+	err          error
+	ctxCapture   *context.Context
+	inputCapture **bedrockruntime.ConverseStreamInput
 }
 
-func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, _ *bedrockruntime.ConverseStreamInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, input *bedrockruntime.ConverseStreamInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
 	if c.ctxCapture != nil {
 		*c.ctxCapture = ctx
+	}
+	if c.inputCapture != nil {
+		*c.inputCapture = input
 	}
 	if c.err != nil {
 		return nil, c.err
