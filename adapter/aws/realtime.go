@@ -250,6 +250,7 @@ type awsRealtimeSession struct {
 	tools                    []llm.Tool
 	pending                  map[string]struct{}
 	sent                     map[string]struct{}
+	audioMessages            map[string]struct{}
 	recycleToolsAfterPending bool
 	audioBStream             *coreaudio.AudioByteStream
 	audioNorm                awsRealtimeInputAudioNormalizer
@@ -270,12 +271,13 @@ type awsRealtimeGeneration struct {
 
 func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
 	session := &awsRealtimeSession{
-		model:   model,
-		client:  client,
-		builder: newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString()),
-		eventCh: make(chan llm.RealtimeEvent, 16),
-		pending: make(map[string]struct{}),
-		sent:    make(map[string]struct{}),
+		model:         model,
+		client:        client,
+		builder:       newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString()),
+		eventCh:       make(chan llm.RealtimeEvent, 16),
+		pending:       make(map[string]struct{}),
+		sent:          make(map[string]struct{}),
+		audioMessages: make(map[string]struct{}),
 		audioBStream: coreaudio.NewAudioByteStream(
 			defaultAWSRealtimeInputSampleRate,
 			defaultAWSRealtimeChannels,
@@ -719,6 +721,12 @@ func awsRealtimeNumberAsInt(value any) int {
 
 func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
 	s.mu.Lock()
+	if event.Type == llm.RealtimeEventTypeInputAudioTranscriptionCompleted &&
+		event.InputTranscription != nil &&
+		event.InputTranscription.IsFinal &&
+		event.InputTranscription.ItemID != "" {
+		s.audioMessages[event.InputTranscription.ItemID] = struct{}{}
+	}
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
@@ -754,6 +762,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	}
 	for _, item := range chatCtx.Items {
 		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleUser {
+			if s.isAudioTranscriptMessage(msg.ID) {
+				continue
+			}
 			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
 				return err
 			}
@@ -794,6 +805,16 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 	}
 	return nil
+}
+
+func (s *awsRealtimeSession) isAudioTranscriptMessage(id string) bool {
+	if id == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.audioMessages[id]
+	return ok
 }
 
 func normalizeAWSRealtimeToolResult(content string) string {

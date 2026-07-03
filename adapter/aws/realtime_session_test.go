@@ -1612,6 +1612,58 @@ func TestAWSRealtimeSessionUpdateChatContextSendsInteractiveUserText(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	awsSession := session.(*awsRealtimeSession)
+	awsSession.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{"role": "USER", "content": "hello sonic"},
+		},
+	})
+	awsSession.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"contentStart": map[string]any{
+				"type":                  "TEXT",
+				"role":                  "ASSISTANT",
+				"additionalModelFields": "SPECULATIVE",
+			},
+		},
+	})
+
+	audioMessageID := ""
+	for range 5 {
+		event := <-awsSession.eventCh
+		if event.Type == llm.RealtimeEventTypeInputAudioTranscriptionCompleted && event.InputTranscription != nil && event.InputTranscription.IsFinal {
+			audioMessageID = event.InputTranscription.ItemID
+			break
+		}
+	}
+	if audioMessageID == "" {
+		t.Fatal("final audio transcript item id is empty")
+	}
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.ChatMessage{
+		ID:      audioMessageID,
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "hello sonic"}},
+	})
+	sentCount := len(stream.sent)
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("audio transcript user text sent %d events, want none", len(stream.sent)-sentCount)
+	}
+}
+
 func TestAWSRealtimeSessionRetriesUserTextAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
