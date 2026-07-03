@@ -278,6 +278,10 @@ type awsRealtimeGeneration struct {
 	closeOnce    sync.Once
 }
 
+type awsRealtimeStartOptions struct {
+	restart bool
+}
+
 func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
 	session := &awsRealtimeSession{
 		model:                    model,
@@ -299,6 +303,10 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 }
 
 func (s *awsRealtimeSession) start(ctx context.Context) error {
+	return s.startWithOptions(ctx, awsRealtimeStartOptions{})
+}
+
+func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRealtimeStartOptions) error {
 	stream, err := s.client.InvokeModelWithBidirectionalStream(ctx, &bedrockruntime.InvokeModelWithBidirectionalStreamInput{
 		ModelId: aws.String(s.model.model),
 	})
@@ -323,6 +331,10 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		s.mu.Lock()
 		s.chatCtx = chatCtx
 		s.mu.Unlock()
+	}
+	interactiveUserText := ""
+	if options.restart {
+		chatCtx, interactiveUserText = awsRealtimeRestartChatContext(chatCtx)
 	}
 	initEvents, historyEvents, err := s.builder.createPromptStartBlock(awsRealtimePromptStartOptions{
 		voiceID:                s.model.voice,
@@ -356,8 +368,47 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 		s.closeStartupStream()
 		return awsRealtimeStartupSendError(err)
 	}
+	if interactiveUserText != "" {
+		if err := s.sendInteractiveUserText(ctx, &llm.ChatMessage{
+			ID:      uuid.NewString(),
+			Role:    llm.ChatRoleUser,
+			Content: []llm.ChatContent{{Text: interactiveUserText}},
+		}); err != nil {
+			s.closeStartupStream()
+			return awsRealtimeStartupSendError(err)
+		}
+	}
 	go s.readResponses()
 	return nil
+}
+
+func awsRealtimeRestartChatContext(chatCtx *llm.ChatContext) (*llm.ChatContext, string) {
+	if chatCtx == nil || len(chatCtx.Items) == 0 {
+		return chatCtx, ""
+	}
+	restartCtx := chatCtx
+	if first, ok := restartCtx.Items[0].(*llm.ChatMessage); ok && first.Role == llm.ChatRoleAssistant {
+		restartCtx = restartCtx.Copy()
+		dummy := &llm.ChatMessage{
+			ID:      uuid.NewString(),
+			Role:    llm.ChatRoleUser,
+			Content: []llm.ChatContent{{Text: "[Resuming conversation]"}},
+		}
+		restartCtx.Items = append([]llm.ChatItem{dummy}, restartCtx.Items...)
+	}
+	last, ok := restartCtx.Items[len(restartCtx.Items)-1].(*llm.ChatMessage)
+	if !ok || last.Role != llm.ChatRoleUser {
+		return restartCtx, ""
+	}
+	text := strings.TrimSpace(last.TextContent())
+	if text == "" {
+		return restartCtx, ""
+	}
+	if restartCtx == chatCtx {
+		restartCtx = restartCtx.Copy()
+	}
+	restartCtx.Items = restartCtx.Items[:len(restartCtx.Items)-1]
+	return restartCtx, text
 }
 
 func awsRealtimeStartupSendError(err error) error {
@@ -454,7 +505,7 @@ func (s *awsRealtimeSession) restartAfterRecoverableReadError(stream awsRealtime
 	s.mu.Unlock()
 
 	_ = stream.Close()
-	if startErr := s.start(context.Background()); startErr != nil {
+	if startErr := s.startWithOptions(context.Background(), awsRealtimeStartOptions{restart: true}); startErr != nil {
 		s.closeGeneration()
 		s.emit(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,

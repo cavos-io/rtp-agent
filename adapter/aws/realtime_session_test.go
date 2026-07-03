@@ -859,15 +859,21 @@ func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testi
 	first.err = errors.New("ValidationException: System instability detected. Please retry your request.")
 	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
-	session, err := provider.Session()
-	if err != nil {
-		t.Fatalf("Session error = %v", err)
+	awsSession := newAWSRealtimeSession(provider, client)
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "assistant opener"})
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "please continue"})
+	if err := awsSession.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
 	}
-	defer session.Close()
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
 
 	close(first.events)
 
-	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 	if event.Reconnect == nil {
 		t.Fatal("Reconnect = nil, want reference restart notification")
 	}
@@ -877,7 +883,24 @@ func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testi
 	if len(second.sent) == 0 {
 		t.Fatal("second stream sent no startup events, want restarted Nova Sonic session")
 	}
-	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeError)
+	texts := awsRealtimeSentTextInputContents(t, second.sent)
+	if len(texts) < 4 {
+		t.Fatalf("restart text inputs = %v, want system, dummy user, assistant history, interactive user", texts)
+	}
+	if got := texts[1]; got != "[Resuming conversation]" {
+		t.Fatalf("restart first history text = %q, want dummy user", got)
+	}
+	if got := texts[2]; got != "assistant opener" {
+		t.Fatalf("restart assistant history text = %q, want preserved assistant opener", got)
+	}
+	if got := texts[len(texts)-1]; got != "please continue" {
+		t.Fatalf("restart interactive text = %q, want last user turn", got)
+	}
+	lastStart := mustAWSRealtimeJSONEvent(t, second.sent[len(second.sent)-3])
+	if got := nestedMap(t, lastStart, "event", "contentStart")["interactive"]; got != true {
+		t.Fatalf("restart last user interactive = %v, want true", got)
+	}
+	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
 }
 
 func TestAWSRealtimeSessionReadFailureClosesReferenceGeneration(t *testing.T) {
