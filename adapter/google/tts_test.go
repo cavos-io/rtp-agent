@@ -1871,6 +1871,60 @@ func TestGoogleTTSStreamCloseCancelsBlockedReferenceStartup(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamCloseUnblocksBlockedReferenceSend(t *testing.T) {
+	sendStarted := make(chan struct{})
+	sendRelease := make(chan struct{})
+	streamClient := &fakeGoogleTTSStream{
+		sendBlock:   sendStarted,
+		sendRelease: sendRelease,
+	}
+	provider := newGoogleTTSWithClient(&fakeGoogleTTSClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	flushErrCh := make(chan error, 1)
+	go func() {
+		flushErrCh <- stream.Flush()
+	}()
+
+	select {
+	case <-sendStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("provider Send did not start")
+	}
+
+	closeErrCh := make(chan error, 1)
+	go func() {
+		closeErrCh <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeErrCh:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(sendRelease)
+		<-flushErrCh
+		<-closeErrCh
+		t.Fatal("Close did not unblock blocked provider Send")
+	}
+
+	close(sendRelease)
+	if err := <-flushErrCh; err == nil {
+		t.Fatal("Flush error = nil, want closed send error after Close")
+	}
+	if !streamClient.closed {
+		t.Fatal("provider stream closed = false")
+	}
+}
+
 func TestGoogleTTSStreamCloseDropsLateReceiveAudioLikeReference(t *testing.T) {
 	recvBlock := make(chan struct{})
 	streamClient := &fakeGoogleTTSStream{
@@ -2731,12 +2785,21 @@ type fakeGoogleTTSStream struct {
 	closed             bool
 	closeErr           error
 	sendErrAfterConfig error
+	sendBlock          chan struct{}
+	sendRelease        chan struct{}
 }
 
 func (s *fakeGoogleTTSStream) Send(req *texttospeech.StreamingSynthesizeRequest) error {
 	s.sent = append(s.sent, req)
 	if req.GetInput() != nil && s.sendErrAfterConfig != nil {
 		return s.sendErrAfterConfig
+	}
+	if req.GetInput() != nil && s.sendBlock != nil {
+		close(s.sendBlock)
+		<-s.sendRelease
+		if s.closed {
+			return io.ErrClosedPipe
+		}
 	}
 	return nil
 }
