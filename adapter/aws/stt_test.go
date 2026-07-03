@@ -219,6 +219,33 @@ func TestAWSSTTStreamInputUsesProviderOptions(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamInputOmitsReferenceDetectionOptionsWithoutDetection(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTLanguageOptions("en-US,id-ID"),
+		WithAWSSTTPreferredLanguage(types.LanguageCodeIdId),
+		WithAWSSTTVocabularyNames("global-vocab"),
+		WithAWSSTTVocabularyFilterNames("global-filter"),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.LanguageOptions != nil {
+		t.Fatalf("language options = %v, want nil without language detection", input.LanguageOptions)
+	}
+	if input.PreferredLanguage != "" {
+		t.Fatalf("preferred language = %q, want empty without language detection", input.PreferredLanguage)
+	}
+	if input.VocabularyNames != nil {
+		t.Fatalf("vocabulary names = %v, want nil without language detection", input.VocabularyNames)
+	}
+	if input.VocabularyFilterNames != nil {
+		t.Fatalf("vocabulary filter names = %v, want nil without language detection", input.VocabularyFilterNames)
+	}
+}
+
 func TestAWSSTTStreamInputOmitsLanguageWhenIdentifyingLanguage(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTIdentifyLanguage(true),

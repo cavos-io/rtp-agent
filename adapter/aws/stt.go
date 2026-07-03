@@ -247,8 +247,10 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	}
 	if s.identifyLanguage {
 		input.IdentifyLanguage = true
+		applyAWSSTTLanguageDetectionOptions(input, s)
 	} else if s.identifyMultipleLanguages {
 		input.IdentifyMultipleLanguages = true
+		applyAWSSTTLanguageDetectionOptions(input, s)
 	} else {
 		input.LanguageCode = languageCode
 	}
@@ -276,6 +278,10 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	if s.languageModelName != "" {
 		input.LanguageModelName = aws.String(s.languageModelName)
 	}
+	return input
+}
+
+func applyAWSSTTLanguageDetectionOptions(input *transcribestreaming.StartStreamTranscriptionInput, s *AWSSTT) {
 	if s.languageOptions != "" {
 		input.LanguageOptions = aws.String(s.languageOptions)
 	}
@@ -288,7 +294,6 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	if s.vocabularyFilterNames != "" {
 		input.VocabularyFilterNames = aws.String(s.vocabularyFilterNames)
 	}
-	return input
 }
 
 func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
