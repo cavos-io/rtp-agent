@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1050,28 +1051,50 @@ func TestAWSSTTEmptyFrameCloseDiagnosticReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestAWSSTTRequestTimeoutReturnsEOF(t *testing.T) {
-	reader := newFakeAWSSTTReader()
-	reader.err = errors.New("Your request timed out because no new audio was received")
-	close(reader.events)
-	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
-		es.Reader = reader
-		es.Writer = &fakeAWSSTTWriter{}
+func TestAWSSTTRestartsReferenceStreamAfterIdleTimeout(t *testing.T) {
+	firstReader := newFakeAWSSTTReader()
+	firstReader.err = errors.New("Your request timed out because no new audio was received")
+	close(firstReader.events)
+	firstWriter := &fakeAWSSTTWriter{}
+	firstStream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = firstReader
+		es.Writer = firstWriter
 	})
-	providerStream := &awsSTTStream{
-		stream: stream,
-		events: make(chan *stt.SpeechEvent),
-		errCh:  make(chan error, 1),
+	secondReader := newFakeAWSSTTReader()
+	secondWriter := &fakeAWSSTTWriter{}
+	secondStream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = secondReader
+		es.Writer = secondWriter
+	})
+	client := &fakeAWSSTTClient{streams: []awsSTTEventStream{firstStream, secondStream}}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
 	}
-	go providerStream.readLoop()
 
-	event, err := providerStream.Next()
-
-	if event != nil {
-		t.Fatalf("Next event = %#v, want nil", event)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
 	}
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF for reference silent Transcribe timeout", err)
+	defer stream.Close()
+
+	deadline := time.After(time.Second)
+	for atomic.LoadInt32(&client.calls) < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("StartStreamTranscription calls = %d, want restart after idle timeout", atomic.LoadInt32(&client.calls))
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("after-timeout")}); err != nil {
+		t.Fatalf("PushFrame after timeout restart error = %v", err)
+	}
+	if string(firstWriter.lastChunk) == "after-timeout" {
+		t.Fatalf("first stream received post-timeout audio, want restarted stream")
+	}
+	if string(secondWriter.lastChunk) != "after-timeout" {
+		t.Fatalf("second stream last chunk = %q, want post-timeout audio", string(secondWriter.lastChunk))
 	}
 }
 
@@ -1195,15 +1218,23 @@ func (r *fakeAWSSTTReader) Err() error {
 }
 
 type fakeAWSSTTClient struct {
-	input  *transcribestreaming.StartStreamTranscriptionInput
-	stream awsSTTEventStream
-	err    error
+	input   *transcribestreaming.StartStreamTranscriptionInput
+	stream  awsSTTEventStream
+	streams []awsSTTEventStream
+	err     error
+	calls   int32
 }
 
 func (c *fakeAWSSTTClient) StartStreamTranscription(_ context.Context, input *transcribestreaming.StartStreamTranscriptionInput) (awsSTTEventStream, error) {
+	atomic.AddInt32(&c.calls, 1)
 	c.input = input
 	if c.err != nil {
 		return nil, c.err
+	}
+	if len(c.streams) > 0 {
+		stream := c.streams[0]
+		c.streams = c.streams[1:]
+		return stream, nil
 	}
 	return c.stream, nil
 }
