@@ -199,6 +199,29 @@ func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
 	assertAWSRealtimeJSONNumber(t, inference["temperature"], 1.0)
 }
 
+func TestAWSRealtimeSessionStartsWithReferenceToolChoice(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}),
+		WithAWSRealtimeToolChoice("required"),
+	)
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, stream.sent[1]), "event", "promptStart", "toolConfiguration")
+	toolChoice := nestedMap(t, map[string]any{"choice": toolConfig["toolChoice"]}, "choice")
+	if _, ok := toolChoice["any"].(map[string]any); !ok {
+		t.Fatalf("toolChoice = %#v, want reference required/any choice", toolConfig["toolChoice"])
+	}
+}
+
 func TestAWSRealtimeSessionAppliesReferenceInferenceOptions(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("",

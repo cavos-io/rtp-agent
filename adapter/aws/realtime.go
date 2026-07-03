@@ -80,6 +80,7 @@ type AWSRealtimeModel struct {
 	maxTokens          int
 	topP               float64
 	temperature        float64
+	toolChoice         llm.ToolChoice
 	maxSession         time.Duration
 	recycleQuietPeriod time.Duration
 	toolRecycleDelay   time.Duration
@@ -175,6 +176,12 @@ func WithAWSRealtimeTemperature(temperature float64) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
 		provider.temperature = temperature
 		provider.temperatureSet = true
+	}
+}
+
+func WithAWSRealtimeToolChoice(toolChoice llm.ToolChoice) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.toolChoice = toolChoice
 	}
 }
 
@@ -434,6 +441,7 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 		maxTokens:              s.model.maxTokens,
 		topP:                   s.model.topP,
 		temperature:            s.model.temperature,
+		toolChoice:             s.model.toolChoice,
 		maxTokensSet:           s.model.maxTokensSet,
 		topPSet:                s.model.topPSet,
 		temperatureSet:         s.model.temperatureSet,

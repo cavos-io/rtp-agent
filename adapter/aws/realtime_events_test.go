@@ -87,6 +87,44 @@ func TestAWSRealtimeEventBuilderCreatesReferencePromptStartBlock(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeToolChoiceMatchesReferenceAdapter(t *testing.T) {
+	tests := []struct {
+		name string
+		in   llm.ToolChoice
+		key  string
+	}{
+		{name: "auto", in: "auto", key: "auto"},
+		{name: "required", in: "required", key: "any"},
+		{
+			name: "named function",
+			in: map[string]any{
+				"type":     "function",
+				"function": map[string]any{"name": "lookup"},
+			},
+			key: "tool",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			choice := awsRealtimeToolChoice(tt.in)
+			mapped, ok := choice.(map[string]any)
+			if !ok {
+				t.Fatalf("tool choice = %#v, want map", choice)
+			}
+			if _, ok := mapped[tt.key]; !ok {
+				t.Fatalf("tool choice = %#v, want %q key", mapped, tt.key)
+			}
+			if tt.key == "tool" {
+				tool := nestedMap(t, map[string]any{"choice": choice}, "choice", "tool")
+				if tool["name"] != "lookup" {
+					t.Fatalf("tool choice name = %#v, want lookup", tool["name"])
+				}
+			}
+		})
+	}
+}
+
 func TestAWSRealtimeEventBuilderCreatesReferenceAudioAndCloseEvents(t *testing.T) {
 	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
 

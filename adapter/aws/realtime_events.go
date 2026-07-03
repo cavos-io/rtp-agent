@@ -30,6 +30,7 @@ type awsRealtimePromptStartOptions struct {
 	systemContent          string
 	chatCtx                *llm.ChatContext
 	tools                  []llm.Tool
+	toolChoice             llm.ToolChoice
 	maxTokens              int
 	topP                   float64
 	temperature            float64
@@ -56,7 +57,7 @@ func (b *awsRealtimeEventBuilder) createPromptStartBlock(options awsRealtimeProm
 		return nil, nil, err
 	}
 	initEvents = append(initEvents, sessionStart)
-	promptStart, err := b.createPromptStartEvent(normalized.voiceID, normalized.outputSampleRate, normalized.tools)
+	promptStart, err := b.createPromptStartEvent(normalized.voiceID, normalized.outputSampleRate, normalized.tools, normalized.toolChoice)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -115,7 +116,7 @@ func (b *awsRealtimeEventBuilder) createSessionStartEvent(maxTokens int, topP fl
 	})
 }
 
-func (b *awsRealtimeEventBuilder) createPromptStartEvent(voiceID string, sampleRate int, tools []llm.Tool) (string, error) {
+func (b *awsRealtimeEventBuilder) createPromptStartEvent(voiceID string, sampleRate int, tools []llm.Tool, toolChoice llm.ToolChoice) (string, error) {
 	return marshalAWSRealtimeEvent(map[string]any{
 		"promptStart": map[string]any{
 			"promptName": b.promptName,
@@ -134,12 +135,12 @@ func (b *awsRealtimeEventBuilder) createPromptStartEvent(voiceID string, sampleR
 			"toolUseOutputConfiguration": map[string]any{
 				"mediaType": "application/json",
 			},
-			"toolConfiguration": buildAWSRealtimeToolConfiguration(tools),
+			"toolConfiguration": buildAWSRealtimeToolConfiguration(tools, toolChoice),
 		},
 	})
 }
 
-func buildAWSRealtimeToolConfiguration(tools []llm.Tool) map[string]any {
+func buildAWSRealtimeToolConfiguration(tools []llm.Tool, toolChoice llm.ToolChoice) map[string]any {
 	toolSpecs := make([]any, 0, len(tools))
 	for _, tool := range tools {
 		if tool == nil {
@@ -163,7 +164,40 @@ func buildAWSRealtimeToolConfiguration(tools []llm.Tool) map[string]any {
 			},
 		})
 	}
-	return map[string]any{"tools": toolSpecs}
+	config := map[string]any{"tools": toolSpecs}
+	if choice := awsRealtimeToolChoice(toolChoice); choice != nil {
+		config["toolChoice"] = choice
+	}
+	return config
+}
+
+func awsRealtimeToolChoice(choice llm.ToolChoice) any {
+	switch v := choice.(type) {
+	case string:
+		switch v {
+		case "auto":
+			return map[string]any{"auto": map[string]any{}}
+		case "required":
+			return map[string]any{"any": map[string]any{}}
+		default:
+			return nil
+		}
+	case map[string]any:
+		if v["type"] != "function" {
+			return nil
+		}
+		function, ok := v["function"].(map[string]any)
+		if !ok {
+			return nil
+		}
+		name, ok := function["name"].(string)
+		if !ok || name == "" {
+			return nil
+		}
+		return map[string]any{"tool": map[string]any{"name": name}}
+	default:
+		return nil
+	}
 }
 
 func (b *awsRealtimeEventBuilder) createAudioContentStartEvent(sampleRate int) (string, error) {
