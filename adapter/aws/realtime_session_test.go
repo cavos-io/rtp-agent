@@ -972,6 +972,7 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationStreams(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for generated text")
 	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeText)
 }
 
 func TestAWSRealtimeSessionTracksReferenceAudioContentStartWithoutRole(t *testing.T) {
@@ -1258,7 +1259,7 @@ func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 
 	stream.emitJSON(`{"event":{"contentStart":{"type":"TEXT","role":"ASSISTANT","contentId":"final-1","additionalModelFields":"{\"generationStage\":\"FINAL\"}"}}}`)
 	stream.emitJSON(`{"event":{"textOutput":{"role":"ASSISTANT","content":"final transcript","contentId":"final-1"}}}`)
-	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeText)
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeText)
 	select {
 	case text := <-msg.TextCh:
 		t.Fatalf("generation text delta = %q, want final assistant text filtered from stream", text)

@@ -447,10 +447,6 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		}
 		if awsRealtimeNestedString(payload, "event", "textOutput", "role") == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
 			s.sendGenerationText(awsRealtimeNestedString(payload, "event", "textOutput", "contentId"), textContent)
-			s.emit(llm.RealtimeEvent{
-				Type: llm.RealtimeEventTypeText,
-				Text: textContent,
-			})
 		}
 	}
 	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
