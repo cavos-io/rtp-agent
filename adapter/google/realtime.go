@@ -1584,6 +1584,13 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		googleRealtimeSetConfigSessionResumption(s.liveConfig, update.NewHandle)
 	}
 	if message.ServerContent != nil {
+		interruptedHandledBeforeGeneration := false
+		if (s.generation == nil || s.generation.closed) && message.ServerContent.Interrupted {
+			if !s.hasPendingReply() {
+				s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+			}
+			interruptedHandledBeforeGeneration = true
+		}
 		generationUserInitiated := false
 		if s.isNewGenerationMessage(message) {
 			generationUserInitiated = s.ensureGeneration()
@@ -1627,7 +1634,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
 			s.markGenerationCompleted()
 		}
-		if message.ServerContent.Interrupted && !generationUserInitiated && !s.hasPendingReply() {
+		if message.ServerContent.Interrupted && !interruptedHandledBeforeGeneration && !generationUserInitiated && !s.hasPendingReply() {
 			s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 		}
 		if message.ServerContent.TurnComplete {

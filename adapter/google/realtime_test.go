@@ -3802,6 +3802,54 @@ func TestGoogleRealtimeSessionInterruptedTurnCompleteMatchesReferenceOrder(t *te
 	}
 }
 
+func TestGoogleRealtimeSessionInterruptedNewTurnMatchesReferenceOrder(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn:    &genai.Content{Parts: []*genai.Part{{Text: "old"}}},
+			TurnComplete: true,
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			Interrupted: true,
+			ModelTurn:   &genai.Content{Parts: []*genai.Part{{Text: "new"}}},
+		},
+	}
+
+	expectGoogleRealtimeGeneration(t, session.EventCh())
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // old text delta
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // old speech_stopped
+
+	interruptStarted := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if interruptStarted.Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("interrupted new-turn first event = %#v, want reference pre-generation speech_started", interruptStarted)
+	}
+	generationStarted := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if generationStarted.Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("interrupted new-turn second event = %#v, want reference generation speech_started", generationStarted)
+	}
+	created := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if created.Type != llm.RealtimeEventTypeGenerationCreated || created.Generation == nil {
+		t.Fatalf("interrupted new-turn third event = %#v, want generation_created", created)
+	}
+	text := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if text.Type != llm.RealtimeEventTypeText || text.Text != "new" {
+		t.Fatalf("interrupted new-turn fourth event = %#v, want new text delta", text)
+	}
+	assertNoGoogleRealtimeEvent(t, session.EventCh())
+}
+
 func TestGoogleRealtimeSessionTurnCompleteEmitsReferenceSpeechStopped(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
