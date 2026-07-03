@@ -1688,6 +1688,61 @@ func TestGoogleRealtimeSessionReconnectReplaysReferenceChatContext(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionImmutableReconnectReplaysReferenceChatContext(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages: make(chan *genai.LiveServerMessage),
+		recvErr:        errors.New("websocket receive failed"),
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeModel("gemini-3.1-flash-live-preview"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+	if len(firstSession.clientContents) != 0 {
+		t.Fatalf("first session client contents = %d, want no active mutable update for immutable model", len(firstSession.clientContents))
+	}
+
+	close(firstSession.serverMessages)
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected", reconnected)
+	}
+	if len(secondSession.clientContents) != 1 {
+		t.Fatalf("replayed client contents = %d, want immutable model initial chat context replay", len(secondSession.clientContents))
+	}
+	replay := secondSession.clientContents[0]
+	if replay.TurnComplete == nil || *replay.TurnComplete {
+		t.Fatalf("replay turn complete = %#v, want false", replay.TurnComplete)
+	}
+	if len(replay.Turns) != 2 {
+		t.Fatalf("replay turns = %#v, want user and model turns", replay.Turns)
+	}
+	if replay.Turns[0].Role != "user" || replay.Turns[0].Parts[0].Text != "hello" {
+		t.Fatalf("first replay turn = %#v, want user hello", replay.Turns[0])
+	}
+	if replay.Turns[1].Role != "model" || replay.Turns[1].Parts[0].Text != "hi" {
+		t.Fatalf("second replay turn = %#v, want model hi", replay.Turns[1])
+	}
+}
+
 func TestGoogleRealtimeSessionReconnectReplaysReferenceCompletedTranscripts(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages: make(chan *genai.LiveServerMessage, 2),

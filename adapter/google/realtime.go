@@ -1545,7 +1545,7 @@ func (s *googleRealtimeSession) currentConnectOptions() llm.APIConnectOptions {
 }
 
 func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {
-	if liveSession == nil || chatCtx == nil || len(chatCtx.Items) == 0 || !s.mutableChatContext {
+	if liveSession == nil || chatCtx == nil || len(chatCtx.Items) == 0 {
 		return nil
 	}
 	turns, err := googleRealtimeChatContextTurns(chatCtx)
