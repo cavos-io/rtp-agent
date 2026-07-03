@@ -724,6 +724,18 @@ func (s *awsRealtimeSession) readResponses() {
 		if s.restartAfterRecoverableReadError(stream, err) {
 			return
 		}
+		if isAWSRealtimeValidationError(err) {
+			s.closeGeneration()
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeError,
+				Error: llm.NewRealtimeModelError(
+					s.model.Label(),
+					llm.NewAPIStatusErrorWithRetryable(err.Error(), 400, "", err, false),
+					false,
+				),
+			})
+			return
+		}
 		s.closeGeneration()
 		var apiErr error = llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err))
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -803,6 +815,10 @@ func isAWSRealtimeRecoverableReadError(err error) bool {
 
 func isAWSRealtimeToolResponseParsingError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "Tool Response parsing error")
+}
+
+func isAWSRealtimeValidationError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "ValidationException")
 }
 
 func (s *awsRealtimeSession) clearPendingTools() {

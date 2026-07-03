@@ -1274,6 +1274,39 @@ func TestAWSRealtimeSessionToolResponseParsingErrorIsReferenceRecoverable(t *tes
 	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 }
 
+func TestAWSRealtimeSessionValidationExceptionIsReferenceNonRecoverable(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	stream.err = errors.New("ValidationException: The toolResult field must be a valid JSON object")
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	close(stream.events)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeError)
+	modelErr, ok := event.Error.(*llm.RealtimeModelError)
+	if !ok {
+		t.Fatalf("Error = %T %v, want RealtimeModelError", event.Error, event.Error)
+	}
+	if modelErr.Recoverable {
+		t.Fatal("Recoverable = true, want reference nonrecoverable validation error")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(modelErr.Err, &statusErr) {
+		t.Fatalf("RealtimeModelError.Err = %T %v, want APIStatusError", modelErr.Err, modelErr.Err)
+	}
+	if statusErr.StatusCode != 400 {
+		t.Fatalf("StatusCode = %d, want 400", statusErr.StatusCode)
+	}
+	if statusErr.APIError == nil || statusErr.APIError.Retryable {
+		t.Fatalf("Retryable = %v, want false", statusErr.APIError != nil && statusErr.APIError.Retryable)
+	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+}
+
 func TestAWSRealtimeSessionReadEOFClosesReferenceGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
