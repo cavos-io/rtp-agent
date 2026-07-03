@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 
@@ -176,17 +177,22 @@ func NewAWSSTT(ctx context.Context, region string, providerOpts ...AWSSTTOption)
 		return nil, err
 	}
 
-	opts := []func(*config.LoadOptions) error{}
-	if region != "" {
-		opts = append(opts, config.WithRegion(region))
-	}
-
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(awsSTTRegionOrDefault(region)))
 	if err != nil {
 		return nil, err
 	}
 
 	return newAWSSTTWithClient(awsSTTSDKClient{client: transcribestreaming.NewFromConfig(cfg)}, providerOpts...)
+}
+
+func awsSTTRegionOrDefault(region string) string {
+	if region != "" {
+		return region
+	}
+	if envRegion := os.Getenv("AWS_REGION"); envRegion != "" {
+		return envRegion
+	}
+	return defaultAWSRegion
 }
 
 func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, error) {

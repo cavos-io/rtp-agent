@@ -402,6 +402,44 @@ func TestNewAWSSTTRejectsMutuallyExclusiveLanguageDetectionBeforeConfigLoad(t *t
 	}
 }
 
+func TestNewAWSSTTUsesReferenceRegionDefaults(t *testing.T) {
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	t.Setenv("AWS_CONFIG_FILE", t.TempDir()+"/config")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", t.TempDir()+"/credentials")
+
+	provider, err := NewAWSSTT(context.Background(), "")
+	if err != nil {
+		t.Fatalf("NewAWSSTT error = %v", err)
+	}
+	sdk, ok := provider.client.(awsSTTSDKClient)
+	if !ok {
+		t.Fatalf("client type = %T, want awsSTTSDKClient", provider.client)
+	}
+	if got := sdk.client.Options().Region; got != defaultAWSRegion {
+		t.Fatalf("region = %q, want reference default %q", got, defaultAWSRegion)
+	}
+
+	t.Setenv("AWS_REGION", "us-west-2")
+	provider, err = NewAWSSTT(context.Background(), "")
+	if err != nil {
+		t.Fatalf("NewAWSSTT with AWS_REGION error = %v", err)
+	}
+	sdk = provider.client.(awsSTTSDKClient)
+	if got := sdk.client.Options().Region; got != "us-west-2" {
+		t.Fatalf("region from env = %q, want us-west-2", got)
+	}
+
+	provider, err = NewAWSSTT(context.Background(), "eu-central-1")
+	if err != nil {
+		t.Fatalf("NewAWSSTT with explicit region error = %v", err)
+	}
+	sdk = provider.client.(awsSTTSDKClient)
+	if got := sdk.client.Options().Region; got != "eu-central-1" {
+		t.Fatalf("explicit region = %q, want eu-central-1", got)
+	}
+}
+
 func TestAWSSTTStreamStartsClientWithReferenceInput(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}
