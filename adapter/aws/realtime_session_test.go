@@ -998,6 +998,56 @@ func TestAWSRealtimeSessionRecycleWaitsForReferenceTurnBoundary(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionRecycleWaitsForReferenceAudioQuiet(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(client),
+		WithAWSRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	provider.recycleQuietPeriod = 30 * time.Millisecond
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	audioBytes := []byte{1, 0, 2, 0}
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	first.emitJSON(`{"event":{"contentStart":{"contentId":"audio-1","type":"AUDIO"}}}`)
+	assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	first.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-1","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	first.emitJSON(`{"event":{"contentEnd":{"contentId":"audio-1","type":"AUDIO","stopReason":"END_TURN"}}}`)
+
+	deadline := time.After(20 * time.Millisecond)
+	for {
+		select {
+		case event := <-awsSession.EventCh():
+			if event.Type == llm.RealtimeEventTypeSessionReconnected {
+				t.Fatalf("got reconnect before reference audio quiet period: %#v", event)
+			}
+		case <-deadline:
+			goto waited
+		}
+	}
+
+waited:
+	if first.closed {
+		t.Fatal("first stream closed before reference audio quiet period")
+	}
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference session recycle after audio quiet")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want recycle after audio quiet")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
+	}
+}
+
 func TestAWSRealtimeSessionCapsReferenceRecoverableRestartsPerGeneration(t *testing.T) {
 	streams := []*fakeAWSRealtimeStream{
 		newFakeAWSRealtimeStream(),

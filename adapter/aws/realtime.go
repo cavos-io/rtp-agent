@@ -34,6 +34,7 @@ const (
 	defaultAWSRealtimeMaxMessageSize = 1024
 	defaultAWSRealtimeMaxRestarts    = 3
 	defaultAWSRealtimeMaxSession     = 6 * time.Minute
+	defaultAWSRealtimeRecycleQuiet   = time.Second
 	awsRealtimeAudioModalities       = "audio"
 	awsRealtimeProvider              = "Amazon"
 	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
@@ -66,31 +67,33 @@ var awsRealtimeRecoverableReadErrorMessages = []string{
 }
 
 type AWSRealtimeModel struct {
-	model          string
-	region         string
-	voice          string
-	modalities     string
-	turnDetection  string
-	maxTokens      int
-	topP           float64
-	temperature    float64
-	maxSession     time.Duration
-	maxTokensSet   bool
-	topPSet        bool
-	temperatureSet bool
-	client         awsRealtimeClient
+	model              string
+	region             string
+	voice              string
+	modalities         string
+	turnDetection      string
+	maxTokens          int
+	topP               float64
+	temperature        float64
+	maxSession         time.Duration
+	recycleQuietPeriod time.Duration
+	maxTokensSet       bool
+	topPSet            bool
+	temperatureSet     bool
+	client             awsRealtimeClient
 }
 
 type AWSRealtimeOption func(*AWSRealtimeModel)
 
 func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeModel {
 	provider := &AWSRealtimeModel{
-		model:         awsRealtimeModelOrDefault(model),
-		region:        awsRegionOrDefault(""),
-		voice:         defaultAWSRealtimeVoice,
-		modalities:    defaultAWSRealtimeModalities,
-		turnDetection: defaultAWSRealtimeTurnDetection,
-		maxSession:    defaultAWSRealtimeMaxSession,
+		model:              awsRealtimeModelOrDefault(model),
+		region:             awsRegionOrDefault(""),
+		voice:              defaultAWSRealtimeVoice,
+		modalities:         defaultAWSRealtimeModalities,
+		turnDetection:      defaultAWSRealtimeTurnDetection,
+		maxSession:         defaultAWSRealtimeMaxSession,
+		recycleQuietPeriod: defaultAWSRealtimeRecycleQuiet,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -278,6 +281,7 @@ type awsRealtimeSession struct {
 	recycleToolsAfterPending bool
 	recycleTimer             *time.Timer
 	recycleVersion           int
+	lastAudioOutput          time.Time
 	currentUserContentID     string
 	audioBStream             *coreaudio.AudioByteStream
 	audioNorm                awsRealtimeInputAudioNormalizer
@@ -423,6 +427,9 @@ func (s *awsRealtimeSession) recycleAfterSessionDuration(ctx context.Context, ve
 	if !s.waitForSessionRecycleTurnBoundary(ctx, version) {
 		return
 	}
+	if !s.waitForSessionRecycleAudioQuiet(ctx, version) {
+		return
+	}
 	s.mu.Lock()
 	if s.closed || version != s.recycleVersion || s.stream == nil {
 		s.mu.Unlock()
@@ -461,6 +468,39 @@ func (s *awsRealtimeSession) waitForSessionRecycleTurnBoundary(ctx context.Conte
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
+		}
+	}
+}
+
+func (s *awsRealtimeSession) waitForSessionRecycleAudioQuiet(ctx context.Context, version int) bool {
+	for {
+		s.mu.Lock()
+		done := s.closed || version != s.recycleVersion
+		lastAudioOutput := s.lastAudioOutput
+		quietPeriod := time.Duration(0)
+		if s.model != nil {
+			quietPeriod = s.model.recycleQuietPeriod
+		}
+		s.mu.Unlock()
+		if done {
+			return false
+		}
+		if lastAudioOutput.IsZero() || quietPeriod <= 0 {
+			return true
+		}
+		wait := quietPeriod - time.Since(lastAudioOutput)
+		if wait <= 0 {
+			return true
+		}
+		if wait > 10*time.Millisecond {
+			wait = 10 * time.Millisecond
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
 		}
 	}
 }
@@ -653,6 +693,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			return
 		}
 		if s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data) {
+			s.markLastAudioOutput()
 			s.emit(llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeAudio,
 				Data: data,
@@ -871,6 +912,12 @@ func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) 
 	default:
 	}
 	return true
+}
+
+func (s *awsRealtimeSession) markLastAudioOutput() {
+	s.mu.Lock()
+	s.lastAudioOutput = time.Now()
+	s.mu.Unlock()
 }
 
 func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
