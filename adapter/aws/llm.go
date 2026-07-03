@@ -128,6 +128,42 @@ func (l *AWSLLM) Model() string { return l.model }
 func (l *AWSLLM) Provider() string {
 	return "AWS Bedrock"
 }
+func (l *AWSLLM) ToolChoice() llm.ToolChoice {
+	if l == nil {
+		return nil
+	}
+	return l.toolChoice
+}
+func (l *AWSLLM) MaxOutputTokens() (int32, bool) {
+	if l == nil {
+		return 0, false
+	}
+	return l.maxOutputTokens, l.maxOutputTokensSet
+}
+func (l *AWSLLM) Temperature() (float32, bool) {
+	if l == nil {
+		return 0, false
+	}
+	return l.temperature, l.temperatureSet
+}
+func (l *AWSLLM) TopP() (float32, bool) {
+	if l == nil {
+		return 0, false
+	}
+	return l.topP, l.topPSet
+}
+func (l *AWSLLM) AdditionalRequestFields() any {
+	if l == nil {
+		return nil
+	}
+	return l.additionalFields
+}
+func (l *AWSLLM) CacheSystem() bool {
+	return l != nil && l.cacheSystem
+}
+func (l *AWSLLM) CacheTools() bool {
+	return l != nil && l.cacheTools
+}
 
 func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.client == nil {

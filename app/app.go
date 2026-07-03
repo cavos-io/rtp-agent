@@ -2358,10 +2358,40 @@ func configureLLMFallbacks(cfg AppConfig, a *agent.Agent) error {
 	return nil
 }
 
+func awsLLMFromConfig(cfg AppConfig) (*adapteraws.AWSLLM, error) {
+	return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel, awsLLMOptionsFromConfig(cfg)...)
+}
+
+func awsLLMOptionsFromConfig(cfg AppConfig) []adapteraws.AWSLLMOption {
+	llmOpts := []adapteraws.AWSLLMOption{}
+	if maxOutputTokens := modelOptionInt(cfg.LLMModelOptions, "max_output_tokens"); maxOutputTokens > 0 {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMMaxOutputTokens(int32(maxOutputTokens)))
+	}
+	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMTemperature(float32(*temperature)))
+	}
+	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMTopP(float32(*topP)))
+	}
+	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	if fields, ok := cfg.LLMModelOptions["additional_request_fields"]; ok {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMAdditionalRequestFields(fields))
+	}
+	if cacheSystem := modelOptionBool(cfg.LLMModelOptions, "cache_system"); cacheSystem != nil {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMCacheSystem(*cacheSystem))
+	}
+	if cacheTools := modelOptionBool(cfg.LLMModelOptions, "cache_tools"); cacheTools != nil {
+		llmOpts = append(llmOpts, adapteraws.WithAWSLLMCacheTools(*cacheTools))
+	}
+	return llmOpts
+}
+
 func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
 	case providerAWS:
-		return adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
+		return awsLLMFromConfig(cfg)
 	case providerAzure:
 		return azureLLMFromConfig(cfg)
 	case providerCerebras:
@@ -4724,7 +4754,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	switch normalizeProvider(cfg.LLMProvider) {
 	case "":
 	case providerAWS:
-		provider, err := adapteraws.NewAWSLLM(context.Background(), cfg.AWSRegion, cfg.LLMModel)
+		provider, err := awsLLMFromConfig(cfg)
 		if err != nil {
 			return nil, err
 		}
