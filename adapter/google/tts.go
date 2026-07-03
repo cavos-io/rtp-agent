@@ -453,6 +453,9 @@ func googleTTSSynthesisError(err error) error {
 	if errors.As(err, &apiStatusErr) && apiStatusErr.StatusCode == 499 {
 		return io.EOF
 	}
+	if errors.Is(err, context.Canceled) {
+		return io.EOF
+	}
 	if status.Code(err) == codes.Canceled {
 		return io.EOF
 	}
@@ -916,6 +919,9 @@ func (s *googleTTSSynthesizeStream) EndInput() error {
 
 func (s *googleTTSSynthesizeStream) Close() error {
 	s.closeOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
 		s.mu.Lock()
 		s.closed = true
 		s.ignoreInput = true
@@ -923,9 +929,6 @@ func (s *googleTTSSynthesizeStream) Close() error {
 		s.streams = nil
 		s.active = nil
 		s.cond.Broadcast()
-		if s.cancel != nil {
-			s.cancel()
-		}
 		s.mu.Unlock()
 		s.unregister()
 		for _, stream := range streams {

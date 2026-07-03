@@ -1810,6 +1810,67 @@ func TestGoogleTTSStreamCloseUnblocksPendingNext(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSStreamCloseCancelsBlockedReferenceStartup(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	client := &fakeGoogleTTSClient{
+		stream:                     &fakeGoogleTTSStream{},
+		blockStreamingSynthesize:   started,
+		unblockStreamingSynthesize: release,
+		streamingErrCh:             make(chan error, 1),
+	}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+
+	flushErrCh := make(chan error, 1)
+	go func() {
+		flushErrCh <- stream.Flush()
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("StreamingSynthesize did not start")
+	}
+
+	closeErrCh := make(chan error, 1)
+	go func() {
+		closeErrCh <- stream.Close()
+	}()
+
+	select {
+	case err := <-closeErrCh:
+		if err != nil {
+			t.Fatalf("Close returned error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(release)
+		<-flushErrCh
+		<-closeErrCh
+		t.Fatal("Close did not cancel blocked StreamingSynthesize startup")
+	}
+
+	select {
+	case err := <-client.streamingErrCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("provider streaming error = %v, want context.Canceled", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("provider streaming startup did not observe context cancellation")
+	}
+
+	if err := <-flushErrCh; !errors.Is(err, io.EOF) {
+		t.Fatalf("Flush error = %v, want EOF after local close", err)
+	}
+}
+
 func TestGoogleTTSStreamCloseDropsLateReceiveAudioLikeReference(t *testing.T) {
 	recvBlock := make(chan struct{})
 	streamClient := &fakeGoogleTTSStream{
@@ -2595,16 +2656,19 @@ func requireGoogleTTSSynthesizeRequest(t *testing.T, stream tts.ChunkedStream, c
 }
 
 type fakeGoogleTTSClient struct {
-	request          *texttospeech.SynthesizeSpeechRequest
-	synthesizeCalls  int
-	response         *texttospeech.SynthesizeSpeechResponse
-	blockSynthesize  chan struct{}
-	synthesizeErrCh  chan error
-	synthesizeDoneCh chan struct{}
-	stream           *fakeGoogleTTSStream
-	streams          []*fakeGoogleTTSStream
-	streamCalls      int
-	err              error
+	request                    *texttospeech.SynthesizeSpeechRequest
+	synthesizeCalls            int
+	response                   *texttospeech.SynthesizeSpeechResponse
+	blockSynthesize            chan struct{}
+	synthesizeErrCh            chan error
+	synthesizeDoneCh           chan struct{}
+	stream                     *fakeGoogleTTSStream
+	streams                    []*fakeGoogleTTSStream
+	streamCalls                int
+	blockStreamingSynthesize   chan struct{}
+	unblockStreamingSynthesize chan struct{}
+	streamingErrCh             chan error
+	err                        error
 }
 
 func (c *fakeGoogleTTSClient) SynthesizeSpeech(ctx context.Context, req *texttospeech.SynthesizeSpeechRequest, opts ...gax.CallOption) (*texttospeech.SynthesizeSpeechResponse, error) {
@@ -2630,6 +2694,17 @@ func (c *fakeGoogleTTSClient) SynthesizeSpeech(ctx context.Context, req *texttos
 
 func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...gax.CallOption) (texttospeech.TextToSpeech_StreamingSynthesizeClient, error) {
 	c.streamCalls++
+	if c.blockStreamingSynthesize != nil {
+		close(c.blockStreamingSynthesize)
+		select {
+		case <-ctx.Done():
+			if c.streamingErrCh != nil {
+				c.streamingErrCh <- ctx.Err()
+			}
+			return nil, ctx.Err()
+		case <-c.unblockStreamingSynthesize:
+		}
+	}
 	if c.err != nil {
 		return nil, c.err
 	}
