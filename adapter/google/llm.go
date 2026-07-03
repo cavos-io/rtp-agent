@@ -464,6 +464,23 @@ func googleFloat32Param(value any) (float32, bool) {
 	}
 }
 
+func googleFloat64Param(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
 func googleInt32Param(value any) (int32, bool) {
 	switch v := value.(type) {
 	case int:
@@ -670,6 +687,27 @@ func googleRetrievalConfigParam(value any) (*genai.RetrievalConfig, bool) {
 		return config, config != nil
 	case genai.RetrievalConfig:
 		return &config, true
+	case map[string]any:
+		result := &genai.RetrievalConfig{}
+		if languageCode := googleStringParam(config["language_code"]); languageCode != "" {
+			result.LanguageCode = languageCode
+		} else if languageCode := googleStringParam(config["languageCode"]); languageCode != "" {
+			result.LanguageCode = languageCode
+		}
+		latLng, _ := config["lat_lng"].(map[string]any)
+		if latLng == nil {
+			latLng, _ = config["latLng"].(map[string]any)
+		}
+		if latLng != nil {
+			result.LatLng = &genai.LatLng{}
+			if latitude, ok := googleFloat64Param(latLng["latitude"]); ok {
+				result.LatLng.Latitude = &latitude
+			}
+			if longitude, ok := googleFloat64Param(latLng["longitude"]); ok {
+				result.LatLng.Longitude = &longitude
+			}
+		}
+		return result, true
 	default:
 		return nil, false
 	}

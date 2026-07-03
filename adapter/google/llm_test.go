@@ -963,6 +963,39 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceRetrievalConfigExtra(t 
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceRetrievalConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"retrieval_config": map[string]any{
+				"language_code": "id-ID",
+				"lat_lng": map[string]any{
+					"latitude":  -6.2,
+					"longitude": 106.8,
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ToolConfig == nil {
+		t.Fatal("ToolConfig = nil, want dict-derived retrieval config")
+	}
+	retrieval := config.ToolConfig.RetrievalConfig
+	if retrieval == nil {
+		t.Fatal("RetrievalConfig = nil, want dict-derived retrieval config")
+	}
+	if retrieval.LanguageCode != "id-ID" {
+		t.Fatalf("RetrievalConfig.LanguageCode = %q, want id-ID", retrieval.LanguageCode)
+	}
+	if retrieval.LatLng == nil || retrieval.LatLng.Latitude == nil || retrieval.LatLng.Longitude == nil {
+		t.Fatalf("RetrievalConfig.LatLng = %#v, want latitude and longitude", retrieval.LatLng)
+	}
+	if *retrieval.LatLng.Latitude != -6.2 || *retrieval.LatLng.Longitude != 106.8 {
+		t.Fatalf("RetrievalConfig.LatLng = %+v, want Jakarta-ish coordinates", retrieval.LatLng)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceRoutingConfigExtra(t *testing.T) {
 	routing := &genai.GenerationConfigRoutingConfig{
 		ManualMode: &genai.GenerationConfigRoutingConfigManualRoutingMode{
