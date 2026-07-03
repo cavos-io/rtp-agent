@@ -242,6 +242,7 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
 		t.Fatalf("UpdateTools active error = %v", err)
 	}
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 
 	closeEvents := first.sent[len(first.sent)-3:]
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[0]), "event", "contentEnd", "contentName"); got == "" {
@@ -267,6 +268,44 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	spec := nestedMap(t, map[string]any{"tool": tools[0]}, "tool", "toolSpec")
 	if spec["name"] != "lookup_order" {
 		t.Fatalf("recycled tool name = %#v, want lookup_order", spec["name"])
+	}
+}
+
+func TestAWSRealtimeSessionUpdateToolsDefersReferenceActiveRecycle(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	provider.toolRecycleDelay = 30 * time.Millisecond
+	session := newAWSRealtimeSession(provider, client)
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools active error = %v", err)
+	}
+	if first.closed {
+		t.Fatal("first stream closed synchronously, want reference deferred recycle")
+	}
+	if len(second.sent) != 0 {
+		t.Fatalf("second stream sent %d events synchronously, want deferred recycle", len(second.sent))
+	}
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want deferred reference recycle notification")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want deferred active recycle")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no events, want restarted prompt with new tools")
 	}
 }
 
@@ -298,6 +337,7 @@ func TestAWSRealtimeSessionUpdateToolsRecycleKeepsBufferedInputTail(t *testing.T
 	if got := countAWSRealtimeAudioInputs(t, first.sent[sentBeforeAudio:]); got != 0 {
 		t.Fatalf("old stream audioInput events during recycle = %d, want buffered tail kept", got)
 	}
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 
 	sentSecondBeforeAudio := len(second.sent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {

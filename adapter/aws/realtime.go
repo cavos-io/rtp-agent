@@ -1241,8 +1241,7 @@ func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	changed := awsRealtimeToolNamesChanged(s.tools, tools)
 	s.tools = append([]llm.Tool(nil), tools...)
 	started := s.stream != nil && !s.closed
-	hasPendingTools := len(s.pending) > 0
-	if started && changed && hasPendingTools {
+	if started && changed {
 		s.recycleToolsAfterPending = true
 		s.toolRecycleVersion++
 		version := s.toolRecycleVersion
@@ -1258,12 +1257,6 @@ func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 		})
 	}
 	s.mu.Unlock()
-	if started && changed && hasPendingTools {
-		return nil
-	}
-	if started && changed {
-		return s.recycleForUpdatedTools(context.Background())
-	}
 	return nil
 }
 
