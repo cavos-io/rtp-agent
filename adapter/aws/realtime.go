@@ -846,14 +846,14 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.sent[msg.ID] = struct{}{}
+	s.mu.Unlock()
 	for _, event := range events {
 		if err := s.sendRawEvent(ctx, event); err != nil {
 			return err
 		}
 	}
-	s.mu.Lock()
-	s.sent[msg.ID] = struct{}{}
-	s.mu.Unlock()
 	return nil
 }
 

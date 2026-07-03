@@ -1480,8 +1480,12 @@ func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
 		Output: `{"ok":true}`,
 	})
 	stream.sendErr = errors.New("bedrock send failed")
+	sentBeforeFailure := len(stream.sent)
 	if err := session.UpdateChatContext(ctx); err == nil {
 		t.Fatal("UpdateChatContext error = nil, want send failure")
+	}
+	if len(stream.sent) != sentBeforeFailure {
+		t.Fatalf("failed UpdateChatContext sent %d events, want none accepted before send error", len(stream.sent)-sentBeforeFailure)
 	}
 	stream.sendErr = nil
 	sentCount := len(stream.sent)
@@ -1664,7 +1668,7 @@ func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeSessionRetriesUserTextAfterSendFailure(t *testing.T) {
+func TestAWSRealtimeSessionDoesNotReplayUserTextAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -1688,13 +1692,10 @@ func TestAWSRealtimeSessionRetriesUserTextAfterSendFailure(t *testing.T) {
 	sentCount := len(stream.sent)
 
 	if err := session.UpdateChatContext(ctx); err != nil {
-		t.Fatalf("UpdateChatContext retry error = %v", err)
+		t.Fatalf("UpdateChatContext repeat error = %v", err)
 	}
-	if len(stream.sent) != sentCount+3 {
-		t.Fatalf("retry sent %d events, want 3 user text events", len(stream.sent)-sentCount)
-	}
-	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[sentCount+1]), "event", "textInput", "content"); got != "try again" {
-		t.Fatalf("retry text input = %q, want try again", got)
+	if len(stream.sent) != sentCount {
+		t.Fatalf("repeat UpdateChatContext sent %d events, want none after failed send marked delivered", len(stream.sent)-sentCount)
 	}
 }
 
