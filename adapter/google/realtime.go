@@ -2038,10 +2038,12 @@ func (s *googleRealtimeSession) Close() error {
 			s.owner.unregisterSession(s)
 		}
 		s.mu.Lock()
-		s.closed = true
 		liveSession := s.liveSession
 		s.liveSession = nil
-		s.closeGeneration()
+		s.mu.Unlock()
+		s.finishCurrentGeneration()
+		s.mu.Lock()
+		s.closed = true
 		s.mu.Unlock()
 		if s.cancel != nil {
 			s.cancel()
