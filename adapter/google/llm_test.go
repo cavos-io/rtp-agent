@@ -1233,20 +1233,36 @@ func TestGoogleLLMStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestGoogleLLMStreamTreatsReference499AsEOF(t *testing.T) {
+func TestGoogleLLMStreamMapsProvider499LikeReference(t *testing.T) {
 	stream := &googleLLMStream{
 		next: func() (*genai.GenerateContentResponse, error, bool) {
-			return nil, genai.APIError{Code: 499, Message: "client closed", Status: "CLIENT_CLOSED"}, true
+			return nil, genai.APIError{Code: 499, Message: "cancelled", Status: "CANCELLED"}, true
 		},
 	}
 
 	chunk, err := stream.Next()
 
 	if chunk != nil {
-		t.Fatalf("Next chunk = %#v, want nil", chunk)
+		t.Fatalf("chunk = %#v, want nil", chunk)
 	}
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want io.EOF for reference client-closed 499", err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "gemini llm: client error" {
+		t.Fatalf("APIStatusError message = %q, want client error", statusErr.Message)
+	}
+	if statusErr.StatusCode != 499 {
+		t.Fatalf("APIStatusError status = %d, want 499", statusErr.StatusCode)
+	}
+	if statusErr.Body != "cancelled CANCELLED" {
+		t.Fatalf("APIStatusError body = %#v, want provider message and status", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = false, want true for 499 client error")
+	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
 	}
 }
 
