@@ -134,6 +134,7 @@ type googleRealtimeOptions struct {
 	thinkingConfig            *genai.ThinkingConfig
 	mediaResolution           genai.MediaResolution
 	httpOptions               *genai.HTTPOptions
+	apiVersion                string
 	connectOptions            *llm.APIConnectOptions
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
@@ -323,6 +324,12 @@ func WithGoogleRealtimeHTTPOptions(httpOptions *genai.HTTPOptions) GoogleRealtim
 	}
 }
 
+func WithGoogleRealtimeAPIVersion(apiVersion string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.apiVersion = apiVersion
+	}
+}
+
 func WithGoogleRealtimeConnectOptions(connectOptions llm.APIConnectOptions) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.connectOptions = &connectOptions
@@ -430,7 +437,9 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		return nil, err
 	}
 	apiVersion := "v1beta"
-	if !vertexAI && ((options.proactivitySet && options.proactivity) || (options.affectiveDialogSet && options.affectiveDialog)) {
+	if options.apiVersion != "" {
+		apiVersion = options.apiVersion
+	} else if !vertexAI && ((options.proactivitySet && options.proactivity) || (options.affectiveDialogSet && options.affectiveDialog)) {
 		apiVersion = "v1alpha"
 	}
 	return &RealtimeModel{
@@ -897,7 +906,11 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 	if err != nil {
 		return nil, err
 	}
-	return client.Live.Connect(ctx, modelName, config)
+	connectConfig := googleRealtimeCloneLiveConfig(config)
+	if connectConfig != nil {
+		connectConfig.HTTPOptions = nil
+	}
+	return client.Live.Connect(ctx, modelName, connectConfig)
 }
 
 type googleRealtimeSession struct {
@@ -1380,6 +1393,7 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 	if !s.mutableChatContext {
 		return fmt.Errorf("generate_reply is not compatible with %q", s.modelName)
 	}
+	s.setPendingReply(true)
 	if err := s.endManualActivity(); err != nil {
 		return err
 	}
@@ -1395,7 +1409,6 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		Parts: []*genai.Part{{Text: "."}},
 	})
 	turnComplete := true
-	s.setPendingReply(true)
 	if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
 		Turns:        turns,
 		TurnComplete: &turnComplete,
@@ -1584,6 +1597,13 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		googleRealtimeSetConfigSessionResumption(s.liveConfig, update.NewHandle)
 	}
 	if message.ServerContent != nil {
+		interruptedHandledBeforeGeneration := false
+		if (s.generation == nil || s.generation.closed) && message.ServerContent.Interrupted {
+			if !s.hasPendingReply() {
+				s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
+			}
+			interruptedHandledBeforeGeneration = true
+		}
 		generationUserInitiated := false
 		if s.isNewGenerationMessage(message) {
 			generationUserInitiated = s.ensureGeneration()
@@ -1627,7 +1647,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
 			s.markGenerationCompleted()
 		}
-		if message.ServerContent.Interrupted && !generationUserInitiated && !s.hasPendingReply() {
+		if message.ServerContent.Interrupted && !interruptedHandledBeforeGeneration && !generationUserInitiated && !s.hasPendingReply() {
 			s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 		}
 		if message.ServerContent.TurnComplete {

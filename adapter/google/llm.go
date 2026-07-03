@@ -464,6 +464,23 @@ func googleFloat32Param(value any) (float32, bool) {
 	}
 }
 
+func googleFloat64Param(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case float32:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case int32:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	default:
+		return 0, false
+	}
+}
+
 func googleInt32Param(value any) (int32, bool) {
 	switch v := value.(type) {
 	case int:
@@ -613,6 +630,38 @@ func googleSafetySettingsParam(value any) ([]*genai.SafetySetting, bool) {
 			result = append(result, &setting)
 		}
 		return result, true
+	case []map[string]any:
+		result := make([]*genai.SafetySetting, 0, len(settings))
+		for _, setting := range settings {
+			if parsed, ok := googleSafetySettingParam(setting); ok {
+				result = append(result, parsed)
+			}
+		}
+		return result, true
+	case []any:
+		result := make([]*genai.SafetySetting, 0, len(settings))
+		for _, setting := range settings {
+			if parsed, ok := googleSafetySettingParam(setting); ok {
+				result = append(result, parsed)
+			}
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleSafetySettingParam(value any) (*genai.SafetySetting, bool) {
+	switch setting := value.(type) {
+	case *genai.SafetySetting:
+		return setting, setting != nil
+	case genai.SafetySetting:
+		return &setting, true
+	case map[string]any:
+		return &genai.SafetySetting{
+			Category:  genai.HarmCategory(googleStringParam(setting["category"])),
+			Threshold: genai.HarmBlockThreshold(googleStringParam(setting["threshold"])),
+		}, true
 	default:
 		return nil, false
 	}
@@ -638,6 +687,27 @@ func googleRetrievalConfigParam(value any) (*genai.RetrievalConfig, bool) {
 		return config, config != nil
 	case genai.RetrievalConfig:
 		return &config, true
+	case map[string]any:
+		result := &genai.RetrievalConfig{}
+		if languageCode := googleStringParam(config["language_code"]); languageCode != "" {
+			result.LanguageCode = languageCode
+		} else if languageCode := googleStringParam(config["languageCode"]); languageCode != "" {
+			result.LanguageCode = languageCode
+		}
+		latLng, _ := config["lat_lng"].(map[string]any)
+		if latLng == nil {
+			latLng, _ = config["latLng"].(map[string]any)
+		}
+		if latLng != nil {
+			result.LatLng = &genai.LatLng{}
+			if latitude, ok := googleFloat64Param(latLng["latitude"]); ok {
+				result.LatLng.Latitude = &latitude
+			}
+			if longitude, ok := googleFloat64Param(latLng["longitude"]); ok {
+				result.LatLng.Longitude = &longitude
+			}
+		}
+		return result, true
 	default:
 		return nil, false
 	}
@@ -1107,9 +1177,6 @@ func googleLLMStreamError(err error, retryable bool, requestID string) error {
 	}
 	var apiErr genai.APIError
 	if errors.As(err, &apiErr) {
-		if apiErr.Code == 499 {
-			return io.EOF
-		}
 		message := "gemini llm: api error"
 		if apiErr.Code >= 400 && apiErr.Code < 500 {
 			message = "gemini llm: client error"

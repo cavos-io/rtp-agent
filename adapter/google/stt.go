@@ -355,6 +355,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	s.mu.Lock()
 	previous := googleSTTCaptureConfig(s)
 	oldLanguage := s.language
+	oldDetectLanguage := s.detectLanguage
 	oldLocation := s.location
 	oldAlternativeLanguages := append([]string(nil), s.alternativeLanguages...)
 	for _, opt := range opts {
@@ -369,6 +370,10 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
+	detectLanguageChanged := oldDetectLanguage != s.detectLanguage
+	alternativeLanguagesChanged := !googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages)
+	includeAlternativeLanguages := false
+	includeAlternativeLanguagesSet := false
 	if oldLocation != s.location {
 		if s.newClient != nil {
 			s.client = nil
@@ -380,6 +385,12 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	if languageChanged && googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages) {
 		s.alternativeLanguages = nil
 	}
+	if languageChanged || alternativeLanguagesChanged {
+		includeAlternativeLanguages = true
+		includeAlternativeLanguagesSet = true
+	} else if detectLanguageChanged {
+		includeAlternativeLanguagesSet = true
+	}
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -387,10 +398,12 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	s.mu.Unlock()
 
 	for _, stream := range streams {
-		stream.updateConfig(minConfidence, language, languageChanged)
-		if err := stream.reconnectForUpdatedConfig(); err != nil {
-			stream.failWithError(err)
-		}
+		stream.updateConfig(minConfidence, language, languageChanged, includeAlternativeLanguages, includeAlternativeLanguagesSet)
+		go func(stream *googleSTTStream) {
+			if err := stream.reconnectForUpdatedConfig(); err != nil {
+				stream.failWithError(err)
+			}
+		}(stream)
 	}
 	return nil
 }
@@ -498,15 +511,6 @@ func (s *GoogleSTT) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
-}
-
-func (s *GoogleSTT) usesV2() bool {
-	if s == nil {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return googleSTTUsesV2(s.model)
 }
 
 func (s *GoogleSTT) registerStream(stream *googleSTTStream) bool {
@@ -1282,16 +1286,33 @@ func (n *googleSTTInputAudioNormalizer) reset() {
 }
 
 func (s *googleSTTStream) readLoop() {
-	if s.usesV2() {
-		s.readLoopV2()
-		return
-	}
 	defer close(s.events)
+	for {
+		var switched bool
+		if s.usesV2() {
+			switched = s.readLoopV2()
+		} else {
+			switched = s.readLoopV1()
+		}
+		if !switched {
+			return
+		}
+	}
+}
+
+func (s *googleSTTStream) readLoopV1() bool {
 	var lastUsageEventTime float64
 	var usageStream speechpb.Speech_StreamingRecognizeClient
 	var speechStarted bool
 	for {
 		stream := s.currentStream()
+		if stream == nil {
+			if s.currentStreamV2() != nil {
+				return true
+			}
+			s.terminate()
+			return false
+		}
 		if stream != usageStream {
 			lastUsageEventTime = 0
 			usageStream = stream
@@ -1299,7 +1320,7 @@ func (s *googleSTTStream) readLoop() {
 		resp, err := stream.Recv()
 		if err != nil {
 			if s.currentStream() != stream {
-				continue
+				return true
 			}
 			if s.shouldRestartAfterConflict(err) {
 				restarted, restartErr := s.restartStreamWithError(stream)
@@ -1313,17 +1334,17 @@ func (s *googleSTTStream) readLoop() {
 			}
 			if s.isClosed() {
 				s.terminate()
-				return
+				return false
 			}
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
 			}
 			s.terminate()
-			return
+			return false
 		}
 		if s.isClosed() {
 			s.terminate()
-			return
+			return false
 		}
 
 		switch resp.GetSpeechEventType() {
@@ -1358,7 +1379,7 @@ func (s *googleSTTStream) readLoop() {
 					if restartErr != nil {
 						s.errCh <- googleSTTStreamError(restartErr)
 						s.terminate()
-						return
+						return false
 					}
 				}
 			}
@@ -1377,13 +1398,19 @@ func (s *googleSTTStream) readLoop() {
 	}
 }
 
-func (s *googleSTTStream) readLoopV2() {
-	defer close(s.events)
+func (s *googleSTTStream) readLoopV2() bool {
 	var speechStarted bool
 	var lastUsageEventTime float64
 	var usageStream speechv2pb.Speech_StreamingRecognizeClient
 	for {
 		stream := s.currentStreamV2()
+		if stream == nil {
+			if s.currentStream() != nil {
+				return true
+			}
+			s.terminate()
+			return false
+		}
 		if stream != usageStream {
 			lastUsageEventTime = 0
 			usageStream = stream
@@ -1391,7 +1418,7 @@ func (s *googleSTTStream) readLoopV2() {
 		resp, err := stream.Recv()
 		if err != nil {
 			if s.currentStreamV2() != stream {
-				continue
+				return true
 			}
 			if s.shouldRestartAfterConflict(err) {
 				restarted, restartErr := s.restartStreamV2WithError(stream)
@@ -1405,17 +1432,17 @@ func (s *googleSTTStream) readLoopV2() {
 			}
 			if s.isClosed() {
 				s.terminate()
-				return
+				return false
 			}
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
 			}
 			s.terminate()
-			return
+			return false
 		}
 		if s.isClosed() {
 			s.terminate()
-			return
+			return false
 		}
 
 		switch resp.GetSpeechEventType() {
@@ -1450,7 +1477,7 @@ func (s *googleSTTStream) readLoopV2() {
 					if restartErr != nil {
 						s.errCh <- googleSTTStreamError(restartErr)
 						s.terminate()
-						return
+						return false
 					}
 				}
 			}
@@ -1587,7 +1614,7 @@ func (s *googleSTTStream) restartFromV1ToV2WithError(old speechpb.Speech_Streami
 }
 
 func (s *googleSTTStream) reconnectForUpdatedConfig() error {
-	wantV2 := s.owner != nil && s.owner.usesV2()
+	wantV2 := s.owner != nil && s.owner.usesCurrentModelV2()
 	haveV2 := s.usesV2()
 	if wantV2 && haveV2 {
 		_, err := s.restartStreamV2WithError(s.currentStreamV2())
@@ -1603,6 +1630,15 @@ func (s *googleSTTStream) reconnectForUpdatedConfig() error {
 	}
 	_, err := s.restartStreamWithError(s.currentStream())
 	return err
+}
+
+func (s *GoogleSTT) usesCurrentModelV2() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return googleSTTUsesV2(s.model)
 }
 
 func (s *googleSTTStream) failWithError(err error) {
@@ -1951,13 +1987,15 @@ func (s *googleSTTStream) currentMinConfidence() float64 {
 	return s.minConfidence
 }
 
-func (s *googleSTTStream) updateConfig(minConfidence float64, language string, languageChanged bool) {
+func (s *googleSTTStream) updateConfig(minConfidence float64, language string, languageChanged bool, includeAlternativeLanguages bool, includeAlternativeLanguagesSet bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.minConfidence = minConfidence
 	if languageChanged {
 		s.language = language
-		s.includeAlternativeLanguages = true
+	}
+	if includeAlternativeLanguagesSet {
+		s.includeAlternativeLanguages = includeAlternativeLanguages
 	}
 }
 

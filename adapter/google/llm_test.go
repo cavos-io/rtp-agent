@@ -894,6 +894,29 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceSafetySettingDicts(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"safety_settings": []map[string]any{{
+				"category":  "HARM_CATEGORY_DANGEROUS_CONTENT",
+				"threshold": "BLOCK_NONE",
+			}},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if len(config.SafetySettings) != 1 {
+		t.Fatalf("SafetySettings = %#v, want one dict-derived safety setting", config.SafetySettings)
+	}
+	if config.SafetySettings[0].Category != genai.HarmCategoryDangerousContent {
+		t.Fatalf("SafetySettings[0].Category = %q, want dangerous content", config.SafetySettings[0].Category)
+	}
+	if config.SafetySettings[0].Threshold != genai.HarmBlockThresholdBlockNone {
+		t.Fatalf("SafetySettings[0].Threshold = %q, want block none", config.SafetySettings[0].Threshold)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigPreservesEmptySafetySettings(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
@@ -937,6 +960,39 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceRetrievalConfigExtra(t 
 
 	if config.ToolConfig == nil || config.ToolConfig.RetrievalConfig != retrieval {
 		t.Fatalf("tool config = %#v, want retrieval config", config.ToolConfig)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceRetrievalConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"retrieval_config": map[string]any{
+				"language_code": "id-ID",
+				"lat_lng": map[string]any{
+					"latitude":  -6.2,
+					"longitude": 106.8,
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ToolConfig == nil {
+		t.Fatal("ToolConfig = nil, want dict-derived retrieval config")
+	}
+	retrieval := config.ToolConfig.RetrievalConfig
+	if retrieval == nil {
+		t.Fatal("RetrievalConfig = nil, want dict-derived retrieval config")
+	}
+	if retrieval.LanguageCode != "id-ID" {
+		t.Fatalf("RetrievalConfig.LanguageCode = %q, want id-ID", retrieval.LanguageCode)
+	}
+	if retrieval.LatLng == nil || retrieval.LatLng.Latitude == nil || retrieval.LatLng.Longitude == nil {
+		t.Fatalf("RetrievalConfig.LatLng = %#v, want latitude and longitude", retrieval.LatLng)
+	}
+	if *retrieval.LatLng.Latitude != -6.2 || *retrieval.LatLng.Longitude != 106.8 {
+		t.Fatalf("RetrievalConfig.LatLng = %+v, want Jakarta-ish coordinates", retrieval.LatLng)
 	}
 }
 
@@ -1233,20 +1289,36 @@ func TestGoogleLLMStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestGoogleLLMStreamTreatsReference499AsEOF(t *testing.T) {
+func TestGoogleLLMStreamMapsProvider499LikeReference(t *testing.T) {
 	stream := &googleLLMStream{
 		next: func() (*genai.GenerateContentResponse, error, bool) {
-			return nil, genai.APIError{Code: 499, Message: "client closed", Status: "CLIENT_CLOSED"}, true
+			return nil, genai.APIError{Code: 499, Message: "cancelled", Status: "CANCELLED"}, true
 		},
 	}
 
 	chunk, err := stream.Next()
 
 	if chunk != nil {
-		t.Fatalf("Next chunk = %#v, want nil", chunk)
+		t.Fatalf("chunk = %#v, want nil", chunk)
 	}
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want io.EOF for reference client-closed 499", err)
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.Message != "gemini llm: client error" {
+		t.Fatalf("APIStatusError message = %q, want client error", statusErr.Message)
+	}
+	if statusErr.StatusCode != 499 {
+		t.Fatalf("APIStatusError status = %d, want 499", statusErr.StatusCode)
+	}
+	if statusErr.Body != "cancelled CANCELLED" {
+		t.Fatalf("APIStatusError body = %#v, want provider message and status", statusErr.Body)
+	}
+	if !statusErr.Retryable {
+		t.Fatal("APIStatusError retryable = false, want true for 499 client error")
+	}
+	if statusErr.RequestID == "" {
+		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
 	}
 }
 

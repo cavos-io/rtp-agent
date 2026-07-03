@@ -1619,6 +1619,62 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsDoesNotBlockOnReferenceReconnectClose(t *testing.T) {
+	closeStarted := make(chan struct{})
+	closeRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{
+		recvBlock:    make(chan struct{}),
+		closeBlock:   closeStarted,
+		closeRelease: closeRelease,
+	}
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: make(chan struct{})}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	updateErrCh := make(chan error, 1)
+	go func() {
+		updateErrCh <- provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
+	}()
+
+	select {
+	case <-closeStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("old provider CloseSend did not start")
+	}
+
+	select {
+	case err := <-updateErrCh:
+		if err != nil {
+			t.Fatalf("UpdateOptions returned error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		closeRelease <- struct{}{}
+		<-updateErrCh
+		t.Fatal("UpdateOptions blocked on old provider CloseSend")
+	}
+
+	closeRelease <- struct{}{}
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want eventual reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for eventual reconnect")
+	}
+	close(firstStream.recvBlock)
+	close(secondStream.recvBlock)
+}
+
 func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
@@ -1675,7 +1731,8 @@ func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
 }
 
 func TestGoogleSTTUpdateOptionsReportsReferenceReconnectError(t *testing.T) {
-	firstStream := &fakeGoogleStreamingRecognizeClient{}
+	releaseFirst := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: releaseFirst}
 	client := &fakeGoogleSpeechClient{
 		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream},
 		streamErrs:   []error{nil, status.Error(codes.Unavailable, "restart failed")},
@@ -1703,6 +1760,7 @@ func TestGoogleSTTUpdateOptionsReportsReferenceReconnectError(t *testing.T) {
 	if statusErr.StatusCode != int(codes.Unavailable) {
 		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, codes.Unavailable)
 	}
+	close(releaseFirst)
 }
 
 func TestGoogleSTTUpdateOptionsNoopPreservesReferenceActiveStream(t *testing.T) {
@@ -1932,6 +1990,55 @@ func TestGoogleSTTUpdateOptionsClearsReferenceAlternativeLanguages(t *testing.T)
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsDetectLanguageKeepsReferenceActiveAlternatives(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: secondRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(
+		client,
+		WithGoogleSTTDetectLanguage(false),
+		WithGoogleSTTAlternativeLanguages("es-ES", "fr-FR"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+	if got := firstStream.sent[0].GetStreamingConfig().GetConfig().GetAlternativeLanguageCodes(); len(got) != 0 {
+		t.Fatalf("first stream alternative languages = %#v, want none with detect_language disabled", got)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTDetectLanguage(true))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after detect language update")
+	}
+	config := secondStream.sent[0].GetStreamingConfig().GetConfig()
+	if got := config.GetLanguageCode(); got != "en-US" {
+		t.Fatalf("second stream language = %q, want original en-US", got)
+	}
+	if got := config.GetAlternativeLanguageCodes(); len(got) != 0 {
+		t.Fatalf("second stream alternative languages = %#v, want none because reference active stream keeps sanitized language snapshot", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTUpdateOptionsAppliesEmptyActiveStreamLanguage(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
@@ -2078,6 +2185,59 @@ func TestGoogleSTTUpdateOptionsSwitchesActiveStreamToReferenceV2(t *testing.T) {
 	}
 	close(firstRelease)
 	close(secondRelease)
+}
+
+func TestGoogleSTTUpdateReconnectUsesLatestReferenceModel(t *testing.T) {
+	oldV2 := &fakeGoogleV2StreamingRecognizeClient{recvBlock: make(chan struct{})}
+	nextV2 := &fakeGoogleV2StreamingRecognizeClient{recvBlock: make(chan struct{})}
+	v2Client := &fakeGoogleV2SpeechClient{
+		streams:      []speechv2pb.Speech_StreamingRecognizeClient{nextV2},
+		streamCallCh: make(chan int, 1),
+	}
+	staleV1 := &fakeGoogleStreamingRecognizeClient{}
+	v1Client := &fakeGoogleSpeechClient{
+		stream:       staleV1,
+		streamCallCh: make(chan int, 1),
+	}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation("us-central1"),
+		WithGoogleSTTModel("chirp_3"),
+	)
+	provider.clientV2 = v2Client
+	googleStream := &googleSTTStream{
+		owner:                       provider,
+		ctx:                         context.Background(),
+		streamV2:                    oldV2,
+		language:                    "en-US",
+		includeAlternativeLanguages: true,
+		events:                      make(chan *stt.SpeechEvent, 1),
+		errCh:                       make(chan error, 1),
+	}
+
+	if err := googleStream.reconnectForUpdatedConfig(); err != nil {
+		t.Fatalf("reconnectForUpdatedConfig returned error: %v", err)
+	}
+
+	select {
+	case calls := <-v2Client.streamCallCh:
+		if calls != 1 {
+			t.Fatalf("v2 stream calls = %d, want latest chirp_3 reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for latest chirp_3 reconnect")
+	}
+	if v1Client.streamCalls != 0 {
+		t.Fatalf("v1 stream calls = %d, want no stale v1 reconnect", v1Client.streamCalls)
+	}
+	if !oldV2.closed {
+		t.Fatal("old v2 stream closed = false after latest-model reconnect")
+	}
+	if len(nextV2.sent) != 1 || nextV2.sent[0].GetStreamingConfig().GetConfig().GetModel() != "chirp_3" {
+		t.Fatalf("next v2 stream sent = %#v, want chirp_3 config", nextV2.sent)
+	}
+	close(oldV2.recvBlock)
+	close(nextV2.recvBlock)
 }
 
 func TestGoogleSTTUpdateOptionsReplacesReferenceAdaptationOnVersionSwitch(t *testing.T) {
