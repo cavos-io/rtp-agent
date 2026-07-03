@@ -1451,7 +1451,7 @@ func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.ev
 func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSession) {
 	defer func() {
 		if s != nil && s.activeLiveSession() == liveSession {
-			s.closeGeneration()
+			s.finishCurrentGeneration()
 		}
 	}()
 	for {

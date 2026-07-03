@@ -3381,6 +3381,63 @@ func TestGoogleRealtimeSessionReceiveErrorClosesReferenceGeneration(t *testing.T
 	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
 }
 
+func TestGoogleRealtimeSessionReceiveCloseFinalizesReferenceGeneration(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	rawSession, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer rawSession.Close()
+	session := rawSession.(*googleRealtimeSession)
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn:          &genai.Content{Parts: []*genai.Part{{Text: "checking"}}},
+			InputTranscription: &genai.Transcription{Text: " question"},
+		},
+	}
+	close(liveSession.serverMessages)
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "checking" {
+		t.Fatalf("text delta = %q, want checking", text)
+	}
+	textEvent := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if textEvent.Type != llm.RealtimeEventTypeText || textEvent.Text != "checking" {
+		t.Fatalf("text event = %#v, want checking delta", textEvent)
+	}
+	interim := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if interim.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || interim.InputTranscription == nil || interim.InputTranscription.Transcript != "question" || interim.InputTranscription.IsFinal {
+		t.Fatalf("interim input transcription = %#v, want non-final question", interim)
+	}
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("receive close event = %#v, want speech_stopped", stopped)
+	}
+	final := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if final.Type != llm.RealtimeEventTypeInputAudioTranscriptionCompleted || final.InputTranscription == nil || final.InputTranscription.Transcript != "question" || !final.InputTranscription.IsFinal {
+		t.Fatalf("final input transcription = %#v, want final question", final)
+	}
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+
+	messages := session.chatCtx.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("chat context messages = %d, want committed user and assistant transcripts", len(messages))
+	}
+	if messages[0].Role != llm.ChatRoleUser || messages[0].TextContent() != "question" {
+		t.Fatalf("user transcript message = %#v, want trimmed question", messages[0])
+	}
+	if messages[1].Role != llm.ChatRoleAssistant || messages[1].TextContent() != "checking" {
+		t.Fatalf("assistant transcript message = %#v, want checking", messages[1])
+	}
+}
+
 func TestGoogleRealtimeSessionOrdersInputBeforeOutputTranscription(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
