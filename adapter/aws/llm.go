@@ -31,6 +31,7 @@ type AWSLLM struct {
 	temperatureSet     bool
 	topP               float32
 	topPSet            bool
+	additionalFields   any
 }
 
 type AWSLLMOption func(*AWSLLM)
@@ -63,6 +64,12 @@ func WithAWSLLMTopP(topP float32) AWSLLMOption {
 	return func(l *AWSLLM) {
 		l.topP = topP
 		l.topPSet = true
+	}
+}
+
+func WithAWSLLMAdditionalRequestFields(fields any) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.additionalFields = fields
 	}
 }
 
@@ -148,6 +155,8 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	}
 	if fields, ok := options.ExtraParams["additional_request_fields"]; ok {
 		req.AdditionalModelRequestFields = document.NewLazyDocument(fields)
+	} else if l.additionalFields != nil {
+		req.AdditionalModelRequestFields = document.NewLazyDocument(l.additionalFields)
 	}
 
 	if systemText != "" {
