@@ -95,6 +95,9 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	if inferenceConfig := buildAWSInferenceConfig(options.ExtraParams); inferenceConfig != nil {
 		req.InferenceConfig = inferenceConfig
 	}
+	if fields, ok := options.ExtraParams["additional_request_fields"]; ok {
+		req.AdditionalModelRequestFields = document.NewLazyDocument(fields)
+	}
 
 	if systemText != "" {
 		req.System = []types.SystemContentBlock{

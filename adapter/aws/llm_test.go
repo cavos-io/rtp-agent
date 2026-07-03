@@ -199,6 +199,32 @@ func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatForwardsReferenceAdditionalRequestFields(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	client := fakeAWSLLMClient{
+		err:          errors.New("stop after capture"),
+		inputCapture: &captured,
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, _ = provider.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
+		"additional_request_fields": map[string]any{
+			"thinking": map[string]any{"type": "disabled"},
+		},
+	}))
+
+	if captured == nil || captured.AdditionalModelRequestFields == nil {
+		t.Fatalf("AdditionalModelRequestFields = %#v, want reference additional request fields", captured)
+	}
+}
+
 func TestAWSLLMStreamClosedState(t *testing.T) {
 	stream := &awsLLMStream{closed: true}
 
