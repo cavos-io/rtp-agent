@@ -74,6 +74,14 @@ func WithAWSSTTSampleRate(sampleRate int32) AWSSTTOption {
 	}
 }
 
+func WithAWSSTTLanguage(language types.LanguageCode) AWSSTTOption {
+	return func(s *AWSSTT) {
+		if language != "" {
+			s.language = language
+		}
+	}
+}
+
 func WithAWSSTTVocabularyName(name string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.vocabularyName = name
