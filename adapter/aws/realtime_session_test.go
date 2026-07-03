@@ -15,6 +15,7 @@ import (
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/google/uuid"
 )
 
 func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
@@ -1027,8 +1028,11 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testin
 	if created.Generation == nil || created.Generation.ResponseID == "" {
 		t.Fatalf("generation = %#v, want response id", created.Generation)
 	}
-	if created.Generation.ResponseID != "completion-1" {
-		t.Fatalf("response id = %q, want provider completion id", created.Generation.ResponseID)
+	if created.Generation.ResponseID == "completion-1" {
+		t.Fatalf("response id = %q, want generated LiveKit id distinct from provider completion id", created.Generation.ResponseID)
+	}
+	if _, err := uuid.Parse(created.Generation.ResponseID); err != nil {
+		t.Fatalf("response id = %q, want generated UUID: %v", created.Generation.ResponseID, err)
 	}
 	if created.Generation.MessageCh == nil || created.Generation.FunctionCh == nil {
 		t.Fatalf("generation streams = %#v/%#v, want reference streams", created.Generation.MessageCh, created.Generation.FunctionCh)
@@ -1036,7 +1040,7 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testin
 	select {
 	case msg := <-created.Generation.MessageCh:
 		if msg.MessageID != created.Generation.ResponseID || msg.TextCh == nil || msg.AudioCh == nil || msg.ModalitiesCh == nil {
-			t.Fatalf("message generation = %#v, want response id and streams", msg)
+			t.Fatalf("message generation = %#v, want generated response id and streams", msg)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for completionStart message generation")

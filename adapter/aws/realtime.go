@@ -416,7 +416,7 @@ func (s *awsRealtimeSession) readResponses() {
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
-		s.emitGenerationCreatedWithResponseID(awsRealtimeMapString(completionStart, "completionId"))
+		s.emitGenerationCreated()
 	}
 	if s.turns != nil {
 		s.turns.feed(payload)
