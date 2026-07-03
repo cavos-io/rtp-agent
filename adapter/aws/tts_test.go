@@ -210,6 +210,30 @@ func TestAWSTTSLazySynthesizeSnapshotsReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamUsesReferenceSnapshotSampleRate(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	provider := newAWSTTSWithClient(nil, "", WithAWSTTSSampleRate(16000))
+	stream := &awsTTSChunkedStream{
+		stream:   io.NopCloser(bytes.NewReader(mp3Data)),
+		provider: provider,
+		options:  provider.snapshotOptions(),
+	}
+	defer stream.Close()
+
+	provider.UpdateOptions(WithAWSTTSSampleRate(24000))
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want stream snapshot sample rate 16000", audio.Frame.SampleRate)
+	}
+}
+
 func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
