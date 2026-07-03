@@ -1033,6 +1033,27 @@ func TestGoogleRealtimeSessionHTTPOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionAPIVersionOptionMatchesReference(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeAPIVersion("v1alpha"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.HTTPOptions == nil || config.HTTPOptions.APIVersion != "v1alpha" {
+		t.Fatalf("api version = %#v, want explicit v1alpha", config)
+	}
+}
+
 func TestGoogleRealtimeSessionHTTPOptionsUsesReferenceConnectTimeout(t *testing.T) {
 	connectTimeout := 1500 * time.Millisecond
 	httpOptions := &genai.HTTPOptions{

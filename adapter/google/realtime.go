@@ -134,6 +134,7 @@ type googleRealtimeOptions struct {
 	thinkingConfig            *genai.ThinkingConfig
 	mediaResolution           genai.MediaResolution
 	httpOptions               *genai.HTTPOptions
+	apiVersion                string
 	connectOptions            *llm.APIConnectOptions
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
@@ -323,6 +324,12 @@ func WithGoogleRealtimeHTTPOptions(httpOptions *genai.HTTPOptions) GoogleRealtim
 	}
 }
 
+func WithGoogleRealtimeAPIVersion(apiVersion string) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.apiVersion = apiVersion
+	}
+}
+
 func WithGoogleRealtimeConnectOptions(connectOptions llm.APIConnectOptions) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.connectOptions = &connectOptions
@@ -430,7 +437,9 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		return nil, err
 	}
 	apiVersion := "v1beta"
-	if !vertexAI && ((options.proactivitySet && options.proactivity) || (options.affectiveDialogSet && options.affectiveDialog)) {
+	if options.apiVersion != "" {
+		apiVersion = options.apiVersion
+	} else if !vertexAI && ((options.proactivitySet && options.proactivity) || (options.affectiveDialogSet && options.affectiveDialog)) {
 		apiVersion = "v1alpha"
 	}
 	return &RealtimeModel{
