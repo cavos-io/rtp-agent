@@ -911,6 +911,37 @@ func TestAWSRealtimeSessionIgnoresReferenceMalformedResponseJSON(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionInvalidReferenceAudioOutputIsModelError(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","role":"ASSISTANT","contentId":"audio-1"}}}`)
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-1","content":"abc"}}}`)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeError)
+	modelErr, ok := event.Error.(*llm.RealtimeModelError)
+	if !ok {
+		t.Fatalf("Error = %T %v, want RealtimeModelError", event.Error, event.Error)
+	}
+	if modelErr.Recoverable {
+		t.Fatal("Recoverable = true, want reference nonrecoverable audio decode error")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(modelErr.Err, &statusErr) {
+		t.Fatalf("RealtimeModelError.Err = %T %v, want APIStatusError", modelErr.Err, modelErr.Err)
+	}
+	if statusErr.StatusCode != 500 {
+		t.Fatalf("StatusCode = %d, want 500", statusErr.StatusCode)
+	}
+}
+
 func TestAWSRealtimeSessionEmitsErrorOnReferenceReadFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	stream.err = errors.New("bedrock output stream failed")

@@ -701,7 +701,9 @@ func (s *awsRealtimeSession) readResponses() {
 		if err := json.Unmarshal(chunk.Value.Bytes, &payload); err != nil {
 			continue
 		}
-		s.handleResponseEvent(payload)
+		if !s.handleResponseEvent(payload) {
+			return
+		}
 	}
 	if err := stream.Err(); err != nil {
 		if isAWSRealtimeToolResponseParsingError(err) {
@@ -830,7 +832,7 @@ func (s *awsRealtimeSession) clearPendingTools() {
 	s.pending = make(map[string]struct{})
 }
 
-func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
+func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
 		s.emitGenerationCreated()
 	}
@@ -841,11 +843,16 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
+			s.closeGeneration()
 			s.emit(llm.RealtimeEvent{
-				Type:  llm.RealtimeEventTypeError,
-				Error: llm.NewRealtimeError("failed to decode AWS Nova Sonic audio output", err),
+				Type: llm.RealtimeEventTypeError,
+				Error: llm.NewRealtimeModelError(
+					s.model.Label(),
+					llm.NewAPIStatusErrorWithRetryable(err.Error(), 500, "", err, false),
+					false,
+				),
 			})
-			return
+			return false
 		}
 		if s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data) {
 			s.markLastAudioOutput()
@@ -863,7 +870,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			if !s.hasPendingTools() {
 				s.closeGeneration()
 			}
-			return
+			return true
 		}
 		if s.shouldStoreProviderUserText(contentID, role) {
 			s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
@@ -881,7 +888,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
 			Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
 		}) {
-			return
+			return true
 		}
 		s.mu.Lock()
 		s.pending[toolUseID] = struct{}{}
@@ -897,6 +904,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
 		s.closeGeneration()
 	}
+	return true
 }
 
 func (s *awsRealtimeSession) hasPendingTools() bool {
