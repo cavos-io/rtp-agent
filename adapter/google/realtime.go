@@ -1358,18 +1358,7 @@ func googleRealtimeSetConfigSessionResumption(config *genai.LiveConnectConfig, h
 }
 
 func googleRealtimeToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
-	if len(tools) == 0 {
-		return nil
-	}
-	declarations := make([]*genai.FunctionDeclaration, 0, len(tools))
-	for _, tool := range tools {
-		declaration := buildGoogleFunctionDeclaration(tool)
-		if behavior := googleRealtimeToolBehavior(behavior); behavior != "" {
-			declaration.Behavior = behavior
-		}
-		declarations = append(declarations, declaration)
-	}
-	return []*genai.Tool{{FunctionDeclarations: declarations}}
+	return googleToolsConfig(tools, behavior)
 }
 
 func googleRealtimeToolBehavior(value any) genai.Behavior {

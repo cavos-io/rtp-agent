@@ -330,6 +330,26 @@ func TestBuildGoogleFunctionDeclarationPreservesNestedSchema(t *testing.T) {
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceGoogleSearchTool(t *testing.T) {
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&GoogleSearchTool{ExcludeDomains: []string{"example.com"}}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Google Search tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.GoogleSearch == nil {
+		t.Fatalf("google search tool = nil, config tools = %#v", config.Tools)
+	}
+	if got := tool.GoogleSearch.ExcludeDomains; !reflect.DeepEqual(got, []string{"example.com"}) {
+		t.Fatalf("exclude domains = %#v, want example.com", got)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Google Search tool", tool.FunctionDeclarations)
+	}
+}
+
 func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
 	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
 		"type": "function",

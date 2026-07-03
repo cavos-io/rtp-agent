@@ -154,15 +154,8 @@ func buildGoogleGenerateContentConfigForModelWithConnectOptions(model string, op
 		config.SystemInstruction = genai.NewContentFromText(systemInstructions, genai.RoleUser)
 	}
 
-	if len(options.Tools) > 0 {
-		declarations := make([]*genai.FunctionDeclaration, 0)
-		for _, t := range options.Tools {
-			declarations = append(declarations, buildGoogleFunctionDeclaration(t))
-		}
-
-		config.Tools = []*genai.Tool{
-			{FunctionDeclarations: declarations},
-		}
+	if tools := googleToolsConfig(options.Tools, ""); len(tools) > 0 {
+		config.Tools = tools
 	}
 	if toolConfig := buildGoogleToolConfig(options.Tools, options.ToolChoice); toolConfig != nil {
 		config.ToolConfig = toolConfig
@@ -710,6 +703,9 @@ func buildGoogleToolConfig(tools []llm.Tool, choice llm.ToolChoice) *genai.ToolC
 func googleToolNames(tools []llm.Tool) []string {
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
+		if _, ok := tool.(llm.ProviderTool); ok {
+			continue
+		}
 		names = append(names, tool.Name())
 	}
 	if len(names) == 0 {

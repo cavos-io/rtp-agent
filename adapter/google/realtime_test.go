@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1689,6 +1690,42 @@ func TestGoogleRealtimeSessionUpdateToolsReconnectsReferenceSession(t *testing.T
 	googleSession := session.(*googleRealtimeSession)
 	if googleSession.liveSession != secondSession {
 		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceGoogleSearchTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{&GoogleSearchTool{ExcludeDomains: []string{"example.com"}}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Google Search tool", tools)
+	}
+	if tools[0].GoogleSearch == nil {
+		t.Fatalf("google search tool = nil, tools = %#v", tools)
+	}
+	if got := tools[0].GoogleSearch.ExcludeDomains; !reflect.DeepEqual(got, []string{"example.com"}) {
+		t.Fatalf("exclude domains = %#v, want example.com", got)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Google Search tool", tools[0].FunctionDeclarations)
 	}
 }
 
