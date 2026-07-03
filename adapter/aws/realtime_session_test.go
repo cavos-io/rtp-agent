@@ -853,6 +853,33 @@ func TestAWSRealtimeSessionReadDeadlineEmitsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	first.err = errors.New("ValidationException: System instability detected. Please retry your request.")
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	close(first.events)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference restart notification")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want stale recoverable stream closed")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want restarted Nova Sonic session")
+	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeError)
+}
+
 func TestAWSRealtimeSessionReadFailureClosesReferenceGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	stream.err = errors.New("bedrock output stream failed")

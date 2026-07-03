@@ -52,6 +52,11 @@ const (
 		"- Ensure that our communication remains in the same language as the user."
 )
 
+var awsRealtimeRecoverableReadErrorMessages = []string{
+	"InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
+	"System instability detected. Please retry your request.",
+}
+
 type AWSRealtimeModel struct {
 	model          string
 	region         string
@@ -415,8 +420,11 @@ func (s *awsRealtimeSession) readResponses() {
 		}
 		s.handleResponseEvent(payload)
 	}
-	s.closeGeneration()
 	if err := stream.Err(); err != nil {
+		if s.restartAfterRecoverableReadError(stream, err) {
+			return
+		}
+		s.closeGeneration()
 		var apiErr error = llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err))
 		if errors.Is(err, context.DeadlineExceeded) {
 			apiErr = llm.NewAPITimeoutError(err.Error())
@@ -425,7 +433,53 @@ func (s *awsRealtimeSession) readResponses() {
 			Type:  llm.RealtimeEventTypeError,
 			Error: apiErr,
 		})
+		return
 	}
+	s.closeGeneration()
+}
+
+func (s *awsRealtimeSession) restartAfterRecoverableReadError(stream awsRealtimeStream, err error) bool {
+	if !isAWSRealtimeRecoverableReadError(err) {
+		return false
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return false
+	}
+	if s.stream == stream {
+		s.stream = nil
+	}
+	s.builder = newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString())
+	s.mu.Unlock()
+
+	_ = stream.Close()
+	if startErr := s.start(context.Background()); startErr != nil {
+		s.closeGeneration()
+		s.emit(llm.RealtimeEvent{
+			Type:  llm.RealtimeEventTypeError,
+			Error: startErr,
+		})
+		return true
+	}
+	s.emit(llm.RealtimeEvent{
+		Type:      llm.RealtimeEventTypeSessionReconnected,
+		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
+	})
+	return true
+}
+
+func isAWSRealtimeRecoverableReadError(err error) bool {
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	message := err.Error()
+	for _, recoverable := range awsRealtimeRecoverableReadErrorMessages {
+		if strings.Contains(message, recoverable) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
