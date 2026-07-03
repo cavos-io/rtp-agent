@@ -706,6 +706,10 @@ func (s *awsRealtimeSession) readResponses() {
 		}
 	}
 	if err := stream.Err(); err != nil {
+		if isAWSRealtimeGracefulClosedReadError(err) {
+			s.closeGeneration()
+			return
+		}
 		if isAWSRealtimeToolResponseParsingError(err) {
 			s.closeGeneration()
 			s.clearPendingTools()
@@ -816,6 +820,14 @@ func isAWSRealtimeRecoverableReadError(err error) bool {
 		}
 	}
 	return false
+}
+
+func isAWSRealtimeGracefulClosedReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return message == "I/O operation on closed file." || strings.Contains(message, "stream already closed")
 }
 
 func isAWSRealtimeToolResponseParsingError(err error) bool {

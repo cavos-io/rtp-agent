@@ -1009,6 +1009,21 @@ func TestAWSRealtimeSessionEmitsErrorOnReferenceReadFailure(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionClosedFileReadErrorIsReferenceGraceful(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	stream.err = errors.New("I/O operation on closed file.")
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	close(stream.events)
+
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeError)
+}
+
 func TestAWSRealtimeSessionReadDeadlineEmitsAPITimeoutError(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	stream.err = context.DeadlineExceeded
