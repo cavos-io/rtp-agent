@@ -325,6 +325,7 @@ func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
 
 	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleSystem, Text: "system instructions"})
 	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
 	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "hi"})
 	if err := session.UpdateChatContext(ctx); err != nil {
@@ -340,7 +341,7 @@ func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	defer session.Close()
 
 	if len(stream.sent) != 12 {
-		t.Fatalf("sent event count = %d, want 12 with two history messages", len(stream.sent))
+		t.Fatalf("sent event count = %d, want 12 with system filtered and two history messages", len(stream.sent))
 	}
 	firstHistoryStart := mustAWSRealtimeJSONEvent(t, stream.sent[5])
 	if got := awsRealtimeNestedString(firstHistoryStart, "event", "contentStart", "role"); got != "USER" {

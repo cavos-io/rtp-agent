@@ -369,7 +369,7 @@ func awsRealtimeHistoryMessages(chatCtx *llm.ChatContext) []awsRealtimeHistoryMe
 			continue
 		}
 		role := strings.ToUpper(string(msg.Role))
-		if role != "USER" && role != "ASSISTANT" && role != "SYSTEM" {
+		if role != "USER" && role != "ASSISTANT" {
 			continue
 		}
 		text := msg.TextContent()
