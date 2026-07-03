@@ -125,6 +125,44 @@ func TestAWSTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	var requests int
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+			requests++
+			return nil, errors.New("polly should not be called before Next")
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want lazy stream", err)
+	}
+	if stream == nil {
+		t.Fatal("Synthesize stream = nil, want lazy stream")
+	}
+	if requests != 0 {
+		t.Fatalf("provider requests after Synthesize = %d, want none until Next", requests)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after preflight Close error = %v, want EOF", err)
+	}
+	if requests != 0 {
+		t.Fatalf("provider requests after Close before Next = %d, want none", requests)
+	}
+}
+
 func TestAWSTTSChunkedStreamDecodesReferenceMP3Audio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -407,14 +445,24 @@ func TestAWSTTSChunkedStreamReadFailureClosesReferenceStream(t *testing.T) {
 func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
 
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want lazy stream", err)
+	}
+	if stream == nil {
+		t.Fatal("Synthesize stream = nil, want lazy stream")
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil without client", audio)
+	}
 	if err == nil || !strings.Contains(err.Error(), "client is not configured") {
-		t.Fatalf("Synthesize error = %v, want configured-client error", err)
+		t.Fatalf("Next error = %v, want configured-client error", err)
 	}
 }
 
-func TestAWSTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
+func TestAWSTTSChunkedStreamNextReturnsAPIConnectionError(t *testing.T) {
 	client := polly.New(polly.Options{
 		Region: "us-east-1",
 		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
@@ -429,13 +477,20 @@ func TestAWSTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	provider := newAWSTTSWithClient(client, "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want lazy stream", err)
+	}
+	if stream == nil {
+		t.Fatal("Synthesize stream = nil, want lazy stream")
+	}
 
-	if stream != nil {
-		t.Fatalf("Synthesize stream = %#v, want nil on provider failure", stream)
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on provider failure", audio)
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
