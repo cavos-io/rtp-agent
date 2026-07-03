@@ -1054,6 +1054,31 @@ func TestGoogleRealtimeSessionAPIVersionOptionMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeDefaultConnectorKeepsHTTPOptionsClientScoped(t *testing.T) {
+	timeout := 10 * time.Millisecond
+	model := &RealtimeModel{
+		apiKey:   "test-key",
+		vertexAI: false,
+		httpOptions: &genai.HTTPOptions{
+			BaseURL: "http://127.0.0.1:1",
+			Headers: http.Header{
+				"x-test-header": []string{"value"},
+			},
+		},
+		connectOptions: llm.APIConnectOptions{Timeout: timeout},
+		apiVersion:     "v1alpha",
+	}
+	config := model.liveConnectConfig()
+
+	_, err := (googleRealtimeDefaultConnector{model: model}).Connect(context.Background(), model.Model(), config)
+	if err == nil {
+		t.Fatal("Connect error = nil, want local dial failure")
+	}
+	if strings.Contains(err.Error(), "request-level in LiveConnectConfig") {
+		t.Fatalf("Connect error = %v, want connector to keep HTTPOptions at client level only", err)
+	}
+}
+
 func TestGoogleRealtimeSessionHTTPOptionsUsesReferenceConnectTimeout(t *testing.T) {
 	connectTimeout := 1500 * time.Millisecond
 	httpOptions := &genai.HTTPOptions{

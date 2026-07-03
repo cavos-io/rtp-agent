@@ -906,7 +906,11 @@ func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName s
 	if err != nil {
 		return nil, err
 	}
-	return client.Live.Connect(ctx, modelName, config)
+	connectConfig := googleRealtimeCloneLiveConfig(config)
+	if connectConfig != nil {
+		connectConfig.HTTPOptions = nil
+	}
+	return client.Live.Connect(ctx, modelName, connectConfig)
 }
 
 type googleRealtimeSession struct {
