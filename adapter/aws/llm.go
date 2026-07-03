@@ -32,6 +32,8 @@ type AWSLLM struct {
 	topP               float32
 	topPSet            bool
 	additionalFields   any
+	cacheSystem        bool
+	cacheTools         bool
 }
 
 type AWSLLMOption func(*AWSLLM)
@@ -70,6 +72,18 @@ func WithAWSLLMTopP(topP float32) AWSLLMOption {
 func WithAWSLLMAdditionalRequestFields(fields any) AWSLLMOption {
 	return func(l *AWSLLM) {
 		l.additionalFields = fields
+	}
+}
+
+func WithAWSLLMCacheSystem(cache bool) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.cacheSystem = cache
+	}
+}
+
+func WithAWSLLMCacheTools(cache bool) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.cacheTools = cache
 	}
 }
 
@@ -139,7 +153,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 
 	toolConfig := (*types.ToolConfiguration)(nil)
 	if len(requestOptions.Tools) > 0 {
-		toolConfig = buildAWSToolConfig(&requestOptions)
+		toolConfig = buildAWSToolConfigWithCache(&requestOptions, l.cacheTools)
 	}
 	if toolConfig == nil {
 		chatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{ExcludeFunctionCall: true})
@@ -162,6 +176,9 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	if systemText != "" {
 		req.System = []types.SystemContentBlock{
 			&types.SystemContentBlockMemberText{Value: systemText},
+		}
+		if l.cacheSystem {
+			req.System = append(req.System, awsCachePointSystemBlock())
 		}
 	}
 
@@ -263,6 +280,10 @@ func awsFloat32Param(params map[string]any, key string) (float32, bool) {
 }
 
 func buildAWSToolConfig(options *llm.ChatOptions) *types.ToolConfiguration {
+	return buildAWSToolConfigWithCache(options, false)
+}
+
+func buildAWSToolConfigWithCache(options *llm.ChatOptions, cacheTools bool) *types.ToolConfiguration {
 	if len(options.Tools) == 0 || options.ToolChoice == "none" {
 		return nil
 	}
@@ -283,10 +304,25 @@ func buildAWSToolConfig(options *llm.ChatOptions) *types.ToolConfiguration {
 			Value: spec,
 		})
 	}
+	if cacheTools {
+		toolSpecs = append(toolSpecs, awsCachePointToolBlock())
+	}
 
 	return &types.ToolConfiguration{
 		Tools:      toolSpecs,
 		ToolChoice: buildAWSToolChoice(options.ToolChoice),
+	}
+}
+
+func awsCachePointSystemBlock() types.SystemContentBlock {
+	return &types.SystemContentBlockMemberCachePoint{
+		Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
+	}
+}
+
+func awsCachePointToolBlock() types.Tool {
+	return &types.ToolMemberCachePoint{
+		Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
 	}
 }
 

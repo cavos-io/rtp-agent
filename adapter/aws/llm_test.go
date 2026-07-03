@@ -284,6 +284,40 @@ func TestAWSLLMChatForwardsReferenceProviderAdditionalRequestFields(t *testing.T
 	}
 }
 
+func TestAWSLLMChatAddsReferenceProviderCachePoints(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	client := fakeAWSLLMClient{
+		err:          errors.New("stop after capture"),
+		inputCapture: &captured,
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	WithAWSLLMCacheSystem(true)(provider)
+	WithAWSLLMCacheTools(true)(provider)
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "be brief"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, _ = provider.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{awsRequestTestTool{}}))
+
+	if captured == nil || len(captured.System) != 2 {
+		t.Fatalf("System = %#v, want system text plus cachePoint", captured)
+	}
+	if _, ok := captured.System[1].(*awstypes.SystemContentBlockMemberCachePoint); !ok {
+		t.Fatalf("system cache block = %T, want cachePoint", captured.System[1])
+	}
+	if captured.ToolConfig == nil || len(captured.ToolConfig.Tools) != 2 {
+		t.Fatalf("ToolConfig = %#v, want tool plus cachePoint", captured.ToolConfig)
+	}
+	if _, ok := captured.ToolConfig.Tools[1].(*awstypes.ToolMemberCachePoint); !ok {
+		t.Fatalf("tool cache block = %T, want cachePoint", captured.ToolConfig.Tools[1])
+	}
+}
+
 func TestAWSLLMStreamClosedState(t *testing.T) {
 	stream := &awsLLMStream{closed: true}
 
