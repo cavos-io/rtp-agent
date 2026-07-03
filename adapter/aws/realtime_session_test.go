@@ -906,12 +906,22 @@ func TestAWSRealtimeSessionEmitsErrorOnReferenceReadFailure(t *testing.T) {
 	if event.Error == nil {
 		t.Fatal("Error = nil, want stream failure")
 	}
-	var connectionErr *llm.APIConnectionError
-	if !errors.As(event.Error, &connectionErr) {
-		t.Fatalf("Error = %T %v, want APIConnectionError", event.Error, event.Error)
+	modelErr, ok := event.Error.(*llm.RealtimeModelError)
+	if !ok {
+		t.Fatalf("Error = %T %v, want RealtimeModelError", event.Error, event.Error)
 	}
-	if !strings.Contains(event.Error.Error(), "AWS Nova Sonic realtime stream failed") {
-		t.Fatalf("Error = %q, want stream failure context", event.Error.Error())
+	if modelErr.Recoverable {
+		t.Fatal("Recoverable = true, want reference nonrecoverable stream failure")
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(modelErr.Err, &statusErr) {
+		t.Fatalf("RealtimeModelError.Err = %T %v, want APIStatusError", modelErr.Err, modelErr.Err)
+	}
+	if statusErr.StatusCode != 500 {
+		t.Fatalf("StatusCode = %d, want 500", statusErr.StatusCode)
+	}
+	if !strings.Contains(statusErr.Error(), "bedrock output stream failed") {
+		t.Fatalf("Error = %q, want provider stream failure", statusErr.Error())
 	}
 }
 

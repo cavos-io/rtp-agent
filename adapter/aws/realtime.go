@@ -737,13 +737,20 @@ func (s *awsRealtimeSession) readResponses() {
 			return
 		}
 		s.closeGeneration()
-		var apiErr error = llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err))
 		if errors.Is(err, context.DeadlineExceeded) {
-			apiErr = llm.NewAPITimeoutError(err.Error())
+			s.emit(llm.RealtimeEvent{
+				Type:  llm.RealtimeEventTypeError,
+				Error: llm.NewAPITimeoutError(err.Error()),
+			})
+			return
 		}
 		s.emit(llm.RealtimeEvent{
-			Type:  llm.RealtimeEventTypeError,
-			Error: apiErr,
+			Type: llm.RealtimeEventTypeError,
+			Error: llm.NewRealtimeModelError(
+				s.model.Label(),
+				llm.NewAPIStatusErrorWithRetryable(err.Error(), 500, "", err, false),
+				false,
+			),
 		})
 		return
 	}
