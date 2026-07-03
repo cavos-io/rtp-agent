@@ -1619,6 +1619,62 @@ func TestGoogleSTTUpdateOptionsAppliesActiveStreamMinConfidence(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTUpdateOptionsDoesNotBlockOnReferenceReconnectClose(t *testing.T) {
+	closeStarted := make(chan struct{})
+	closeRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{
+		recvBlock:    make(chan struct{}),
+		closeBlock:   closeStarted,
+		closeRelease: closeRelease,
+	}
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: make(chan struct{})}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(client)
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+
+	updateErrCh := make(chan error, 1)
+	go func() {
+		updateErrCh <- provider.UpdateOptions(WithGoogleSTTMinConfidenceThreshold(0.5))
+	}()
+
+	select {
+	case <-closeStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("old provider CloseSend did not start")
+	}
+
+	select {
+	case err := <-updateErrCh:
+		if err != nil {
+			t.Fatalf("UpdateOptions returned error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		closeRelease <- struct{}{}
+		<-updateErrCh
+		t.Fatal("UpdateOptions blocked on old provider CloseSend")
+	}
+
+	closeRelease <- struct{}{}
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want eventual reconnect", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for eventual reconnect")
+	}
+	close(firstStream.recvBlock)
+	close(secondStream.recvBlock)
+}
+
 func TestGoogleSTTUpdateOptionsAppliesNegativeMinConfidence(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}

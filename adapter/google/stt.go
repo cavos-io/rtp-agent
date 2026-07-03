@@ -369,6 +369,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
+	wantV2 := googleSTTUsesV2(s.model)
 	if oldLocation != s.location {
 		if s.newClient != nil {
 			s.client = nil
@@ -388,9 +389,11 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 
 	for _, stream := range streams {
 		stream.updateConfig(minConfidence, language, languageChanged)
-		if err := stream.reconnectForUpdatedConfig(); err != nil {
-			stream.failWithError(err)
-		}
+		go func(stream *googleSTTStream) {
+			if err := stream.reconnectForUpdatedConfig(wantV2); err != nil {
+				stream.failWithError(err)
+			}
+		}(stream)
 	}
 	return nil
 }
@@ -498,15 +501,6 @@ func (s *GoogleSTT) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
-}
-
-func (s *GoogleSTT) usesV2() bool {
-	if s == nil {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return googleSTTUsesV2(s.model)
 }
 
 func (s *GoogleSTT) registerStream(stream *googleSTTStream) bool {
@@ -1282,16 +1276,33 @@ func (n *googleSTTInputAudioNormalizer) reset() {
 }
 
 func (s *googleSTTStream) readLoop() {
-	if s.usesV2() {
-		s.readLoopV2()
-		return
-	}
 	defer close(s.events)
+	for {
+		var switched bool
+		if s.usesV2() {
+			switched = s.readLoopV2()
+		} else {
+			switched = s.readLoopV1()
+		}
+		if !switched {
+			return
+		}
+	}
+}
+
+func (s *googleSTTStream) readLoopV1() bool {
 	var lastUsageEventTime float64
 	var usageStream speechpb.Speech_StreamingRecognizeClient
 	var speechStarted bool
 	for {
 		stream := s.currentStream()
+		if stream == nil {
+			if s.currentStreamV2() != nil {
+				return true
+			}
+			s.terminate()
+			return false
+		}
 		if stream != usageStream {
 			lastUsageEventTime = 0
 			usageStream = stream
@@ -1299,7 +1310,7 @@ func (s *googleSTTStream) readLoop() {
 		resp, err := stream.Recv()
 		if err != nil {
 			if s.currentStream() != stream {
-				continue
+				return true
 			}
 			if s.shouldRestartAfterConflict(err) {
 				restarted, restartErr := s.restartStreamWithError(stream)
@@ -1313,17 +1324,17 @@ func (s *googleSTTStream) readLoop() {
 			}
 			if s.isClosed() {
 				s.terminate()
-				return
+				return false
 			}
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
 			}
 			s.terminate()
-			return
+			return false
 		}
 		if s.isClosed() {
 			s.terminate()
-			return
+			return false
 		}
 
 		switch resp.GetSpeechEventType() {
@@ -1358,7 +1369,7 @@ func (s *googleSTTStream) readLoop() {
 					if restartErr != nil {
 						s.errCh <- googleSTTStreamError(restartErr)
 						s.terminate()
-						return
+						return false
 					}
 				}
 			}
@@ -1377,13 +1388,19 @@ func (s *googleSTTStream) readLoop() {
 	}
 }
 
-func (s *googleSTTStream) readLoopV2() {
-	defer close(s.events)
+func (s *googleSTTStream) readLoopV2() bool {
 	var speechStarted bool
 	var lastUsageEventTime float64
 	var usageStream speechv2pb.Speech_StreamingRecognizeClient
 	for {
 		stream := s.currentStreamV2()
+		if stream == nil {
+			if s.currentStream() != nil {
+				return true
+			}
+			s.terminate()
+			return false
+		}
 		if stream != usageStream {
 			lastUsageEventTime = 0
 			usageStream = stream
@@ -1391,7 +1408,7 @@ func (s *googleSTTStream) readLoopV2() {
 		resp, err := stream.Recv()
 		if err != nil {
 			if s.currentStreamV2() != stream {
-				continue
+				return true
 			}
 			if s.shouldRestartAfterConflict(err) {
 				restarted, restartErr := s.restartStreamV2WithError(stream)
@@ -1405,17 +1422,17 @@ func (s *googleSTTStream) readLoopV2() {
 			}
 			if s.isClosed() {
 				s.terminate()
-				return
+				return false
 			}
 			if err != io.EOF {
 				s.errCh <- googleSTTStreamError(err)
 			}
 			s.terminate()
-			return
+			return false
 		}
 		if s.isClosed() {
 			s.terminate()
-			return
+			return false
 		}
 
 		switch resp.GetSpeechEventType() {
@@ -1450,7 +1467,7 @@ func (s *googleSTTStream) readLoopV2() {
 					if restartErr != nil {
 						s.errCh <- googleSTTStreamError(restartErr)
 						s.terminate()
-						return
+						return false
 					}
 				}
 			}
@@ -1586,8 +1603,7 @@ func (s *googleSTTStream) restartFromV1ToV2WithError(old speechpb.Speech_Streami
 	return true, nil
 }
 
-func (s *googleSTTStream) reconnectForUpdatedConfig() error {
-	wantV2 := s.owner != nil && s.owner.usesV2()
+func (s *googleSTTStream) reconnectForUpdatedConfig(wantV2 bool) error {
 	haveV2 := s.usesV2()
 	if wantV2 && haveV2 {
 		_, err := s.restartStreamV2WithError(s.currentStreamV2())
