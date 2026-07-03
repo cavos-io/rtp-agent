@@ -1963,8 +1963,8 @@ func (s *googleSTTStream) updateConfig(minConfidence float64, language string, l
 
 func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed || s.inputClosed {
+		s.mu.Unlock()
 		if s.callerClosedInput {
 			return errors.New("stream input ended")
 		}
@@ -1977,46 +1977,71 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.pushedSampleRate = frame.SampleRate
 		normalized, err := s.inputAudio.normalize(frame, uint32(s.owner.sampleRate))
 		if err != nil {
+			s.mu.Unlock()
 			return err
 		}
 		frame = normalized
 	}
-	return s.sendAudioFrameLocked(frame)
+	s.mu.Unlock()
+	return s.sendAudioFrame(frame)
 }
 
-func (s *googleSTTStream) sendAudioFrameLocked(frame *model.AudioFrame) error {
+func (s *googleSTTStream) sendAudioFrame(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {
 		return nil
 	}
-	if s.streamV2 != nil {
-		if err := s.streamV2.Send(&speechv2pb.StreamingRecognizeRequest{
+	s.mu.Lock()
+	if s.closed || s.inputClosed {
+		s.mu.Unlock()
+		if s.callerClosedInput {
+			return errors.New("stream input ended")
+		}
+		return io.ErrClosedPipe
+	}
+	streamV2 := s.streamV2
+	stream := s.stream
+	s.mu.Unlock()
+
+	if streamV2 != nil {
+		if err := streamV2.Send(&speechv2pb.StreamingRecognizeRequest{
 			StreamingRequest: &speechv2pb.StreamingRecognizeRequest_Audio{
 				Audio: bytes.Clone(frame.Data),
 			},
 		}); err != nil {
-			s.closed = true
-			_ = s.streamV2.CloseSend()
-			s.unregister()
+			s.mu.Lock()
+			if !s.closed {
+				s.closed = true
+				_ = streamV2.CloseSend()
+				s.unregister()
+			}
+			s.mu.Unlock()
 			return googleSTTStreamError(err)
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed || s.inputClosed {
+			if s.callerClosedInput {
+				return errors.New("stream input ended")
+			}
+			return io.ErrClosedPipe
 		}
 		s.audioPushed = true
 		return nil
 	}
-	if err := s.stream.Send(&speechpb.StreamingRecognizeRequest{
+	if err := stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
 			AudioContent: bytes.Clone(frame.Data),
 		},
 	}); err != nil {
-		s.closed = true
-		_ = s.stream.CloseSend()
-		s.unregister()
+		s.mu.Lock()
+		if !s.closed {
+			s.closed = true
+			_ = stream.CloseSend()
+			s.unregister()
+		}
+		s.mu.Unlock()
 		return googleSTTStreamError(err)
 	}
-	s.audioPushed = true
-	return nil
-}
-
-func (s *googleSTTStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.inputClosed {
@@ -2025,9 +2050,24 @@ func (s *googleSTTStream) Flush() error {
 		}
 		return io.ErrClosedPipe
 	}
-	if tail := s.inputAudio.flush(); tail != nil {
-		return s.sendAudioFrameLocked(tail)
+	s.audioPushed = true
+	return nil
+}
+
+func (s *googleSTTStream) Flush() error {
+	s.mu.Lock()
+	if s.closed || s.inputClosed {
+		s.mu.Unlock()
+		if s.callerClosedInput {
+			return errors.New("stream input ended")
+		}
+		return io.ErrClosedPipe
 	}
+	if tail := s.inputAudio.flush(); tail != nil {
+		s.mu.Unlock()
+		return s.sendAudioFrame(tail)
+	}
+	s.mu.Unlock()
 	return nil
 }
 
