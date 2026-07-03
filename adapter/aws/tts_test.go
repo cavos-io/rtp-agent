@@ -128,6 +128,16 @@ func TestAWSTTSUpdateOptionsMatchesReference(t *testing.T) {
 	}
 }
 
+func TestAWSTTSUpdateOptionsKeepsReferenceSampleRate(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "", WithAWSTTSSampleRate(16000))
+
+	provider.UpdateOptions(WithAWSTTSSampleRate(24000))
+
+	if provider.sampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want unchanged reference sample rate 16000", provider.sampleRate)
+	}
+}
+
 func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	var requests int
 	client := polly.New(polly.Options{

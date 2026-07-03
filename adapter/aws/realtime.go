@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +38,8 @@ const (
 	defaultAWSRealtimeMaxSession     = 6 * time.Minute
 	defaultAWSRealtimeRecycleQuiet   = time.Second
 	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
+	awsRealtimeCredentialExpirySlack = 3 * time.Minute
+	awsRealtimeMinRecycleDuration    = 10 * time.Second
 	awsRealtimeAudioModalities       = "audio"
 	awsRealtimeProvider              = "Amazon"
 	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
@@ -79,6 +83,7 @@ type AWSRealtimeModel struct {
 	maxSession         time.Duration
 	recycleQuietPeriod time.Duration
 	toolRecycleDelay   time.Duration
+	credentialExpiry   func() (time.Time, bool)
 	maxTokensSet       bool
 	topPSet            bool
 	temperatureSet     bool
@@ -94,7 +99,7 @@ func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeMo
 		voice:              defaultAWSRealtimeVoice,
 		modalities:         defaultAWSRealtimeModalities,
 		turnDetection:      defaultAWSRealtimeTurnDetection,
-		maxSession:         defaultAWSRealtimeMaxSession,
+		maxSession:         awsRealtimeMaxSessionFromEnv(),
 		recycleQuietPeriod: defaultAWSRealtimeRecycleQuiet,
 		toolRecycleDelay:   defaultAWSRealtimeToolRecycle,
 	}
@@ -185,11 +190,48 @@ func WithAWSRealtimeMaxSessionDuration(duration time.Duration) AWSRealtimeOption
 	}
 }
 
+func WithAWSRealtimeCredentialExpiry(expiry func() (time.Time, bool)) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.credentialExpiry = expiry
+	}
+}
+
+func (m *AWSRealtimeModel) sessionRecycleDuration(now time.Time) time.Duration {
+	if m == nil {
+		return 0
+	}
+	duration := m.maxSession
+	if m.credentialExpiry != nil {
+		if expiry, ok := m.credentialExpiry(); ok {
+			untilExpiry := expiry.Sub(now) - awsRealtimeCredentialExpirySlack
+			if duration <= 0 || untilExpiry < duration {
+				duration = untilExpiry
+			}
+			if duration < 30*time.Second {
+				duration = max(duration, awsRealtimeMinRecycleDuration)
+			}
+		}
+	}
+	return duration
+}
+
 func awsRealtimeModelOrDefault(model string) string {
 	if model != "" {
 		return model
 	}
 	return defaultAWSRealtimeModel
+}
+
+func awsRealtimeMaxSessionFromEnv() time.Duration {
+	raw := os.Getenv("LK_SESSION_MAX_DURATION")
+	if raw == "" {
+		return defaultAWSRealtimeMaxSession
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultAWSRealtimeMaxSession
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (m *AWSRealtimeModel) Label() string         { return "aws.RealtimeModel" }
@@ -223,6 +265,9 @@ func (m *AWSRealtimeModel) Session() (llm.RealtimeSession, error) {
 			return nil, err
 		}
 		client = resolved
+		if m.credentialExpiry == nil {
+			m.credentialExpiry = resolved.credentialExpiry
+		}
 	}
 	session := newAWSRealtimeSession(m, client)
 	if err := session.start(context.Background()); err != nil {
@@ -247,7 +292,8 @@ type awsRealtimeStream interface {
 }
 
 type awsRealtimeSDKClient struct {
-	client *bedrockruntime.Client
+	client           *bedrockruntime.Client
+	credentialExpiry func() (time.Time, bool)
 }
 
 func newAWSRealtimeSDKClient(ctx context.Context, region string) (*awsRealtimeSDKClient, error) {
@@ -255,7 +301,23 @@ func newAWSRealtimeSDKClient(ctx context.Context, region string) (*awsRealtimeSD
 	if err != nil {
 		return nil, err
 	}
-	return &awsRealtimeSDKClient{client: bedrockruntime.NewFromConfig(cfg)}, nil
+	return &awsRealtimeSDKClient{
+		client:           bedrockruntime.NewFromConfig(cfg),
+		credentialExpiry: awsRealtimeCredentialExpiry(ctx, cfg.Credentials),
+	}, nil
+}
+
+func awsRealtimeCredentialExpiry(ctx context.Context, provider aws.CredentialsProvider) func() (time.Time, bool) {
+	return func() (time.Time, bool) {
+		if provider == nil {
+			return time.Time{}, false
+		}
+		credentials, err := provider.Retrieve(ctx)
+		if err != nil || !credentials.CanExpire || credentials.Expires.IsZero() {
+			return time.Time{}, false
+		}
+		return credentials.Expires, true
+	}
 }
 
 func (c *awsRealtimeSDKClient) InvokeModelWithBidirectionalStream(ctx context.Context, input *bedrockruntime.InvokeModelWithBidirectionalStreamInput) (awsRealtimeStream, error) {
@@ -420,7 +482,7 @@ func (s *awsRealtimeSession) startSessionRecycleTimer() {
 	}
 	s.recycleVersion++
 	version := s.recycleVersion
-	duration := s.model.maxSession
+	duration := s.model.sessionRecycleDuration(time.Now())
 	s.recycleTimer = time.AfterFunc(duration, func() {
 		s.recycleAfterSessionDuration(context.Background(), version)
 	})
@@ -1093,7 +1155,11 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		return nil
 	}
 	started := s.stream != nil
-	s.chatCtx = chatCtx.Copy()
+	if s.chatCtx == nil {
+		s.chatCtx = awsRealtimeStripLeadingAssistant(chatCtx.Copy())
+	} else {
+		s.chatCtx = chatCtx.Copy()
+	}
 	s.mu.Unlock()
 	if !started {
 		return nil
@@ -1143,6 +1209,18 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 	}
 	return nil
+}
+
+func awsRealtimeStripLeadingAssistant(chatCtx *llm.ChatContext) *llm.ChatContext {
+	if chatCtx == nil || len(chatCtx.Items) == 0 {
+		return chatCtx
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant {
+		return chatCtx
+	}
+	chatCtx.Items = chatCtx.Items[1:]
+	return chatCtx
 }
 
 func (s *awsRealtimeSession) isAudioTranscriptMessage(id string) bool {
@@ -1227,8 +1305,7 @@ func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	changed := awsRealtimeToolNamesChanged(s.tools, tools)
 	s.tools = append([]llm.Tool(nil), tools...)
 	started := s.stream != nil && !s.closed
-	hasPendingTools := len(s.pending) > 0
-	if started && changed && hasPendingTools {
+	if started && changed {
 		s.recycleToolsAfterPending = true
 		s.toolRecycleVersion++
 		version := s.toolRecycleVersion
@@ -1244,12 +1321,6 @@ func (s *awsRealtimeSession) UpdateTools(tools []llm.Tool) error {
 		})
 	}
 	s.mu.Unlock()
-	if started && changed && hasPendingTools {
-		return nil
-	}
-	if started && changed {
-		return s.recycleForUpdatedTools(context.Background())
-	}
 	return nil
 }
 

@@ -242,6 +242,7 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
 		t.Fatalf("UpdateTools active error = %v", err)
 	}
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 
 	closeEvents := first.sent[len(first.sent)-3:]
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[0]), "event", "contentEnd", "contentName"); got == "" {
@@ -267,6 +268,44 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	spec := nestedMap(t, map[string]any{"tool": tools[0]}, "tool", "toolSpec")
 	if spec["name"] != "lookup_order" {
 		t.Fatalf("recycled tool name = %#v, want lookup_order", spec["name"])
+	}
+}
+
+func TestAWSRealtimeSessionUpdateToolsDefersReferenceActiveRecycle(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	provider.toolRecycleDelay = 30 * time.Millisecond
+	session := newAWSRealtimeSession(provider, client)
+
+	if err := session.UpdateTools([]llm.Tool{awsRequestTestTool{}}); err != nil {
+		t.Fatalf("initial UpdateTools error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
+		t.Fatalf("UpdateTools active error = %v", err)
+	}
+	if first.closed {
+		t.Fatal("first stream closed synchronously, want reference deferred recycle")
+	}
+	if len(second.sent) != 0 {
+		t.Fatalf("second stream sent %d events synchronously, want deferred recycle", len(second.sent))
+	}
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want deferred reference recycle notification")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want deferred active recycle")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no events, want restarted prompt with new tools")
 	}
 }
 
@@ -298,6 +337,7 @@ func TestAWSRealtimeSessionUpdateToolsRecycleKeepsBufferedInputTail(t *testing.T
 	if got := countAWSRealtimeAudioInputs(t, first.sent[sentBeforeAudio:]); got != 0 {
 		t.Fatalf("old stream audioInput events during recycle = %d, want buffered tail kept", got)
 	}
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 
 	sentSecondBeforeAudio := len(second.sent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
@@ -530,6 +570,27 @@ func TestAWSRealtimeSessionUpdateChatContextAfterCloseIsIgnored(t *testing.T) {
 	}
 	if len(stream.sent) != sentCount {
 		t.Fatalf("UpdateChatContext after Close sent %d events, want none", len(stream.sent)-sentCount)
+	}
+}
+
+func TestAWSRealtimeSessionStripsReferenceLeadingAssistantOnInitialChatContext(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{stream: stream}
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), client)
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "orphan greeting"})
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "continue"})
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+
+	if session.chatCtx == nil || len(session.chatCtx.Items) != 1 {
+		t.Fatalf("stored chatCtx = %#v, want leading assistant stripped", session.chatCtx)
+	}
+	msg, ok := session.chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleUser || msg.TextContent() != "continue" {
+		t.Fatalf("stored first item = %#v, want user continue", session.chatCtx.Items[0])
 	}
 }
 
@@ -884,14 +945,13 @@ func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testi
 		t.Fatal("second stream sent no startup events, want restarted Nova Sonic session")
 	}
 	texts := awsRealtimeSentTextInputContents(t, second.sent)
-	if len(texts) < 4 {
-		t.Fatalf("restart text inputs = %v, want system, dummy user, assistant history, interactive user", texts)
+	if len(texts) < 2 {
+		t.Fatalf("restart text inputs = %v, want system and interactive user", texts)
 	}
-	if got := texts[1]; got != "[Resuming conversation]" {
-		t.Fatalf("restart first history text = %q, want dummy user", got)
-	}
-	if got := texts[2]; got != "assistant opener" {
-		t.Fatalf("restart assistant history text = %q, want preserved assistant opener", got)
+	for _, text := range texts {
+		if text == "[Resuming conversation]" || text == "assistant opener" {
+			t.Fatalf("restart text inputs = %v, want orphan assistant stripped like reference", texts)
+		}
 	}
 	if got := texts[len(texts)-1]; got != "please continue" {
 		t.Fatalf("restart interactive text = %q, want last user turn", got)

@@ -187,9 +187,11 @@ func buildAWSSynthesizeSpeechInputFromOptions(opts awsTTSRequestOptions, text st
 func (t *AWSTTS) UpdateOptions(opts ...AWSTTSOption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	sampleRate := t.sampleRate
 	for _, opt := range opts {
 		opt(t)
 	}
+	t.sampleRate = sampleRate
 }
 
 func (t *AWSTTS) Close() error {

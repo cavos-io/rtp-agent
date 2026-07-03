@@ -1,8 +1,12 @@
 package aws
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -46,6 +50,63 @@ func TestAWSRealtimeDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeMaxSessionDurationUsesReferenceEnv(t *testing.T) {
+	t.Setenv("LK_SESSION_MAX_DURATION", "45")
+
+	provider := NewAWSRealtimeModel("")
+
+	if provider.maxSession != 45*time.Second {
+		t.Fatalf("maxSession = %s, want 45s from LK_SESSION_MAX_DURATION", provider.maxSession)
+	}
+}
+
+func TestAWSRealtimeSessionDurationUsesReferenceCredentialExpiry(t *testing.T) {
+	now := time.Unix(1000, 0)
+	expiry := now.Add(4 * time.Minute)
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeMaxSessionDuration(6*time.Minute),
+		WithAWSRealtimeCredentialExpiry(func() (time.Time, bool) {
+			return expiry, true
+		}),
+	)
+
+	got := provider.sessionRecycleDuration(now)
+
+	if got != time.Minute {
+		t.Fatalf("session duration = %v, want reference credential expiry minus 3m buffer", got)
+	}
+}
+
+func TestAWSRealtimeCredentialExpiryReadsSDKCredentials(t *testing.T) {
+	expiry := time.Unix(2000, 0)
+	getExpiry := awsRealtimeCredentialExpiry(context.Background(), fakeAWSRealtimeCredentialsProvider{
+		creds: aws.Credentials{CanExpire: true, Expires: expiry},
+	})
+
+	got, ok := getExpiry()
+
+	if !ok {
+		t.Fatal("credential expiry ok = false, want true for expiring SDK credentials")
+	}
+	if !got.Equal(expiry) {
+		t.Fatalf("credential expiry = %v, want %v", got, expiry)
+	}
+
+	getStaticExpiry := awsRealtimeCredentialExpiry(context.Background(), fakeAWSRealtimeCredentialsProvider{
+		creds: aws.Credentials{CanExpire: false},
+	})
+	if _, ok := getStaticExpiry(); ok {
+		t.Fatal("static credential expiry ok = true, want false")
+	}
+
+	getErrorExpiry := awsRealtimeCredentialExpiry(context.Background(), fakeAWSRealtimeCredentialsProvider{
+		err: errors.New("credential load failed"),
+	})
+	if _, ok := getErrorExpiry(); ok {
+		t.Fatal("errored credential expiry ok = true, want false")
+	}
+}
+
 func TestAWSRealtimeNovaSonicConstructorsMatchReference(t *testing.T) {
 	sonic1 := NewAWSRealtimeModelWithNovaSonic1(
 		WithAWSRealtimeVoice("matthew"),
@@ -77,4 +138,13 @@ func TestAWSRealtimeNovaSonicConstructorsMatchReference(t *testing.T) {
 	if sonic2.TurnDetection() != "HIGH" {
 		t.Fatalf("Sonic 2 turn detection = %q, want HIGH", sonic2.TurnDetection())
 	}
+}
+
+type fakeAWSRealtimeCredentialsProvider struct {
+	creds aws.Credentials
+	err   error
+}
+
+func (p fakeAWSRealtimeCredentialsProvider) Retrieve(context.Context) (aws.Credentials, error) {
+	return p.creds, p.err
 }
