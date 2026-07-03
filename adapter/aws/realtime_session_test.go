@@ -2226,6 +2226,30 @@ func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T)
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplyUsesReferenceTimeout(t *testing.T) {
+	stream := &blockingAWSRealtimeStream{fakeAWSRealtimeStream: newFakeAWSRealtimeStream()}
+	provider := NewAWSRealtimeModelWithNovaSonic2(
+		WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}),
+		WithAWSRealtimeGenerateReplyTimeout(time.Millisecond),
+	)
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer func() {
+		stream.blockSend = false
+		_ = session.Close()
+	}()
+	stream.blockSend = true
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask for the card number"})
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("GenerateReply error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyAudioOnlyEmitsReferenceEmptyGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic1(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -2483,6 +2507,19 @@ func (s *fakeAWSRealtimeStream) Close() error {
 
 func (s *fakeAWSRealtimeStream) Err() error {
 	return s.err
+}
+
+type blockingAWSRealtimeStream struct {
+	*fakeAWSRealtimeStream
+	blockSend bool
+}
+
+func (s *blockingAWSRealtimeStream) Send(ctx context.Context, event awstypes.InvokeModelWithBidirectionalStreamInput) error {
+	if !s.blockSend {
+		return s.fakeAWSRealtimeStream.Send(ctx, event)
+	}
+	<-ctx.Done()
+	return ctx.Err()
 }
 
 type awsSecondRequestTestTool struct{}
