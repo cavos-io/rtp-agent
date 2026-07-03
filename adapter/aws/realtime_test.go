@@ -2,6 +2,7 @@ package aws
 
 import (
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -43,6 +44,16 @@ func TestAWSRealtimeDefaultsMatchReference(t *testing.T) {
 	}
 	if caps != want {
 		t.Fatalf("Capabilities = %+v, want %+v", caps, want)
+	}
+}
+
+func TestAWSRealtimeMaxSessionDurationUsesReferenceEnv(t *testing.T) {
+	t.Setenv("LK_SESSION_MAX_DURATION", "45")
+
+	provider := NewAWSRealtimeModel("")
+
+	if provider.maxSession != 45*time.Second {
+		t.Fatalf("maxSession = %s, want 45s from LK_SESSION_MAX_DURATION", provider.maxSession)
 	}
 }
 

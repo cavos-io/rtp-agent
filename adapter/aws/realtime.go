@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -94,7 +96,7 @@ func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeMo
 		voice:              defaultAWSRealtimeVoice,
 		modalities:         defaultAWSRealtimeModalities,
 		turnDetection:      defaultAWSRealtimeTurnDetection,
-		maxSession:         defaultAWSRealtimeMaxSession,
+		maxSession:         awsRealtimeMaxSessionFromEnv(),
 		recycleQuietPeriod: defaultAWSRealtimeRecycleQuiet,
 		toolRecycleDelay:   defaultAWSRealtimeToolRecycle,
 	}
@@ -190,6 +192,18 @@ func awsRealtimeModelOrDefault(model string) string {
 		return model
 	}
 	return defaultAWSRealtimeModel
+}
+
+func awsRealtimeMaxSessionFromEnv() time.Duration {
+	raw := os.Getenv("LK_SESSION_MAX_DURATION")
+	if raw == "" {
+		return defaultAWSRealtimeMaxSession
+	}
+	seconds, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultAWSRealtimeMaxSession
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func (m *AWSRealtimeModel) Label() string         { return "aws.RealtimeModel" }
