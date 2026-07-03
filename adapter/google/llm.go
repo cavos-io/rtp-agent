@@ -1102,6 +1102,9 @@ func googleLLMStreamError(err error, retryable bool, requestID string) error {
 	if err == nil {
 		return nil
 	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
 	var apiErr genai.APIError
 	if errors.As(err, &apiErr) {
 		if apiErr.Code == 499 {
