@@ -1389,6 +1389,7 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 	if !s.mutableChatContext {
 		return fmt.Errorf("generate_reply is not compatible with %q", s.modelName)
 	}
+	s.setPendingReply(true)
 	if err := s.endManualActivity(); err != nil {
 		return err
 	}
@@ -1404,7 +1405,6 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		Parts: []*genai.Part{{Text: "."}},
 	})
 	turnComplete := true
-	s.setPendingReply(true)
 	if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
 		Turns:        turns,
 		TurnComplete: &turnComplete,
