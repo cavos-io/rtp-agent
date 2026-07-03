@@ -425,6 +425,47 @@ func TestGoogleRealtimeSessionOptionReconnectReplaysReferenceChatContext(t *test
 	}
 }
 
+func TestGoogleRealtimeSessionOptionReconnectReplayFailureClearsFailedSession(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages:       make(chan *genai.LiveServerMessage),
+		sendClientContentErr: errors.New("replay failed"),
+	}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	rawSession, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer rawSession.Close()
+	session := rawSession.(*googleRealtimeSession)
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "before restart"}}},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	err = session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true})
+	if err == nil || !strings.Contains(err.Error(), "replay failed") {
+		t.Fatalf("UpdateOptions error = %v, want replay failure", err)
+	}
+	if !secondSession.closed {
+		t.Fatal("failed replay session closed = false")
+	}
+	if session.liveSession == secondSession {
+		t.Fatal("active live session still points at failed replay session")
+	}
+}
+
 func TestGoogleRealtimeSessionTurnDetectionUpdateReconnectsReferenceSession(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
@@ -3428,13 +3469,14 @@ func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string,
 }
 
 type fakeGoogleRealtimeLiveSession struct {
-	inputs         []genai.LiveRealtimeInput
-	clientContents []genai.LiveClientContentInput
-	toolResponses  []genai.LiveToolResponseInput
-	serverMessages chan *genai.LiveServerMessage
-	closed         bool
-	closeErr       error
-	recvErr        error
+	inputs               []genai.LiveRealtimeInput
+	clientContents       []genai.LiveClientContentInput
+	toolResponses        []genai.LiveToolResponseInput
+	serverMessages       chan *genai.LiveServerMessage
+	closed               bool
+	closeErr             error
+	recvErr              error
+	sendClientContentErr error
 }
 
 func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealtimeInput) error {
@@ -3444,6 +3486,9 @@ func (s *fakeGoogleRealtimeLiveSession) SendRealtimeInput(input genai.LiveRealti
 
 func (s *fakeGoogleRealtimeLiveSession) SendClientContent(input genai.LiveClientContentInput) error {
 	s.clientContents = append(s.clientContents, input)
+	if s.sendClientContentErr != nil {
+		return s.sendClientContentErr
+	}
 	return nil
 }
 

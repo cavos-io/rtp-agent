@@ -1142,6 +1142,7 @@ func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, vo
 	}
 	s.mu.Unlock()
 	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.clearLiveSession(nextSession)
 		_ = nextSession.Close()
 		return err
 	}
@@ -1219,6 +1220,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	}
 	s.mu.Unlock()
 	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.clearLiveSession(nextSession)
 		_ = nextSession.Close()
 		return err
 	}
@@ -1270,6 +1272,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	}
 	s.mu.Unlock()
 	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.clearLiveSession(nextSession)
 		_ = nextSession.Close()
 		return err
 	}
@@ -1547,6 +1550,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	}
 	s.mu.Unlock()
 	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		s.clearLiveSession(nextSession)
 		s.emitEvent(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
 			Error: llm.NewAPIConnectionError(fmt.Sprintf("failed to replay Google realtime chat context after reconnect: %v", err)),
@@ -1584,6 +1588,17 @@ func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLive
 		Turns:        turns,
 		TurnComplete: &turnComplete,
 	})
+}
+
+func (s *googleRealtimeSession) clearLiveSession(liveSession googleRealtimeLiveSession) {
+	if s == nil || liveSession == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.liveSession == liveSession {
+		s.liveSession = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *googleRealtimeSession) activeLiveSession() googleRealtimeLiveSession {
