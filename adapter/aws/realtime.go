@@ -454,16 +454,17 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 	}
 	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
 		contentID := awsRealtimeNestedString(payload, "event", "textOutput", "contentId")
+		role := awsRealtimeNestedString(payload, "event", "textOutput", "role")
 		if textContent == awsRealtimeBargeInContent {
 			if !s.hasPendingTools() {
 				s.closeGeneration()
 			}
 			return
 		}
-		if s.isProviderUserText(contentID) {
+		if s.shouldStoreProviderUserText(contentID, role) {
 			s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
 		}
-		if awsRealtimeNestedString(payload, "event", "textOutput", "role") == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
+		if role == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
 			if s.isProviderAssistantText(contentID) {
 				s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
 			}
@@ -589,13 +590,17 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	s.mu.Unlock()
 }
 
-func (s *awsRealtimeSession) isProviderUserText(contentID string) bool {
+func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string, role string) bool {
+	if role != "USER" {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.generation != nil && s.generation.contentTypes[contentID] == "USER_ASR" {
-		return true
+	if s.generation != nil {
+		return s.generation.contentTypes[contentID] == "USER_ASR"
 	}
-	return s.noGenerationContentRoles[contentID] == "USER"
+	trackedRole, tracked := s.noGenerationContentRoles[contentID]
+	return !tracked || trackedRole == "USER"
 }
 
 func (s *awsRealtimeSession) isProviderAssistantText(contentID string) bool {

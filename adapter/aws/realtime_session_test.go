@@ -1371,6 +1371,35 @@ func TestAWSRealtimeSessionPreservesReferenceProviderTextHistory(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionPreservesReferenceBareUserTextHistory(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"textOutput":{"role":"USER","content":"bare hello","contentId":"user-bare"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+
+	awsSession.mu.Lock()
+	chatCtx := awsSession.chatCtx
+	awsSession.mu.Unlock()
+	if chatCtx == nil || len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx items = %#v, want bare provider USER text history", chatCtx)
+	}
+	userMsg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || userMsg.Role != llm.ChatRoleUser || userMsg.TextContent() != "bare hello" {
+		t.Fatalf("user history = %#v, want bare provider ASR text", chatCtx.Items[0])
+	}
+	if !awsSession.isAudioTranscriptMessage(userMsg.ID) {
+		t.Fatalf("bare user message id %q not marked as provider audio transcript", userMsg.ID)
+	}
+}
+
 func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
