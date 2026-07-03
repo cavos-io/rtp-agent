@@ -196,8 +196,8 @@ func TestAWSSTTStreamInputUsesProviderOptions(t *testing.T) {
 
 	input := buildAWSStartStreamTranscriptionInput(provider, "id-ID")
 
-	if input.LanguageCode != types.LanguageCodeIdId {
-		t.Fatalf("language = %q, want id-ID", input.LanguageCode)
+	if input.LanguageCode != types.LanguageCodeEnUs {
+		t.Fatalf("language = %q, want configured en-US despite stream language argument", input.LanguageCode)
 	}
 	if input.MediaSampleRateHertz == nil || *input.MediaSampleRateHertz != 8000 {
 		t.Fatalf("sample rate = %v, want 8000", input.MediaSampleRateHertz)
@@ -397,14 +397,18 @@ func TestAWSSTTStreamStartsClientWithReferenceInput(t *testing.T) {
 	if client.input == nil {
 		t.Fatal("client input = nil, want StartStreamTranscription input")
 	}
-	if client.input.LanguageCode != types.LanguageCodeIdId {
-		t.Fatalf("language code = %q, want id-ID", client.input.LanguageCode)
+	if client.input.LanguageCode != types.LanguageCodeEnUs {
+		t.Fatalf("language code = %q, want configured en-US despite stream language argument", client.input.LanguageCode)
 	}
 	if client.input.MediaSampleRateHertz == nil || *client.input.MediaSampleRateHertz != 16000 {
 		t.Fatalf("sample rate = %v, want 16000", client.input.MediaSampleRateHertz)
 	}
-	if _, ok := stream.(*awsSTTStream); !ok {
+	awsStream, ok := stream.(*awsSTTStream)
+	if !ok {
 		t.Fatalf("stream = %T, want *awsSTTStream", stream)
+	}
+	if awsStream.language != types.LanguageCodeEnUs {
+		t.Fatalf("stream fallback language = %q, want configured en-US", awsStream.language)
 	}
 }
 

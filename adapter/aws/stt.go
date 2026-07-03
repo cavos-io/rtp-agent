@@ -217,9 +217,6 @@ func (s *AWSSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	if language == "" {
-		language = "en-US"
-	}
 	input := buildAWSStartStreamTranscriptionInput(s, language)
 	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
@@ -244,9 +241,6 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 
 func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcribestreaming.StartStreamTranscriptionInput {
 	languageCode := s.language
-	if language != "" {
-		languageCode = types.LanguageCode(language)
-	}
 	input := &transcribestreaming.StartStreamTranscriptionInput{
 		MediaEncoding:        s.encoding,
 		MediaSampleRateHertz: aws.Int32(s.sampleRate),
