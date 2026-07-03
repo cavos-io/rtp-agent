@@ -92,6 +92,26 @@ func (t *URLContextTool) googleToolConfig() *genai.Tool {
 	return &genai.Tool{URLContext: &genai.URLContext{}}
 }
 
+type CodeExecutionTool struct{}
+
+func (t *CodeExecutionTool) ID() string          { return "gemini_code_execution" }
+func (t *CodeExecutionTool) Name() string        { return "gemini_code_execution" }
+func (t *CodeExecutionTool) Description() string { return "Enable Gemini code execution." }
+func (t *CodeExecutionTool) Parameters() map[string]any {
+	return nil
+}
+func (t *CodeExecutionTool) Execute(context.Context, string) (string, error) {
+	return "dispatched", nil
+}
+func (t *CodeExecutionTool) IsProviderTool() bool { return true }
+
+func (t *CodeExecutionTool) googleToolConfig() *genai.Tool {
+	if t == nil {
+		return nil
+	}
+	return &genai.Tool{CodeExecution: &genai.ToolCodeExecution{}}
+}
+
 func googleToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
@@ -127,6 +147,8 @@ func googleProviderToolConfig(tool llm.Tool) *genai.Tool {
 	case *FileSearchTool:
 		return t.googleToolConfig()
 	case *URLContextTool:
+		return t.googleToolConfig()
+	case *CodeExecutionTool:
 		return t.googleToolConfig()
 	default:
 		return nil

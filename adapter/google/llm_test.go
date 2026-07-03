@@ -398,6 +398,23 @@ func TestBuildGoogleGenerateContentConfigMapsReferenceURLContextTool(t *testing.
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceCodeExecutionTool(t *testing.T) {
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&CodeExecutionTool{}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Code Execution tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.CodeExecution == nil {
+		t.Fatalf("code execution tool = nil, config tools = %#v", config.Tools)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Code Execution tool", tool.FunctionDeclarations)
+	}
+}
+
 func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
 	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
 		"type": "function",

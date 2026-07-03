@@ -1809,6 +1809,39 @@ func TestGoogleRealtimeSessionUpdateToolsMapsReferenceURLContextTool(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceCodeExecutionTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateTools([]llm.Tool{&CodeExecutionTool{}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Code Execution tool", tools)
+	}
+	if tools[0].CodeExecution == nil {
+		t.Fatalf("code execution tool = nil, tools = %#v", tools)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Code Execution tool", tools[0].FunctionDeclarations)
+	}
+}
+
 func TestGoogleRealtimeSessionUpdateToolsSameValueNoopsLikeReference(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
