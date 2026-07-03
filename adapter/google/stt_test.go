@@ -1990,6 +1990,55 @@ func TestGoogleSTTUpdateOptionsClearsReferenceAlternativeLanguages(t *testing.T)
 	close(secondRelease)
 }
 
+func TestGoogleSTTUpdateOptionsDetectLanguageKeepsReferenceActiveAlternatives(t *testing.T) {
+	firstRelease := make(chan struct{})
+	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}
+	secondRelease := make(chan struct{})
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: secondRelease}
+	client := &fakeGoogleSpeechClient{
+		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
+		streamCallCh: make(chan int, 2),
+	}
+	provider := newGoogleSTTWithClient(
+		client,
+		WithGoogleSTTDetectLanguage(false),
+		WithGoogleSTTAlternativeLanguages("es-ES", "fr-FR"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	<-client.streamCallCh
+	if got := firstStream.sent[0].GetStreamingConfig().GetConfig().GetAlternativeLanguageCodes(); len(got) != 0 {
+		t.Fatalf("first stream alternative languages = %#v, want none with detect_language disabled", got)
+	}
+
+	provider.UpdateOptions(WithGoogleSTTDetectLanguage(true))
+
+	select {
+	case calls := <-client.streamCallCh:
+		if calls != 2 {
+			t.Fatalf("stream calls = %d, want reconnected stream", calls)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for reconnected stream")
+	}
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after detect language update")
+	}
+	config := secondStream.sent[0].GetStreamingConfig().GetConfig()
+	if got := config.GetLanguageCode(); got != "en-US" {
+		t.Fatalf("second stream language = %q, want original en-US", got)
+	}
+	if got := config.GetAlternativeLanguageCodes(); len(got) != 0 {
+		t.Fatalf("second stream alternative languages = %#v, want none because reference active stream keeps sanitized language snapshot", got)
+	}
+	close(firstRelease)
+	close(secondRelease)
+}
+
 func TestGoogleSTTUpdateOptionsAppliesEmptyActiveStreamLanguage(t *testing.T) {
 	firstRelease := make(chan struct{})
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvBlock: firstRelease}

@@ -355,6 +355,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	s.mu.Lock()
 	previous := googleSTTCaptureConfig(s)
 	oldLanguage := s.language
+	oldDetectLanguage := s.detectLanguage
 	oldLocation := s.location
 	oldAlternativeLanguages := append([]string(nil), s.alternativeLanguages...)
 	for _, opt := range opts {
@@ -369,6 +370,10 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	minConfidence := s.minConfidence
 	language := s.language
 	languageChanged := oldLanguage != language
+	detectLanguageChanged := oldDetectLanguage != s.detectLanguage
+	alternativeLanguagesChanged := !googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages)
+	includeAlternativeLanguages := false
+	includeAlternativeLanguagesSet := false
 	if oldLocation != s.location {
 		if s.newClient != nil {
 			s.client = nil
@@ -380,6 +385,12 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	if languageChanged && googleStringSlicesEqual(oldAlternativeLanguages, s.alternativeLanguages) {
 		s.alternativeLanguages = nil
 	}
+	if languageChanged || alternativeLanguagesChanged {
+		includeAlternativeLanguages = true
+		includeAlternativeLanguagesSet = true
+	} else if detectLanguageChanged {
+		includeAlternativeLanguagesSet = true
+	}
 	streams := make([]*googleSTTStream, 0, len(s.streams))
 	for stream := range s.streams {
 		streams = append(streams, stream)
@@ -387,7 +398,7 @@ func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
 	s.mu.Unlock()
 
 	for _, stream := range streams {
-		stream.updateConfig(minConfidence, language, languageChanged)
+		stream.updateConfig(minConfidence, language, languageChanged, includeAlternativeLanguages, includeAlternativeLanguagesSet)
 		go func(stream *googleSTTStream) {
 			if err := stream.reconnectForUpdatedConfig(); err != nil {
 				stream.failWithError(err)
@@ -1976,13 +1987,15 @@ func (s *googleSTTStream) currentMinConfidence() float64 {
 	return s.minConfidence
 }
 
-func (s *googleSTTStream) updateConfig(minConfidence float64, language string, languageChanged bool) {
+func (s *googleSTTStream) updateConfig(minConfidence float64, language string, languageChanged bool, includeAlternativeLanguages bool, includeAlternativeLanguagesSet bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.minConfidence = minConfidence
 	if languageChanged {
 		s.language = language
-		s.includeAlternativeLanguages = true
+	}
+	if includeAlternativeLanguagesSet {
+		s.includeAlternativeLanguages = includeAlternativeLanguages
 	}
 }
 
