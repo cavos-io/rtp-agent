@@ -1800,9 +1800,6 @@ func (s *googleRealtimeSession) sendGenerationText(text string) {
 		_ = recover()
 	}()
 	s.generation.outputText += text
-	if s.generation.firstTokenAt.IsZero() {
-		s.generation.firstTokenAt = time.Now()
-	}
 	select {
 	case s.generation.textCh <- text:
 	case <-s.doneCh():

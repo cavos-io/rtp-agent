@@ -3068,6 +3068,40 @@ func TestGoogleRealtimeSessionEmitsReferenceUsageMetrics(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionTextOnlyMetricsKeepReferenceTTFTUnset(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "hello"}}},
+		},
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		UsageMetadata: &genai.UsageMetadata{
+			ResponseTokenCount: 3,
+		},
+	}
+
+	expectGoogleRealtimeGeneration(t, session.EventCh())
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeMetricsCollected || event.Metrics == nil {
+		t.Fatalf("metrics event = %#v, want metrics_collected", event)
+	}
+	if event.Metrics.TTFT != -1 {
+		t.Fatalf("TTFT = %v, want -1 for reference text-only generation", event.Metrics.TTFT)
+	}
+}
+
 func TestGoogleRealtimeSessionEmitsReferenceUsageTokenDetails(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
