@@ -887,10 +887,8 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		if s.shouldStoreProviderUserText(contentID, role) {
 			s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
 		}
-		if role == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
-			if s.isProviderAssistantText(contentID) {
-				s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
-			}
+		if s.isProviderAssistantText(contentID) {
+			s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
 			s.sendGenerationText(contentID, textContent)
 		}
 	}
