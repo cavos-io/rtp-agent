@@ -699,10 +699,6 @@ func (s *awsRealtimeSession) readResponses() {
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(chunk.Value.Bytes, &payload); err != nil {
-			s.emit(llm.RealtimeEvent{
-				Type:  llm.RealtimeEventTypeError,
-				Error: llm.NewRealtimeError("failed to decode AWS Nova Sonic realtime event", err),
-			})
 			continue
 		}
 		s.handleResponseEvent(payload)

@@ -890,6 +890,27 @@ func TestAWSRealtimeSessionMapsReferenceResponseEvents(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionIgnoresReferenceMalformedResponseJSON(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":`)
+	audioBytes := []byte{1, 2, 3, 4}
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","role":"ASSISTANT","contentId":"audio-1"}}}`)
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-1","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	audio := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	if string(audio.Data) != string(audioBytes) {
+		t.Fatalf("audio data = %v, want %v", audio.Data, audioBytes)
+	}
+}
+
 func TestAWSRealtimeSessionEmitsErrorOnReferenceReadFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	stream.err = errors.New("bedrock output stream failed")
