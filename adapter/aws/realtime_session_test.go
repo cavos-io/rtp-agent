@@ -956,6 +956,48 @@ func TestAWSRealtimeSessionRecyclesIdleStreamAfterReferenceDuration(t *testing.T
 	}
 }
 
+func TestAWSRealtimeSessionRecycleWaitsForReferenceTurnBoundary(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(client),
+		WithAWSRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	first.emitJSON(`{"event":{"contentStart":{"contentId":"audio-1","type":"AUDIO"}}}`)
+	assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+
+	select {
+	case event := <-awsSession.EventCh():
+		if event.Type == llm.RealtimeEventTypeSessionReconnected {
+			t.Fatalf("got reconnect before AUDIO END_TURN: %#v", event)
+		}
+	case <-time.After(50 * time.Millisecond):
+	}
+	if first.closed {
+		t.Fatal("first stream closed before AUDIO END_TURN")
+	}
+
+	first.emitJSON(`{"event":{"contentEnd":{"contentId":"audio-1","type":"AUDIO","stopReason":"END_TURN"}}}`)
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference session recycle after turn boundary")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want recycle after AUDIO END_TURN")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
+	}
+}
+
 func TestAWSRealtimeSessionCapsReferenceRecoverableRestartsPerGeneration(t *testing.T) {
 	streams := []*fakeAWSRealtimeStream{
 		newFakeAWSRealtimeStream(),

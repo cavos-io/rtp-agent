@@ -420,6 +420,9 @@ func (s *awsRealtimeSession) startSessionRecycleTimer() {
 }
 
 func (s *awsRealtimeSession) recycleAfterSessionDuration(ctx context.Context, version int) {
+	if !s.waitForSessionRecycleTurnBoundary(ctx, version) {
+		return
+	}
 	s.mu.Lock()
 	if s.closed || version != s.recycleVersion || s.stream == nil {
 		s.mu.Unlock()
@@ -438,6 +441,28 @@ func (s *awsRealtimeSession) recycleAfterSessionDuration(ctx context.Context, ve
 		Type:      llm.RealtimeEventTypeSessionReconnected,
 		Reconnect: &llm.RealtimeSessionReconnectedEvent{},
 	})
+}
+
+func (s *awsRealtimeSession) waitForSessionRecycleTurnBoundary(ctx context.Context, version int) bool {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.mu.Lock()
+		done := s.closed || version != s.recycleVersion
+		activeGeneration := s.generation != nil
+		s.mu.Unlock()
+		if done {
+			return false
+		}
+		if !activeGeneration {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 func awsRealtimeRestartChatContext(chatCtx *llm.ChatContext) (*llm.ChatContext, string) {
