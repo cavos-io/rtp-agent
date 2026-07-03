@@ -56,6 +56,12 @@ const (
 var awsRealtimeRecoverableReadErrorMessages = []string{
 	"InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
 	"System instability detected. Please retry your request.",
+	"ThrottlingException",
+	"ModelNotReadyException",
+	"ModelErrorException",
+	"ModelStreamErrorException",
+	"ModelTimeoutException",
+	"InvalidEventBytes",
 }
 
 type AWSRealtimeModel struct {

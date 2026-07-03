@@ -903,6 +903,33 @@ func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testi
 	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
 }
 
+func TestAWSRealtimeSessionRestartsAfterReferenceModelTimeoutReadFailure(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	first.err = errors.New("ModelTimeoutException: model stream timed out")
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	close(first.events)
+
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference restart for model timeout")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want stale timeout stream closed")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want restarted Nova Sonic session")
+	}
+	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
+}
+
 func TestAWSRealtimeSessionCapsReferenceRecoverableRestartsPerGeneration(t *testing.T) {
 	streams := []*fakeAWSRealtimeStream{
 		newFakeAWSRealtimeStream(),
