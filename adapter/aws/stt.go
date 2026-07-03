@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 
@@ -176,17 +177,22 @@ func NewAWSSTT(ctx context.Context, region string, providerOpts ...AWSSTTOption)
 		return nil, err
 	}
 
-	opts := []func(*config.LoadOptions) error{}
-	if region != "" {
-		opts = append(opts, config.WithRegion(region))
-	}
-
-	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(awsSTTRegionOrDefault(region)))
 	if err != nil {
 		return nil, err
 	}
 
 	return newAWSSTTWithClient(awsSTTSDKClient{client: transcribestreaming.NewFromConfig(cfg)}, providerOpts...)
+}
+
+func awsSTTRegionOrDefault(region string) string {
+	if region != "" {
+		return region
+	}
+	if envRegion := os.Getenv("AWS_REGION"); envRegion != "" {
+		return envRegion
+	}
+	return defaultAWSRegion
 }
 
 func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, error) {
@@ -217,9 +223,6 @@ func (s *AWSSTT) Capabilities() stt.STTCapabilities {
 }
 
 func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
-	if language == "" {
-		language = "en-US"
-	}
 	input := buildAWSStartStreamTranscriptionInput(s, language)
 	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
@@ -231,6 +234,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 
 	gs := &awsSTTStream{
 		stream:                   stream,
+		restart:                  func() (awsSTTEventStream, error) { return s.client.StartStreamTranscription(ctx, input) },
 		language:                 input.LanguageCode,
 		identifyLanguage:         s.identifyLanguage,
 		identifyMultipleLanguage: s.identifyMultipleLanguages,
@@ -244,17 +248,16 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 
 func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcribestreaming.StartStreamTranscriptionInput {
 	languageCode := s.language
-	if language != "" {
-		languageCode = types.LanguageCode(language)
-	}
 	input := &transcribestreaming.StartStreamTranscriptionInput{
 		MediaEncoding:        s.encoding,
 		MediaSampleRateHertz: aws.Int32(s.sampleRate),
 	}
 	if s.identifyLanguage {
 		input.IdentifyLanguage = true
+		applyAWSSTTLanguageDetectionOptions(input, s)
 	} else if s.identifyMultipleLanguages {
 		input.IdentifyMultipleLanguages = true
+		applyAWSSTTLanguageDetectionOptions(input, s)
 	} else {
 		input.LanguageCode = languageCode
 	}
@@ -282,6 +285,10 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	if s.languageModelName != "" {
 		input.LanguageModelName = aws.String(s.languageModelName)
 	}
+	return input
+}
+
+func applyAWSSTTLanguageDetectionOptions(input *transcribestreaming.StartStreamTranscriptionInput, s *AWSSTT) {
 	if s.languageOptions != "" {
 		input.LanguageOptions = aws.String(s.languageOptions)
 	}
@@ -294,7 +301,6 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	if s.vocabularyFilterNames != "" {
 		input.VocabularyFilterNames = aws.String(s.vocabularyFilterNames)
 	}
-	return input
 }
 
 func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, language string) (*stt.SpeechEvent, error) {
@@ -305,11 +311,13 @@ func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 
 type awsSTTStream struct {
 	stream                   awsSTTEventStream
+	restart                  func() (awsSTTEventStream, error)
 	language                 types.LanguageCode
 	identifyLanguage         bool
 	identifyMultipleLanguage bool
 	events                   chan *stt.SpeechEvent
 	errCh                    chan error
+	streamMu                 sync.Mutex
 	closed                   bool
 	speaking                 bool
 	timingMu                 sync.Mutex
@@ -320,9 +328,19 @@ type awsSTTStream struct {
 func (s *awsSTTStream) readLoop() {
 	defer close(s.events)
 	for {
-		event := <-s.stream.Events()
+		stream := s.currentStream()
+		if stream == nil {
+			return
+		}
+		event := <-stream.Events()
 		if event == nil {
-			if err := s.stream.Err(); err != nil {
+			if err := stream.Err(); err != nil {
+				if isAWSSTTRequestTimeout(err) {
+					if s.restartAfterTimeout() {
+						continue
+					}
+					return
+				}
 				if err != io.EOF && !isHarmlessAWSSTTStreamCloseError(err) {
 					if errors.Is(err, context.DeadlineExceeded) {
 						s.errCh <- llm.NewAPITimeoutError(err.Error())
@@ -367,8 +385,41 @@ func (s *awsSTTStream) readLoop() {
 func isHarmlessAWSSTTStreamCloseError(err error) bool {
 	message := err.Error()
 	return strings.Contains(message, "complete signal was sent without the preceding empty frame") ||
-		strings.HasPrefix(message, "Your request timed out") ||
 		strings.Contains(message, "InvalidStateError")
+}
+
+func isAWSSTTRequestTimeout(err error) bool {
+	return strings.HasPrefix(err.Error(), "Your request timed out")
+}
+
+func (s *awsSTTStream) currentStream() awsSTTEventStream {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.stream
+}
+
+func (s *awsSTTStream) restartAfterTimeout() bool {
+	if s.restart == nil || s.isClosed() {
+		return false
+	}
+	stream, err := s.restart()
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			s.errCh <- llm.NewAPITimeoutError(err.Error())
+			return false
+		}
+		s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream restart failed: %v", err))
+		return false
+	}
+	s.streamMu.Lock()
+	if s.closed {
+		s.streamMu.Unlock()
+		_ = stream.Close()
+		return false
+	}
+	s.stream = stream
+	s.streamMu.Unlock()
+	return true
 }
 
 func awsSpeechDataFromResultOffset(result types.Result, startTimeOffset float64, fallbackLanguage string, includeSourceLanguages bool) stt.SpeechData {
@@ -480,10 +531,14 @@ func (s *awsSTTStream) currentStartTimeOffset() float64 {
 }
 
 func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
-	if s.closed {
+	stream, closed := s.streamForSend()
+	if closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+	if stream == nil {
+		return llm.NewAPIConnectionError("AWS Transcribe stream is not initialized")
+	}
+	if err := stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
 			AudioChunk: frame.Data,
 		},
@@ -497,10 +552,14 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *awsSTTStream) Flush() error {
-	if s.closed {
+	stream, closed := s.streamForSend()
+	if closed {
 		return io.ErrClosedPipe
 	}
-	if err := s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+	if stream == nil {
+		return llm.NewAPIConnectionError("AWS Transcribe stream is not initialized")
+	}
+	if err := stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
 			AudioChunk: []byte{},
 		},
@@ -514,21 +573,46 @@ func (s *awsSTTStream) Flush() error {
 }
 
 func (s *awsSTTStream) Close() error {
-	if s.closed {
+	stream, closed := s.closeStream()
+	if closed {
 		return nil
 	}
-	s.closed = true
-	_ = s.stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+	if stream == nil {
+		return nil
+	}
+	_ = stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
 			AudioChunk: []byte{},
 		},
 	})
-	_ = s.stream.Close()
+	_ = stream.Close()
 	return nil
 }
 
-func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
+func (s *awsSTTStream) streamForSend() (awsSTTEventStream, bool) {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.stream, s.closed
+}
+
+func (s *awsSTTStream) closeStream() (awsSTTEventStream, bool) {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
 	if s.closed {
+		return nil, true
+	}
+	s.closed = true
+	return s.stream, false
+}
+
+func (s *awsSTTStream) isClosed() bool {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.closed
+}
+
+func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
+	if s.isClosed() {
 		select {
 		case event, ok := <-s.events:
 			if ok {

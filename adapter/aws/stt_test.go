@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,8 +197,8 @@ func TestAWSSTTStreamInputUsesProviderOptions(t *testing.T) {
 
 	input := buildAWSStartStreamTranscriptionInput(provider, "id-ID")
 
-	if input.LanguageCode != types.LanguageCodeIdId {
-		t.Fatalf("language = %q, want id-ID", input.LanguageCode)
+	if input.LanguageCode != types.LanguageCodeEnUs {
+		t.Fatalf("language = %q, want configured en-US despite stream language argument", input.LanguageCode)
 	}
 	if input.MediaSampleRateHertz == nil || *input.MediaSampleRateHertz != 8000 {
 		t.Fatalf("sample rate = %v, want 8000", input.MediaSampleRateHertz)
@@ -216,6 +217,33 @@ func TestAWSSTTStreamInputUsesProviderOptions(t *testing.T) {
 	}
 	if input.LanguageModelName == nil || *input.LanguageModelName != "support-model" {
 		t.Fatalf("language model = %v, want support-model", input.LanguageModelName)
+	}
+}
+
+func TestAWSSTTStreamInputOmitsReferenceDetectionOptionsWithoutDetection(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTLanguageOptions("en-US,id-ID"),
+		WithAWSSTTPreferredLanguage(types.LanguageCodeIdId),
+		WithAWSSTTVocabularyNames("global-vocab"),
+		WithAWSSTTVocabularyFilterNames("global-filter"),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.LanguageOptions != nil {
+		t.Fatalf("language options = %v, want nil without language detection", input.LanguageOptions)
+	}
+	if input.PreferredLanguage != "" {
+		t.Fatalf("preferred language = %q, want empty without language detection", input.PreferredLanguage)
+	}
+	if input.VocabularyNames != nil {
+		t.Fatalf("vocabulary names = %v, want nil without language detection", input.VocabularyNames)
+	}
+	if input.VocabularyFilterNames != nil {
+		t.Fatalf("vocabulary filter names = %v, want nil without language detection", input.VocabularyFilterNames)
 	}
 }
 
@@ -375,6 +403,44 @@ func TestNewAWSSTTRejectsMutuallyExclusiveLanguageDetectionBeforeConfigLoad(t *t
 	}
 }
 
+func TestNewAWSSTTUsesReferenceRegionDefaults(t *testing.T) {
+	t.Setenv("AWS_REGION", "")
+	t.Setenv("AWS_DEFAULT_REGION", "")
+	t.Setenv("AWS_CONFIG_FILE", t.TempDir()+"/config")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", t.TempDir()+"/credentials")
+
+	provider, err := NewAWSSTT(context.Background(), "")
+	if err != nil {
+		t.Fatalf("NewAWSSTT error = %v", err)
+	}
+	sdk, ok := provider.client.(awsSTTSDKClient)
+	if !ok {
+		t.Fatalf("client type = %T, want awsSTTSDKClient", provider.client)
+	}
+	if got := sdk.client.Options().Region; got != defaultAWSRegion {
+		t.Fatalf("region = %q, want reference default %q", got, defaultAWSRegion)
+	}
+
+	t.Setenv("AWS_REGION", "us-west-2")
+	provider, err = NewAWSSTT(context.Background(), "")
+	if err != nil {
+		t.Fatalf("NewAWSSTT with AWS_REGION error = %v", err)
+	}
+	sdk = provider.client.(awsSTTSDKClient)
+	if got := sdk.client.Options().Region; got != "us-west-2" {
+		t.Fatalf("region from env = %q, want us-west-2", got)
+	}
+
+	provider, err = NewAWSSTT(context.Background(), "eu-central-1")
+	if err != nil {
+		t.Fatalf("NewAWSSTT with explicit region error = %v", err)
+	}
+	sdk = provider.client.(awsSTTSDKClient)
+	if got := sdk.client.Options().Region; got != "eu-central-1" {
+		t.Fatalf("explicit region = %q, want eu-central-1", got)
+	}
+}
+
 func TestAWSSTTStreamStartsClientWithReferenceInput(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}
@@ -397,14 +463,18 @@ func TestAWSSTTStreamStartsClientWithReferenceInput(t *testing.T) {
 	if client.input == nil {
 		t.Fatal("client input = nil, want StartStreamTranscription input")
 	}
-	if client.input.LanguageCode != types.LanguageCodeIdId {
-		t.Fatalf("language code = %q, want id-ID", client.input.LanguageCode)
+	if client.input.LanguageCode != types.LanguageCodeEnUs {
+		t.Fatalf("language code = %q, want configured en-US despite stream language argument", client.input.LanguageCode)
 	}
 	if client.input.MediaSampleRateHertz == nil || *client.input.MediaSampleRateHertz != 16000 {
 		t.Fatalf("sample rate = %v, want 16000", client.input.MediaSampleRateHertz)
 	}
-	if _, ok := stream.(*awsSTTStream); !ok {
+	awsStream, ok := stream.(*awsSTTStream)
+	if !ok {
 		t.Fatalf("stream = %T, want *awsSTTStream", stream)
+	}
+	if awsStream.language != types.LanguageCodeEnUs {
+		t.Fatalf("stream fallback language = %q, want configured en-US", awsStream.language)
 	}
 }
 
@@ -981,28 +1051,50 @@ func TestAWSSTTEmptyFrameCloseDiagnosticReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestAWSSTTRequestTimeoutReturnsEOF(t *testing.T) {
-	reader := newFakeAWSSTTReader()
-	reader.err = errors.New("Your request timed out because no new audio was received")
-	close(reader.events)
-	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
-		es.Reader = reader
-		es.Writer = &fakeAWSSTTWriter{}
+func TestAWSSTTRestartsReferenceStreamAfterIdleTimeout(t *testing.T) {
+	firstReader := newFakeAWSSTTReader()
+	firstReader.err = errors.New("Your request timed out because no new audio was received")
+	close(firstReader.events)
+	firstWriter := &fakeAWSSTTWriter{}
+	firstStream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = firstReader
+		es.Writer = firstWriter
 	})
-	providerStream := &awsSTTStream{
-		stream: stream,
-		events: make(chan *stt.SpeechEvent),
-		errCh:  make(chan error, 1),
+	secondReader := newFakeAWSSTTReader()
+	secondWriter := &fakeAWSSTTWriter{}
+	secondStream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = secondReader
+		es.Writer = secondWriter
+	})
+	client := &fakeAWSSTTClient{streams: []awsSTTEventStream{firstStream, secondStream}}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
 	}
-	go providerStream.readLoop()
 
-	event, err := providerStream.Next()
-
-	if event != nil {
-		t.Fatalf("Next event = %#v, want nil", event)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
 	}
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %v, want EOF for reference silent Transcribe timeout", err)
+	defer stream.Close()
+
+	deadline := time.After(time.Second)
+	for atomic.LoadInt32(&client.calls) < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("StartStreamTranscription calls = %d, want restart after idle timeout", atomic.LoadInt32(&client.calls))
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte("after-timeout")}); err != nil {
+		t.Fatalf("PushFrame after timeout restart error = %v", err)
+	}
+	if string(firstWriter.lastChunk) == "after-timeout" {
+		t.Fatalf("first stream received post-timeout audio, want restarted stream")
+	}
+	if string(secondWriter.lastChunk) != "after-timeout" {
+		t.Fatalf("second stream last chunk = %q, want post-timeout audio", string(secondWriter.lastChunk))
 	}
 }
 
@@ -1126,15 +1218,23 @@ func (r *fakeAWSSTTReader) Err() error {
 }
 
 type fakeAWSSTTClient struct {
-	input  *transcribestreaming.StartStreamTranscriptionInput
-	stream awsSTTEventStream
-	err    error
+	input   *transcribestreaming.StartStreamTranscriptionInput
+	stream  awsSTTEventStream
+	streams []awsSTTEventStream
+	err     error
+	calls   int32
 }
 
 func (c *fakeAWSSTTClient) StartStreamTranscription(_ context.Context, input *transcribestreaming.StartStreamTranscriptionInput) (awsSTTEventStream, error) {
+	atomic.AddInt32(&c.calls, 1)
 	c.input = input
 	if c.err != nil {
 		return nil, c.err
+	}
+	if len(c.streams) > 0 {
+		stream := c.streams[0]
+		c.streams = c.streams[1:]
+		return stream, nil
 	}
 	return c.stream, nil
 }

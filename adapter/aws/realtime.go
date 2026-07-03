@@ -24,15 +24,17 @@ import (
 )
 
 const (
-	defaultAWSRealtimeModel         = "amazon.nova-2-sonic-v1:0"
-	defaultAWSRealtimeNovaSonic1    = "amazon.nova-sonic-v1:0"
-	defaultAWSRealtimeNovaSonic2    = "amazon.nova-2-sonic-v1:0"
-	defaultAWSRealtimeVoice         = "tiffany"
-	defaultAWSRealtimeTurnDetection = "MEDIUM"
-	defaultAWSRealtimeModalities    = "mixed"
-	awsRealtimeAudioModalities      = "audio"
-	awsRealtimeProvider             = "Amazon"
-	defaultAWSRealtimeSystemPrompt  = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
+	defaultAWSRealtimeModel          = "amazon.nova-2-sonic-v1:0"
+	defaultAWSRealtimeNovaSonic1     = "amazon.nova-sonic-v1:0"
+	defaultAWSRealtimeNovaSonic2     = "amazon.nova-2-sonic-v1:0"
+	defaultAWSRealtimeVoice          = "tiffany"
+	defaultAWSRealtimeTurnDetection  = "MEDIUM"
+	defaultAWSRealtimeModalities     = "mixed"
+	defaultAWSRealtimeMaxMessages    = 40
+	defaultAWSRealtimeMaxMessageSize = 1024
+	awsRealtimeAudioModalities       = "audio"
+	awsRealtimeProvider              = "Amazon"
+	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
 		"You love helping people and having natural conversations. " +
 		"Be warm, conversational, and engaging. " +
 		"Keep your responses natural and concise for voice interaction. " +
@@ -250,7 +252,10 @@ type awsRealtimeSession struct {
 	tools                    []llm.Tool
 	pending                  map[string]struct{}
 	sent                     map[string]struct{}
+	audioMessages            map[string]struct{}
+	noGenerationContentRoles map[string]string
 	recycleToolsAfterPending bool
+	currentUserContentID     string
 	audioBStream             *coreaudio.AudioByteStream
 	audioNorm                awsRealtimeInputAudioNormalizer
 	mu                       sync.Mutex
@@ -270,12 +275,14 @@ type awsRealtimeGeneration struct {
 
 func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
 	session := &awsRealtimeSession{
-		model:   model,
-		client:  client,
-		builder: newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString()),
-		eventCh: make(chan llm.RealtimeEvent, 16),
-		pending: make(map[string]struct{}),
-		sent:    make(map[string]struct{}),
+		model:                    model,
+		client:                   client,
+		builder:                  newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString()),
+		eventCh:                  make(chan llm.RealtimeEvent, 16),
+		pending:                  make(map[string]struct{}),
+		sent:                     make(map[string]struct{}),
+		audioMessages:            make(map[string]struct{}),
+		noGenerationContentRoles: make(map[string]string),
 		audioBStream: coreaudio.NewAudioByteStream(
 			defaultAWSRealtimeInputSampleRate,
 			defaultAWSRealtimeChannels,
@@ -304,6 +311,13 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	s.mu.Unlock()
 	if systemPrompt == "" {
 		systemPrompt = defaultAWSRealtimeSystemPrompt
+	}
+	if chatCtx != nil && len(chatCtx.Items) > defaultAWSRealtimeMaxMessages {
+		chatCtx = chatCtx.Copy()
+		chatCtx.Truncate(defaultAWSRealtimeMaxMessages)
+		s.mu.Lock()
+		s.chatCtx = chatCtx
+		s.mu.Unlock()
 	}
 	initEvents, historyEvents, err := s.builder.createPromptStartBlock(awsRealtimePromptStartOptions{
 		voiceID:                s.model.voice,
@@ -439,14 +453,22 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		}
 	}
 	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
+		contentID := awsRealtimeNestedString(payload, "event", "textOutput", "contentId")
+		role := awsRealtimeNestedString(payload, "event", "textOutput", "role")
 		if textContent == awsRealtimeBargeInContent {
 			if !s.hasPendingTools() {
 				s.closeGeneration()
 			}
 			return
 		}
-		if awsRealtimeNestedString(payload, "event", "textOutput", "role") == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
-			s.sendGenerationText(awsRealtimeNestedString(payload, "event", "textOutput", "contentId"), textContent)
+		if s.shouldStoreProviderUserText(contentID, role) {
+			s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
+		}
+		if role == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
+			if s.isProviderAssistantText(contentID) {
+				s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
+			}
+			s.sendGenerationText(contentID, textContent)
 		}
 	}
 	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
@@ -531,14 +553,17 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	}
 	contentType := awsRealtimeNestedString(payload, "event", "contentStart", "type")
 	additionalFields := awsRealtimeNestedString(payload, "event", "contentStart", "additionalModelFields")
+	role := awsRealtimeNestedString(payload, "event", "contentStart", "role")
 	var streamType string
 	switch {
 	case contentType == "AUDIO":
 		streamType = "ASSISTANT_AUDIO"
-	case awsRealtimeNestedString(payload, "event", "contentStart", "role") == "ASSISTANT" &&
+	case role == "USER" && contentType == "TEXT":
+		streamType = "USER_ASR"
+	case role == "ASSISTANT" &&
 		contentType == "TEXT" && strings.Contains(additionalFields, "SPECULATIVE"):
 		streamType = "ASSISTANT_TEXT"
-	case awsRealtimeNestedString(payload, "event", "contentStart", "role") == "ASSISTANT" &&
+	case role == "ASSISTANT" &&
 		contentType == "TEXT" && strings.Contains(additionalFields, "FINAL"):
 		streamType = "ASSISTANT_FINAL"
 	default:
@@ -553,11 +578,68 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 		s.mu.Unlock()
 	}
 	if generation == nil {
+		s.mu.Lock()
+		if role != "" {
+			s.noGenerationContentRoles[contentID] = role
+		}
+		s.mu.Unlock()
 		return
 	}
 	s.mu.Lock()
 	generation.contentTypes[contentID] = streamType
 	s.mu.Unlock()
+}
+
+func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string, role string) bool {
+	if role != "USER" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.generation != nil {
+		return s.generation.contentTypes[contentID] == "USER_ASR"
+	}
+	trackedRole, tracked := s.noGenerationContentRoles[contentID]
+	return !tracked || trackedRole == "USER"
+}
+
+func (s *awsRealtimeSession) isProviderAssistantText(contentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.generation != nil && s.generation.contentTypes[contentID] == "ASSISTANT_TEXT" {
+		return true
+	}
+	return s.noGenerationContentRoles[contentID] == "ASSISTANT"
+}
+
+func (s *awsRealtimeSession) updateProviderTextHistory(role llm.ChatRole, text string, contentID string) {
+	if text == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.chatCtx == nil {
+		s.chatCtx = llm.NewChatContext()
+	}
+	forceNew := false
+	if role == llm.ChatRoleUser && contentID != "" && s.currentUserContentID != contentID {
+		forceNew = true
+		s.currentUserContentID = contentID
+	}
+	if len(s.chatCtx.Items) > 0 && !forceNew {
+		if msg, ok := s.chatCtx.Items[len(s.chatCtx.Items)-1].(*llm.ChatMessage); ok && msg.Role == role {
+			current := msg.TextContent()
+			if len(current)+len(text) < defaultAWSRealtimeMaxMessageSize {
+				msg.Content = []llm.ChatContent{{Text: current + "\n" + text}}
+				return
+			}
+		}
+	}
+	msg := s.chatCtx.AddMessage(llm.ChatMessageArgs{Role: role, Text: text})
+	if role == llm.ChatRoleUser {
+		s.audioMessages[msg.ID] = struct{}{}
+	}
+	s.chatCtx.Truncate(defaultAWSRealtimeMaxMessages)
 }
 
 func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) bool {
@@ -719,6 +801,12 @@ func awsRealtimeNumberAsInt(value any) int {
 
 func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
 	s.mu.Lock()
+	if event.Type == llm.RealtimeEventTypeInputAudioTranscriptionCompleted &&
+		event.InputTranscription != nil &&
+		event.InputTranscription.IsFinal &&
+		event.InputTranscription.ItemID != "" {
+		s.audioMessages[event.InputTranscription.ItemID] = struct{}{}
+	}
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
@@ -754,6 +842,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	}
 	for _, item := range chatCtx.Items {
 		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleUser {
+			if s.isAudioTranscriptMessage(msg.ID) {
+				continue
+			}
 			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
 				return err
 			}
@@ -796,6 +887,16 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	return nil
 }
 
+func (s *awsRealtimeSession) isAudioTranscriptMessage(id string) bool {
+	if id == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.audioMessages[id]
+	return ok
+}
+
 func normalizeAWSRealtimeToolResult(content string) string {
 	var parsed any
 	if err := json.Unmarshal([]byte(content), &parsed); err == nil {
@@ -825,14 +926,14 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.sent[msg.ID] = struct{}{}
+	s.mu.Unlock()
 	for _, event := range events {
 		if err := s.sendRawEvent(ctx, event); err != nil {
 			return err
 		}
 	}
-	s.mu.Lock()
-	s.sent[msg.ID] = struct{}{}
-	s.mu.Unlock()
 	return nil
 }
 

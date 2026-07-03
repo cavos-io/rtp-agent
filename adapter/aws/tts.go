@@ -79,7 +79,7 @@ func NewAWSTTS(ctx context.Context, region string, voice string, providerOpts ..
 		voice = string(types.VoiceIdRuth)
 	}
 
-	opts := []func(*config.LoadOptions) error{}
+	opts := []func(*config.LoadOptions) error{config.WithRetryMaxAttempts(1)}
 	if region != "" {
 		opts = append(opts, config.WithRegion(region))
 	}
