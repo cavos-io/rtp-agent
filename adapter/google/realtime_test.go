@@ -374,6 +374,57 @@ func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T
 	}
 }
 
+func TestGoogleRealtimeSessionOptionReconnectReplaysReferenceChatContext(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user-1", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "before restart"}}},
+		&llm.ChatMessage{ID: "assistant-1", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "kept context"}}},
+	}
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+	if len(firstSession.clientContents) != 1 {
+		t.Fatalf("first session client contents = %d, want active mutable chat update", len(firstSession.clientContents))
+	}
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true}); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v, want reference reconnect", err)
+	}
+
+	if len(secondSession.clientContents) != 1 {
+		t.Fatalf("second session client contents = %d, want replayed chat context after option reconnect", len(secondSession.clientContents))
+	}
+	replay := secondSession.clientContents[0]
+	if replay.TurnComplete == nil || *replay.TurnComplete {
+		t.Fatalf("replay turn complete = %#v, want false", replay.TurnComplete)
+	}
+	if len(replay.Turns) != 2 {
+		t.Fatalf("replay turns = %#v, want user and model turns", replay.Turns)
+	}
+	if replay.Turns[0].Role != "user" || replay.Turns[0].Parts[0].Text != "before restart" {
+		t.Fatalf("first replay turn = %#v, want user before restart", replay.Turns[0])
+	}
+	if replay.Turns[1].Role != "model" || replay.Turns[1].Parts[0].Text != "kept context" {
+		t.Fatalf("second replay turn = %#v, want model kept context", replay.Turns[1])
+	}
+}
+
 func TestGoogleRealtimeSessionTurnDetectionUpdateReconnectsReferenceSession(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}

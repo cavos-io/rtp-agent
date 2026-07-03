@@ -1136,7 +1136,15 @@ func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, vo
 		s.suppressActivityStart = googleRealtimeNoInterruption(config.RealtimeInputConfig)
 		s.inUserActivity = false
 	}
+	var chatCtx *llm.ChatContext
+	if s.chatCtx != nil {
+		chatCtx = s.chatCtx.Copy(llm.ChatContextCopyOptions{})
+	}
 	s.mu.Unlock()
+	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		_ = nextSession.Close()
+		return err
+	}
 	go s.receiveLoop(nextSession)
 	return nil
 }
@@ -1205,7 +1213,15 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	if options.toolBehaviorSet {
 		s.toolBehavior = options.toolBehavior
 	}
+	var chatCtx *llm.ChatContext
+	if s.chatCtx != nil {
+		chatCtx = s.chatCtx.Copy(llm.ChatContextCopyOptions{})
+	}
 	s.mu.Unlock()
+	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		_ = nextSession.Close()
+		return err
+	}
 	go s.receiveLoop(nextSession)
 	return nil
 }
@@ -1248,7 +1264,15 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	s.liveSession = nextSession
 	s.liveConfig = config
 	s.tools = tools
+	var chatCtx *llm.ChatContext
+	if s.chatCtx != nil {
+		chatCtx = s.chatCtx.Copy(llm.ChatContextCopyOptions{})
+	}
 	s.mu.Unlock()
+	if err := s.replayChatContext(nextSession, chatCtx); err != nil {
+		_ = nextSession.Close()
+		return err
+	}
 	go s.receiveLoop(nextSession)
 	return nil
 }
