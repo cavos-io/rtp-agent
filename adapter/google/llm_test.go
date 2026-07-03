@@ -894,6 +894,29 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceSafetySettingsExtra(t *
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceSafetySettingDicts(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"safety_settings": []map[string]any{{
+				"category":  "HARM_CATEGORY_DANGEROUS_CONTENT",
+				"threshold": "BLOCK_NONE",
+			}},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if len(config.SafetySettings) != 1 {
+		t.Fatalf("SafetySettings = %#v, want one dict-derived safety setting", config.SafetySettings)
+	}
+	if config.SafetySettings[0].Category != genai.HarmCategoryDangerousContent {
+		t.Fatalf("SafetySettings[0].Category = %q, want dangerous content", config.SafetySettings[0].Category)
+	}
+	if config.SafetySettings[0].Threshold != genai.HarmBlockThresholdBlockNone {
+		t.Fatalf("SafetySettings[0].Threshold = %q, want block none", config.SafetySettings[0].Threshold)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigPreservesEmptySafetySettings(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{

@@ -613,6 +613,38 @@ func googleSafetySettingsParam(value any) ([]*genai.SafetySetting, bool) {
 			result = append(result, &setting)
 		}
 		return result, true
+	case []map[string]any:
+		result := make([]*genai.SafetySetting, 0, len(settings))
+		for _, setting := range settings {
+			if parsed, ok := googleSafetySettingParam(setting); ok {
+				result = append(result, parsed)
+			}
+		}
+		return result, true
+	case []any:
+		result := make([]*genai.SafetySetting, 0, len(settings))
+		for _, setting := range settings {
+			if parsed, ok := googleSafetySettingParam(setting); ok {
+				result = append(result, parsed)
+			}
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleSafetySettingParam(value any) (*genai.SafetySetting, bool) {
+	switch setting := value.(type) {
+	case *genai.SafetySetting:
+		return setting, setting != nil
+	case genai.SafetySetting:
+		return &setting, true
+	case map[string]any:
+		return &genai.SafetySetting{
+			Category:  genai.HarmCategory(googleStringParam(setting["category"])),
+			Threshold: genai.HarmBlockThreshold(googleStringParam(setting["threshold"])),
+		}, true
 	default:
 		return nil, false
 	}
