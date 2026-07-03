@@ -2076,8 +2076,8 @@ func (s *googleSTTStream) EndInput() error {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.inputClosed {
+		s.mu.Unlock()
 		if s.callerClosedInput {
 			return errors.New("stream input ended")
 		}
@@ -2085,29 +2085,39 @@ func (s *googleSTTStream) EndInput() error {
 	}
 	s.inputClosed = true
 	s.callerClosedInput = true
-	if s.streamV2 != nil {
-		_ = s.streamV2.CloseSend()
-	} else {
-		_ = s.stream.CloseSend()
+	streamV2 := s.streamV2
+	stream := s.stream
+	s.mu.Unlock()
+	if streamV2 != nil {
+		if err := streamV2.CloseSend(); err != nil && s.isClosed() {
+			return io.ErrClosedPipe
+		}
+	} else if stream != nil {
+		if err := stream.CloseSend(); err != nil && s.isClosed() {
+			return io.ErrClosedPipe
+		}
 	}
 	return nil
 }
 
 func (s *googleSTTStream) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
 	s.inputClosed = true
 	s.callerClosedInput = true
-	if s.streamV2 != nil {
-		_ = s.streamV2.CloseSend()
-	} else {
-		_ = s.stream.CloseSend()
-	}
+	streamV2 := s.streamV2
+	stream := s.stream
 	s.unregister()
+	s.mu.Unlock()
+	if streamV2 != nil {
+		_ = streamV2.CloseSend()
+	} else if stream != nil {
+		_ = stream.CloseSend()
+	}
 	return nil
 }
 
