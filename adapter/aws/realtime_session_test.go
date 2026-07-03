@@ -573,6 +573,27 @@ func TestAWSRealtimeSessionUpdateChatContextAfterCloseIsIgnored(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionStripsReferenceLeadingAssistantOnInitialChatContext(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{stream: stream}
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), client)
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "orphan greeting"})
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "continue"})
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+
+	if session.chatCtx == nil || len(session.chatCtx.Items) != 1 {
+		t.Fatalf("stored chatCtx = %#v, want leading assistant stripped", session.chatCtx)
+	}
+	msg, ok := session.chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleUser || msg.TextContent() != "continue" {
+		t.Fatalf("stored first item = %#v, want user continue", session.chatCtx.Items[0])
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyAfterCloseIsIgnored(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -924,14 +945,13 @@ func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testi
 		t.Fatal("second stream sent no startup events, want restarted Nova Sonic session")
 	}
 	texts := awsRealtimeSentTextInputContents(t, second.sent)
-	if len(texts) < 4 {
-		t.Fatalf("restart text inputs = %v, want system, dummy user, assistant history, interactive user", texts)
+	if len(texts) < 2 {
+		t.Fatalf("restart text inputs = %v, want system and interactive user", texts)
 	}
-	if got := texts[1]; got != "[Resuming conversation]" {
-		t.Fatalf("restart first history text = %q, want dummy user", got)
-	}
-	if got := texts[2]; got != "assistant opener" {
-		t.Fatalf("restart assistant history text = %q, want preserved assistant opener", got)
+	for _, text := range texts {
+		if text == "[Resuming conversation]" || text == "assistant opener" {
+			t.Fatalf("restart text inputs = %v, want orphan assistant stripped like reference", texts)
+		}
 	}
 	if got := texts[len(texts)-1]; got != "please continue" {
 		t.Fatalf("restart interactive text = %q, want last user turn", got)

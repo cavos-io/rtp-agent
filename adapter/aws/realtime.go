@@ -1155,7 +1155,11 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		return nil
 	}
 	started := s.stream != nil
-	s.chatCtx = chatCtx.Copy()
+	if s.chatCtx == nil {
+		s.chatCtx = awsRealtimeStripLeadingAssistant(chatCtx.Copy())
+	} else {
+		s.chatCtx = chatCtx.Copy()
+	}
 	s.mu.Unlock()
 	if !started {
 		return nil
@@ -1205,6 +1209,18 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 	}
 	return nil
+}
+
+func awsRealtimeStripLeadingAssistant(chatCtx *llm.ChatContext) *llm.ChatContext {
+	if chatCtx == nil || len(chatCtx.Items) == 0 {
+		return chatCtx
+	}
+	msg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || msg.Role != llm.ChatRoleAssistant {
+		return chatCtx
+	}
+	chatCtx.Items = chatCtx.Items[1:]
+	return chatCtx
 }
 
 func (s *awsRealtimeSession) isAudioTranscriptMessage(id string) bool {
