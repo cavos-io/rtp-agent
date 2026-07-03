@@ -2760,6 +2760,24 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	turnSeq := a.nextUserTurnCompletionSeq()
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
+	if info.StoppedSpeakingAt == nil {
+		a.userTurnMu.Lock()
+		if !a.userSpeechStoppedAt.IsZero() {
+			stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
+			info.StoppedSpeakingAt = &stopped
+		} else if !a.lastFinalTranscriptTime.IsZero() {
+			stopped := timeToUnixSeconds(a.lastFinalTranscriptTime)
+			info.StoppedSpeakingAt = &stopped
+		}
+		a.userTurnMu.Unlock()
+	}
+	if info.EndOfTurnDelay == 0 {
+		info.EndOfTurnDelay = computeEndOfTurnDelay(
+			info.StartedSpeakingAt,
+			info.StoppedSpeakingAt,
+			timeToUnixSeconds(time.Now()),
+		)
+	}
 
 	if rejectsZeroConfidenceTranscript(info.NewTranscript, info.TranscriptConfidence) {
 		a.cancelPreemptiveGeneration()
