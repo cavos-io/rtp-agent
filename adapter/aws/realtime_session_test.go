@@ -930,6 +930,32 @@ func TestAWSRealtimeSessionRestartsAfterReferenceModelTimeoutReadFailure(t *test
 	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
 }
 
+func TestAWSRealtimeSessionRecyclesIdleStreamAfterReferenceDuration(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(client),
+		WithAWSRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference session recycle notification")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want stale duration-limited stream closed")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
+	}
+}
+
 func TestAWSRealtimeSessionCapsReferenceRecoverableRestartsPerGeneration(t *testing.T) {
 	streams := []*fakeAWSRealtimeStream{
 		newFakeAWSRealtimeStream(),
