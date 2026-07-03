@@ -350,6 +350,27 @@ func TestBuildGoogleGenerateContentConfigMapsReferenceGoogleSearchTool(t *testin
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceGoogleMapsTool(t *testing.T) {
+	enableWidget := true
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&GoogleMapsTool{EnableWidget: &enableWidget}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Google Maps tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.GoogleMaps == nil {
+		t.Fatalf("google maps tool = nil, config tools = %#v", config.Tools)
+	}
+	if tool.GoogleMaps.EnableWidget == nil || !*tool.GoogleMaps.EnableWidget {
+		t.Fatalf("enable widget = %#v, want true", tool.GoogleMaps.EnableWidget)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Google Maps tool", tool.FunctionDeclarations)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigMapsReferenceFileSearchTool(t *testing.T) {
 	topK := int32(4)
 	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{

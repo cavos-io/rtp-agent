@@ -1729,6 +1729,43 @@ func TestGoogleRealtimeSessionUpdateToolsMapsReferenceGoogleSearchTool(t *testin
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceGoogleMapsTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	enableWidget := true
+	if err := session.UpdateTools([]llm.Tool{&GoogleMapsTool{EnableWidget: &enableWidget}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider Google Maps tool", tools)
+	}
+	if tools[0].GoogleMaps == nil {
+		t.Fatalf("google maps tool = nil, tools = %#v", tools)
+	}
+	if tools[0].GoogleMaps.EnableWidget == nil || !*tools[0].GoogleMaps.EnableWidget {
+		t.Fatalf("enable widget = %#v, want true", tools[0].GoogleMaps.EnableWidget)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider Google Maps tool", tools[0].FunctionDeclarations)
+	}
+}
+
 func TestGoogleRealtimeSessionUpdateToolsMapsReferenceFileSearchTool(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}

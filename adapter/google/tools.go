@@ -37,6 +37,39 @@ func (t *GoogleSearchTool) googleToolConfig() *genai.Tool {
 	}
 }
 
+type GoogleMapsTool struct {
+	AuthConfig   *genai.AuthConfig
+	EnableWidget *bool
+}
+
+func (t *GoogleMapsTool) ID() string          { return "gemini_google_maps" }
+func (t *GoogleMapsTool) Name() string        { return "gemini_google_maps" }
+func (t *GoogleMapsTool) Description() string { return "Enable Google Maps grounding." }
+func (t *GoogleMapsTool) Parameters() map[string]any {
+	return nil
+}
+func (t *GoogleMapsTool) Execute(context.Context, string) (string, error) {
+	return "dispatched", nil
+}
+func (t *GoogleMapsTool) IsProviderTool() bool { return true }
+
+func (t *GoogleMapsTool) googleToolConfig() *genai.Tool {
+	if t == nil {
+		return nil
+	}
+	var enableWidget *bool
+	if t.EnableWidget != nil {
+		value := *t.EnableWidget
+		enableWidget = &value
+	}
+	return &genai.Tool{
+		GoogleMaps: &genai.GoogleMaps{
+			AuthConfig:   t.AuthConfig,
+			EnableWidget: enableWidget,
+		},
+	}
+}
+
 type FileSearchTool struct {
 	FileSearchStoreNames []string
 	TopK                 *int32
@@ -143,6 +176,8 @@ func googleToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
 func googleProviderToolConfig(tool llm.Tool) *genai.Tool {
 	switch t := tool.(type) {
 	case *GoogleSearchTool:
+		return t.googleToolConfig()
+	case *GoogleMapsTool:
 		return t.googleToolConfig()
 	case *FileSearchTool:
 		return t.googleToolConfig()
