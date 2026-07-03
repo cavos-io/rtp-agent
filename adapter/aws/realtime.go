@@ -38,6 +38,8 @@ const (
 	defaultAWSRealtimeMaxSession     = 6 * time.Minute
 	defaultAWSRealtimeRecycleQuiet   = time.Second
 	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
+	awsRealtimeCredentialExpirySlack = 3 * time.Minute
+	awsRealtimeMinRecycleDuration    = 10 * time.Second
 	awsRealtimeAudioModalities       = "audio"
 	awsRealtimeProvider              = "Amazon"
 	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
@@ -81,6 +83,7 @@ type AWSRealtimeModel struct {
 	maxSession         time.Duration
 	recycleQuietPeriod time.Duration
 	toolRecycleDelay   time.Duration
+	credentialExpiry   func() (time.Time, bool)
 	maxTokensSet       bool
 	topPSet            bool
 	temperatureSet     bool
@@ -185,6 +188,31 @@ func WithAWSRealtimeMaxSessionDuration(duration time.Duration) AWSRealtimeOption
 	return func(provider *AWSRealtimeModel) {
 		provider.maxSession = duration
 	}
+}
+
+func WithAWSRealtimeCredentialExpiry(expiry func() (time.Time, bool)) AWSRealtimeOption {
+	return func(provider *AWSRealtimeModel) {
+		provider.credentialExpiry = expiry
+	}
+}
+
+func (m *AWSRealtimeModel) sessionRecycleDuration(now time.Time) time.Duration {
+	if m == nil {
+		return 0
+	}
+	duration := m.maxSession
+	if m.credentialExpiry != nil {
+		if expiry, ok := m.credentialExpiry(); ok {
+			untilExpiry := expiry.Sub(now) - awsRealtimeCredentialExpirySlack
+			if duration <= 0 || untilExpiry < duration {
+				duration = untilExpiry
+			}
+			if duration < 30*time.Second {
+				duration = max(duration, awsRealtimeMinRecycleDuration)
+			}
+		}
+	}
+	return duration
 }
 
 func awsRealtimeModelOrDefault(model string) string {
@@ -434,7 +462,7 @@ func (s *awsRealtimeSession) startSessionRecycleTimer() {
 	}
 	s.recycleVersion++
 	version := s.recycleVersion
-	duration := s.model.maxSession
+	duration := s.model.sessionRecycleDuration(time.Now())
 	s.recycleTimer = time.AfterFunc(duration, func() {
 		s.recycleAfterSessionDuration(context.Background(), version)
 	})

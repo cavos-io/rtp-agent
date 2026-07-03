@@ -57,6 +57,23 @@ func TestAWSRealtimeMaxSessionDurationUsesReferenceEnv(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionDurationUsesReferenceCredentialExpiry(t *testing.T) {
+	now := time.Unix(1000, 0)
+	expiry := now.Add(4 * time.Minute)
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeMaxSessionDuration(6*time.Minute),
+		WithAWSRealtimeCredentialExpiry(func() (time.Time, bool) {
+			return expiry, true
+		}),
+	)
+
+	got := provider.sessionRecycleDuration(now)
+
+	if got != time.Minute {
+		t.Fatalf("session duration = %v, want reference credential expiry minus 3m buffer", got)
+	}
+}
+
 func TestAWSRealtimeNovaSonicConstructorsMatchReference(t *testing.T) {
 	sonic1 := NewAWSRealtimeModelWithNovaSonic1(
 		WithAWSRealtimeVoice("matthew"),
