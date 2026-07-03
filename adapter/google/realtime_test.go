@@ -1729,6 +1729,53 @@ func TestGoogleRealtimeSessionUpdateToolsMapsReferenceGoogleSearchTool(t *testin
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateToolsMapsReferenceFileSearchTool(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	topK := int32(4)
+	if err := session.UpdateTools([]llm.Tool{&FileSearchTool{
+		FileSearchStoreNames: []string{"fileSearchStores/store-1"},
+		TopK:                 &topK,
+		MetadataFilter:       `category = "voice"`,
+	}}); err != nil {
+		t.Fatalf("UpdateTools error = %v", err)
+	}
+
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus tool reconnect", len(connector.configs))
+	}
+	tools := connector.configs[1].Tools
+	if len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider File Search tool", tools)
+	}
+	if tools[0].FileSearch == nil {
+		t.Fatalf("file search tool = nil, tools = %#v", tools)
+	}
+	if got := tools[0].FileSearch.FileSearchStoreNames; !reflect.DeepEqual(got, []string{"fileSearchStores/store-1"}) {
+		t.Fatalf("file search stores = %#v, want store-1", got)
+	}
+	if tools[0].FileSearch.TopK == nil || *tools[0].FileSearch.TopK != 4 {
+		t.Fatalf("top_k = %#v, want 4", tools[0].FileSearch.TopK)
+	}
+	if tools[0].FileSearch.MetadataFilter != `category = "voice"` {
+		t.Fatalf("metadata filter = %q, want category voice", tools[0].FileSearch.MetadataFilter)
+	}
+	if len(tools[0].FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider File Search tool", tools[0].FunctionDeclarations)
+	}
+}
+
 func TestGoogleRealtimeSessionUpdateToolsSameValueNoopsLikeReference(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}

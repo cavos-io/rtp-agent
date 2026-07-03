@@ -37,6 +37,41 @@ func (t *GoogleSearchTool) googleToolConfig() *genai.Tool {
 	}
 }
 
+type FileSearchTool struct {
+	FileSearchStoreNames []string
+	TopK                 *int32
+	MetadataFilter       string
+}
+
+func (t *FileSearchTool) ID() string          { return "gemini_file_search" }
+func (t *FileSearchTool) Name() string        { return "gemini_file_search" }
+func (t *FileSearchTool) Description() string { return "Enable Gemini file search." }
+func (t *FileSearchTool) Parameters() map[string]any {
+	return nil
+}
+func (t *FileSearchTool) Execute(context.Context, string) (string, error) {
+	return "dispatched", nil
+}
+func (t *FileSearchTool) IsProviderTool() bool { return true }
+
+func (t *FileSearchTool) googleToolConfig() *genai.Tool {
+	if t == nil {
+		return nil
+	}
+	var topK *int32
+	if t.TopK != nil {
+		value := *t.TopK
+		topK = &value
+	}
+	return &genai.Tool{
+		FileSearch: &genai.FileSearch{
+			FileSearchStoreNames: append([]string(nil), t.FileSearchStoreNames...),
+			TopK:                 topK,
+			MetadataFilter:       t.MetadataFilter,
+		},
+	}
+}
+
 func googleToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
@@ -68,6 +103,8 @@ func googleToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
 func googleProviderToolConfig(tool llm.Tool) *genai.Tool {
 	switch t := tool.(type) {
 	case *GoogleSearchTool:
+		return t.googleToolConfig()
+	case *FileSearchTool:
 		return t.googleToolConfig()
 	default:
 		return nil

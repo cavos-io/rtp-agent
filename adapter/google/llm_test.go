@@ -350,6 +350,37 @@ func TestBuildGoogleGenerateContentConfigMapsReferenceGoogleSearchTool(t *testin
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceFileSearchTool(t *testing.T) {
+	topK := int32(4)
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&FileSearchTool{
+			FileSearchStoreNames: []string{"fileSearchStores/store-1"},
+			TopK:                 &topK,
+			MetadataFilter:       `category = "voice"`,
+		}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider File Search tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.FileSearch == nil {
+		t.Fatalf("file search tool = nil, config tools = %#v", config.Tools)
+	}
+	if got := tool.FileSearch.FileSearchStoreNames; !reflect.DeepEqual(got, []string{"fileSearchStores/store-1"}) {
+		t.Fatalf("file search stores = %#v, want store-1", got)
+	}
+	if tool.FileSearch.TopK == nil || *tool.FileSearch.TopK != 4 {
+		t.Fatalf("top_k = %#v, want 4", tool.FileSearch.TopK)
+	}
+	if tool.FileSearch.MetadataFilter != `category = "voice"` {
+		t.Fatalf("metadata filter = %q, want category voice", tool.FileSearch.MetadataFilter)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider File Search tool", tool.FunctionDeclarations)
+	}
+}
+
 func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
 	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
 		"type": "function",
