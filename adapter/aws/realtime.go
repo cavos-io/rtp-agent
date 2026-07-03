@@ -312,6 +312,13 @@ func (s *awsRealtimeSession) start(ctx context.Context) error {
 	if systemPrompt == "" {
 		systemPrompt = defaultAWSRealtimeSystemPrompt
 	}
+	if chatCtx != nil && len(chatCtx.Items) > defaultAWSRealtimeMaxMessages {
+		chatCtx = chatCtx.Copy()
+		chatCtx.Truncate(defaultAWSRealtimeMaxMessages)
+		s.mu.Lock()
+		s.chatCtx = chatCtx
+		s.mu.Unlock()
+	}
 	initEvents, historyEvents, err := s.builder.createPromptStartBlock(awsRealtimePromptStartOptions{
 		voiceID:                s.model.voice,
 		outputSampleRate:       defaultAWSRealtimeOutputSampleRate,
