@@ -994,9 +994,6 @@ func (s *awsRealtimeSession) Close() error {
 
 	s.closeGeneration()
 	if stream != nil {
-		if err := s.flushBufferedAudioInput(context.Background(), stream); err != nil {
-			return err
-		}
 		closeEvents, err := s.builder.createPromptEndBlock()
 		if err != nil {
 			return err
@@ -1015,19 +1012,6 @@ func (s *awsRealtimeSession) Close() error {
 }
 
 func (s *awsRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
-
-func (s *awsRealtimeSession) flushBufferedAudioInput(ctx context.Context, stream awsRealtimeStream) error {
-	for _, frame := range s.audioBStream.Flush() {
-		event, err := s.builder.createAudioInputEvent(base64.StdEncoding.EncodeToString(frame.Data))
-		if err != nil {
-			return err
-		}
-		if err := sendAWSRealtimeRawEvent(ctx, stream, event); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if frame == nil || len(frame.Data) == 0 {

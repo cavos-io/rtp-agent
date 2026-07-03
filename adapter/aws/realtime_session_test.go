@@ -579,7 +579,7 @@ func TestAWSRealtimeSessionPushAudioChunksReferenceInput(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
+func TestAWSRealtimeSessionCloseDropsReferenceInputAudioTail(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -599,16 +599,8 @@ func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
 		t.Fatalf("Close error = %v", err)
 	}
 
-	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
-	if len(audioInputs) != 1 {
-		t.Fatalf("audioInput events after Close = %d, want flushed tail", len(audioInputs))
-	}
-	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
-	if err != nil {
-		t.Fatalf("audioInput base64 decode error = %v", err)
-	}
-	if got, want := len(decoded), 256*2; got != want {
-		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
+	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after Close = %d, want buffered tail dropped", got)
 	}
 	audioIndex := -1
 	contentEndIndex := -1
@@ -622,8 +614,44 @@ func TestAWSRealtimeSessionCloseFlushesReferenceInputAudioTail(t *testing.T) {
 			break
 		}
 	}
-	if audioIndex < 0 || contentEndIndex < 0 || audioIndex > contentEndIndex {
-		t.Fatalf("audioInput/contentEnd order = %d/%d, want audio tail before contentEnd", audioIndex, contentEndIndex)
+	if audioIndex >= 0 || contentEndIndex < 0 {
+		t.Fatalf("audioInput/contentEnd order = %d/%d, want no tail before contentEnd", audioIndex, contentEndIndex)
+	}
+}
+
+func TestAWSRealtimeSessionCloseKeepsCompletedInputChunks(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	sentCount := len(stream.sent)
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512))); err != nil {
+		t.Fatalf("PushAudio complete chunk error = %v", err)
+	}
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
+		t.Fatalf("PushAudio tail error = %v", err)
+	}
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events before Close = %d, want one completed chunk", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 512*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want completed chunk %d", got, want)
+	}
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	audioInputs = collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events after Close = %d, want no extra tail chunk", len(audioInputs))
 	}
 }
 
@@ -650,15 +678,8 @@ func TestAWSRealtimeSessionClearAudioIsReferenceNoop(t *testing.T) {
 	}
 
 	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
-	if len(audioInputs) != 1 {
-		t.Fatalf("audioInput events after Close = %d, want buffered tail flushed", len(audioInputs))
-	}
-	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
-	if err != nil {
-		t.Fatalf("audioInput base64 decode error = %v", err)
-	}
-	if got, want := len(decoded), 256*2; got != want {
-		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
+	if len(audioInputs) != 0 {
+		t.Fatalf("audioInput events after Close = %d, want buffered tail dropped", len(audioInputs))
 	}
 }
 
@@ -692,15 +713,8 @@ func TestAWSRealtimeSessionCommitAudioIsReferenceNoop(t *testing.T) {
 		t.Fatalf("Close error = %v", err)
 	}
 	audioInputs = collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
-	if len(audioInputs) != 1 {
-		t.Fatalf("audioInput events after Close = %d, want buffered tail flushed", len(audioInputs))
-	}
-	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
-	if err != nil {
-		t.Fatalf("audioInput base64 decode error = %v", err)
-	}
-	if got, want := len(decoded), 256*2; got != want {
-		t.Fatalf("audioInput bytes = %d, want flushed tail %d", got, want)
+	if len(audioInputs) != 0 {
+		t.Fatalf("audioInput events after Close = %d, want buffered tail dropped", len(audioInputs))
 	}
 }
 
