@@ -2071,14 +2071,16 @@ func (s *googleRealtimeSession) Close() error {
 		}
 		s.mu.Lock()
 		s.closed = true
+		liveSession := s.liveSession
+		s.liveSession = nil
 		s.closeGeneration()
 		s.mu.Unlock()
 		if s.cancel != nil {
 			s.cancel()
 		}
 		close(s.eventCh)
-		if s.liveSession != nil {
-			_ = s.liveSession.Close()
+		if liveSession != nil {
+			_ = liveSession.Close()
 		}
 	})
 	return nil

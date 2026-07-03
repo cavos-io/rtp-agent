@@ -2302,6 +2302,29 @@ func TestGoogleRealtimeSessionCloseSuppressesLiveSessionCloseError(t *testing.T)
 	}
 }
 
+func TestGoogleRealtimeSessionCloseClearsReferenceActiveSession(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	rawSession, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	session := rawSession.(*googleRealtimeSession)
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !liveSession.closed {
+		t.Fatal("live session closed = false")
+	}
+	if session.liveSession != nil {
+		t.Fatalf("active live session = %#v, want nil after reference close", session.liveSession)
+	}
+}
+
 func TestGoogleRealtimeSessionSuppressesLateEventAfterEventChannelClose(t *testing.T) {
 	session := &googleRealtimeSession{
 		ctx:     context.Background(),
