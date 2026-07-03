@@ -22,16 +22,18 @@ import (
 )
 
 type AWSTTS struct {
-	client       *polly.Client
-	voice        types.VoiceId
-	engine       types.Engine
-	outputFormat types.OutputFormat
-	textType     types.TextType
-	language     types.LanguageCode
-	sampleRate   int
-	mu           sync.Mutex
-	streams      map[*awsTTSChunkedStream]struct{}
-	closed       bool
+	client         *polly.Client
+	credentials    AWSCredentials
+	credentialsSet bool
+	voice          types.VoiceId
+	engine         types.Engine
+	outputFormat   types.OutputFormat
+	textType       types.TextType
+	language       types.LanguageCode
+	sampleRate     int
+	mu             sync.Mutex
+	streams        map[*awsTTSChunkedStream]struct{}
+	closed         bool
 }
 
 type AWSTTSOption func(*AWSTTS)
@@ -40,6 +42,15 @@ func WithAWSTTSVoice(voice types.VoiceId) AWSTTSOption {
 	return func(t *AWSTTS) {
 		if voice != "" {
 			t.voice = voice
+		}
+	}
+}
+
+func WithAWSTTSCredentials(creds AWSCredentials) AWSTTSOption {
+	return func(t *AWSTTS) {
+		if creds.valid() {
+			t.credentials = creds
+			t.credentialsSet = true
 		}
 	}
 }
@@ -84,12 +95,18 @@ func NewAWSTTS(ctx context.Context, region string, voice string, providerOpts ..
 		opts = append(opts, config.WithRegion(region))
 	}
 
+	provider := newAWSTTSWithClient(nil, voice, providerOpts...)
+	if opt := awsCredentialsLoadOption(provider.credentials, provider.credentialsSet); opt != nil {
+		opts = append(opts, opt)
+	}
+
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return newAWSTTSWithClient(polly.NewFromConfig(cfg), voice, providerOpts...), nil
+	provider.client = polly.NewFromConfig(cfg)
+	return provider, nil
 }
 
 func newAWSTTSWithClient(client *polly.Client, voice string, opts ...AWSTTSOption) *AWSTTS {

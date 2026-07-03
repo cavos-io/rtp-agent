@@ -454,6 +454,24 @@ func TestNewAWSSTTUsesReferenceRegionDefaults(t *testing.T) {
 	}
 }
 
+func TestAWSSTTExplicitCredentialsMatchReference(t *testing.T) {
+	creds := AWSCredentials{
+		AccessKeyID:     "test-access",
+		SecretAccessKey: "test-secret",
+		SessionToken:    "test-token",
+	}
+	provider, err := NewAWSSTT(context.Background(), "us-west-2", WithAWSSTTCredentials(creds))
+	if err != nil {
+		t.Fatalf("NewAWSSTT error = %v, want nil with explicit credentials", err)
+	}
+	if !provider.credentialsSet {
+		t.Fatal("credentialsSet = false, want explicit credentials stored")
+	}
+	if provider.credentials != creds {
+		t.Fatalf("credentials = %#v, want %#v", provider.credentials, creds)
+	}
+}
+
 func TestAWSSTTStreamStartsClientWithReferenceInput(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}

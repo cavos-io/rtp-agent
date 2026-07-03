@@ -24,6 +24,8 @@ const (
 type AWSLLM struct {
 	client             awsLLMClient
 	model              string
+	credentials        AWSCredentials
+	credentialsSet     bool
 	toolChoice         llm.ToolChoice
 	maxOutputTokens    int32
 	maxOutputTokensSet bool
@@ -45,6 +47,15 @@ type awsLLMClient interface {
 func WithAWSLLMToolChoice(toolChoice llm.ToolChoice) AWSLLMOption {
 	return func(l *AWSLLM) {
 		l.toolChoice = toolChoice
+	}
+}
+
+func WithAWSLLMCredentials(creds AWSCredentials) AWSLLMOption {
+	return func(l *AWSLLM) {
+		if creds.valid() {
+			l.credentials = creds
+			l.credentialsSet = true
+		}
 	}
 }
 
@@ -91,21 +102,22 @@ func NewAWSLLM(ctx context.Context, region string, model string, providerOpts ..
 	model = awsLLMModelOrDefault(model)
 	region = awsRegionOrDefault(region)
 
-	opts := []func(*config.LoadOptions) error{}
-	opts = append(opts, config.WithRegion(region))
+	provider := &AWSLLM{
+		model: model,
+	}
+	for _, opt := range providerOpts {
+		opt(provider)
+	}
+	opts := []func(*config.LoadOptions) error{config.WithRegion(region)}
+	if opt := awsCredentialsLoadOption(provider.credentials, provider.credentialsSet); opt != nil {
+		opts = append(opts, opt)
+	}
 
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
-
-	provider := &AWSLLM{
-		client: bedrockruntime.NewFromConfig(cfg),
-		model:  model,
-	}
-	for _, opt := range providerOpts {
-		opt(provider)
-	}
+	provider.client = bedrockruntime.NewFromConfig(cfg)
 	return provider, nil
 }
 

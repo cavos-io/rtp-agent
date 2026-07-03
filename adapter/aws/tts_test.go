@@ -75,6 +75,24 @@ func TestNewAWSTTSUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestAWSTTSExplicitCredentialsMatchReference(t *testing.T) {
+	creds := AWSCredentials{
+		AccessKeyID:     "test-access",
+		SecretAccessKey: "test-secret",
+		SessionToken:    "test-token",
+	}
+	provider, err := NewAWSTTS(context.Background(), "us-west-2", "", WithAWSTTSCredentials(creds))
+	if err != nil {
+		t.Fatalf("NewAWSTTS error = %v, want nil with explicit credentials", err)
+	}
+	if !provider.credentialsSet {
+		t.Fatal("credentialsSet = false, want explicit credentials stored")
+	}
+	if provider.credentials != creds {
+		t.Fatalf("credentials = %#v, want %#v", provider.credentials, creds)
+	}
+}
+
 func TestAWSTTSSynthesizeInputUsesProviderOptions(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "Matthew",
 		WithAWSTTSEngine(types.EngineNeural),

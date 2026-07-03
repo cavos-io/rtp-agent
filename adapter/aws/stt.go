@@ -20,6 +20,8 @@ import (
 
 type AWSSTT struct {
 	client                            awsSTTClient
+	credentials                       AWSCredentials
+	credentialsSet                    bool
 	sampleRate                        int32
 	encoding                          types.MediaEncoding
 	language                          types.LanguageCode
@@ -70,6 +72,15 @@ func WithAWSSTTSampleRate(sampleRate int32) AWSSTTOption {
 	return func(s *AWSSTT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithAWSSTTCredentials(creds AWSCredentials) AWSSTTOption {
+	return func(s *AWSSTT) {
+		if creds.valid() {
+			s.credentials = creds
+			s.credentialsSet = true
 		}
 	}
 }
@@ -181,16 +192,21 @@ func WithAWSSTTVocabularyFilterNames(names string) AWSSTTOption {
 }
 
 func NewAWSSTT(ctx context.Context, region string, providerOpts ...AWSSTTOption) (*AWSSTT, error) {
-	if _, err := newAWSSTTWithClient(nil, providerOpts...); err != nil {
-		return nil, err
-	}
-
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(awsSTTRegionOrDefault(region)))
+	provider, err := newAWSSTTWithClient(nil, providerOpts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return newAWSSTTWithClient(awsSTTSDKClient{client: transcribestreaming.NewFromConfig(cfg)}, providerOpts...)
+	opts := []func(*config.LoadOptions) error{config.WithRegion(awsSTTRegionOrDefault(region))}
+	if opt := awsCredentialsLoadOption(provider.credentials, provider.credentialsSet); opt != nil {
+		opts = append(opts, opt)
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	provider.client = awsSTTSDKClient{client: transcribestreaming.NewFromConfig(cfg)}
+	return provider, nil
 }
 
 func awsSTTRegionOrDefault(region string) string {
