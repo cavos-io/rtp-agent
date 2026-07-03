@@ -1,9 +1,12 @@
 package aws
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -74,6 +77,36 @@ func TestAWSRealtimeSessionDurationUsesReferenceCredentialExpiry(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeCredentialExpiryReadsSDKCredentials(t *testing.T) {
+	expiry := time.Unix(2000, 0)
+	getExpiry := awsRealtimeCredentialExpiry(context.Background(), fakeAWSRealtimeCredentialsProvider{
+		creds: aws.Credentials{CanExpire: true, Expires: expiry},
+	})
+
+	got, ok := getExpiry()
+
+	if !ok {
+		t.Fatal("credential expiry ok = false, want true for expiring SDK credentials")
+	}
+	if !got.Equal(expiry) {
+		t.Fatalf("credential expiry = %v, want %v", got, expiry)
+	}
+
+	getStaticExpiry := awsRealtimeCredentialExpiry(context.Background(), fakeAWSRealtimeCredentialsProvider{
+		creds: aws.Credentials{CanExpire: false},
+	})
+	if _, ok := getStaticExpiry(); ok {
+		t.Fatal("static credential expiry ok = true, want false")
+	}
+
+	getErrorExpiry := awsRealtimeCredentialExpiry(context.Background(), fakeAWSRealtimeCredentialsProvider{
+		err: errors.New("credential load failed"),
+	})
+	if _, ok := getErrorExpiry(); ok {
+		t.Fatal("errored credential expiry ok = true, want false")
+	}
+}
+
 func TestAWSRealtimeNovaSonicConstructorsMatchReference(t *testing.T) {
 	sonic1 := NewAWSRealtimeModelWithNovaSonic1(
 		WithAWSRealtimeVoice("matthew"),
@@ -105,4 +138,13 @@ func TestAWSRealtimeNovaSonicConstructorsMatchReference(t *testing.T) {
 	if sonic2.TurnDetection() != "HIGH" {
 		t.Fatalf("Sonic 2 turn detection = %q, want HIGH", sonic2.TurnDetection())
 	}
+}
+
+type fakeAWSRealtimeCredentialsProvider struct {
+	creds aws.Credentials
+	err   error
+}
+
+func (p fakeAWSRealtimeCredentialsProvider) Retrieve(context.Context) (aws.Credentials, error) {
+	return p.creds, p.err
 }

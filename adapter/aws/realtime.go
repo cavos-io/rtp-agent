@@ -265,6 +265,9 @@ func (m *AWSRealtimeModel) Session() (llm.RealtimeSession, error) {
 			return nil, err
 		}
 		client = resolved
+		if m.credentialExpiry == nil {
+			m.credentialExpiry = resolved.credentialExpiry
+		}
 	}
 	session := newAWSRealtimeSession(m, client)
 	if err := session.start(context.Background()); err != nil {
@@ -289,7 +292,8 @@ type awsRealtimeStream interface {
 }
 
 type awsRealtimeSDKClient struct {
-	client *bedrockruntime.Client
+	client           *bedrockruntime.Client
+	credentialExpiry func() (time.Time, bool)
 }
 
 func newAWSRealtimeSDKClient(ctx context.Context, region string) (*awsRealtimeSDKClient, error) {
@@ -297,7 +301,23 @@ func newAWSRealtimeSDKClient(ctx context.Context, region string) (*awsRealtimeSD
 	if err != nil {
 		return nil, err
 	}
-	return &awsRealtimeSDKClient{client: bedrockruntime.NewFromConfig(cfg)}, nil
+	return &awsRealtimeSDKClient{
+		client:           bedrockruntime.NewFromConfig(cfg),
+		credentialExpiry: awsRealtimeCredentialExpiry(ctx, cfg.Credentials),
+	}, nil
+}
+
+func awsRealtimeCredentialExpiry(ctx context.Context, provider aws.CredentialsProvider) func() (time.Time, bool) {
+	return func() (time.Time, bool) {
+		if provider == nil {
+			return time.Time{}, false
+		}
+		credentials, err := provider.Retrieve(ctx)
+		if err != nil || !credentials.CanExpire || credentials.Expires.IsZero() {
+			return time.Time{}, false
+		}
+		return credentials.Expires, true
+	}
 }
 
 func (c *awsRealtimeSDKClient) InvokeModelWithBidirectionalStream(ctx context.Context, input *bedrockruntime.InvokeModelWithBidirectionalStreamInput) (awsRealtimeStream, error) {
