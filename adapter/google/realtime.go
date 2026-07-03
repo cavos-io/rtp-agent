@@ -1234,7 +1234,14 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	}
 	tools = append([]llm.Tool(nil), tools...)
 	s.mu.Lock()
-	if googleRealtimeSameTools(s.tools, tools) {
+	behavior := s.toolBehavior
+	nextToolsConfig := googleRealtimeToolsConfig(tools, behavior)
+	var currentToolsConfig []*genai.Tool
+	if s.liveConfig != nil {
+		currentToolsConfig = s.liveConfig.Tools
+	}
+	if reflect.DeepEqual(currentToolsConfig, nextToolsConfig) {
+		s.tools = tools
 		s.mu.Unlock()
 		return nil
 	}
@@ -1242,13 +1249,12 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	modelName := s.modelName
 	config := googleRealtimeCloneLiveConfig(s.liveConfig)
 	oldSession := s.liveSession
-	behavior := s.toolBehavior
 	connectOptions := s.currentConnectOptions()
 	s.mu.Unlock()
 	if connector == nil || config == nil {
 		return errors.New("google realtime session tool update is not implemented")
 	}
-	config.Tools = googleRealtimeToolsConfig(tools, behavior)
+	config.Tools = nextToolsConfig
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
@@ -1278,33 +1284,6 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	}
 	go s.receiveLoop(nextSession)
 	return nil
-}
-
-func googleRealtimeSameTools(left, right []llm.Tool) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if !googleRealtimeSameTool(left[i], right[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func googleRealtimeSameTool(left, right llm.Tool) bool {
-	leftValue := reflect.ValueOf(left)
-	rightValue := reflect.ValueOf(right)
-	if !leftValue.IsValid() || !rightValue.IsValid() {
-		return !leftValue.IsValid() && !rightValue.IsValid()
-	}
-	if leftValue.Type() != rightValue.Type() {
-		return false
-	}
-	if leftValue.Kind() != reflect.Ptr && leftValue.Kind() != reflect.UnsafePointer {
-		return false
-	}
-	return leftValue.Pointer() == rightValue.Pointer()
 }
 
 func (s *googleRealtimeSession) updateToolResponseScheduling(scheduling any) {

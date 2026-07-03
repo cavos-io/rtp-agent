@@ -1692,6 +1692,41 @@ func TestGoogleRealtimeSessionUpdateToolsReconnectsReferenceSession(t *testing.T
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateToolsSameValueNoopsLikeReference(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	thirdSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession, thirdSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	tool := googleRequestTestTool{}
+	if err := session.UpdateTools([]llm.Tool{tool}); err != nil {
+		t.Fatalf("first UpdateTools error = %v", err)
+	}
+	if err := session.UpdateTools([]llm.Tool{tool}); err != nil {
+		t.Fatalf("second UpdateTools error = %v", err)
+	}
+
+	if secondSession.closed {
+		t.Fatal("second live session closed after unchanged tool update")
+	}
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect calls = %d, want initial session plus first tool reconnect", len(connector.configs))
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want unchanged second session", googleSession.liveSession)
+	}
+}
+
 func TestGoogleRealtimeSessionReconnectsAfterReferenceReceiveError(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages: make(chan *genai.LiveServerMessage),
