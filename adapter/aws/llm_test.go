@@ -69,6 +69,24 @@ func TestNewAWSLLMUsesReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestAWSLLMExplicitCredentialsMatchReference(t *testing.T) {
+	creds := AWSCredentials{
+		AccessKeyID:     "test-access",
+		SecretAccessKey: "test-secret",
+		SessionToken:    "test-token",
+	}
+	provider, err := NewAWSLLM(context.Background(), "us-west-2", "", WithAWSLLMCredentials(creds))
+	if err != nil {
+		t.Fatalf("NewAWSLLM error = %v, want nil with explicit credentials", err)
+	}
+	if !provider.credentialsSet {
+		t.Fatal("credentialsSet = false, want explicit credentials stored")
+	}
+	if provider.credentials != creds {
+		t.Fatalf("credentials = %#v, want %#v", provider.credentials, creds)
+	}
+}
+
 func TestAWSRegionDefaultMatchesReference(t *testing.T) {
 	if got := awsRegionOrDefault(""); got != "us-east-1" {
 		t.Fatalf("default region = %q, want us-east-1", got)

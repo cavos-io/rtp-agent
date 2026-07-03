@@ -31,6 +31,15 @@ func TestAWSRealtimeDefaultsMatchReference(t *testing.T) {
 	if provider.TurnDetection() != "MEDIUM" {
 		t.Fatalf("TurnDetection = %q, want MEDIUM", provider.TurnDetection())
 	}
+	if got, _ := provider.MaxTokens(); got != 1024 {
+		t.Fatalf("MaxTokens = %d, want reference default 1024", got)
+	}
+	if got, _ := provider.TopP(); got != 0.9 {
+		t.Fatalf("TopP = %v, want reference default 0.9", got)
+	}
+	if got, _ := provider.Temperature(); got != 0.7 {
+		t.Fatalf("Temperature = %v, want reference default 0.7", got)
+	}
 
 	caps := provider.Capabilities()
 	want := llm.RealtimeCapabilities{
@@ -138,6 +147,61 @@ func TestAWSRealtimeNovaSonicConstructorsMatchReference(t *testing.T) {
 	if sonic2.TurnDetection() != "HIGH" {
 		t.Fatalf("Sonic 2 turn detection = %q, want HIGH", sonic2.TurnDetection())
 	}
+}
+
+func TestAWSRealtimeNovaSonicSurfaceConstantsMatchReference(t *testing.T) {
+	if AWSRealtimeModelNovaSonic1 != "amazon.nova-sonic-v1:0" {
+		t.Fatalf("AWSRealtimeModelNovaSonic1 = %q, want reference Sonic 1 model", AWSRealtimeModelNovaSonic1)
+	}
+	if AWSRealtimeModelNovaSonic2 != "amazon.nova-2-sonic-v1:0" {
+		t.Fatalf("AWSRealtimeModelNovaSonic2 = %q, want reference Sonic 2 model", AWSRealtimeModelNovaSonic2)
+	}
+	if AWSRealtimeModalitiesAudio != "audio" || AWSRealtimeModalitiesMixed != "mixed" {
+		t.Fatalf("modalities = %q/%q, want audio/mixed", AWSRealtimeModalitiesAudio, AWSRealtimeModalitiesMixed)
+	}
+	if AWSRealtimeTurnDetectionHigh != "HIGH" ||
+		AWSRealtimeTurnDetectionMedium != "MEDIUM" ||
+		AWSRealtimeTurnDetectionLow != "LOW" {
+		t.Fatalf("turn detection constants = %q/%q/%q, want HIGH/MEDIUM/LOW",
+			AWSRealtimeTurnDetectionHigh,
+			AWSRealtimeTurnDetectionMedium,
+			AWSRealtimeTurnDetectionLow,
+		)
+	}
+
+	wantSonic1 := []string{
+		"matthew", "tiffany", "amy", "lupe", "carlos", "ambre",
+		"florian", "greta", "lennart", "beatrice", "lorenzo",
+	}
+	if !stringSlicesEqual(AWSRealtimeSonic1Voices(), wantSonic1) {
+		t.Fatalf("AWSRealtimeSonic1Voices = %#v, want %#v", AWSRealtimeSonic1Voices(), wantSonic1)
+	}
+	wantSonic2 := []string{
+		"matthew", "tiffany", "amy", "olivia", "lupe", "carlos", "ambre",
+		"florian", "tina", "lennart", "beatrice", "lorenzo", "carolina",
+		"leo", "arjun", "kiara",
+	}
+	if !stringSlicesEqual(AWSRealtimeSonic2Voices(), wantSonic2) {
+		t.Fatalf("AWSRealtimeSonic2Voices = %#v, want %#v", AWSRealtimeSonic2Voices(), wantSonic2)
+	}
+
+	voices := AWSRealtimeSonic2Voices()
+	voices[0] = "mutated"
+	if AWSRealtimeSonic2Voices()[0] != "matthew" {
+		t.Fatal("AWSRealtimeSonic2Voices returned mutable backing slice")
+	}
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 type fakeAWSRealtimeCredentialsProvider struct {

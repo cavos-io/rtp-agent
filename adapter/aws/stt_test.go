@@ -141,6 +141,27 @@ func TestAWSSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 	}
 }
 
+func TestAWSSTTModelAndProviderMatchReference(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+	if got := stt.Model(provider); got != "unknown" {
+		t.Fatalf("Model = %q, want unknown", got)
+	}
+	if got := stt.Provider(provider); got != "Amazon Transcribe" {
+		t.Fatalf("Provider = %q, want Amazon Transcribe", got)
+	}
+
+	custom, err := newAWSSTTWithClient(nil, WithAWSSTTLanguageModelName("support-model"))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient custom error = %v", err)
+	}
+	if got := stt.Model(custom); got != "support-model" {
+		t.Fatalf("custom Model = %q, want support-model", got)
+	}
+}
+
 func TestAWSSTTStreamInputDefaultsMatchReference(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil)
 	if err != nil {
@@ -451,6 +472,24 @@ func TestNewAWSSTTUsesReferenceRegionDefaults(t *testing.T) {
 	sdk = provider.client.(awsSTTSDKClient)
 	if got := sdk.client.Options().Region; got != "eu-central-1" {
 		t.Fatalf("explicit region = %q, want eu-central-1", got)
+	}
+}
+
+func TestAWSSTTExplicitCredentialsMatchReference(t *testing.T) {
+	creds := AWSCredentials{
+		AccessKeyID:     "test-access",
+		SecretAccessKey: "test-secret",
+		SessionToken:    "test-token",
+	}
+	provider, err := NewAWSSTT(context.Background(), "us-west-2", WithAWSSTTCredentials(creds))
+	if err != nil {
+		t.Fatalf("NewAWSSTT error = %v, want nil with explicit credentials", err)
+	}
+	if !provider.credentialsSet {
+		t.Fatal("credentialsSet = false, want explicit credentials stored")
+	}
+	if provider.credentials != creds {
+		t.Fatalf("credentials = %#v, want %#v", provider.credentials, creds)
 	}
 }
 
@@ -910,6 +949,53 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := &fakeAWSSTTWriter{}
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	if err := providerStream.PushFrame(&model.AudioFrame{
+		Data:       []byte("pcm-24k"),
+		SampleRate: 24000,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v, want nil", err)
+	}
+
+	err := providerStream.PushFrame(&model.AudioFrame{
+		Data:       []byte("pcm-16k"),
+		SampleRate: 16000,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("second PushFrame error = %v, want reference sample-rate consistency error", err)
+	}
+	if len(writer.chunks) != 1 {
+		t.Fatalf("provider chunks = %d, want only first frame written", len(writer.chunks))
+	}
+	if string(writer.chunks[0]) != "pcm-24k" {
+		t.Fatalf("provider chunk = %q, want first frame only", string(writer.chunks[0]))
+	}
+
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	err = providerStream.PushFrame(&model.AudioFrame{
+		Data:       []byte("after-close"),
+		SampleRate: 16000,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after close error = %v, want ErrClosedPipe before sample-rate check", err)
+	}
+}
+
 func TestAWSSTTStreamCloseSuppressesReferenceWriterCloseError(t *testing.T) {
 	writer := &fakeAWSSTTWriter{closeErr: errors.New("transcribe close failed")}
 	providerStream := &awsSTTStream{
@@ -929,6 +1015,43 @@ func TestAWSSTTStreamCloseSuppressesReferenceWriterCloseError(t *testing.T) {
 	}
 	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
 		t.Fatalf("close chunks = %#v, want one empty sentinel before close", writer.chunks)
+	}
+}
+
+func TestAWSSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	writer := &fakeAWSSTTWriter{}
+	client := &fakeAWSSTTClient{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = newFakeAWSSTTReader()
+			es.Writer = writer
+		}),
+	}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+	providerStream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !writer.closed {
+		t.Fatal("writer closed = false after provider Close")
+	}
+	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
+		t.Fatalf("close chunks = %#v, want one empty sentinel before close", writer.chunks)
+	}
+	if err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("after-close")}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want ErrClosedPipe", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if len(writer.chunks) != 1 {
+		t.Fatalf("close chunks after second Close = %#v, want unchanged", writer.chunks)
 	}
 }
 

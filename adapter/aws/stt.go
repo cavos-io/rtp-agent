@@ -19,7 +19,10 @@ import (
 )
 
 type AWSSTT struct {
+	mu                                sync.Mutex
 	client                            awsSTTClient
+	credentials                       AWSCredentials
+	credentialsSet                    bool
 	sampleRate                        int32
 	encoding                          types.MediaEncoding
 	language                          types.LanguageCode
@@ -39,6 +42,8 @@ type AWSSTT struct {
 	preferredLanguage                 types.LanguageCode
 	vocabularyNames                   string
 	vocabularyFilterNames             string
+	streams                           map[*awsSTTStream]struct{}
+	closed                            bool
 }
 
 type AWSSTTOption func(*AWSSTT)
@@ -70,6 +75,15 @@ func WithAWSSTTSampleRate(sampleRate int32) AWSSTTOption {
 	return func(s *AWSSTT) {
 		if sampleRate > 0 {
 			s.sampleRate = sampleRate
+		}
+	}
+}
+
+func WithAWSSTTCredentials(creds AWSCredentials) AWSSTTOption {
+	return func(s *AWSSTT) {
+		if creds.valid() {
+			s.credentials = creds
+			s.credentialsSet = true
 		}
 	}
 }
@@ -181,16 +195,21 @@ func WithAWSSTTVocabularyFilterNames(names string) AWSSTTOption {
 }
 
 func NewAWSSTT(ctx context.Context, region string, providerOpts ...AWSSTTOption) (*AWSSTT, error) {
-	if _, err := newAWSSTTWithClient(nil, providerOpts...); err != nil {
-		return nil, err
-	}
-
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(awsSTTRegionOrDefault(region)))
+	provider, err := newAWSSTTWithClient(nil, providerOpts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return newAWSSTTWithClient(awsSTTSDKClient{client: transcribestreaming.NewFromConfig(cfg)}, providerOpts...)
+	opts := []func(*config.LoadOptions) error{config.WithRegion(awsSTTRegionOrDefault(region))}
+	if opt := awsCredentialsLoadOption(provider.credentials, provider.credentialsSet); opt != nil {
+		opts = append(opts, opt)
+	}
+	cfg, err := config.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return nil, err
+	}
+	provider.client = awsSTTSDKClient{client: transcribestreaming.NewFromConfig(cfg)}
+	return provider, nil
 }
 
 func awsSTTRegionOrDefault(region string) string {
@@ -209,6 +228,7 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 		sampleRate: 24000,
 		encoding:   types.MediaEncodingPcm,
 		language:   types.LanguageCodeEnUs,
+		streams:    make(map[*awsSTTStream]struct{}),
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -220,6 +240,13 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 }
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
+func (s *AWSSTT) Model() string {
+	if s == nil || s.languageModelName == "" {
+		return "unknown"
+	}
+	return s.languageModelName
+}
+func (s *AWSSTT) Provider() string { return "Amazon Transcribe" }
 func (s *AWSSTT) Language() string {
 	if s == nil {
 		return ""
@@ -236,7 +263,69 @@ func (s *AWSSTT) Capabilities() stt.STTCapabilities {
 	return stt.STTCapabilities{Streaming: true, InterimResults: true, Diarization: false, AlignedTranscript: "word", OfflineRecognize: false}
 }
 
+func (s *AWSSTT) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	streams := make([]*awsSTTStream, 0, len(s.streams))
+	for stream := range s.streams {
+		streams = append(streams, stream)
+	}
+	s.streams = make(map[*awsSTTStream]struct{})
+	s.mu.Unlock()
+
+	for _, stream := range streams {
+		_ = stream.Close()
+	}
+	return nil
+}
+
+func (s *AWSSTT) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *AWSSTT) registerStream(stream *awsSTTStream) bool {
+	if s == nil || stream == nil {
+		return false
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = stream.Close()
+		return false
+	}
+	if s.streams == nil {
+		s.streams = make(map[*awsSTTStream]struct{})
+	}
+	s.streams[stream] = struct{}{}
+	s.mu.Unlock()
+	return true
+}
+
+func (s *AWSSTT) unregisterStream(stream *awsSTTStream) {
+	if s == nil || stream == nil {
+		return
+	}
+	s.mu.Lock()
+	delete(s.streams, stream)
+	s.mu.Unlock()
+}
+
 func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStream, error) {
+	if s.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
 	input := buildAWSStartStreamTranscriptionInput(s, language)
 	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
@@ -247,6 +336,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	}
 
 	gs := &awsSTTStream{
+		provider:                 s,
 		stream:                   stream,
 		restart:                  func() (awsSTTEventStream, error) { return s.client.StartStreamTranscription(ctx, input) },
 		language:                 input.LanguageCode,
@@ -254,6 +344,9 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 		identifyMultipleLanguage: s.identifyMultipleLanguages,
 		events:                   make(chan *stt.SpeechEvent, 10),
 		errCh:                    make(chan error, 1),
+	}
+	if !s.registerStream(gs) {
+		return nil, io.ErrClosedPipe
 	}
 	go gs.readLoop()
 
@@ -324,6 +417,7 @@ func (s *AWSSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, lang
 }
 
 type awsSTTStream struct {
+	provider                 *AWSSTT
 	stream                   awsSTTEventStream
 	restart                  func() (awsSTTEventStream, error)
 	language                 types.LanguageCode
@@ -333,6 +427,7 @@ type awsSTTStream struct {
 	errCh                    chan error
 	streamMu                 sync.Mutex
 	closed                   bool
+	pushedSampleRate         uint32
 	speaking                 bool
 	timingMu                 sync.Mutex
 	startTimeOffset          float64
@@ -340,6 +435,11 @@ type awsSTTStream struct {
 }
 
 func (s *awsSTTStream) readLoop() {
+	defer func() {
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+	}()
 	defer close(s.events)
 	for {
 		stream := s.currentStream()
@@ -561,10 +661,21 @@ func (s *awsSTTStream) currentStartTimeOffset() float64 {
 }
 
 func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
-	stream, closed := s.streamForSend()
+	s.streamMu.Lock()
+	stream := s.stream
+	closed := s.closed
 	if closed {
+		s.streamMu.Unlock()
 		return io.ErrClosedPipe
 	}
+	if frame != nil && frame.SampleRate != 0 {
+		if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
+			s.streamMu.Unlock()
+			return fmt.Errorf("the sample rate of the input frames must be consistent")
+		}
+		s.pushedSampleRate = frame.SampleRate
+	}
+	s.streamMu.Unlock()
 	if stream == nil {
 		return llm.NewAPIConnectionError("AWS Transcribe stream is not initialized")
 	}
@@ -603,6 +714,9 @@ func (s *awsSTTStream) Flush() error {
 }
 
 func (s *awsSTTStream) Close() error {
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
 	stream, closed := s.closeStream()
 	if closed {
 		return nil

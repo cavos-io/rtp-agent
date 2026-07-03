@@ -26,12 +26,19 @@ import (
 )
 
 const (
-	defaultAWSRealtimeModel          = "amazon.nova-2-sonic-v1:0"
-	defaultAWSRealtimeNovaSonic1     = "amazon.nova-sonic-v1:0"
-	defaultAWSRealtimeNovaSonic2     = "amazon.nova-2-sonic-v1:0"
+	AWSRealtimeModelNovaSonic1       = "amazon.nova-sonic-v1:0"
+	AWSRealtimeModelNovaSonic2       = "amazon.nova-2-sonic-v1:0"
+	AWSRealtimeModalitiesAudio       = "audio"
+	AWSRealtimeModalitiesMixed       = "mixed"
+	AWSRealtimeTurnDetectionHigh     = "HIGH"
+	AWSRealtimeTurnDetectionMedium   = "MEDIUM"
+	AWSRealtimeTurnDetectionLow      = "LOW"
+	defaultAWSRealtimeModel          = AWSRealtimeModelNovaSonic2
+	defaultAWSRealtimeNovaSonic1     = AWSRealtimeModelNovaSonic1
+	defaultAWSRealtimeNovaSonic2     = AWSRealtimeModelNovaSonic2
 	defaultAWSRealtimeVoice          = "tiffany"
-	defaultAWSRealtimeTurnDetection  = "MEDIUM"
-	defaultAWSRealtimeModalities     = "mixed"
+	defaultAWSRealtimeTurnDetection  = AWSRealtimeTurnDetectionMedium
+	defaultAWSRealtimeModalities     = AWSRealtimeModalitiesMixed
 	defaultAWSRealtimeMaxMessages    = 40
 	defaultAWSRealtimeMaxMessageSize = 1024
 	defaultAWSRealtimeMaxRestarts    = 3
@@ -41,7 +48,7 @@ const (
 	defaultAWSRealtimeGenerateReply  = 10 * time.Second
 	awsRealtimeCredentialExpirySlack = 3 * time.Minute
 	awsRealtimeMinRecycleDuration    = 10 * time.Second
-	awsRealtimeAudioModalities       = "audio"
+	awsRealtimeAudioModalities       = AWSRealtimeModalitiesAudio
 	awsRealtimeProvider              = "Amazon"
 	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
 		"You love helping people and having natural conversations. " +
@@ -70,6 +77,47 @@ var awsRealtimeRecoverableReadErrorMessages = []string{
 	"ModelStreamErrorException",
 	"ModelTimeoutException",
 	"InvalidEventBytes",
+}
+
+var awsRealtimeSonic1Voices = []string{
+	"matthew",
+	"tiffany",
+	"amy",
+	"lupe",
+	"carlos",
+	"ambre",
+	"florian",
+	"greta",
+	"lennart",
+	"beatrice",
+	"lorenzo",
+}
+
+var awsRealtimeSonic2Voices = []string{
+	"matthew",
+	"tiffany",
+	"amy",
+	"olivia",
+	"lupe",
+	"carlos",
+	"ambre",
+	"florian",
+	"tina",
+	"lennart",
+	"beatrice",
+	"lorenzo",
+	"carolina",
+	"leo",
+	"arjun",
+	"kiara",
+}
+
+func AWSRealtimeSonic1Voices() []string {
+	return append([]string(nil), awsRealtimeSonic1Voices...)
+}
+
+func AWSRealtimeSonic2Voices() []string {
+	return append([]string(nil), awsRealtimeSonic2Voices...)
 }
 
 type AWSRealtimeModel struct {
@@ -102,6 +150,9 @@ func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeMo
 		voice:                defaultAWSRealtimeVoice,
 		modalities:           defaultAWSRealtimeModalities,
 		turnDetection:        defaultAWSRealtimeTurnDetection,
+		maxTokens:            defaultAWSRealtimeMaxTokens,
+		topP:                 defaultAWSRealtimeTopP,
+		temperature:          defaultAWSRealtimeTemperature,
 		maxSession:           awsRealtimeMaxSessionFromEnv(),
 		recycleQuietPeriod:   defaultAWSRealtimeRecycleQuiet,
 		toolRecycleDelay:     defaultAWSRealtimeToolRecycle,
@@ -699,26 +750,60 @@ func (s *awsRealtimeSession) readResponses() {
 		}
 		var payload map[string]any
 		if err := json.Unmarshal(chunk.Value.Bytes, &payload); err != nil {
-			s.emit(llm.RealtimeEvent{
-				Type:  llm.RealtimeEventTypeError,
-				Error: llm.NewRealtimeError("failed to decode AWS Nova Sonic realtime event", err),
-			})
 			continue
 		}
-		s.handleResponseEvent(payload)
+		if !s.handleResponseEvent(payload) {
+			return
+		}
 	}
 	if err := stream.Err(); err != nil {
+		if isAWSRealtimeGracefulClosedReadError(err) {
+			s.closeGeneration()
+			return
+		}
+		if isAWSRealtimeToolResponseParsingError(err) {
+			s.closeGeneration()
+			s.clearPendingTools()
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeError,
+				Error: llm.NewRealtimeModelError(
+					s.model.Label(),
+					llm.NewAPIStatusErrorWithRetryable(err.Error(), 400, "", err, false),
+					true,
+				),
+			})
+			return
+		}
 		if s.restartAfterRecoverableReadError(stream, err) {
 			return
 		}
+		if isAWSRealtimeValidationError(err) {
+			s.closeGeneration()
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeError,
+				Error: llm.NewRealtimeModelError(
+					s.model.Label(),
+					llm.NewAPIStatusErrorWithRetryable(err.Error(), 400, "", err, false),
+					false,
+				),
+			})
+			return
+		}
 		s.closeGeneration()
-		var apiErr error = llm.NewAPIConnectionError(fmt.Sprintf("AWS Nova Sonic realtime stream failed: %v", err))
 		if errors.Is(err, context.DeadlineExceeded) {
-			apiErr = llm.NewAPITimeoutError(err.Error())
+			s.emit(llm.RealtimeEvent{
+				Type:  llm.RealtimeEventTypeError,
+				Error: llm.NewAPITimeoutError(err.Error()),
+			})
+			return
 		}
 		s.emit(llm.RealtimeEvent{
-			Type:  llm.RealtimeEventTypeError,
-			Error: apiErr,
+			Type: llm.RealtimeEventTypeError,
+			Error: llm.NewRealtimeModelError(
+				s.model.Label(),
+				llm.NewAPIStatusErrorWithRetryable(err.Error(), 500, "", err, false),
+				false,
+			),
 		})
 		return
 	}
@@ -788,7 +873,29 @@ func isAWSRealtimeRecoverableReadError(err error) bool {
 	return false
 }
 
-func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
+func isAWSRealtimeGracefulClosedReadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return message == "I/O operation on closed file." || strings.Contains(message, "stream already closed")
+}
+
+func isAWSRealtimeToolResponseParsingError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Tool Response parsing error")
+}
+
+func isAWSRealtimeValidationError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "ValidationException")
+}
+
+func (s *awsRealtimeSession) clearPendingTools() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = make(map[string]struct{})
+}
+
+func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
 		s.emitGenerationCreated()
 	}
@@ -799,11 +906,16 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
+			s.closeGeneration()
 			s.emit(llm.RealtimeEvent{
-				Type:  llm.RealtimeEventTypeError,
-				Error: llm.NewRealtimeError("failed to decode AWS Nova Sonic audio output", err),
+				Type: llm.RealtimeEventTypeError,
+				Error: llm.NewRealtimeModelError(
+					s.model.Label(),
+					llm.NewAPIStatusErrorWithRetryable(err.Error(), 500, "", err, false),
+					false,
+				),
 			})
-			return
+			return false
 		}
 		if s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data) {
 			s.markLastAudioOutput()
@@ -821,15 +933,13 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			if !s.hasPendingTools() {
 				s.closeGeneration()
 			}
-			return
+			return true
 		}
 		if s.shouldStoreProviderUserText(contentID, role) {
 			s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
 		}
-		if role == "ASSISTANT" && textContent != awsRealtimeBargeInContent {
-			if s.isProviderAssistantText(contentID) {
-				s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
-			}
+		if s.isProviderAssistantText(contentID) {
+			s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
 			s.sendGenerationText(contentID, textContent)
 		}
 	}
@@ -839,7 +949,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 			Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
 			Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
 		}) {
-			return
+			return true
 		}
 		s.mu.Lock()
 		s.pending[toolUseID] = struct{}{}
@@ -855,6 +965,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) {
 		awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
 		s.closeGeneration()
 	}
+	return true
 }
 
 func (s *awsRealtimeSession) hasPendingTools() bool {
@@ -953,7 +1064,7 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 }
 
 func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string, role string) bool {
-	if role != "USER" {
+	if role != "" && role != "USER" {
 		return false
 	}
 	s.mu.Lock()
@@ -1214,6 +1325,7 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	if chatCtx == nil {
 		return nil
 	}
+	chatCtx = awsRealtimeSanitizeChatContext(chatCtx)
 	s.mu.Lock()
 	closed := s.closed
 	if closed {
@@ -1275,6 +1387,15 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		}
 	}
 	return nil
+}
+
+func awsRealtimeSanitizeChatContext(chatCtx *llm.ChatContext) *llm.ChatContext {
+	return chatCtx.Copy(llm.ChatContextCopyOptions{
+		ExcludeHandoff:      true,
+		ExcludeInstructions: true,
+		ExcludeEmptyMessage: true,
+		ExcludeConfigUpdate: true,
+	})
 }
 
 func awsRealtimeStripLeadingAssistant(chatCtx *llm.ChatContext) *llm.ChatContext {
