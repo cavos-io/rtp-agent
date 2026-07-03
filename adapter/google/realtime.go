@@ -1577,8 +1577,9 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		googleRealtimeSetConfigSessionResumption(s.liveConfig, update.NewHandle)
 	}
 	if message.ServerContent != nil {
+		generationUserInitiated := false
 		if s.isNewGenerationMessage(message) {
-			s.ensureGeneration()
+			generationUserInitiated = s.ensureGeneration()
 		}
 		if message.ServerContent.ModelTurn != nil {
 			for _, part := range message.ServerContent.ModelTurn.Parts {
@@ -1619,7 +1620,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		if message.ServerContent.GenerationComplete || message.ServerContent.TurnComplete {
 			s.markGenerationCompleted()
 		}
-		if message.ServerContent.Interrupted && !s.hasPendingReply() {
+		if message.ServerContent.Interrupted && !generationUserInitiated && !s.hasPendingReply() {
 			s.emitEvent(llm.RealtimeEvent{Type: llm.RealtimeEventTypeSpeechStarted})
 		}
 		if message.ServerContent.TurnComplete {
@@ -1706,9 +1707,9 @@ func (s *googleRealtimeSession) isNewGenerationMessage(message *genai.LiveServer
 	return content.InputTranscription != nil && content.InputTranscription.Text != ""
 }
 
-func (s *googleRealtimeSession) ensureGeneration() {
+func (s *googleRealtimeSession) ensureGeneration() bool {
 	if s.generation != nil && !s.generation.closed {
-		return
+		return false
 	}
 	s.responseSeq++
 	responseID := fmt.Sprintf("GR_%d", s.responseSeq)
@@ -1749,6 +1750,7 @@ func (s *googleRealtimeSession) ensureGeneration() {
 			UserInitiated: userInitiated,
 		},
 	})
+	return userInitiated
 }
 
 func (s *googleRealtimeSession) setPendingReply(pending bool) {

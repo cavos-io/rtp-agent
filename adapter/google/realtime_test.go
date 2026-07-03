@@ -3022,6 +3022,42 @@ func TestGoogleRealtimeSessionPendingReplySuppressesReferenceInterruptedSpeechSt
 	assertNoGoogleRealtimeEvent(t, session.EventCh())
 }
 
+func TestGoogleRealtimeSessionPendingReplySuppressesInterruptedModelTurnSpeechStarted(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			Interrupted: true,
+			ModelTurn:   &genai.Content{Parts: []*genai.Part{{Text: "reply"}}},
+		},
+	}
+
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type == llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("first event = %#v, want no reference speech_started while pending reply owns interrupted model turn", event)
+	}
+	if event.Type != llm.RealtimeEventTypeGenerationCreated || event.Generation == nil || !event.Generation.UserInitiated {
+		t.Fatalf("first event = %#v, want user-initiated generation_created", event)
+	}
+	text := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if text.Type != llm.RealtimeEventTypeText || text.Text != "reply" {
+		t.Fatalf("second event = %#v, want model-turn text delta", text)
+	}
+	assertNoGoogleRealtimeEvent(t, session.EventCh())
+}
+
 func TestGoogleRealtimeSessionInterruptedTurnCompleteMatchesReferenceOrder(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
