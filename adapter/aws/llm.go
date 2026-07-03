@@ -186,6 +186,7 @@ type awsLLMStream struct {
 	emittedChunk bool
 	toolCallID   string
 	toolName     string
+	toolNameSet  bool
 	toolArgs     string
 }
 
@@ -489,11 +490,16 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			if toolStart, ok := v.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
 				s.toolCallID = aws.ToString(toolStart.Value.ToolUseId)
 				s.toolName = aws.ToString(toolStart.Value.Name)
+				s.toolNameSet = toolStart.Value.Name != nil
 				s.toolArgs = ""
 				continue
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStop:
 			if s.toolCallID != "" {
+				if !s.toolNameSet {
+					s.toolCallID, s.toolName, s.toolArgs, s.toolNameSet = "", "", "", false
+					continue
+				}
 				s.emittedChunk = true
 				chunk := &llm.ChatChunk{
 					ID: s.requestID,
@@ -507,7 +513,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 						}},
 					},
 				}
-				s.toolCallID, s.toolName, s.toolArgs = "", "", ""
+				s.toolCallID, s.toolName, s.toolArgs, s.toolNameSet = "", "", "", false
 				return chunk, nil
 			}
 		case *types.ConverseStreamOutputMemberMetadata:

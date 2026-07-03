@@ -228,6 +228,42 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamDropsReferenceToolUseWithoutName(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStart{
+		Value: awstypes.ContentBlockStartEvent{
+			Start: &awstypes.ContentBlockStartMemberToolUse{
+				Value: awstypes.ToolUseBlockStart{
+					ToolUseId: awsString("call_lookup"),
+				},
+			},
+		},
+	}
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberToolUse{
+				Value: awstypes.ToolUseBlockDelta{Input: awsString(`{"query":"weather"}`)},
+			},
+		},
+	}
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStop{}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want malformed tool call suppressed", chunk)
+	}
+	if err != io.EOF {
+		t.Fatalf("Next error = %v, want EOF after suppressed malformed tool call", err)
+	}
+}
+
 func TestAWSLLMStreamChunksCarryReferenceRequestID(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
