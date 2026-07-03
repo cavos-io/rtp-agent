@@ -381,6 +381,23 @@ func TestBuildGoogleGenerateContentConfigMapsReferenceFileSearchTool(t *testing.
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceURLContextTool(t *testing.T) {
+	config := buildGoogleGenerateContentConfig(&llm.ChatOptions{
+		Tools: []llm.Tool{&URLContextTool{}},
+	}, "")
+
+	if len(config.Tools) != 1 {
+		t.Fatalf("tools = %#v, want one provider URL Context tool", config.Tools)
+	}
+	tool := config.Tools[0]
+	if tool.URLContext == nil {
+		t.Fatalf("url context tool = nil, config tools = %#v", config.Tools)
+	}
+	if len(tool.FunctionDeclarations) != 0 {
+		t.Fatalf("function declarations = %#v, want none for provider URL Context tool", tool.FunctionDeclarations)
+	}
+}
+
 func TestBuildGoogleToolConfigMapsNamedToolChoice(t *testing.T) {
 	config := buildGoogleToolConfig([]llm.Tool{googleRequestTestTool{}}, map[string]any{
 		"type": "function",

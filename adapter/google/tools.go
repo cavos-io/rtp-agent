@@ -72,6 +72,26 @@ func (t *FileSearchTool) googleToolConfig() *genai.Tool {
 	}
 }
 
+type URLContextTool struct{}
+
+func (t *URLContextTool) ID() string          { return "gemini_url_context" }
+func (t *URLContextTool) Name() string        { return "gemini_url_context" }
+func (t *URLContextTool) Description() string { return "Enable Gemini URL context." }
+func (t *URLContextTool) Parameters() map[string]any {
+	return nil
+}
+func (t *URLContextTool) Execute(context.Context, string) (string, error) {
+	return "dispatched", nil
+}
+func (t *URLContextTool) IsProviderTool() bool { return true }
+
+func (t *URLContextTool) googleToolConfig() *genai.Tool {
+	if t == nil {
+		return nil
+	}
+	return &genai.Tool{URLContext: &genai.URLContext{}}
+}
+
 func googleToolsConfig(tools []llm.Tool, behavior any) []*genai.Tool {
 	if len(tools) == 0 {
 		return nil
@@ -105,6 +125,8 @@ func googleProviderToolConfig(tool llm.Tool) *genai.Tool {
 	case *GoogleSearchTool:
 		return t.googleToolConfig()
 	case *FileSearchTool:
+		return t.googleToolConfig()
+	case *URLContextTool:
 		return t.googleToolConfig()
 	default:
 		return nil
