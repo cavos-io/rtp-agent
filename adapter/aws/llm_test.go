@@ -718,6 +718,32 @@ func TestBuildAWSToolConfigMapsNamedToolChoice(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatUsesReferenceProviderToolChoice(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	client := fakeAWSLLMClient{
+		err:          errors.New("stop after capture"),
+		inputCapture: &captured,
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	WithAWSLLMToolChoice("required")(provider)
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	_, _ = provider.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{awsRequestTestTool{}}))
+
+	if captured == nil || captured.ToolConfig == nil {
+		t.Fatalf("ToolConfig = %#v, want reference provider tool choice", captured)
+	}
+	if _, ok := captured.ToolConfig.ToolChoice.(*awstypes.ToolChoiceMemberAny); !ok {
+		t.Fatalf("ToolChoice = %T, want required/any from provider default", captured.ToolConfig.ToolChoice)
+	}
+}
+
 func TestBuildAWSToolConfigDropsToolsForNoneChoice(t *testing.T) {
 	config := buildAWSToolConfig(&llm.ChatOptions{
 		Tools:      []llm.Tool{awsRequestTestTool{}},

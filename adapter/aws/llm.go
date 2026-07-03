@@ -22,15 +22,24 @@ const (
 )
 
 type AWSLLM struct {
-	client awsLLMClient
-	model  string
+	client     awsLLMClient
+	model      string
+	toolChoice llm.ToolChoice
 }
+
+type AWSLLMOption func(*AWSLLM)
 
 type awsLLMClient interface {
 	ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error)
 }
 
-func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error) {
+func WithAWSLLMToolChoice(toolChoice llm.ToolChoice) AWSLLMOption {
+	return func(l *AWSLLM) {
+		l.toolChoice = toolChoice
+	}
+}
+
+func NewAWSLLM(ctx context.Context, region string, model string, providerOpts ...AWSLLMOption) (*AWSLLM, error) {
 	model = awsLLMModelOrDefault(model)
 	region = awsRegionOrDefault(region)
 
@@ -42,10 +51,14 @@ func NewAWSLLM(ctx context.Context, region string, model string) (*AWSLLM, error
 		return nil, err
 	}
 
-	return &AWSLLM{
+	provider := &AWSLLM{
 		client: bedrockruntime.NewFromConfig(cfg),
 		model:  model,
-	}, nil
+	}
+	for _, opt := range providerOpts {
+		opt(provider)
+	}
+	return provider, nil
 }
 
 func awsLLMModelOrDefault(model string) string {
@@ -77,6 +90,10 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	for _, opt := range opts {
 		opt(options)
 	}
+	requestOptions := *options
+	if requestOptions.ToolChoice == nil {
+		requestOptions.ToolChoice = l.toolChoice
+	}
 	connectOptions, err := options.EffectiveConnectOptions()
 	if err != nil {
 		return nil, err
@@ -105,8 +122,8 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		}
 	}
 
-	if len(options.Tools) > 0 {
-		req.ToolConfig = buildAWSToolConfig(options)
+	if len(requestOptions.Tools) > 0 {
+		req.ToolConfig = buildAWSToolConfig(&requestOptions)
 	}
 
 	out, err := l.client.ConverseStream(ctx, req)
