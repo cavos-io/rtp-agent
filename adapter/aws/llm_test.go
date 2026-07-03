@@ -755,6 +755,46 @@ func TestBuildAWSToolConfigDropsToolsForNoneChoice(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatToolChoiceNoneStripsReferenceFunctionHistory(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	client := fakeAWSLLMClient{
+		err:          errors.New("stop after capture"),
+		inputCapture: &captured,
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.FunctionCall{ID: "call", CallID: "call_lookup", Name: "lookup", Arguments: `{}`},
+		&llm.FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "sunny"},
+	}
+
+	_, _ = provider.Chat(
+		context.Background(),
+		ctx,
+		llm.WithTools([]llm.Tool{awsRequestTestTool{}}),
+		llm.WithToolChoice("none"),
+	)
+
+	if captured == nil {
+		t.Fatal("captured request = nil")
+	}
+	if captured.ToolConfig != nil {
+		t.Fatalf("ToolConfig = %#v, want nil for reference none tool choice", captured.ToolConfig)
+	}
+	for _, msg := range captured.Messages {
+		for _, block := range msg.Content {
+			switch block.(type) {
+			case *awstypes.ContentBlockMemberToolUse, *awstypes.ContentBlockMemberToolResult:
+				t.Fatalf("message content includes %T, want function history stripped when toolConfig is nil", block)
+			}
+		}
+	}
+}
+
 func TestBuildAWSToolConfigOmitsReferenceEmptyDescription(t *testing.T) {
 	config := buildAWSToolConfig(&llm.ChatOptions{
 		Tools: []llm.Tool{awsEmptyDescriptionTool{}},

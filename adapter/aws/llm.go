@@ -103,6 +103,13 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
 	}
 
+	toolConfig := (*types.ToolConfiguration)(nil)
+	if len(requestOptions.Tools) > 0 {
+		toolConfig = buildAWSToolConfig(&requestOptions)
+	}
+	if toolConfig == nil {
+		chatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{ExcludeFunctionCall: true})
+	}
 	messages, systemText := buildAWSMessages(chatCtx)
 
 	req := &bedrockruntime.ConverseStreamInput{
@@ -122,8 +129,8 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		}
 	}
 
-	if len(requestOptions.Tools) > 0 {
-		req.ToolConfig = buildAWSToolConfig(&requestOptions)
+	if toolConfig != nil {
+		req.ToolConfig = toolConfig
 	}
 
 	out, err := l.client.ConverseStream(ctx, req)
