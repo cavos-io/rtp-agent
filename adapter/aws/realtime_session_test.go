@@ -1277,6 +1277,62 @@ func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionPreservesReferenceProviderTextHistory(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TEXT","role":"USER","contentId":"user-1"}}}`)
+	stream.emitJSON(`{"event":{"textOutput":{"role":"USER","content":"hello","contentId":"user-1"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	stream.emitJSON(`{"event":{"textOutput":{"role":"USER","content":"again","contentId":"user-1"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TEXT","role":"ASSISTANT","contentId":"text-1","additionalModelFields":"{\"generationStage\":\"SPECULATIVE\"}"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStopped)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+	stream.emitJSON(`{"event":{"textOutput":{"role":"ASSISTANT","content":"hi","contentId":"text-1"}}}`)
+	select {
+	case text := <-msg.TextCh:
+		if text != "hi" {
+			t.Fatalf("assistant text delta = %q, want hi", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for assistant text delta")
+	}
+
+	awsSession.mu.Lock()
+	chatCtx := awsSession.chatCtx
+	awsSession.mu.Unlock()
+	if chatCtx == nil || len(chatCtx.Items) != 2 {
+		t.Fatalf("chatCtx items = %#v, want user and assistant provider text history", chatCtx)
+	}
+	userMsg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || userMsg.Role != llm.ChatRoleUser || userMsg.TextContent() != "hello\nagain" {
+		t.Fatalf("user history = %#v, want merged provider ASR text", chatCtx.Items[0])
+	}
+	assistantMsg, ok := chatCtx.Items[1].(*llm.ChatMessage)
+	if !ok || assistantMsg.Role != llm.ChatRoleAssistant || assistantMsg.TextContent() != "hi" {
+		t.Fatalf("assistant history = %#v, want provider assistant text", chatCtx.Items[1])
+	}
+	if !awsSession.isAudioTranscriptMessage(userMsg.ID) {
+		t.Fatalf("user message id %q not marked as provider audio transcript", userMsg.ID)
+	}
+}
+
 func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
