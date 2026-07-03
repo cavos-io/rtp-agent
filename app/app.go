@@ -3625,6 +3625,9 @@ func awsSTTFromConfig(cfg AppConfig) (*adapteraws.AWSSTT, error) {
 	if cfg.STTSampleRate != nil {
 		sttOpts = append(sttOpts, adapteraws.WithAWSSTTSampleRate(int32(*cfg.STTSampleRate)))
 	}
+	if cfg.STTLanguage != "" {
+		sttOpts = append(sttOpts, adapteraws.WithAWSSTTLanguage(awstranscribetypes.LanguageCode(cfg.STTLanguage)))
+	}
 	if cfg.STTVocabularyName != "" {
 		sttOpts = append(sttOpts, adapteraws.WithAWSSTTVocabularyName(cfg.STTVocabularyName))
 	}

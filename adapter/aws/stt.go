@@ -220,6 +220,12 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 }
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
+func (s *AWSSTT) Language() string {
+	if s == nil {
+		return ""
+	}
+	return string(s.language)
+}
 func (s *AWSSTT) InputSampleRate() uint32 {
 	if s == nil || s.sampleRate <= 0 {
 		return 24000

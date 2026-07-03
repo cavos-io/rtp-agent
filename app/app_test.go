@@ -13013,7 +13013,7 @@ func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_MODEL", "amazon.nova-test")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "aws")
 	t.Setenv("RTP_AGENT_STT_SAMPLE_RATE", "16000")
-	t.Setenv("RTP_AGENT_STT_LANGUAGE", "en-US")
+	t.Setenv("RTP_AGENT_STT_LANGUAGE", "id-ID")
 	t.Setenv("RTP_AGENT_STT_SPEAKER_LABELS", "true")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "aws")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "Joanna")
@@ -13033,6 +13033,13 @@ func TestDefaultConfigFromEnvSelectsAWSProviders(t *testing.T) {
 	}
 	if got := app.Session.STT.Label(); got != "aws.STT" {
 		t.Fatalf("STT label = %q, want aws.STT", got)
+	}
+	awsSTT, ok := app.Session.STT.(*adapteraws.AWSSTT)
+	if !ok {
+		t.Fatalf("STT = %T, want *aws.AWSSTT", app.Session.STT)
+	}
+	if got := awsSTT.Language(); got != "id-ID" {
+		t.Fatalf("STT language = %q, want id-ID", got)
 	}
 	if got := app.Session.TTS.Label(); got != "aws.TTS" {
 		t.Fatalf("TTS label = %q, want aws.TTS", got)
