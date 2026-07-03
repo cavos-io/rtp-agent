@@ -760,10 +760,6 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 		s.mu.Unlock()
 		return nil
 	}
-	if s.flushed > 0 {
-		s.mu.Unlock()
-		return nil
-	}
 	if _, err := s.buffer.WriteString(text); err != nil {
 		s.mu.Unlock()
 		return err
@@ -778,7 +774,7 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 			}
 			return io.ErrClosedPipe
 		}
-		if s.inputEnded || s.flushed > 0 {
+		if s.inputEnded {
 			s.mu.Unlock()
 			return nil
 		}
