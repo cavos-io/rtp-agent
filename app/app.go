@@ -180,6 +180,7 @@ type appGoogleRealtimeConfig struct {
 	sessionResumptionHandle  string
 	connectOptions           *llm.APIConnectOptions
 	toolResponseScheduling   genai.FunctionResponseScheduling
+	toolBehavior             genai.Behavior
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -252,6 +253,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.toolResponseScheduling != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeToolResponseScheduling(c.toolResponseScheduling))
+	}
+	if c.toolBehavior != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeToolBehavior(c.toolBehavior))
 	}
 	return opts
 }
@@ -7161,6 +7165,7 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.sessionResumptionHandle = modelOptionString(cfg.RealtimeModelOptions, "session_resumption_handle")
 	googleCfg.connectOptions = googleRealtimeConnectOptionsFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.toolResponseScheduling = genai.FunctionResponseScheduling(modelOptionString(cfg.RealtimeModelOptions, "tool_response_scheduling"))
+	googleCfg.toolBehavior = genai.Behavior(modelOptionString(cfg.RealtimeModelOptions, "tool_behavior"))
 	return googleCfg
 }
 

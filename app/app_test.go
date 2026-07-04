@@ -15192,6 +15192,32 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeToolResponseSchedulingOptions(
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeToolBehaviorOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "tool_behavior=NON_BLOCKING")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.toolBehavior != genai.BehaviorNonBlocking {
+		t.Fatalf("toolBehavior = %q, want %q", capturedCfg.toolBehavior, genai.BehaviorNonBlocking)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
