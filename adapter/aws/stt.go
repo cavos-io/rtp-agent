@@ -686,6 +686,9 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 		s.pushedSampleRate = frame.SampleRate
 	}
 	s.streamMu.Unlock()
+	if frame == nil {
+		return nil
+	}
 	if stream == nil {
 		return llm.NewAPIConnectionError("AWS Transcribe stream is not initialized")
 	}
