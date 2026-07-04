@@ -548,6 +548,31 @@ func TestAWSSTTStreamReturnsClientError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamRequiresConfiguredClient(t *testing.T) {
+	provider := &AWSSTT{
+		language:   types.LanguageCodeEnUs,
+		sampleRate: 24000,
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Stream panic = %v, want APIConnectionError", r)
+		}
+	}()
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil without client", stream)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "client is not configured") {
+		t.Fatalf("Stream error = %v, want configured-client context", err)
+	}
+}
+
 func TestAWSSTTStreamReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
 	client := &fakeAWSSTTClient{err: context.DeadlineExceeded}
 	provider, err := newAWSSTTWithClient(client)

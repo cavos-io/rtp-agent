@@ -453,11 +453,12 @@ type awsRealtimeSession struct {
 	audioNorm                awsRealtimeInputAudioNormalizer
 	audioMu                  sync.Mutex
 	audioCond                *sync.Cond
-	audioQueue               []string
+	audioQueue               []awsRealtimeAudioInputEvent
 	audioClosed              bool
 	audioCtx                 context.Context
 	audioCancel              context.CancelFunc
 	audioSenderDone          chan struct{}
+	pendingGenerationStart   *awsRealtimePendingGenerationStart
 	mu                       sync.Mutex
 	closed                   bool
 }
@@ -472,6 +473,39 @@ type awsRealtimeGeneration struct {
 	contentTypes map[string]string
 	restarts     int
 	closeOnce    sync.Once
+}
+
+type awsRealtimePendingGenerationStart struct {
+	done chan struct{}
+	err  error
+	once sync.Once
+	mu   sync.Mutex
+}
+
+func newAWSRealtimePendingGenerationStart() *awsRealtimePendingGenerationStart {
+	return &awsRealtimePendingGenerationStart{done: make(chan struct{})}
+}
+
+func (p *awsRealtimePendingGenerationStart) resolve(err error) {
+	if p == nil {
+		return
+	}
+	p.once.Do(func() {
+		p.mu.Lock()
+		p.err = err
+		p.mu.Unlock()
+		close(p.done)
+	})
+}
+
+func (p *awsRealtimePendingGenerationStart) wait() error {
+	if p == nil {
+		return nil
+	}
+	<-p.done
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.err
 }
 
 type awsRealtimeStartOptions struct {
@@ -570,7 +604,11 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 	if err != nil {
 		return err
 	}
-	s.enqueueAudioInputEvent(audioStart)
+	audioStartSent := s.enqueueAudioInputEvent(audioStart)
+	if err := waitAWSRealtimeAudioInputEventStarted(ctx, audioStartSent); err != nil {
+		s.closeStartupStream()
+		return awsRealtimeStartupSendError(err)
+	}
 	if interactiveUserText != "" {
 		if err := s.waitInteractiveTextDelay(ctx); err != nil {
 			s.closeStartupStream()
@@ -944,9 +982,6 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		s.emitGenerationCreated()
 	}
 	s.trackGenerationContentStart(payload)
-	if s.turns != nil {
-		s.turns.feed(payload)
-	}
 	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
@@ -977,14 +1012,14 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			if !s.hasPendingTools() {
 				s.closeGeneration()
 			}
-			return true
-		}
-		if s.shouldStoreProviderUserText(contentID, role) {
-			s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
-		}
-		if s.isProviderAssistantText(contentID) {
-			s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
-			s.sendGenerationText(contentID, textContent)
+		} else {
+			if s.shouldStoreProviderUserText(contentID, role) {
+				s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
+			}
+			if s.isProviderAssistantText(contentID) {
+				s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
+				s.sendGenerationText(contentID, textContent)
+			}
 		}
 	}
 	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
@@ -1009,6 +1044,9 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
 		s.closeGeneration()
 	}
+	if s.turns != nil {
+		s.turns.feed(payload)
+	}
 	return true
 }
 
@@ -1032,6 +1070,7 @@ func (s *awsRealtimeSession) emitGenerationCreatedWithResponseID(responseID stri
 			ResponseID: generation.responseID,
 		},
 	})
+	s.resolvePendingGenerationStart()
 }
 
 func (s *awsRealtimeSession) ensureGenerationWithCreated(responseID string) (*awsRealtimeGeneration, bool) {
@@ -1101,6 +1140,7 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 					ResponseID: generation.responseID,
 				},
 			})
+			s.resolvePendingGenerationStart()
 		}
 	} else {
 		s.mu.Lock()
@@ -1407,7 +1447,17 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			if strings.TrimSpace(msg.TextContent()) == "" {
 				continue
 			}
+			s.mu.Lock()
+			_, alreadySent := s.sent[msg.ID]
+			s.mu.Unlock()
+			var pending *awsRealtimePendingGenerationStart
+			if !alreadySent {
+				pending = s.createPendingGenerationStart()
+			}
 			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
+				if pending != nil {
+					s.clearPendingGenerationStart(pending)
+				}
 				return err
 			}
 			continue
@@ -1483,7 +1533,10 @@ func (s *awsRealtimeSession) isAudioTranscriptMessage(id string) bool {
 func normalizeAWSRealtimeToolResult(content string) string {
 	var parsed any
 	if err := json.Unmarshal([]byte(content), &parsed); err == nil {
-		if _, ok := parsed.(string); !ok {
+		if text, ok := parsed.(string); ok {
+			return text
+		}
+		if parsed != nil {
 			return content
 		}
 	}
@@ -1657,8 +1710,15 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		return nil
 	}
 	if options.Instructions == "" {
-		return nil
+		s.mu.Lock()
+		pending := s.pendingGenerationStart
+		s.mu.Unlock()
+		if pending == nil {
+			return nil
+		}
+		return s.waitForGenerationStart(pending)
 	}
+	pending := s.createPendingGenerationStart()
 	msg := &llm.ChatMessage{
 		ID:      uuid.NewString(),
 		Role:    llm.ChatRoleUser,
@@ -1671,7 +1731,70 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	return s.sendInteractiveUserText(ctx, msg)
+	if err := s.sendInteractiveUserText(ctx, msg); err != nil {
+		s.clearPendingGenerationStart(pending)
+		return err
+	}
+	return s.waitForGenerationStart(pending)
+}
+
+func (s *awsRealtimeSession) createPendingGenerationStart() *awsRealtimePendingGenerationStart {
+	pending := newAWSRealtimePendingGenerationStart()
+	s.mu.Lock()
+	s.pendingGenerationStart = pending
+	s.mu.Unlock()
+	return pending
+}
+
+func (s *awsRealtimeSession) resolvePendingGenerationStart() {
+	s.mu.Lock()
+	pending := s.pendingGenerationStart
+	if pending != nil {
+		s.pendingGenerationStart = nil
+	}
+	s.mu.Unlock()
+	if pending != nil {
+		pending.resolve(nil)
+	}
+}
+
+func (s *awsRealtimeSession) rejectPendingGenerationStart(err error) {
+	s.mu.Lock()
+	pending := s.pendingGenerationStart
+	if pending != nil {
+		s.pendingGenerationStart = nil
+	}
+	s.mu.Unlock()
+	if pending != nil {
+		pending.resolve(err)
+	}
+}
+
+func (s *awsRealtimeSession) clearPendingGenerationStart(pending *awsRealtimePendingGenerationStart) {
+	s.mu.Lock()
+	if s.pendingGenerationStart == pending {
+		s.pendingGenerationStart = nil
+	}
+	s.mu.Unlock()
+}
+
+func (s *awsRealtimeSession) waitForGenerationStart(pending *awsRealtimePendingGenerationStart) error {
+	timeout := time.Duration(0)
+	if s.model != nil {
+		timeout = s.model.generateReplyTimeout
+	}
+	if timeout < 0 {
+		return pending.wait()
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-pending.done:
+		return pending.wait()
+	case <-timer.C:
+		s.clearPendingGenerationStart(pending)
+		return llm.NewRealtimeError("generate_reply timed out waiting for generation", nil)
+	}
 }
 
 func (s *awsRealtimeSession) emitEmptyGenerationCreated(userInitiated bool) {
@@ -1711,6 +1834,7 @@ func (s *awsRealtimeSession) Close() error {
 	}
 	s.mu.Unlock()
 
+	s.rejectPendingGenerationStart(llm.NewRealtimeError("Session closed while waiting for generation", nil))
 	s.closeAudioInputSender()
 	s.closeGeneration()
 	if stream != nil {
@@ -1757,14 +1881,22 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return nil
 }
 
-func (s *awsRealtimeSession) enqueueAudioInputEvent(event string) {
+type awsRealtimeAudioInputEvent struct {
+	event   string
+	started chan struct{}
+}
+
+func (s *awsRealtimeSession) enqueueAudioInputEvent(event string) <-chan struct{} {
+	started := make(chan struct{})
 	s.audioMu.Lock()
 	defer s.audioMu.Unlock()
 	if s.audioClosed {
-		return
+		close(started)
+		return started
 	}
-	s.audioQueue = append(s.audioQueue, event)
+	s.audioQueue = append(s.audioQueue, awsRealtimeAudioInputEvent{event: event, started: started})
 	s.audioCond.Signal()
+	return started
 }
 
 func (s *awsRealtimeSession) runAudioInputSender() {
@@ -1778,19 +1910,33 @@ func (s *awsRealtimeSession) runAudioInputSender() {
 			s.audioMu.Unlock()
 			return
 		}
-		event := s.audioQueue[0]
-		s.audioQueue[0] = ""
+		item := s.audioQueue[0]
+		s.audioQueue[0] = awsRealtimeAudioInputEvent{}
 		s.audioQueue = s.audioQueue[1:]
 		ctx := s.audioCtx
 		s.audioMu.Unlock()
 
 		if ctx.Err() != nil {
+			close(item.started)
 			return
 		}
-		_ = s.sendRawEvent(ctx, event)
+		close(item.started)
+		_ = s.sendRawEvent(ctx, item.event)
 		if ctx.Err() != nil {
 			return
 		}
+	}
+}
+
+func waitAWSRealtimeAudioInputEventStarted(ctx context.Context, started <-chan struct{}) error {
+	if started == nil {
+		return nil
+	}
+	select {
+	case <-started:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -1798,6 +1944,9 @@ func (s *awsRealtimeSession) closeAudioInputSender() {
 	s.audioMu.Lock()
 	if !s.audioClosed {
 		s.audioClosed = true
+		for _, item := range s.audioQueue {
+			close(item.started)
+		}
 		s.audioQueue = nil
 		s.audioCond.Broadcast()
 	}

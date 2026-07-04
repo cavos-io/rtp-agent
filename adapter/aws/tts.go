@@ -363,7 +363,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *awsTTSChunkedStream) open() error {
 	s.lazy = false
 	if s.provider == nil || s.provider.client == nil {
-		return fmt.Errorf("aws polly client is not configured")
+		return llm.NewAPIConnectionError("aws polly client is not configured")
 	}
 	ctx := s.ctx
 	if ctx == nil {

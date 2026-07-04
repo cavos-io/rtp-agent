@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -179,7 +180,7 @@ func (l *AWSLLM) CacheTools() bool {
 
 func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.client == nil {
-		return nil, fmt.Errorf("aws bedrock client is not configured")
+		return nil, llm.NewAPIConnectionError("aws bedrock client is not configured")
 	}
 
 	options := &llm.ChatOptions{}
@@ -244,6 +245,22 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError("")
+		}
+		var responseErr *smithyhttp.ResponseError
+		if errors.As(err, &responseErr) {
+			var requestID string
+			var statusCode int
+			if responseErr.Response != nil && responseErr.Response.Response != nil {
+				statusCode = responseErr.Response.Response.StatusCode
+				requestID = responseErr.Response.Response.Header.Get("x-amzn-requestid")
+			}
+			return nil, llm.NewAPIStatusErrorWithRetryable(
+				fmt.Sprintf("aws bedrock llm: error generating content: %v", err),
+				statusCode,
+				requestID,
+				nil,
+				false,
+			)
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
 	}
