@@ -4468,6 +4468,11 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	if googleCfg.prompt == "" {
 		googleCfg.prompt = modelOptionString(cfg.TTSModelOptions, "prompt")
 	}
+	if googleCfg.sampleRate == nil {
+		if sampleRate, ok := modelOptionIntValue(cfg.TTSModelOptions, "sample_rate"); ok {
+			googleCfg.sampleRate = &sampleRate
+		}
+	}
 	googleCfg.audioEncoding = googleTTSAudioEncodingFromConfig(cfg)
 	switch {
 	case strings.EqualFold(cfg.TTSTextType, "markup"):

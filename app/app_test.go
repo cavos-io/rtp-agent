@@ -13639,6 +13639,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceCloningKeyOption(t *testi
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceSampleRateOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"sample_rate": "16000"},
+	})
+
+	if googleCfg.sampleRate == nil || *googleCfg.sampleRate != 16000 {
+		t.Fatalf("sample rate = %v, want model option sample_rate", googleCfg.sampleRate)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"
