@@ -13949,6 +13949,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferencePunctuateOption(t *testing.T) 
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSpokenPunctuationOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"spoken_punctuation": true},
+	})
+
+	if googleCfg.spokenPunctuation == nil || !*googleCfg.spokenPunctuation {
+		t.Fatalf("spokenPunctuation = %#v, want model option spoken_punctuation true", googleCfg.spokenPunctuation)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"use_streaming": false},
