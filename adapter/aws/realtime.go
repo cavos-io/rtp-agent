@@ -1414,7 +1414,17 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			if strings.TrimSpace(msg.TextContent()) == "" {
 				continue
 			}
+			s.mu.Lock()
+			_, alreadySent := s.sent[msg.ID]
+			s.mu.Unlock()
+			var pending chan struct{}
+			if !alreadySent {
+				pending = s.createPendingGenerationStart()
+			}
 			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
+				if pending != nil {
+					s.clearPendingGenerationStart(pending)
+				}
 				return err
 			}
 			continue
