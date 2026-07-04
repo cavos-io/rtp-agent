@@ -2964,6 +2964,42 @@ func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T)
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplyIgnoresReferencePerResponseTools(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+	sentCount := len(stream.sent)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{
+			Instructions: "ask for the card number",
+			Tools:        []llm.Tool{awsRequestTestTool{}},
+			ToolChoice:   "required",
+		})
+	}()
+	waitAWSRealtimeTextInput(t, stream, "ask for the card number")
+
+	if got := len(stream.sent) - sentCount; got != 3 {
+		t.Fatalf("GenerateReply sent %d provider events, want only reference interactive text triplet", got)
+	}
+	for _, raw := range stream.sent[sentCount:] {
+		event := mustAWSRealtimeJSONEvent(t, raw)
+		if nestedMap(t, event, "event")["promptStart"] != nil {
+			t.Fatalf("GenerateReply sent promptStart with per-response tools: %s", raw)
+		}
+	}
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	if err := <-done; err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyUsesReferenceTimeout(t *testing.T) {
 	stream := &blockingAWSRealtimeStream{fakeAWSRealtimeStream: newFakeAWSRealtimeStream()}
 	provider := NewAWSRealtimeModelWithNovaSonic2(
