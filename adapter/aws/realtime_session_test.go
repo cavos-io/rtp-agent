@@ -728,7 +728,7 @@ func TestAWSRealtimeSessionPushAudioSendErrorDoesNotBlockReferenceInput(t *testi
 		t.Fatalf("Session error = %v", err)
 	}
 	defer session.Close()
-	stream.sendErr = errors.New("bedrock send failed")
+	stream.setSendErr(errors.New("bedrock send failed"))
 
 	err = session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512)))
 
@@ -4405,8 +4405,11 @@ func (s *fakeAWSRealtimeStream) emitJSON(raw string) {
 }
 
 func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeModelWithBidirectionalStreamInput) error {
-	if s.sendErr != nil {
-		return s.sendErr
+	s.mu.Lock()
+	sendErr := s.sendErr
+	s.mu.Unlock()
+	if sendErr != nil {
+		return sendErr
 	}
 	chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk)
 	if !ok {
@@ -4427,6 +4430,12 @@ func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeMod
 	s.sent = append(s.sent, string(chunk.Value.Bytes))
 	s.sentAt = append(s.sentAt, time.Now())
 	return nil
+}
+
+func (s *fakeAWSRealtimeStream) setSendErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sendErr = err
 }
 
 func (s *fakeAWSRealtimeStream) snapshotSent() []string {
