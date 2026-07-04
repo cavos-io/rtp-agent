@@ -1040,8 +1040,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if awsRealtimeNestedMap(payload, "event", "completionEnd") != nil {
 		s.closeGeneration()
 	}
-	if awsRealtimeNestedString(payload, "event", "contentEnd", "type") == "AUDIO" &&
-		awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
+	if awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
 		s.closeGeneration()
 	}
 	if s.turns != nil {
@@ -1714,7 +1713,7 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		pending := s.pendingGenerationStart
 		s.mu.Unlock()
 		if pending == nil {
-			return nil
+			return s.waitForMissingGenerationStart()
 		}
 		return s.waitForGenerationStart(pending)
 	}
@@ -1795,6 +1794,19 @@ func (s *awsRealtimeSession) waitForGenerationStart(pending *awsRealtimePendingG
 		s.clearPendingGenerationStart(pending)
 		return llm.NewRealtimeError("generate_reply timed out waiting for generation", nil)
 	}
+}
+
+func (s *awsRealtimeSession) waitForMissingGenerationStart() error {
+	timeout := time.Duration(0)
+	if s.model != nil {
+		timeout = s.model.generateReplyTimeout
+	}
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		<-timer.C
+	}
+	return llm.NewRealtimeError("generate_reply timed out waiting for generation", nil)
 }
 
 func (s *awsRealtimeSession) emitEmptyGenerationCreated(userInitiated bool) {

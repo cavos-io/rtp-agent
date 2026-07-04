@@ -502,6 +502,36 @@ func TestAWSLLMStreamDropsReferenceToolUseWithoutName(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamRejectsReferenceToolDeltaWithoutStart(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberToolUse{
+				Value: awstypes.ToolUseBlockDelta{Input: awsString(`{"query":"weather"}`)},
+			},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil for malformed tool delta", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
+	}
+}
+
 func TestAWSLLMStreamChunksCarryReferenceRequestID(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
@@ -868,6 +898,40 @@ func TestBuildAWSMessagesIncludesInlineImageBlocks(t *testing.T) {
 	source, ok := imageBlock.Value.Source.(*awstypes.ImageSourceMemberBytes)
 	if !ok || !reflect.DeepEqual(source.Value, []byte("webp-bytes")) {
 		t.Fatalf("image source = %#v, want bytes", imageBlock.Value.Source)
+	}
+}
+
+func TestAWSLLMChatRejectsReferenceExternalImage(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{
+			err:          errors.New("bedrock should not be called"),
+			inputCapture: &captured,
+		},
+		model: defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{
+			ID:   "user",
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: "describe"},
+				{Image: &llm.ImageContent{Image: "https://example.test/image.png"}},
+			},
+		},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil for external image", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "external_url is not supported by AWS Bedrock") {
+		t.Fatalf("Chat error = %v, want reference external_url unsupported error", err)
+	}
+	if captured != nil {
+		t.Fatalf("ConverseStream input = %#v, want no provider call for unsupported external image", captured)
 	}
 }
 

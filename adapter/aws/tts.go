@@ -275,6 +275,7 @@ func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type awsTTSChunkedStream struct {
+	mu           sync.Mutex
 	ctx          context.Context
 	cancel       context.CancelFunc
 	text         string
@@ -293,12 +294,12 @@ type awsTTSChunkedStream struct {
 }
 
 func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.closed {
+	if s.isClosed() {
 		return nil, io.EOF
 	}
 	if s.lazy {
 		if err := s.open(); err != nil {
-			if s.closed {
+			if s.isClosed() {
 				return nil, io.EOF
 			}
 			_ = s.Close()
@@ -318,6 +319,10 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		first, firstErr := readAWSTTSChunk(s.stream)
 		if len(first) == 0 && firstErr == io.EOF {
 			_ = s.decoder.Close()
+			if strings.TrimSpace(s.text) != "" {
+				_ = s.Close()
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+			}
 			s.finalSent = true
 			return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 		}
@@ -377,8 +382,17 @@ func (s *awsTTSChunkedStream) open() error {
 		return llm.NewAPIConnectionError(err.Error())
 	}
 	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		if out.AudioStream != nil {
+			_ = out.AudioStream.Close()
+		}
+		return io.EOF
+	}
 	s.stream = out.AudioStream
 	s.requestID = requestID
+	s.mu.Unlock()
 	return nil
 }
 
@@ -492,6 +506,11 @@ func downmixAWSTTSFrameToMono(frame *model.AudioFrame) *model.AudioFrame {
 }
 
 func (s *awsTTSChunkedStream) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
 	s.closed = true
 	s.lazy = false
 	if s.cancel != nil {
@@ -500,17 +519,21 @@ func (s *awsTTSChunkedStream) Close() error {
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}
-	if s.stream == nil {
-		if s.provider != nil {
-			s.provider.unregisterStream(s)
-		}
-		return nil
-	}
 	stream := s.stream
 	s.stream = nil
-	_ = stream.Close()
+	s.mu.Unlock()
+
+	if stream != nil {
+		_ = stream.Close()
+	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
 	}
 	return nil
+}
+
+func (s *awsTTSChunkedStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
