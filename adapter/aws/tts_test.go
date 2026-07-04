@@ -726,6 +726,29 @@ func TestAWSTTSChunkedStreamCloseSuppressesBodyCloseError(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
+	body := &countingAWSReadCloser{}
+	provider := newAWSTTSWithClient(nil, "")
+	stream := &awsTTSChunkedStream{
+		stream:   body,
+		provider: provider,
+	}
+	provider.registerStream(stream)
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close error = %v, want nil", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v, want nil", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want one close across repeated cleanup", body.closed)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("registered streams = %d, want stream unregistered once", len(provider.streams))
+	}
+}
+
 func TestAWSTTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 	if err := provider.Close(); err != nil {
