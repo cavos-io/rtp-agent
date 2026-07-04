@@ -2504,6 +2504,142 @@ func TestAgentActivityEOUDelayAnchorsToLastSpeechTime(t *testing.T) {
 	}
 }
 
+func TestComputeEndOfTurnDelay(t *testing.T) {
+	ptr := func(v float64) *float64 { return &v }
+
+	tests := []struct {
+		name    string
+		started *float64
+		stopped *float64
+		now     float64
+		want    float64
+	}{
+		{
+			name:    "gap between last speech and now",
+			started: ptr(100.0),
+			stopped: ptr(100.5),
+			now:     101.0,
+			want:    0.5,
+		},
+		{
+			name:    "clamps negative delay to zero",
+			started: ptr(100.0),
+			stopped: ptr(101.0),
+			now:     100.8,
+			want:    0,
+		},
+		{
+			name:    "stale anchor (stopped before started) yields zero",
+			started: ptr(100.5),
+			stopped: ptr(100.0),
+			now:     101.0,
+			want:    0,
+		},
+		{
+			name:    "missing stop anchor yields zero",
+			started: ptr(100.0),
+			stopped: nil,
+			now:     101.0,
+			want:    0,
+		},
+		{
+			name:    "missing start anchor yields zero",
+			started: nil,
+			stopped: ptr(100.5),
+			now:     101.0,
+			want:    0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := computeEndOfTurnDelay(tc.started, tc.stopped, tc.now)
+			if got != tc.want {
+				t.Fatalf("computeEndOfTurnDelay(%v, %v, %v) = %v, want %v",
+					tc.started, tc.stopped, tc.now, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentActivityCompleteUserTurnFallsBackToTranscriptTimeForEOUDelay(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	started := timeToUnixSeconds(time.Now().Add(-2 * time.Second))
+	activity.lastFinalTranscriptTime = time.Now().Add(-500 * time.Millisecond)
+
+	_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		NewTranscript:        "no stop anchor",
+		TranscriptConfidence: 0.9,
+		StartedSpeakingAt:    &started,
+	})
+	if err != nil {
+		t.Fatalf("completeUserTurn error = %v, want nil", err)
+	}
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		metrics, ok := ev.Metrics.(*telemetry.EOUMetrics)
+		if !ok {
+			t.Fatalf("metrics = %T, want *telemetry.EOUMetrics", ev.Metrics)
+		}
+		if metrics.EndOfUtteranceDelay < 0.4 || metrics.EndOfUtteranceDelay > 1.0 {
+			t.Fatalf("EndOfUtteranceDelay = %v, want ~0.5 from final-transcript-time fallback",
+				metrics.EndOfUtteranceDelay)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("MetricsCollectedEvents did not receive EOU metrics")
+	}
+}
+
+func TestAgentActivityRunEOUDetectionRecordsEndOfUtteranceDelay(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeSTT
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{MinEndpointingDelay: 0.01})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+	defer activity.Stop()
+
+	metricsCh := session.MetricsCollectedEvents()
+
+	now := timeToUnixSeconds(time.Now())
+	started := now - 1.0
+	stopped := now - 0.2
+
+	activity.runEOUDetection(EndOfTurnInfo{
+		NewTranscript:        "already ended",
+		TranscriptConfidence: 0.9,
+		StartedSpeakingAt:    &started,
+		StoppedSpeakingAt:    &stopped,
+	})
+
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case ev := <-metricsCh:
+			eou, ok := ev.Metrics.(*telemetry.EOUMetrics)
+			if !ok {
+				continue
+			}
+			if eou.EndOfUtteranceDelay < 0.15 {
+				t.Fatalf("EOUMetrics EndOfUtteranceDelay = %v, want >= ~0.2 measured from StoppedSpeakingAt",
+					eou.EndOfUtteranceDelay)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no EOUMetrics with a computed EndOfUtteranceDelay was emitted")
+		}
+	}
+}
+
 func TestAgentActivityPendingFinalUsesVADAdjustedSpeechEndTime(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -4956,6 +5092,43 @@ func TestAgentActivityCompleteUserTurnAddsMetricsToGeneratedUserMessage(t *testi
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("completeUserTurn did not generate a reply")
+	}
+}
+
+func TestAgentActivityCompleteUserTurnComputesEOUDelayFromAnchorsWhenUnset(t *testing.T) {
+	agent := NewAgent("test")
+	agent.TurnDetection = TurnDetectionModeManual
+	agent.LLM = &fakeGenerationLLM{stream: &fakeGenerationLLMStream{}}
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	activity := NewAgentActivity(agent, session)
+	agent.activity = activity
+	session.activity = activity
+
+	base := timeToUnixSeconds(time.Now())
+	started := base - 1.5
+	stopped := base - 0.5
+	_, err := activity.completeUserTurn(context.Background(), EndOfTurnInfo{
+		NewTranscript:        "anchored turn",
+		TranscriptConfidence: 0.9,
+		StartedSpeakingAt:    &started,
+		StoppedSpeakingAt:    &stopped,
+	})
+	if err != nil {
+		t.Fatalf("completeUserTurn error = %v, want nil", err)
+	}
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		metrics, ok := ev.Metrics.(*telemetry.EOUMetrics)
+		if !ok {
+			t.Fatalf("metrics = %T, want *telemetry.EOUMetrics", ev.Metrics)
+		}
+		if metrics.EndOfUtteranceDelay < 0.5 || metrics.EndOfUtteranceDelay > 1.0 {
+			t.Fatalf("EOUMetrics EndOfUtteranceDelay = %v, want ~0.5 derived from speaking anchors",
+				metrics.EndOfUtteranceDelay)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("MetricsCollectedEvents did not receive EOU metrics")
 	}
 }
 

@@ -1574,8 +1574,15 @@ func (va *PipelineAgent) precomputeLLMGeneration(ctx context.Context, session *A
 }
 
 func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGenerationData) {
-	if session == nil || genData == nil || genData.Usage == nil {
+	if session == nil || genData == nil {
 		return
+	}
+	var completionTokens, promptTokens, promptCachedTokens, totalTokens int
+	if genData.Usage != nil {
+		completionTokens = genData.Usage.CompletionTokens
+		promptTokens = genData.Usage.PromptTokens
+		promptCachedTokens = llmCachedPromptTokens(genData.Usage)
+		totalTokens = genData.Usage.TotalTokens
 	}
 	metrics := &telemetry.LLMMetrics{
 		Label:              llm.Label(va.LLM),
@@ -1583,10 +1590,10 @@ func (va *PipelineAgent) emitLLMMetrics(session *AgentSession, genData *LLMGener
 		Timestamp:          time.Now(),
 		Duration:           genData.Duration.Seconds(),
 		TTFT:               genData.TTFT.Seconds(),
-		CompletionTokens:   genData.Usage.CompletionTokens,
-		PromptTokens:       genData.Usage.PromptTokens,
-		PromptCachedTokens: llmCachedPromptTokens(genData.Usage),
-		TotalTokens:        genData.Usage.TotalTokens,
+		CompletionTokens:   completionTokens,
+		PromptTokens:       promptTokens,
+		PromptCachedTokens: promptCachedTokens,
+		TotalTokens:        totalTokens,
 		Metadata: &telemetry.Metadata{
 			ModelName:     llm.Model(va.LLM),
 			ModelProvider: llm.Provider(va.LLM),

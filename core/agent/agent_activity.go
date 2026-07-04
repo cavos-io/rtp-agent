@@ -2211,6 +2211,16 @@ func (a *AgentActivity) finalTranscriptTiming(ev *stt.SpeechEvent) (*float64, *f
 	return &started, &stopped, transcriptionDelay
 }
 
+func computeEndOfTurnDelay(startedSpeakingAt, stoppedSpeakingAt *float64, now float64) float64 {
+	if startedSpeakingAt == nil || stoppedSpeakingAt == nil {
+		return 0
+	}
+	if *stoppedSpeakingAt < *startedSpeakingAt {
+		return 0
+	}
+	return max(now-*stoppedSpeakingAt, 0)
+}
+
 func (a *AgentActivity) RecordUserAudioFrame(frame *model.AudioFrame) {
 	if a == nil || frame == nil {
 		return
@@ -2750,6 +2760,24 @@ func (a *AgentActivity) completeUserTurn(ctx context.Context, info EndOfTurnInfo
 	turnSeq := a.nextUserTurnCompletionSeq()
 	a.userTurnCompletionMu.Lock()
 	defer a.userTurnCompletionMu.Unlock()
+	if info.StoppedSpeakingAt == nil {
+		a.userTurnMu.Lock()
+		if !a.userSpeechStoppedAt.IsZero() {
+			stopped := timeToUnixSeconds(a.userSpeechStoppedAt)
+			info.StoppedSpeakingAt = &stopped
+		} else if !a.lastFinalTranscriptTime.IsZero() {
+			stopped := timeToUnixSeconds(a.lastFinalTranscriptTime)
+			info.StoppedSpeakingAt = &stopped
+		}
+		a.userTurnMu.Unlock()
+	}
+	if info.EndOfTurnDelay == 0 {
+		info.EndOfTurnDelay = computeEndOfTurnDelay(
+			info.StartedSpeakingAt,
+			info.StoppedSpeakingAt,
+			timeToUnixSeconds(time.Now()),
+		)
+	}
 
 	if rejectsZeroConfidenceTranscript(info.NewTranscript, info.TranscriptConfidence) {
 		a.cancelPreemptiveGeneration()
@@ -3509,6 +3537,11 @@ func (a *AgentActivity) runEOUDetection(info EndOfTurnInfo) {
 				a.cancelPreemptiveGeneration()
 				return
 			}
+			info.EndOfTurnDelay = computeEndOfTurnDelay(
+				info.StartedSpeakingAt,
+				info.StoppedSpeakingAt,
+				timeToUnixSeconds(time.Now()),
+			)
 			a.clearPendingUserTurn()
 			if _, err := a.completeUserTurn(a.ctx, info); err != nil {
 				logger.Logger.Errorw("user turn completion failed", err)

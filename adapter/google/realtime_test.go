@@ -2140,6 +2140,50 @@ func TestGoogleRealtimeSessionUpdateChatContextAppendsReferenceTurns(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateChatContextToolFailureKeepsReferenceDiff(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages:      make(chan *genai.LiveServerMessage, 1),
+		sendToolResponseErr: errors.New("tool response failed"),
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.FunctionCall{ID: "call-item", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "output-item", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+	err = session.UpdateChatContext(chatCtx)
+	if err == nil || !strings.Contains(err.Error(), "tool response failed") {
+		t.Fatalf("UpdateChatContext error = %v, want tool response failed", err)
+	}
+
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected after tool response failure", reconnected)
+	}
+
+	if err := session.UpdateChatContext(chatCtx); err != nil {
+		t.Fatalf("retry UpdateChatContext error = %v", err)
+	}
+	if len(secondSession.toolResponses) != 1 {
+		t.Fatalf("second session tool responses = %d, want retried missed tool response", len(secondSession.toolResponses))
+	}
+	responses := secondSession.toolResponses[0].FunctionResponses
+	if len(responses) != 1 || responses[0].ID != "call_weather" || responses[0].Name != "weather" || responses[0].Response["output"] != "sunny" {
+		t.Fatalf("retry tool responses = %#v, want weather sunny", responses)
+	}
+}
+
 func TestGoogleRealtimeSessionUpdateChatContextSendsReferenceToolResponse(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key",

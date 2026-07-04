@@ -141,6 +141,7 @@ type appGoogleTTSConfig struct {
 	audioEncoding        *texttospeechpb.AudioEncoding
 	effectsProfileID     string
 	volumeGainDB         float64
+	volumeGainDBSet      bool
 	streaming            *bool
 	ssml                 *bool
 	markup               *bool
@@ -440,7 +441,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.effectsProfileID != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSEffectsProfileID(cfg.effectsProfileID))
 	}
-	if cfg.volumeGainDB != 0 {
+	if cfg.volumeGainDBSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVolumeGainDB(cfg.volumeGainDB))
 	}
 	if cfg.streaming != nil {
@@ -4615,6 +4616,7 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg.effectsProfileID = modelOptionString(cfg.TTSModelOptions, "effects_profile_id")
 	if volumeGainDB := modelOptionFloat(cfg.TTSModelOptions, "volume_gain_db"); volumeGainDB != nil {
 		googleCfg.volumeGainDB = *volumeGainDB
+		googleCfg.volumeGainDBSet = true
 	}
 	googleCfg.customPronunciations = googleTTSCustomPronunciationsFromOptions(cfg.TTSModelOptions)
 	return googleCfg

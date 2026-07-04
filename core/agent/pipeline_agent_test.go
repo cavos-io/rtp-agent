@@ -3747,6 +3747,51 @@ func TestPipelineAgentEmitsLLMMetricsForUsageChunk(t *testing.T) {
 	}
 }
 
+func TestPipelineAgentEmitsLLMMetricsWithoutUsageChunk(t *testing.T) {
+	session := NewAgentSession(NewAgent("test"), nil, AgentSessionOptions{})
+	l := &fakeGenerationLLM{
+		model:    "test-model",
+		provider: "test-provider",
+		stream: &fakeGenerationLLMStream{
+			chunks: []*llm.ChatChunk{
+				{
+					ID: "chatcmpl_no_usage",
+					Delta: &llm.ChoiceDelta{
+						Content: "hello",
+					},
+				},
+			},
+		},
+	}
+	agent := NewPipelineAgent(nil, nil, l, &fakePipelineTTS{}, llm.NewChatContext())
+	agent.session = session
+	agent.ctx = context.Background()
+
+	agent.generateReply()
+
+	select {
+	case ev := <-session.MetricsCollectedEvents():
+		metrics, ok := ev.Metrics.(*telemetry.LLMMetrics)
+		if !ok {
+			t.Fatalf("Metrics = %T, want *telemetry.LLMMetrics", ev.Metrics)
+		}
+		if metrics.RequestID != "chatcmpl_no_usage" {
+			t.Fatalf("RequestID = %q, want chatcmpl_no_usage", metrics.RequestID)
+		}
+		if metrics.Duration < 0 || metrics.TTFT < 0 {
+			t.Fatalf("duration/ttft = %v/%v, want both >= 0", metrics.Duration, metrics.TTFT)
+		}
+		if metrics.PromptTokens != 0 || metrics.CompletionTokens != 0 || metrics.TotalTokens != 0 {
+			t.Fatalf("token metrics = %#v, want all zero when usage absent", metrics)
+		}
+		if metrics.TokensPerSecond != 0 {
+			t.Fatalf("tokens_per_second = %v, want 0 when usage absent", metrics.TokensPerSecond)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MetricsCollectedEvents did not receive LLM metrics without a usage chunk")
+	}
+}
+
 func TestPipelineAgentReturnsToThinkingWhileExecutingTools(t *testing.T) {
 	chatCtx := llm.NewChatContext()
 	l := &fakeGenerationLLM{
