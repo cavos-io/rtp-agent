@@ -471,23 +471,27 @@ func TestAWSRealtimeSessionUpdateToolsRecycleKeepsBufferedInputTail(t *testing.T
 		t.Fatalf("start error = %v", err)
 	}
 
-	sentBeforeAudio := len(first.sent)
+	firstSent := first.snapshotSent()
+	sentBeforeAudio := len(firstSent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
 		t.Fatalf("PushAudio first tail error = %v", err)
 	}
-	if got := countAWSRealtimeAudioInputs(t, first.sent[sentBeforeAudio:]); got != 0 {
+	firstSent = first.snapshotSent()
+	if got := countAWSRealtimeAudioInputs(t, firstSent[sentBeforeAudio:]); got != 0 {
 		t.Fatalf("audioInput events before recycle = %d, want none for buffered tail", got)
 	}
 
 	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
 		t.Fatalf("UpdateTools active error = %v", err)
 	}
-	if got := countAWSRealtimeAudioInputs(t, first.sent[sentBeforeAudio:]); got != 0 {
+	firstSent = first.snapshotSent()
+	if got := countAWSRealtimeAudioInputs(t, firstSent[sentBeforeAudio:]); got != 0 {
 		t.Fatalf("old stream audioInput events during recycle = %d, want buffered tail kept", got)
 	}
 	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 
-	sentSecondBeforeAudio := len(second.sent)
+	secondSent := second.snapshotSent()
+	sentSecondBeforeAudio := len(secondSent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
 		t.Fatalf("PushAudio second tail error = %v", err)
 	}
@@ -4257,7 +4261,8 @@ func waitAWSRealtimeAudioInputPayloads(t *testing.T, stream *fakeAWSRealtimeStre
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
-		payloads := collectAWSRealtimeAudioInputPayloads(t, stream.sent[start:])
+		sent := stream.snapshotSent()
+		payloads := collectAWSRealtimeAudioInputPayloads(t, sent[start:])
 		if len(payloads) >= want {
 			return payloads
 		}
