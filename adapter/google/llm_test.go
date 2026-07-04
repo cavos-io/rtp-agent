@@ -1174,6 +1174,30 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceModelArmorConfigExtra(t
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceModelArmorConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"model_armor_config": map[string]any{
+				"prompt_template_name":    "projects/p/locations/us/templates/prompt",
+				"responseTemplateName":    "projects/p/locations/us/templates/response",
+				"ignored_reference_field": "ignored",
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ModelArmorConfig == nil {
+		t.Fatal("ModelArmorConfig = nil, want dict-derived model armor config")
+	}
+	if config.ModelArmorConfig.PromptTemplateName != "projects/p/locations/us/templates/prompt" {
+		t.Fatalf("PromptTemplateName = %q, want prompt template", config.ModelArmorConfig.PromptTemplateName)
+	}
+	if config.ModelArmorConfig.ResponseTemplateName != "projects/p/locations/us/templates/response" {
+		t.Fatalf("ResponseTemplateName = %q, want response template", config.ModelArmorConfig.ResponseTemplateName)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceEnhancedCivicAnswersExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{

@@ -682,8 +682,27 @@ func googleLabelsParam(value any) (map[string]string, bool) {
 }
 
 func googleModelArmorConfigParam(value any) (*genai.ModelArmorConfig, bool) {
-	config, ok := value.(*genai.ModelArmorConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.ModelArmorConfig:
+		return config, config != nil
+	case genai.ModelArmorConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.ModelArmorConfig{}
+		if name := googleStringParam(config["prompt_template_name"]); name != "" {
+			result.PromptTemplateName = name
+		} else if name := googleStringParam(config["promptTemplateName"]); name != "" {
+			result.PromptTemplateName = name
+		}
+		if name := googleStringParam(config["response_template_name"]); name != "" {
+			result.ResponseTemplateName = name
+		} else if name := googleStringParam(config["responseTemplateName"]); name != "" {
+			result.ResponseTemplateName = name
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleImageConfigParam(value any) (*genai.ImageConfig, bool) {
