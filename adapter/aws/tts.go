@@ -383,6 +383,14 @@ func (s *awsTTSChunkedStream) open() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var timeoutCancel context.CancelFunc
+	if _, ok := ctx.Deadline(); !ok {
+		timeout := llm.DefaultAPIConnectOptions().Timeout
+		if timeout > 0 {
+			ctx, timeoutCancel = context.WithTimeout(ctx, timeout)
+			defer timeoutCancel()
+		}
+	}
 	out, err := s.provider.client.SynthesizeSpeech(ctx, buildAWSSynthesizeSpeechInputFromOptions(s.options, s.text))
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

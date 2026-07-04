@@ -237,6 +237,56 @@ func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestAWSTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read reference mp3: %v", err)
+	}
+	var hasDeadline bool
+	var remaining time.Duration
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			hasDeadline = ok
+			if ok {
+				remaining = time.Until(deadline)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type":     []string{"audio/mpeg"},
+					"X-Amzn-Requestid": []string{"timeout-polly-request"},
+					"Content-Length":   []string{fmt.Sprintf("%d", len(mp3Data))},
+				},
+				Body: io.NopCloser(bytes.NewReader(mp3Data)),
+			}, nil
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want AWS reference connect timeout")
+	}
+	if remaining <= 0 || remaining > llm.DefaultAPIConnectOptions().Timeout {
+		t.Fatalf("request context deadline remaining = %v, want bounded by AWS reference 10s timeout", remaining)
+	}
+}
+
 func TestAWSTTSLazySynthesizeSnapshotsReferenceOptions(t *testing.T) {
 	var requestBody string
 	client := polly.New(polly.Options{
