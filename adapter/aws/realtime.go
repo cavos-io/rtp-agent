@@ -981,6 +981,12 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
 		s.emitGenerationCreated()
 	}
+	if contentStart := awsRealtimeNestedMap(payload, "event", "contentStart"); contentStart != nil {
+		if _, ok := awsRealtimeRequiredMapString(contentStart, "contentId"); !ok {
+			s.handleMalformedContentStart(contentStart)
+			return true
+		}
+	}
 	s.trackGenerationContentStart(payload)
 	if audioOutput := awsRealtimeNestedMap(payload, "event", "audioOutput"); audioOutput != nil {
 		audioContent := awsRealtimeMapString(audioOutput, "content")
@@ -1052,6 +1058,16 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		s.turns.feed(payload)
 	}
 	return true
+}
+
+func (s *awsRealtimeSession) handleMalformedContentStart(contentStart map[string]any) {
+	contentType := awsRealtimeMapString(contentStart, "type")
+	role := awsRealtimeMapString(contentStart, "role")
+	additionalFields := awsRealtimeMapString(contentStart, "additionalModelFields")
+	if contentType == "TOOL" ||
+		(role == "ASSISTANT" && contentType == "TEXT" && strings.Contains(additionalFields, "SPECULATIVE")) {
+		s.emitGenerationCreated()
+	}
 }
 
 func (s *awsRealtimeSession) hasPendingTools() bool {
