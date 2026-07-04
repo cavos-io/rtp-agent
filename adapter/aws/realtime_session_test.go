@@ -2364,6 +2364,32 @@ func TestAWSRealtimeSessionKeepsReferenceStringPrimitiveToolArguments(t *testing
 	}
 }
 
+func TestAWSRealtimeSessionKeepsReferenceInvalidJSONToolArguments(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-invalid","toolName":"lookup","content":"not-valid-json"}}}`)
+
+	var call *llm.FunctionCall
+	select {
+	case call = <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
+	if call.Arguments != "not-valid-json" {
+		t.Fatalf("arguments = %q, want reference invalid JSON string preserved", call.Arguments)
+	}
+}
+
 func TestAWSRealtimeSessionIgnoresReferenceToolUseWithoutGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
