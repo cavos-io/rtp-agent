@@ -87,6 +87,28 @@ func TestAWSRealtimeEventBuilderCreatesReferencePromptStartBlock(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeEventBuilderOmitsReferenceInteractiveFalse(t *testing.T) {
+	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
+
+	nonInteractive, err := builder.createTextContentStartEvent("content-1", "USER", false)
+	if err != nil {
+		t.Fatalf("createTextContentStartEvent error = %v", err)
+	}
+	start := nestedMap(t, mustAWSRealtimeJSONEvent(t, nonInteractive), "event", "contentStart")
+	if _, ok := start["interactive"]; ok {
+		t.Fatalf("non-interactive contentStart interactive = %#v, want field omitted like reference", start["interactive"])
+	}
+
+	interactive, err := builder.createTextContentStartEvent("content-2", "USER", true)
+	if err != nil {
+		t.Fatalf("createTextContentStartEvent interactive error = %v", err)
+	}
+	start = nestedMap(t, mustAWSRealtimeJSONEvent(t, interactive), "event", "contentStart")
+	if got := start["interactive"]; got != true {
+		t.Fatalf("interactive contentStart interactive = %#v, want true", got)
+	}
+}
+
 func TestAWSRealtimeToolChoiceMatchesReferenceAdapter(t *testing.T) {
 	tests := []struct {
 		name string
