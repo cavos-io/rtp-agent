@@ -677,12 +677,14 @@ func TestAWSRealtimeSessionDoesNotReplaySeededUserHistory(t *testing.T) {
 	}
 	defer session.Close()
 
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.UpdateChatContext(ctx); err != nil {
 		t.Fatalf("UpdateChatContext after start error = %v", err)
 	}
-	if len(stream.sent) != sentCount {
-		t.Fatalf("seeded history replay sent %d new events, want none", len(stream.sent)-sentCount)
+	sent = stream.snapshotSent()
+	if len(sent) != sentCount {
+		t.Fatalf("seeded history replay sent %d new events, want none", len(sent)-sentCount)
 	}
 }
 
