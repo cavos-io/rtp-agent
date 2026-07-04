@@ -2728,9 +2728,11 @@ func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T)
 	defer session.Close()
 	waitAWSRealtimeAudioContentStart(t, stream, 0)
 
-	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask for the card number"}); err != nil {
-		t.Fatalf("GenerateReply error = %v", err)
-	}
+	done := make(chan error, 1)
+	go func() {
+		done <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask for the card number"})
+	}()
+	waitAWSRealtimeTextInput(t, stream, "ask for the card number")
 
 	textEvents := stream.sent[len(stream.sent)-3:]
 	start := mustAWSRealtimeJSONEvent(t, textEvents[0])
@@ -2748,6 +2750,10 @@ func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T)
 	}
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, textEvents[2]), "event", "contentEnd", "contentName"); got == "" {
 		t.Fatal("contentEnd contentName empty")
+	}
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	if err := <-done; err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
 	}
 }
 
@@ -2772,6 +2778,41 @@ func TestAWSRealtimeSessionGenerateReplyUsesReferenceTimeout(t *testing.T) {
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("GenerateReply error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestAWSRealtimeSessionGenerateReplyWaitsForReferenceGenerationStart(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(
+		WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}),
+		WithAWSRealtimeGenerateReplyTimeout(time.Second),
+	)
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask for the card number"})
+	}()
+	waitAWSRealtimeTextInput(t, stream, "ask for the card number")
+
+	select {
+	case err := <-done:
+		t.Fatalf("GenerateReply returned before generation start: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	if err := <-done; err != nil {
+		t.Fatalf("GenerateReply error after generation start = %v", err)
+	}
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want reference generation event")
 	}
 }
 
@@ -3013,6 +3054,26 @@ func waitAWSRealtimeAudioContentStart(t *testing.T, stream *fakeAWSRealtimeStrea
 		select {
 		case <-deadline:
 			t.Fatal("audio contentStart not sent")
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitAWSRealtimeTextInput(t *testing.T, stream *fakeAWSRealtimeStream, content string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		for _, raw := range stream.sent {
+			event := mustAWSRealtimeJSONEvent(t, raw)
+			if awsRealtimeNestedString(event, "event", "textInput", "content") == content {
+				return
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("text input %q not sent", content)
 		case <-ticker.C:
 		}
 	}
