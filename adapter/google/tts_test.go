@@ -532,18 +532,13 @@ func TestGoogleTTSStreamErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
 	}
 }
 
-func TestGoogleTTSStreamSynthesizesSecondSegmentLikeReference(t *testing.T) {
+func TestGoogleTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	firstStream := &fakeGoogleTTSStream{
 		responses: []*texttospeech.StreamingSynthesizeResponse{{
 			AudioContent: []byte{1, 2, 3, 4},
 		}},
 	}
-	secondStream := &fakeGoogleTTSStream{
-		responses: []*texttospeech.StreamingSynthesizeResponse{{
-			AudioContent: []byte{5, 6, 7, 8},
-		}},
-	}
-	client := &fakeGoogleTTSClient{streams: []*fakeGoogleTTSStream{firstStream, secondStream}}
+	client := &fakeGoogleTTSClient{streams: []*fakeGoogleTTSStream{firstStream}}
 	provider := newGoogleTTSWithClient(client)
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
@@ -573,6 +568,16 @@ func TestGoogleTTSStreamSynthesizesSecondSegmentLikeReference(t *testing.T) {
 	if client.streamCalls != 1 || len(firstStream.sent) != 2 {
 		t.Fatalf("first segment calls = %d sent=%d, want one stream with config and input", client.streamCalls, len(firstStream.sent))
 	}
+	if firstStream.sent[0].GetStreamingConfig() == nil {
+		t.Fatal("first request missing streaming config")
+	}
+	firstInput := firstStream.sent[1].GetInput()
+	if firstInput == nil {
+		t.Fatal("first input request missing input")
+	}
+	if got := firstInput.GetText(); got != "first" {
+		t.Fatalf("first input text = %q, want first", got)
+	}
 
 	if err := stream.PushText("second"); err != nil {
 		t.Fatalf("PushText second returned error: %v", err)
@@ -580,41 +585,48 @@ func TestGoogleTTSStreamSynthesizesSecondSegmentLikeReference(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush second returned error: %v", err)
 	}
-	if client.streamCalls != 2 {
-		t.Fatalf("stream calls after second segment = %d, want second provider segment", client.streamCalls)
+	if client.streamCalls != 1 {
+		t.Fatalf("stream calls after ignored second segment = %d, want still one", client.streamCalls)
 	}
-	if len(secondStream.sent) != 2 {
-		t.Fatalf("second stream sent requests = %d, want config and input", len(secondStream.sent))
+	if len(firstStream.sent) != 2 {
+		t.Fatalf("first stream sent requests after ignored second segment = %d, want still config and first input only", len(firstStream.sent))
 	}
-	if !secondStream.closed {
-		t.Fatal("second stream closed = false after second Flush")
+	if got := firstStream.sent[1].GetInput().GetText(); got != "first" {
+		t.Fatalf("first stream text after ignored second segment = %q, want first", got)
 	}
-	secondAudio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("second Next audio error = %v", err)
-	}
-	if secondAudio == nil || secondAudio.Frame == nil || !bytes.Equal(secondAudio.Frame.Data, []byte{5, 6, 7, 8}) {
-		t.Fatalf("second Next audio = %+v, want second segment audio", secondAudio)
-	}
-	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
-		t.Fatalf("second final = (%+v, %v), want final marker", final, err)
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after ignored second segment")
 	}
 	googleStream := stream.(*googleTTSSynthesizeStream)
 	googleStream.mu.Lock()
 	buffered := googleStream.buffer.String()
 	flushed := googleStream.flushed
+	active := googleStream.active
+	streams := len(googleStream.streams)
 	googleStream.mu.Unlock()
 	if buffered != "" {
 		t.Fatalf("buffer after second segment = %q, want empty", buffered)
 	}
-	if flushed != 2 {
-		t.Fatalf("flush count after second segment = %d, want two provider segments", flushed)
+	if flushed != 1 {
+		t.Fatalf("flush count after ignored second segment = %d, want one provider segment", flushed)
+	}
+	if active != nil {
+		t.Fatal("active stream after ignored second segment = non-nil, want nil")
+	}
+	if streams != 0 {
+		t.Fatalf("queued streams after ignored second segment = %d, want none", streams)
 	}
 	if err := googleStream.EndInput(); err != nil {
 		t.Fatalf("EndInput after second segment returned error: %v", err)
 	}
-	if client.streamCalls != 2 {
-		t.Fatalf("stream calls after EndInput = %d, want still two", client.streamCalls)
+	if client.streamCalls != 1 {
+		t.Fatalf("stream calls after EndInput = %d, want still one", client.streamCalls)
+	}
+	if len(firstStream.sent) != 2 {
+		t.Fatalf("first stream sent requests after EndInput = %d, want unchanged", len(firstStream.sent))
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after ignored second segment = (%+v, %v), want nil EOF", audio, err)
 	}
 }
 
