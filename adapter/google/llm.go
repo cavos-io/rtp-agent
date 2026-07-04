@@ -706,8 +706,42 @@ func googleModelArmorConfigParam(value any) (*genai.ModelArmorConfig, bool) {
 }
 
 func googleImageConfigParam(value any) (*genai.ImageConfig, bool) {
-	config, ok := value.(*genai.ImageConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.ImageConfig:
+		return config, config != nil
+	case genai.ImageConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.ImageConfig{}
+		if value := googleStringParam(config["aspect_ratio"]); value != "" {
+			result.AspectRatio = value
+		} else if value := googleStringParam(config["aspectRatio"]); value != "" {
+			result.AspectRatio = value
+		}
+		if value := googleStringParam(config["image_size"]); value != "" {
+			result.ImageSize = value
+		} else if value := googleStringParam(config["imageSize"]); value != "" {
+			result.ImageSize = value
+		}
+		if value := googleStringParam(config["person_generation"]); value != "" {
+			result.PersonGeneration = value
+		} else if value := googleStringParam(config["personGeneration"]); value != "" {
+			result.PersonGeneration = value
+		}
+		if value := googleStringParam(config["output_mime_type"]); value != "" {
+			result.OutputMIMEType = value
+		} else if value := googleStringParam(config["outputMimeType"]); value != "" {
+			result.OutputMIMEType = value
+		}
+		if value, ok := googleInt32Param(config["output_compression_quality"]); ok {
+			result.OutputCompressionQuality = &value
+		} else if value, ok := googleInt32Param(config["outputCompressionQuality"]); ok {
+			result.OutputCompressionQuality = &value
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleServiceTierParam(value any) (genai.ServiceTier, bool) {

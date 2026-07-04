@@ -1230,6 +1230,42 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceImageConfigExtra(t *tes
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceImageConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"image_config": map[string]any{
+				"aspect_ratio":               "16:9",
+				"imageSize":                  "2K",
+				"person_generation":          "ALLOW_ADULT",
+				"output_mime_type":           "image/jpeg",
+				"outputCompressionQuality":   82,
+				"ignored_reference_property": "ignored",
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ImageConfig == nil {
+		t.Fatal("ImageConfig = nil, want dict-derived image config")
+	}
+	if config.ImageConfig.AspectRatio != "16:9" {
+		t.Fatalf("AspectRatio = %q, want 16:9", config.ImageConfig.AspectRatio)
+	}
+	if config.ImageConfig.ImageSize != "2K" {
+		t.Fatalf("ImageSize = %q, want 2K", config.ImageConfig.ImageSize)
+	}
+	if config.ImageConfig.PersonGeneration != "ALLOW_ADULT" {
+		t.Fatalf("PersonGeneration = %q, want ALLOW_ADULT", config.ImageConfig.PersonGeneration)
+	}
+	if config.ImageConfig.OutputMIMEType != "image/jpeg" {
+		t.Fatalf("OutputMIMEType = %q, want image/jpeg", config.ImageConfig.OutputMIMEType)
+	}
+	if config.ImageConfig.OutputCompressionQuality == nil || *config.ImageConfig.OutputCompressionQuality != 82 {
+		t.Fatalf("OutputCompressionQuality = %#v, want 82", config.ImageConfig.OutputCompressionQuality)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceResponseModalitiesExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
