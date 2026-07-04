@@ -1792,6 +1792,44 @@ func TestAWSRealtimeSessionTracksReferenceAudioContentStartWithoutRole(t *testin
 	}
 }
 
+func TestAWSRealtimeSessionStreamsReferenceEmptyAudioOutput(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEventEventually(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","contentId":"audio-empty"}}}`)
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-empty","content":""}}}`)
+
+	audio := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	if len(audio.Data) != 0 {
+		t.Fatalf("audio data = %v, want empty reference audio delta", audio.Data)
+	}
+	select {
+	case frame := <-msg.AudioCh:
+		if frame == nil {
+			t.Fatal("audio frame = nil, want empty reference frame")
+		}
+		if len(frame.Data) != 0 || frame.SamplesPerChannel != 0 || frame.SampleRate != defaultAWSRealtimeOutputSampleRate || frame.NumChannels != defaultAWSRealtimeChannels {
+			t.Fatalf("audio frame = %#v, want empty reference output frame", frame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for empty generated audio")
+	}
+}
+
 func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

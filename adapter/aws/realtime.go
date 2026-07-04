@@ -982,7 +982,8 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		s.emitGenerationCreated()
 	}
 	s.trackGenerationContentStart(payload)
-	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
+	if audioOutput := awsRealtimeNestedMap(payload, "event", "audioOutput"); audioOutput != nil {
+		audioContent := awsRealtimeMapString(audioOutput, "content")
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
 			s.closeGeneration()
@@ -996,7 +997,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			})
 			return false
 		}
-		if s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data) {
+		if s.sendGenerationAudio(awsRealtimeMapString(audioOutput, "contentId"), data) {
 			s.markLastAudioOutput()
 			s.emit(llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeAudio,
