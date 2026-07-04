@@ -4265,6 +4265,8 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	}
 	if cfg.STTSpeechStartTimeoutMS != nil {
 		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond
+	} else if speechStartTimeout := modelOptionFloat(cfg.STTModelOptions, "speech_start_timeout"); speechStartTimeout != nil {
+		googleCfg.speechStartTimeout = time.Duration(*speechStartTimeout * float64(time.Second))
 	}
 	return googleCfg
 }
