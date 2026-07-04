@@ -185,6 +185,24 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeExplicitEmptyModalitiesMatchReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeModalities([]string{}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	if model.Capabilities().AudioOutput {
+		t.Fatal("AudioOutput = true, want false for explicit empty modalities")
+	}
+	if len(model.modalities) != 0 {
+		t.Fatalf("modalities = %#v, want explicit empty list", model.modalities)
+	}
+	config := model.liveConnectConfig()
+	if len(config.ResponseModalities) != 0 {
+		t.Fatalf("response modalities = %#v, want explicit empty list", config.ResponseModalities)
+	}
+}
+
 func TestGoogleRealtimeUpdateOptionsMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {

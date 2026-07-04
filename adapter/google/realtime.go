@@ -108,6 +108,7 @@ type googleRealtimeOptions struct {
 	location                  string
 	locationSet               bool
 	modalities                []string
+	modalitiesSet             bool
 	turnDetection             *bool
 	inputAudioTranscription   *bool
 	outputAudioTranscription  *bool
@@ -205,6 +206,7 @@ func WithGoogleRealtimeLocation(location string) GoogleRealtimeOption {
 func WithGoogleRealtimeModalities(modalities []string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.modalities = append([]string(nil), modalities...)
+		options.modalitiesSet = true
 	}
 }
 
@@ -408,7 +410,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		voice = defaultGoogleRealtimeVoice
 	}
 	modalities := options.modalities
-	if len(modalities) == 0 {
+	if !options.modalitiesSet {
 		modalities = []string{"AUDIO"}
 	} else {
 		modalities = append([]string(nil), modalities...)
