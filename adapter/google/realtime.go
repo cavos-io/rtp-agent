@@ -1145,7 +1145,7 @@ func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, vo
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
-	s.closeGeneration()
+	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
@@ -1221,7 +1221,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
-	s.closeGeneration()
+	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
@@ -1288,7 +1288,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
-	s.closeGeneration()
+	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
