@@ -2140,6 +2140,10 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 				MIMEType: "audio/pcm;rate=16000",
 			},
 		}); err != nil {
+			s.reconnectActiveSession(liveSession,
+				fmt.Sprintf("google realtime audio send failed: %v", err),
+				"failed to reconnect Google realtime after audio send error: %v",
+			)
 			return err
 		}
 	}
