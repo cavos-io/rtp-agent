@@ -3020,6 +3020,28 @@ func TestGoogleSTTStreamUsesReferenceV2EndpointingConfig(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamRejectsReferenceInvalidEndpointingSensitivity(t *testing.T) {
+	streamClient := &fakeGoogleV2StreamingRecognizeClient{}
+	provider := newGoogleSTTWithV2Client(
+		&fakeGoogleV2SpeechClient{stream: streamClient},
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTEndpointingSensitivity("NOT_A_SENSITIVITY"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil for invalid endpointing sensitivity", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "invalid Google STT endpointing_sensitivity") {
+		t.Fatalf("Stream error = %v, want reference invalid endpointing_sensitivity error", err)
+	}
+	if len(streamClient.sent) != 0 {
+		t.Fatalf("sent requests = %d, want no provider config after invalid endpointing sensitivity", len(streamClient.sent))
+	}
+}
+
 func TestGoogleSTTStreamV2ExplicitZeroTimeoutEnablesReferenceActivity(t *testing.T) {
 	streamClient := &fakeGoogleV2StreamingRecognizeClient{}
 	provider := newGoogleSTTWithV2Client(
