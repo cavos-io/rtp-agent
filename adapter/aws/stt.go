@@ -338,6 +338,7 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe stream start failed: %v", err))
 	}
 
+	eventStream := newAWSRealtimeQueuedStream[*stt.SpeechEvent]()
 	gs := &awsSTTStream{
 		provider:                 s,
 		stream:                   stream,
@@ -345,7 +346,8 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 		language:                 input.LanguageCode,
 		identifyLanguage:         s.identifyLanguage,
 		identifyMultipleLanguage: s.identifyMultipleLanguages,
-		events:                   make(chan *stt.SpeechEvent, 10),
+		events:                   eventStream.Chan(),
+		eventStream:              eventStream,
 		errCh:                    make(chan error, 1),
 	}
 	if !s.registerStream(gs) {
@@ -427,6 +429,7 @@ type awsSTTStream struct {
 	identifyLanguage         bool
 	identifyMultipleLanguage bool
 	events                   chan *stt.SpeechEvent
+	eventStream              *awsRealtimeQueuedStream[*stt.SpeechEvent]
 	errCh                    chan error
 	streamMu                 sync.Mutex
 	closed                   bool
@@ -446,7 +449,7 @@ func (s *awsSTTStream) readLoop() {
 			s.provider.unregisterStream(s)
 		}
 	}()
-	defer close(s.events)
+	defer s.closeSpeechEvents()
 	for {
 		stream := s.currentStream()
 		if stream == nil {
@@ -792,12 +795,23 @@ func (s *awsSTTStream) Close() error {
 }
 
 func (s *awsSTTStream) sendSpeechEvent(event *stt.SpeechEvent) bool {
+	if s.eventStream != nil {
+		return s.eventStream.Send(event)
+	}
 	select {
 	case s.events <- event:
 		return true
 	case <-s.closedSignal():
 		return false
 	}
+}
+
+func (s *awsSTTStream) closeSpeechEvents() {
+	if s.eventStream != nil {
+		s.eventStream.Close()
+		return
+	}
+	close(s.events)
 }
 
 func (s *awsSTTStream) closeStream() (awsSTTEventStream, bool, bool) {

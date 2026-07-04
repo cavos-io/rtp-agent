@@ -241,42 +241,18 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		req.ToolConfig = toolConfig
 	}
 
-	out, err := l.client.ConverseStream(ctx, req)
-	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
-		if errors.Is(err, context.Canceled) {
-			return nil, err
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError("")
-		}
-		var responseErr *smithyhttp.ResponseError
-		if errors.As(err, &responseErr) {
-			var requestID string
-			var statusCode int
-			if responseErr.Response != nil && responseErr.Response.Response != nil {
-				statusCode = responseErr.Response.Response.StatusCode
-				requestID = responseErr.Response.Response.Header.Get("x-amzn-requestid")
-			}
-			return nil, llm.NewAPIStatusErrorWithRetryable(
-				fmt.Sprintf("aws bedrock llm: error generating content: %v", err),
-				statusCode,
-				requestID,
-				nil,
-				false,
-			)
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
+	chunkStream := newAWSRealtimeQueuedStream[*llm.ChatChunk]()
+	stream := &awsLLMStream{
+		client:      l.client,
+		ctx:         ctx,
+		request:     req,
+		cancel:      cancel,
+		chunks:      chunkStream.Chan(),
+		chunkStream: chunkStream,
+		errCh:       make(chan error, 1),
 	}
-
-	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
-	return &awsLLMStream{
-		stream:    out.GetStream(),
-		requestID: requestID,
-		cancel:    cancel,
-	}, nil
+	go stream.readLoop()
+	return stream, nil
 }
 
 func buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
@@ -454,6 +430,9 @@ func buildAWSToolChoice(choice llm.ToolChoice) types.ToolChoice {
 }
 
 type awsLLMStream struct {
+	client       awsLLMClient
+	ctx          context.Context
+	request      *bedrockruntime.ConverseStreamInput
 	stream       *bedrockruntime.ConverseStreamEventStream
 	requestID    string
 	cancel       context.CancelFunc
@@ -463,6 +442,9 @@ type awsLLMStream struct {
 	toolName     string
 	toolNameSet  bool
 	toolArgs     string
+	chunks       <-chan *llm.ChatChunk
+	chunkStream  *awsRealtimeQueuedStream[*llm.ChatChunk]
+	errCh        chan error
 }
 
 func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
@@ -742,7 +724,91 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 	if s.closed {
 		return nil, io.EOF
 	}
+	if s.chunks != nil {
+		chunk, ok := <-s.chunks
+		if ok {
+			return chunk, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	}
 
+	return s.nextFromProvider()
+}
+
+func (s *awsLLMStream) readLoop() {
+	defer s.chunkStream.Close()
+	if err := s.open(); err != nil {
+		select {
+		case s.errCh <- err:
+		default:
+		}
+		return
+	}
+	for {
+		chunk, err := s.nextFromProvider()
+		if err != nil {
+			if err != io.EOF {
+				select {
+				case s.errCh <- err:
+				default:
+				}
+			}
+			return
+		}
+		if chunk != nil && !s.chunkStream.Send(chunk) {
+			return
+		}
+	}
+}
+
+func (s *awsLLMStream) open() error {
+	if s.stream != nil {
+		return nil
+	}
+	if s.client == nil {
+		return llm.NewAPIConnectionError("aws bedrock client is not configured")
+	}
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out, err := s.client.ConverseStream(ctx, s.request)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError("")
+		}
+		var responseErr *smithyhttp.ResponseError
+		if errors.As(err, &responseErr) {
+			var requestID string
+			var statusCode int
+			if responseErr.Response != nil && responseErr.Response.Response != nil {
+				statusCode = responseErr.Response.Response.StatusCode
+				requestID = responseErr.Response.Response.Header.Get("x-amzn-requestid")
+			}
+			return llm.NewAPIStatusErrorWithRetryable(
+				fmt.Sprintf("aws bedrock llm: error generating content: %v", err),
+				statusCode,
+				requestID,
+				nil,
+				false,
+			)
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
+	}
+	s.requestID, _ = awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
+	s.stream = out.GetStream()
+	return nil
+}
+
+func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 	for {
 		event := <-s.stream.Events()
 		if event == nil {
@@ -841,6 +907,9 @@ func (s *awsLLMStream) Close() error {
 		return nil
 	}
 	s.stream.Close()
+	if s.chunkStream != nil {
+		s.chunkStream.Close()
+	}
 	s.closed = true
 	return nil
 }

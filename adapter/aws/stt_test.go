@@ -687,6 +687,76 @@ func TestAWSSTTStreamMapsTranscriptEventsAndEOF(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamPreservesReferenceQueuedTranscriptBurst(t *testing.T) {
+	reader := &fakeAWSSTTReader{events: make(chan types.TranscriptResultStream, 16)}
+	writer := &fakeAWSSTTWriter{}
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	client := &fakeAWSSTTClient{stream: stream}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+	recognizeStream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	providerStream := recognizeStream.(*awsSTTStream)
+
+	const transcripts = 12
+	for i := 0; i < transcripts; i++ {
+		reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+			Value: types.TranscriptEvent{
+				Transcript: &types.Transcript{
+					Results: []types.Result{
+						{
+							IsPartial: true,
+							StartTime: float64(i) + 0.1,
+							EndTime:   float64(i) + 0.2,
+							Alternatives: []types.Alternative{
+								{Transcript: awsconfig.String(fmt.Sprintf("burst-%02d", i))},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+	close(reader.events)
+
+	deadline := time.After(150 * time.Millisecond)
+	for {
+		provider.mu.Lock()
+		active := len(provider.streams)
+		provider.mu.Unlock()
+		if active == 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			_ = providerStream.Close()
+			t.Fatalf("AWS STT readLoop still active behind %d queued transcripts; want reference-style unbounded transcript delivery", transcripts)
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	for i := 0; i < transcripts; i++ {
+		ev, err := providerStream.Next()
+		if err != nil {
+			t.Fatalf("Next transcript %d error = %v", i, err)
+		}
+		want := fmt.Sprintf("burst-%02d", i)
+		if ev.Type != stt.SpeechEventInterimTranscript || len(ev.Alternatives) != 1 || ev.Alternatives[0].Text != want {
+			t.Fatalf("event %d = %#v, want interim transcript %q", i, ev, want)
+		}
+	}
+	if ev, err := providerStream.Next(); err != io.EOF || ev != nil {
+		t.Fatalf("Next EOF = (%#v, %v), want nil EOF", ev, err)
+	}
+}
+
 func TestAWSSTTStreamIgnoresReferenceNilTranscriptEvent(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {

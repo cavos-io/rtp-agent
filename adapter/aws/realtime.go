@@ -499,7 +499,7 @@ func newAWSRealtimeQueuedStream[T any]() *awsRealtimeQueuedStream[T] {
 	return stream
 }
 
-func (s *awsRealtimeQueuedStream[T]) Chan() <-chan T {
+func (s *awsRealtimeQueuedStream[T]) Chan() chan T {
 	if s == nil {
 		return nil
 	}

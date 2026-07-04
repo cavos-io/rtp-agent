@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -128,15 +130,19 @@ func TestAWSLLMChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 
 	stream, err := provider.Chat(context.Background(), ctx)
 
-	if stream != nil {
-		t.Fatalf("Chat stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil on startup transport error", chunk)
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 	if !strings.Contains(err.Error(), "AWS Bedrock LLM chat failed") {
-		t.Fatalf("Chat error = %q, want Bedrock chat context", err.Error())
+		t.Fatalf("Next error = %q, want Bedrock chat context", err.Error())
 	}
 }
 
@@ -161,12 +167,16 @@ func TestAWSLLMChatReturnsReferenceAPIStatusErrorOnProviderStatus(t *testing.T) 
 
 	stream, err := provider.Chat(context.Background(), ctx)
 
-	if stream != nil {
-		t.Fatalf("Chat stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil on startup status error", chunk)
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -191,12 +201,16 @@ func TestAWSLLMChatReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
 
 	stream, err := provider.Chat(context.Background(), ctx)
 
-	if stream != nil {
-		t.Fatalf("Chat stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil on startup timeout", chunk)
 	}
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Chat error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -212,11 +226,15 @@ func TestAWSLLMChatCallerCancelReturnsContextCanceled(t *testing.T) {
 
 	stream, err := provider.Chat(context.Background(), ctx)
 
-	if stream != nil {
-		t.Fatalf("Chat stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil on caller cancellation", chunk)
 	}
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Chat error = %T %v, want context.Canceled", err, err)
+		t.Fatalf("Next error = %T %v, want context.Canceled", err, err)
 	}
 }
 
@@ -234,7 +252,11 @@ func TestAWSLLMChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 
-	_, _ = provider.Chat(context.Background(), ctx, llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}))
+	stream, err := provider.Chat(context.Background(), ctx, llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}))
+	if err != nil {
+		t.Fatalf("Chat error = %v, want lazy stream", err)
+	}
+	_, _ = stream.Next()
 
 	deadline, ok := captured.Deadline()
 	if !ok {
@@ -246,11 +268,10 @@ func TestAWSLLMChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	}
 }
 
-func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
-	var captured *bedrockruntime.ConverseStreamInput
-	client := fakeAWSLLMClient{
-		err:          errors.New("stop after capture"),
-		inputCapture: &captured,
+func TestAWSLLMChatReturnsBeforeReferenceProviderStreamStarts(t *testing.T) {
+	client := &blockingAWSLLMClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
 	}
 	provider := &AWSLLM{
 		client: client,
@@ -261,13 +282,56 @@ func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 
-	_, _ = provider.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
+	resultCh := make(chan llm.LLMStream, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		stream, err := provider.Chat(context.Background(), ctx)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- stream
+	}()
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider stream did not start")
+	}
+
+	select {
+	case stream := <-resultCh:
+		_ = stream.Close()
+	case err := <-errCh:
+		t.Fatalf("Chat error = %v, want stream returned while provider start is pending", err)
+	case <-time.After(150 * time.Millisecond):
+		close(client.release)
+		t.Fatal("Chat blocked behind provider stream start; want reference background startup")
+	}
+
+	close(client.release)
+}
+
+func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
 		"max_output_tokens": 128,
 		"temperature":       0.2,
 		"top_p":             0.7,
 	}))
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
 
-	input := captured
+	input := stream.(*awsLLMStream).request
 	if input == nil || input.InferenceConfig == nil {
 		t.Fatalf("InferenceConfig = %#v, want reference Bedrock inference config", input)
 	}
@@ -283,13 +347,8 @@ func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
 }
 
 func TestAWSLLMChatAppliesReferenceProviderInferenceDefaults(t *testing.T) {
-	var captured *bedrockruntime.ConverseStreamInput
-	client := fakeAWSLLMClient{
-		err:          errors.New("stop after capture"),
-		inputCapture: &captured,
-	}
 	provider := &AWSLLM{
-		client: client,
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
 	}
 	WithAWSLLMMaxOutputTokens(256)(provider)
@@ -300,30 +359,29 @@ func TestAWSLLMChatAppliesReferenceProviderInferenceDefaults(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 
-	_, _ = provider.Chat(context.Background(), ctx)
+	stream, err := provider.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	input := stream.(*awsLLMStream).request
 
-	if captured == nil || captured.InferenceConfig == nil {
-		t.Fatalf("InferenceConfig = %#v, want provider defaults", captured)
+	if input == nil || input.InferenceConfig == nil {
+		t.Fatalf("InferenceConfig = %#v, want provider defaults", input)
 	}
-	if captured.InferenceConfig.MaxTokens == nil || *captured.InferenceConfig.MaxTokens != 256 {
-		t.Fatalf("max tokens = %#v, want 256", captured.InferenceConfig.MaxTokens)
+	if input.InferenceConfig.MaxTokens == nil || *input.InferenceConfig.MaxTokens != 256 {
+		t.Fatalf("max tokens = %#v, want 256", input.InferenceConfig.MaxTokens)
 	}
-	if captured.InferenceConfig.Temperature == nil || *captured.InferenceConfig.Temperature != 0.3 {
-		t.Fatalf("temperature = %#v, want 0.3", captured.InferenceConfig.Temperature)
+	if input.InferenceConfig.Temperature == nil || *input.InferenceConfig.Temperature != 0.3 {
+		t.Fatalf("temperature = %#v, want 0.3", input.InferenceConfig.Temperature)
 	}
-	if captured.InferenceConfig.TopP == nil || *captured.InferenceConfig.TopP != 0.8 {
-		t.Fatalf("topP = %#v, want 0.8", captured.InferenceConfig.TopP)
+	if input.InferenceConfig.TopP == nil || *input.InferenceConfig.TopP != 0.8 {
+		t.Fatalf("topP = %#v, want 0.8", input.InferenceConfig.TopP)
 	}
 }
 
 func TestAWSLLMChatForwardsReferenceAdditionalRequestFields(t *testing.T) {
-	var captured *bedrockruntime.ConverseStreamInput
-	client := fakeAWSLLMClient{
-		err:          errors.New("stop after capture"),
-		inputCapture: &captured,
-	}
 	provider := &AWSLLM{
-		client: client,
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
 	}
 	ctx := llm.NewChatContext()
@@ -331,25 +389,24 @@ func TestAWSLLMChatForwardsReferenceAdditionalRequestFields(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 
-	_, _ = provider.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
+	stream, err := provider.Chat(context.Background(), ctx, llm.WithExtraParams(map[string]any{
 		"additional_request_fields": map[string]any{
 			"thinking": map[string]any{"type": "disabled"},
 		},
 	}))
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	input := stream.(*awsLLMStream).request
 
-	if captured == nil || captured.AdditionalModelRequestFields == nil {
-		t.Fatalf("AdditionalModelRequestFields = %#v, want reference additional request fields", captured)
+	if input == nil || input.AdditionalModelRequestFields == nil {
+		t.Fatalf("AdditionalModelRequestFields = %#v, want reference additional request fields", input)
 	}
 }
 
 func TestAWSLLMChatForwardsReferenceProviderAdditionalRequestFields(t *testing.T) {
-	var captured *bedrockruntime.ConverseStreamInput
-	client := fakeAWSLLMClient{
-		err:          errors.New("stop after capture"),
-		inputCapture: &captured,
-	}
 	provider := &AWSLLM{
-		client: client,
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
 	}
 	WithAWSLLMAdditionalRequestFields(map[string]any{
@@ -360,21 +417,20 @@ func TestAWSLLMChatForwardsReferenceProviderAdditionalRequestFields(t *testing.T
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 
-	_, _ = provider.Chat(context.Background(), ctx)
+	stream, err := provider.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	input := stream.(*awsLLMStream).request
 
-	if captured == nil || captured.AdditionalModelRequestFields == nil {
-		t.Fatalf("AdditionalModelRequestFields = %#v, want provider additional request fields", captured)
+	if input == nil || input.AdditionalModelRequestFields == nil {
+		t.Fatalf("AdditionalModelRequestFields = %#v, want provider additional request fields", input)
 	}
 }
 
 func TestAWSLLMChatAddsReferenceProviderCachePoints(t *testing.T) {
-	var captured *bedrockruntime.ConverseStreamInput
-	client := fakeAWSLLMClient{
-		err:          errors.New("stop after capture"),
-		inputCapture: &captured,
-	}
 	provider := &AWSLLM{
-		client: client,
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
 	}
 	WithAWSLLMCacheSystem(true)(provider)
@@ -385,19 +441,23 @@ func TestAWSLLMChatAddsReferenceProviderCachePoints(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 
-	_, _ = provider.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{awsRequestTestTool{}}))
+	stream, err := provider.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{awsRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	input := stream.(*awsLLMStream).request
 
-	if captured == nil || len(captured.System) != 2 {
-		t.Fatalf("System = %#v, want system text plus cachePoint", captured)
+	if input == nil || len(input.System) != 2 {
+		t.Fatalf("System = %#v, want system text plus cachePoint", input)
 	}
-	if _, ok := captured.System[1].(*awstypes.SystemContentBlockMemberCachePoint); !ok {
-		t.Fatalf("system cache block = %T, want cachePoint", captured.System[1])
+	if _, ok := input.System[1].(*awstypes.SystemContentBlockMemberCachePoint); !ok {
+		t.Fatalf("system cache block = %T, want cachePoint", input.System[1])
 	}
-	if captured.ToolConfig == nil || len(captured.ToolConfig.Tools) != 2 {
-		t.Fatalf("ToolConfig = %#v, want tool plus cachePoint", captured.ToolConfig)
+	if input.ToolConfig == nil || len(input.ToolConfig.Tools) != 2 {
+		t.Fatalf("ToolConfig = %#v, want tool plus cachePoint", input.ToolConfig)
 	}
-	if _, ok := captured.ToolConfig.Tools[1].(*awstypes.ToolMemberCachePoint); !ok {
-		t.Fatalf("tool cache block = %T, want cachePoint", captured.ToolConfig.Tools[1])
+	if _, ok := input.ToolConfig.Tools[1].(*awstypes.ToolMemberCachePoint); !ok {
+		t.Fatalf("tool cache block = %T, want cachePoint", input.ToolConfig.Tools[1])
 	}
 }
 
@@ -487,6 +547,66 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after tool call err = %v, want EOF", err)
+	}
+}
+
+func TestAWSLLMChatPreservesReferenceQueuedTextDeltas(t *testing.T) {
+	reader := &fakeAWSLLMReader{events: make(chan awstypes.ConverseStreamOutput, 4)}
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{
+			out: newFakeAWSLLMOutput(reader),
+		},
+		model: defaultAWSLLMModel,
+	}
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	stream, err := provider.Chat(context.Background(), chatCtx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+
+	const deltas = 12
+	stop := make(chan struct{})
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		defer close(reader.events)
+		for i := 0; i < deltas; i++ {
+			event := &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+				Value: awstypes.ContentBlockDeltaEvent{
+					Delta: &awstypes.ContentBlockDeltaMemberText{Value: fmt.Sprintf("delta-%02d", i)},
+				},
+			}
+			select {
+			case reader.events <- event:
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-sent:
+	case <-time.After(150 * time.Millisecond):
+		close(stop)
+		_ = stream.Close()
+		t.Fatalf("AWS LLM provider stream blocked behind %d queued text deltas; want reference background drain into event channel", deltas)
+	}
+
+	for i := 0; i < deltas; i++ {
+		chunk, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next delta %d error = %v", i, err)
+		}
+		want := fmt.Sprintf("delta-%02d", i)
+		if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != want {
+			t.Fatalf("chunk %d = %#v, want text delta %q", i, chunk, want)
+		}
+	}
+	if chunk, err := stream.Next(); err != io.EOF || chunk != nil {
+		t.Fatalf("Next EOF = (%#v, %v), want nil EOF", chunk, err)
 	}
 }
 
@@ -1049,13 +1169,8 @@ func TestBuildAWSToolConfigMapsNamedToolChoice(t *testing.T) {
 }
 
 func TestAWSLLMChatUsesReferenceProviderToolChoice(t *testing.T) {
-	var captured *bedrockruntime.ConverseStreamInput
-	client := fakeAWSLLMClient{
-		err:          errors.New("stop after capture"),
-		inputCapture: &captured,
-	}
 	provider := &AWSLLM{
-		client: client,
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
 	}
 	WithAWSLLMToolChoice("required")(provider)
@@ -1064,13 +1179,17 @@ func TestAWSLLMChatUsesReferenceProviderToolChoice(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 
-	_, _ = provider.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{awsRequestTestTool{}}))
-
-	if captured == nil || captured.ToolConfig == nil {
-		t.Fatalf("ToolConfig = %#v, want reference provider tool choice", captured)
+	stream, err := provider.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{awsRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
 	}
-	if _, ok := captured.ToolConfig.ToolChoice.(*awstypes.ToolChoiceMemberAny); !ok {
-		t.Fatalf("ToolChoice = %T, want required/any from provider default", captured.ToolConfig.ToolChoice)
+	input := stream.(*awsLLMStream).request
+
+	if input == nil || input.ToolConfig == nil {
+		t.Fatalf("ToolConfig = %#v, want reference provider tool choice", input)
+	}
+	if _, ok := input.ToolConfig.ToolChoice.(*awstypes.ToolChoiceMemberAny); !ok {
+		t.Fatalf("ToolChoice = %T, want required/any from provider default", input.ToolConfig.ToolChoice)
 	}
 }
 
@@ -1086,13 +1205,8 @@ func TestBuildAWSToolConfigDropsToolsForNoneChoice(t *testing.T) {
 }
 
 func TestAWSLLMChatToolChoiceNoneStripsReferenceFunctionHistory(t *testing.T) {
-	var captured *bedrockruntime.ConverseStreamInput
-	client := fakeAWSLLMClient{
-		err:          errors.New("stop after capture"),
-		inputCapture: &captured,
-	}
 	provider := &AWSLLM{
-		client: client,
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
 	}
 	ctx := llm.NewChatContext()
@@ -1102,20 +1216,24 @@ func TestAWSLLMChatToolChoiceNoneStripsReferenceFunctionHistory(t *testing.T) {
 		&llm.FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "sunny"},
 	}
 
-	_, _ = provider.Chat(
+	stream, err := provider.Chat(
 		context.Background(),
 		ctx,
 		llm.WithTools([]llm.Tool{awsRequestTestTool{}}),
 		llm.WithToolChoice("none"),
 	)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	input := stream.(*awsLLMStream).request
 
-	if captured == nil {
+	if input == nil {
 		t.Fatal("captured request = nil")
 	}
-	if captured.ToolConfig != nil {
-		t.Fatalf("ToolConfig = %#v, want nil for reference none tool choice", captured.ToolConfig)
+	if input.ToolConfig != nil {
+		t.Fatalf("ToolConfig = %#v, want nil for reference none tool choice", input.ToolConfig)
 	}
-	for _, msg := range captured.Messages {
+	for _, msg := range input.Messages {
 		for _, block := range msg.Content {
 			switch block.(type) {
 			case *awstypes.ContentBlockMemberToolUse, *awstypes.ContentBlockMemberToolResult:
@@ -1289,6 +1407,11 @@ type fakeAWSLLMClient struct {
 	inputCapture **bedrockruntime.ConverseStreamInput
 }
 
+type blockingAWSLLMClient struct {
+	started chan struct{}
+	release chan struct{}
+}
+
 func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, input *bedrockruntime.ConverseStreamInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
 	if c.ctxCapture != nil {
 		*c.ctxCapture = ctx
@@ -1302,8 +1425,28 @@ func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, input *bedrockrunt
 	return c.out, nil
 }
 
+func (c *blockingAWSLLMClient) ConverseStream(ctx context.Context, _ *bedrockruntime.ConverseStreamInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+	close(c.started)
+	select {
+	case <-c.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return newFakeAWSLLMOutput(&fakeAWSLLMReader{events: make(chan awstypes.ConverseStreamOutput)}), nil
+}
+
 func newFakeAWSLLMReader() *fakeAWSLLMReader {
 	return &fakeAWSLLMReader{events: make(chan awstypes.ConverseStreamOutput, 8)}
+}
+
+func newFakeAWSLLMOutput(reader *fakeAWSLLMReader) *bedrockruntime.ConverseStreamOutput {
+	out := &bedrockruntime.ConverseStreamOutput{}
+	stream := bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+		es.Reader = reader
+	})
+	field := reflect.ValueOf(out).Elem().FieldByName("eventStream")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(stream))
+	return out
 }
 
 func (r *fakeAWSLLMReader) Events() <-chan awstypes.ConverseStreamOutput {
