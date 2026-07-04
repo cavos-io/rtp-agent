@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -7125,6 +7126,12 @@ func llmExtraParamsFromConfig(cfg AppConfig) map[string]any {
 			if params == nil {
 				params = make(map[string]any)
 			}
+			if key == "http_options" {
+				if httpOptions := googleLLMHTTPOptionsFromModelOption(value); httpOptions != nil {
+					params[key] = httpOptions
+				}
+				continue
+			}
 			params[key] = value
 		}
 	}
@@ -7260,6 +7267,7 @@ func googleRealtimeInputConfigFromOptions(options map[string]any) *genai.Realtim
 
 var googleLLMExtraParamKeys = []string{
 	"cached_content",
+	"http_options",
 	"temperature",
 	"top_p",
 	"top_k",
@@ -7289,6 +7297,85 @@ var googleLLMExtraParamKeys = []string{
 	"media_resolution",
 	"tool_config",
 	"retrieval_config",
+}
+
+func googleLLMHTTPOptionsFromModelOption(value any) *genai.HTTPOptions {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	result := &genai.HTTPOptions{}
+	if baseURL, ok := options["base_url"].(string); ok {
+		result.BaseURL = baseURL
+	} else if baseURL, ok := options["baseUrl"].(string); ok {
+		result.BaseURL = baseURL
+	}
+	if apiVersion, ok := options["api_version"].(string); ok {
+		result.APIVersion = apiVersion
+	} else if apiVersion, ok := options["apiVersion"].(string); ok {
+		result.APIVersion = apiVersion
+	}
+	if timeout, ok := modelOptionDurationMilliseconds(options, "timeout"); ok {
+		result.Timeout = &timeout
+	} else if timeout, ok := modelOptionDurationMilliseconds(options, "timeout_ms"); ok {
+		result.Timeout = &timeout
+	}
+	result.Headers = googleLLMHTTPHeadersFromModelOption(options["headers"])
+	if extraBody, ok := options["extra_body"].(map[string]any); ok {
+		result.ExtraBody = cloneAppAnyMap(extraBody)
+	} else if extraBody, ok := options["extraBody"].(map[string]any); ok {
+		result.ExtraBody = cloneAppAnyMap(extraBody)
+	}
+	if result.BaseURL == "" && result.APIVersion == "" && result.Timeout == nil && len(result.Headers) == 0 && len(result.ExtraBody) == 0 {
+		return nil
+	}
+	return result
+}
+
+func modelOptionDurationMilliseconds(options map[string]any, key string) (time.Duration, bool) {
+	value, ok := modelOptionIntValue(options, key)
+	if !ok {
+		return 0, false
+	}
+	return time.Duration(value) * time.Millisecond, true
+}
+
+func googleLLMHTTPHeadersFromModelOption(value any) http.Header {
+	headers := http.Header{}
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return headers
+	}
+	for key, value := range raw {
+		values := googleLLMHTTPHeaderValues(value)
+		if len(values) > 0 {
+			headers[key] = values
+		}
+	}
+	return headers
+}
+
+func googleLLMHTTPHeaderValues(value any) []string {
+	switch typed := value.(type) {
+	case string:
+		if typed == "" {
+			return nil
+		}
+		return []string{typed}
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			str, ok := item.(string)
+			if ok && str != "" {
+				values = append(values, str)
+			}
+		}
+		return values
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return nil
+	}
 }
 
 func googleLLMToolChoiceFromConfig(cfg AppConfig) llm.ToolChoice {

@@ -13469,6 +13469,27 @@ func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T
 	}
 }
 
+func TestDefaultConfigFromEnvMapsGoogleLLMHTTPOptions(t *testing.T) {
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `http_options={"timeout":2500,"headers":{"x-test":["yes"]}}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	options, ok := app.Session.Options.LLMExtraParams["http_options"].(*genai.HTTPOptions)
+	if !ok || options == nil {
+		t.Fatalf("http_options = %#v, want *genai.HTTPOptions", app.Session.Options.LLMExtraParams["http_options"])
+	}
+	if options.Timeout == nil || *options.Timeout != 2500*time.Millisecond {
+		t.Fatalf("http_options timeout = %#v, want 2.5s", options.Timeout)
+	}
+	if got := options.Headers["x-test"]; len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("http_options headers = %#v, want x-test yes", options.Headers)
+	}
+}
+
 func numericTestValue(value any) float64 {
 	switch typed := value.(type) {
 	case int:
