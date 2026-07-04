@@ -31,6 +31,15 @@ func TestAWSRealtimeDefaultsMatchReference(t *testing.T) {
 	if provider.TurnDetection() != "MEDIUM" {
 		t.Fatalf("TurnDetection = %q, want MEDIUM", provider.TurnDetection())
 	}
+	if got, _ := provider.MaxTokens(); got != 1024 {
+		t.Fatalf("MaxTokens = %d, want reference default 1024", got)
+	}
+	if got, _ := provider.TopP(); got != 0.9 {
+		t.Fatalf("TopP = %v, want reference default 0.9", got)
+	}
+	if got, _ := provider.Temperature(); got != 0.7 {
+		t.Fatalf("Temperature = %v, want reference default 0.7", got)
+	}
 
 	caps := provider.Capabilities()
 	want := llm.RealtimeCapabilities{
