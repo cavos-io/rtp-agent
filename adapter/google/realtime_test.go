@@ -1879,11 +1879,13 @@ func TestGoogleRealtimeSessionGenerateReplyPreservesReferenceEmptyInstructions(t
 }
 
 func TestGoogleRealtimeSessionGenerateReplySendFailureKeepsReferencePending(t *testing.T) {
-	liveSession := &fakeGoogleRealtimeLiveSession{
+	firstSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages:       make(chan *genai.LiveServerMessage, 1),
 		sendClientContentErr: errors.New("send failed"),
 	}
-	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -1898,7 +1900,15 @@ func TestGoogleRealtimeSessionGenerateReplySendFailureKeepsReferencePending(t *t
 		t.Fatalf("GenerateReply error = %v, want send failure", err)
 	}
 
-	liveSession.serverMessages <- &genai.LiveServerMessage{
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("first event = %#v, want session_reconnected after GenerateReply send failure", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after GenerateReply send failure")
+	}
+
+	secondSession.serverMessages <- &genai.LiveServerMessage{
 		ServerContent: &genai.LiveServerContent{
 			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "late reply"}}},
 		},
@@ -2116,6 +2126,46 @@ func TestGoogleRealtimeSessionUpdateChatContextSendsReferenceToolResponse(t *tes
 	}
 	if response.Scheduling != genai.FunctionResponseSchedulingInterrupt {
 		t.Fatalf("function response scheduling = %q, want INTERRUPT", response.Scheduling)
+	}
+}
+
+func TestGoogleRealtimeSessionReconnectsAfterReferenceToolResponseSendError(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages:      make(chan *genai.LiveServerMessage, 1),
+		sendToolResponseErr: errors.New("tool response failed"),
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.FunctionCall{ID: "call-item", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "output-item", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+	err = session.UpdateChatContext(chatCtx)
+	if err == nil || !strings.Contains(err.Error(), "tool response failed") {
+		t.Fatalf("UpdateChatContext error = %v, want tool response failed", err)
+	}
+
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected after tool response send failure", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after tool response send failure")
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
 	}
 }
 
@@ -4799,6 +4849,7 @@ type fakeGoogleRealtimeLiveSession struct {
 	closeErr             error
 	recvErr              error
 	sendClientContentErr error
+	sendToolResponseErr  error
 	sendRealtimeErrs     []error
 	sendRealtimeBlock    chan struct{}
 	sendRealtimeRelease  chan struct{}
@@ -4834,6 +4885,9 @@ func (s *fakeGoogleRealtimeLiveSession) SendClientContent(input genai.LiveClient
 
 func (s *fakeGoogleRealtimeLiveSession) SendToolResponse(input genai.LiveToolResponseInput) error {
 	s.toolResponses = append(s.toolResponses, input)
+	if s.sendToolResponseErr != nil {
+		return s.sendToolResponseErr
+	}
 	return nil
 }
 

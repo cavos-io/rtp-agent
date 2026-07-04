@@ -1001,7 +1001,11 @@ func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
 	}
 	s.instructions = instructions
 	googleRealtimeSetConfigInstructions(s.liveConfig, instructions)
-	if !s.mutableInstructions || s.liveSession == nil || s.isClosed() {
+	if !s.mutableInstructions || s.isClosed() {
+		return nil
+	}
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
 		return nil
 	}
 	role := ""
@@ -1009,7 +1013,7 @@ func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
 		role = "model"
 	}
 	turnComplete := false
-	return s.liveSession.SendClientContent(genai.LiveClientContentInput{
+	return s.sendClientContentWithReconnect(liveSession, genai.LiveClientContentInput{
 		Turns: []*genai.Content{{
 			Role:  role,
 			Parts: []*genai.Part{{Text: instructions}},
@@ -1042,7 +1046,11 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 		}
 	}
 	s.chatCtx = nextCtx
-	if len(appendCtx.Items) == 0 || s.liveSession == nil || s.isClosed() {
+	if len(appendCtx.Items) == 0 || s.isClosed() {
+		return nil
+	}
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
 		return nil
 	}
 	if s.mutableChatContext {
@@ -1052,7 +1060,7 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 		}
 		if len(turns) > 0 {
 			turnComplete := false
-			if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
+			if err := s.sendClientContentWithReconnect(liveSession, genai.LiveClientContentInput{
 				Turns:        turns,
 				TurnComplete: &turnComplete,
 			}); err != nil {
@@ -1064,7 +1072,7 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 	if len(responses) == 0 {
 		return nil
 	}
-	return s.liveSession.SendToolResponse(genai.LiveToolResponseInput{FunctionResponses: responses})
+	return s.sendToolResponseWithReconnect(liveSession, genai.LiveToolResponseInput{FunctionResponses: responses})
 }
 func (s *googleRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	return s.reconnectWithTools(tools)
@@ -1405,7 +1413,11 @@ func googleRealtimeToolBehavior(value any) genai.Behavior {
 }
 
 func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
-	if s == nil || s.liveSession == nil || s.isClosed() {
+	if s == nil || s.isClosed() {
+		return nil
+	}
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
 		return nil
 	}
 	if !s.mutableChatContext {
@@ -1427,7 +1439,7 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		Parts: []*genai.Part{{Text: "."}},
 	})
 	turnComplete := true
-	if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
+	if err := s.sendClientContentWithReconnect(liveSession, genai.LiveClientContentInput{
 		Turns:        turns,
 		TurnComplete: &turnComplete,
 	}); err != nil {
@@ -2303,6 +2315,35 @@ func (s *googleRealtimeSession) sendRealtimeInputWithReconnect(liveSession googl
 	}
 	return nil
 }
+
+func (s *googleRealtimeSession) sendClientContentWithReconnect(liveSession googleRealtimeLiveSession, input genai.LiveClientContentInput) error {
+	if liveSession == nil {
+		return nil
+	}
+	if err := liveSession.SendClientContent(input); err != nil {
+		s.reconnectActiveSession(liveSession,
+			fmt.Sprintf("google realtime client content send failed: %v", err),
+			"failed to reconnect Google realtime after client content send error: %v",
+		)
+		return err
+	}
+	return nil
+}
+
+func (s *googleRealtimeSession) sendToolResponseWithReconnect(liveSession googleRealtimeLiveSession, input genai.LiveToolResponseInput) error {
+	if liveSession == nil {
+		return nil
+	}
+	if err := liveSession.SendToolResponse(input); err != nil {
+		s.reconnectActiveSession(liveSession,
+			fmt.Sprintf("google realtime tool response send failed: %v", err),
+			"failed to reconnect Google realtime after tool response send error: %v",
+		)
+		return err
+	}
+	return nil
+}
+
 func (s *googleRealtimeSession) CommitAudio() error { return nil }
 func (s *googleRealtimeSession) ClearAudio() error  { return nil }
 
