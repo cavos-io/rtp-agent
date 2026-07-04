@@ -13992,6 +13992,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceLanguagesOption(t *testing.T) 
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceModelOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"model": "chirp_3"},
+	})
+
+	if googleCfg.model != "chirp_3" {
+		t.Fatalf("model = %q, want model option chirp_3", googleCfg.model)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceProfanityFilterOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"profanity_filter": true},
