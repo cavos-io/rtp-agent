@@ -2944,6 +2944,34 @@ func TestAWSRealtimeSessionGenerateReplyWaitsForReferenceChatContextGeneration(t
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplyWithoutPendingTimesOutLikeReferenceFuture(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(
+		WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}),
+		WithAWSRealtimeGenerateReplyTimeout(time.Millisecond),
+	)
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+	sentCount := len(stream.sent)
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{})
+
+	var realtimeErr llm.RealtimeError
+	if !errors.As(err, &realtimeErr) {
+		t.Fatalf("GenerateReply error = %T %v, want RealtimeError", err, err)
+	}
+	if !strings.Contains(err.Error(), "generate_reply timed out waiting for generation") {
+		t.Fatalf("GenerateReply error = %v, want generation timeout", err)
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("GenerateReply sent %d provider events, want none without pending generation", len(stream.sent)-sentCount)
+	}
+}
+
 func TestAWSRealtimeSessionCloseRejectsPendingReferenceGenerateReply(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic2(
