@@ -1155,7 +1155,8 @@ func TestAWSRealtimeSessionPushAudioPreservesResampleDurationAcrossFrames(t *tes
 	}
 	defer session.Close()
 
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	for range 180 {
 		if err := session.PushAudio(awsRealtimeTestMonoFrame(44100, make([]int16, 100))); err != nil {
 			t.Fatalf("PushAudio error = %v", err)
