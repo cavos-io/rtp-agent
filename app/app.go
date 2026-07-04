@@ -4238,6 +4238,9 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		adaptationV2:           googleSTTAdaptationV2FromOptions(cfg.STTModelOptions),
 		endpointingSensitivity: modelOptionString(cfg.STTModelOptions, "endpointing_sensitivity"),
 	}
+	if googleCfg.streaming == nil {
+		googleCfg.streaming = modelOptionBool(cfg.STTModelOptions, "use_streaming")
+	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
 	} else if cfg.STTEndpointingSeconds != nil {

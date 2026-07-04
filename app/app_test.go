@@ -13919,6 +13919,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndSeconds(t *testing.T)
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"use_streaming": false},
+	})
+
+	if googleCfg.streaming == nil || *googleCfg.streaming {
+		t.Fatalf("streaming = %#v, want model option use_streaming false", googleCfg.streaming)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{
