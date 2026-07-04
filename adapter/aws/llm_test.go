@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -135,6 +137,45 @@ func TestAWSLLMChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AWS Bedrock LLM chat failed") {
 		t.Fatalf("Chat error = %q, want Bedrock chat context", err.Error())
+	}
+}
+
+func TestAWSLLMChatReturnsReferenceAPIStatusErrorOnProviderStatus(t *testing.T) {
+	header := http.Header{}
+	header.Set("x-amzn-requestid", "aws-request-429")
+	providerErr := &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     header,
+		}},
+		Err: errors.New("throttled"),
+	}
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: providerErr},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil", stream)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Chat error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.RequestID != "aws-request-429" {
+		t.Fatalf("request id = %q, want aws-request-429", statusErr.RequestID)
+	}
+	if statusErr.Retryable {
+		t.Fatal("Retryable = true, want reference nonretryable startup status error")
 	}
 }
 
