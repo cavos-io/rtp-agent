@@ -1373,6 +1373,54 @@ func TestAWSSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestAWSSTTReadLoopUnblocksWhenClosedWithFullEventQueue(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := &fakeAWSSTTWriter{}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = reader
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+	done := make(chan struct{})
+	go func() {
+		providerStream.readLoop()
+		close(done)
+	}()
+
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{{
+					StartTime: 0,
+					EndTime:   0.4,
+					IsPartial: true,
+					Alternatives: []types.Alternative{{
+						Transcript: awsconfig.String("queued"),
+					}},
+				}},
+			},
+		},
+	}
+
+	select {
+	case <-done:
+		t.Fatal("readLoop returned before close; want blocked on full event queue")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not unblock after Close with full event queue")
+	}
+}
+
 type fakeAWSSTTWriter struct {
 	lastChunk   []byte
 	chunks      [][]byte
