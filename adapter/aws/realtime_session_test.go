@@ -1111,7 +1111,8 @@ func TestAWSRealtimeSessionUpdateOptionsIsReferenceNoop(t *testing.T) {
 		t.Fatalf("Session error = %v", err)
 	}
 	defer session.Close()
-	before := len(stream.sent)
+	sent := stream.snapshotSent()
+	before := len(sent)
 
 	err = session.UpdateOptions(llm.RealtimeSessionOptions{
 		ToolChoice:       "required",
@@ -1125,10 +1126,11 @@ func TestAWSRealtimeSessionUpdateOptionsIsReferenceNoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateOptions error = %v", err)
 	}
-	if after := len(stream.sent); after != before {
+	sent = stream.snapshotSent()
+	if after := len(sent); after != before {
 		t.Fatalf("sent events after UpdateOptions = %d, want unchanged %d", after, before)
 	}
-	if stream.closed {
+	if stream.isClosed() {
 		t.Fatal("stream closed after UpdateOptions, want reference no-op")
 	}
 }
