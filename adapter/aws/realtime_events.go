@@ -76,9 +76,6 @@ func (b *awsRealtimeEventBuilder) createPromptStartBlock(options awsRealtimeProm
 }
 
 func normalizeAWSRealtimePromptStartOptions(options awsRealtimePromptStartOptions) awsRealtimePromptStartOptions {
-	if options.voiceID == "" {
-		options.voiceID = defaultAWSRealtimeVoice
-	}
 	if options.outputSampleRate == 0 {
 		options.outputSampleRate = defaultAWSRealtimeOutputSampleRate
 	}

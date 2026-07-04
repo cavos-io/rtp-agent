@@ -95,6 +95,23 @@ func TestAWSRealtimeEventBuilderCreatesReferencePromptStartBlock(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeEventBuilderPreservesReferenceEmptyVoice(t *testing.T) {
+	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
+
+	initEvents, _, err := builder.createPromptStartBlock(awsRealtimePromptStartOptions{
+		voiceID:       "",
+		systemContent: "system prompt",
+	})
+	if err != nil {
+		t.Fatalf("createPromptStartBlock error = %v", err)
+	}
+
+	promptStart := mustAWSRealtimeJSONEvent(t, initEvents[1])
+	if got := awsRealtimeNestedString(promptStart, "event", "promptStart", "audioOutputConfiguration", "voiceId"); got != "" {
+		t.Fatalf("voiceId = %q, want explicit empty reference voice", got)
+	}
+}
+
 func TestAWSRealtimeEventBuilderEmitsReferenceInteractiveFalse(t *testing.T) {
 	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
 
