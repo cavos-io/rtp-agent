@@ -42,6 +42,7 @@ func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
 	if *client.input.ModelId != "amazon.nova-sonic-v1:0" {
 		t.Fatalf("model id = %q, want configured Nova Sonic model", *client.input.ModelId)
 	}
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
 	if len(stream.sent) != 6 {
 		t.Fatalf("sent init event count = %d, want 6", len(stream.sent))
 	}
@@ -51,7 +52,7 @@ func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[1]), "event", "promptStart", "audioOutputConfiguration", "voiceId"); got != "matthew" {
 		t.Fatalf("voiceId = %q, want matthew", got)
 	}
-	audioStart := mustAWSRealtimeJSONEvent(t, stream.sent[5])
+	audioStart := waitAWSRealtimeAudioContentStart(t, stream, 5)
 	if got := awsRealtimeNestedString(audioStart, "event", "contentStart", "type"); got != "AUDIO" {
 		t.Fatalf("event[5] type = %q, want AUDIO", got)
 	}
@@ -71,6 +72,45 @@ func TestAWSRealtimeSessionStartsReferenceReaderBeforeAudioInput(t *testing.T) {
 
 	if stream.audioSentBeforeEvents.Load() {
 		t.Fatal("audio contentStart sent before response Events reader started")
+	}
+}
+
+func TestAWSRealtimeSessionDoesNotBlockOnReferenceAudioContentStart(t *testing.T) {
+	stream := &blockingAudioContentStartAWSRealtimeStream{
+		fakeAWSRealtimeStream: newFakeAWSRealtimeStream(),
+		started:               make(chan struct{}),
+		release:               make(chan struct{}),
+	}
+	t.Cleanup(func() { close(stream.release) })
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+
+	sessionCh := make(chan llm.RealtimeSession, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		session, err := provider.Session()
+		if err == nil {
+			sessionCh <- session
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-stream.started:
+	case <-time.After(time.Second):
+		t.Fatal("Session did not start provider audio contentStart send")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Session error = %v, want nil while audio contentStart send continues asynchronously", err)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("Session blocked on provider audio contentStart send")
+	}
+
+	session := <-sessionCh
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
 	}
 }
 
@@ -422,6 +462,7 @@ func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	}
 	defer session.Close()
 
+	waitAWSRealtimeAudioContentStart(t, stream, 11)
 	if len(stream.sent) != 12 {
 		t.Fatalf("sent event count = %d, want 12 with system filtered and two history messages", len(stream.sent))
 	}
@@ -439,7 +480,7 @@ func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[9]), "event", "textInput", "content"); got != "hi" {
 		t.Fatalf("second history text = %q, want hi", got)
 	}
-	audioStart := mustAWSRealtimeJSONEvent(t, stream.sent[11])
+	audioStart := waitAWSRealtimeAudioContentStart(t, stream, 11)
 	if got := awsRealtimeNestedString(audioStart, "event", "contentStart", "type"); got != "AUDIO" {
 		t.Fatalf("event[11] type = %q, want AUDIO", got)
 	}
@@ -2288,6 +2329,7 @@ func TestAWSRealtimeSessionDefersToolUpdateRecycleUntilPendingToolResult(t *test
 		t.Fatalf("start error = %v", err)
 	}
 	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, first, 0)
 
 	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
 	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
@@ -2403,6 +2445,7 @@ func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
 		t.Fatalf("Session error = %v", err)
 	}
 	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
 
 	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
 	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
@@ -2919,6 +2962,26 @@ func waitAWSRealtimeAudioInputPayloads(t *testing.T, stream *fakeAWSRealtimeStre
 	}
 }
 
+func waitAWSRealtimeAudioContentStart(t *testing.T, stream *fakeAWSRealtimeStream, start int) map[string]any {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		for _, raw := range stream.sent[start:] {
+			event := mustAWSRealtimeJSONEvent(t, raw)
+			if awsRealtimeNestedString(event, "event", "contentStart", "type") == "AUDIO" {
+				return event
+			}
+		}
+		select {
+		case <-deadline:
+			t.Fatal("audio contentStart not sent")
+		case <-ticker.C:
+		}
+	}
+}
+
 func awsRealtimeSentTextInputContents(t *testing.T, events []string) []string {
 	t.Helper()
 	var contents []string
@@ -3033,6 +3096,29 @@ func (s *blockingAudioInputAWSRealtimeStream) Send(ctx context.Context, event aw
 	if ok {
 		var decoded map[string]any
 		if err := json.Unmarshal(chunk.Value.Bytes, &decoded); err == nil && awsRealtimeNestedString(decoded, "event", "audioInput", "content") != "" {
+			s.once.Do(func() { close(s.started) })
+			select {
+			case <-s.release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return s.fakeAWSRealtimeStream.Send(ctx, event)
+}
+
+type blockingAudioContentStartAWSRealtimeStream struct {
+	*fakeAWSRealtimeStream
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingAudioContentStartAWSRealtimeStream) Send(ctx context.Context, event awstypes.InvokeModelWithBidirectionalStreamInput) error {
+	chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk)
+	if ok {
+		var decoded map[string]any
+		if err := json.Unmarshal(chunk.Value.Bytes, &decoded); err == nil && awsRealtimeNestedString(decoded, "event", "contentStart", "type") == "AUDIO" {
 			s.once.Do(func() { close(s.started) })
 			select {
 			case <-s.release:

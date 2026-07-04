@@ -570,10 +570,7 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 	if err != nil {
 		return err
 	}
-	if err := s.sendRawEvent(ctx, audioStart); err != nil {
-		s.closeStartupStream()
-		return awsRealtimeStartupSendError(err)
-	}
+	s.enqueueAudioInputEvent(audioStart)
 	if interactiveUserText != "" {
 		if err := s.waitInteractiveTextDelay(ctx); err != nil {
 			s.closeStartupStream()
