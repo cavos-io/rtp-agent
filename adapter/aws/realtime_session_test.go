@@ -1978,6 +1978,40 @@ func TestAWSRealtimeSessionPreservesReferenceProviderTextHistory(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionPreservesReferenceRolelessUserTextHistory(t *testing.T) {
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
+
+	session.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"contentStart": map[string]any{
+				"type":      "TEXT",
+				"role":      "USER",
+				"contentId": "user-1",
+			},
+		},
+	})
+	session.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{
+				"content":   "roleless user transcript",
+				"contentId": "user-1",
+			},
+		},
+	})
+
+	chatCtx := session.chatCtx
+	if chatCtx == nil || len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx items = %#v, want roleless user transcript history", chatCtx)
+	}
+	userMsg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || userMsg.Role != llm.ChatRoleUser || userMsg.TextContent() != "roleless user transcript" {
+		t.Fatalf("user history = %#v, want roleless user transcript", chatCtx.Items[0])
+	}
+	if !session.isAudioTranscriptMessage(userMsg.ID) {
+		t.Fatalf("user message id %q not marked as provider audio transcript", userMsg.ID)
+	}
+}
+
 func TestAWSRealtimeSessionPreservesReferenceBareUserTextHistory(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

@@ -1013,7 +1013,7 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 }
 
 func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string, role string) bool {
-	if role != "USER" {
+	if role != "" && role != "USER" {
 		return false
 	}
 	s.mu.Lock()
