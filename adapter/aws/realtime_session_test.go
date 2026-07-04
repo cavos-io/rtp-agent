@@ -904,7 +904,8 @@ func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T)
 		samples[i] = [2]int16{10, 30}
 	}
 	frame := awsRealtimeTestStereoFrame(48000, samples)
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.PushAudio(frame); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
