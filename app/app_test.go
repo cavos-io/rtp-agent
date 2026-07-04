@@ -13430,6 +13430,19 @@ func TestDefaultConfigFromEnvSelectsGoogleLLMVertexModelOptions(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMConfigFromAppConfigPreservesReferenceEmptyLocationOption(t *testing.T) {
+	googleCfg := googleLLMConfigFromAppConfig(AppConfig{
+		LLMModelOptions: map[string]any{"location": ""},
+	})
+
+	if !googleCfg.locationSet {
+		t.Fatal("locationSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.location != "" {
+		t.Fatalf("location = %q, want explicit empty model option", googleCfg.location)
+	}
+}
+
 func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
@@ -13589,6 +13602,88 @@ func TestGoogleTTSConfigFromAppConfigMapsReferencePromptOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyPromptOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"prompt": ""},
+	})
+
+	if !googleCfg.promptSet {
+		t.Fatal("promptSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.prompt != "" {
+		t.Fatalf("prompt = %q, want explicit empty model option", googleCfg.prompt)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceLanguageOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"language": "id-ID"},
+	})
+
+	if googleCfg.language != "id-ID" {
+		t.Fatalf("language = %q, want model option language", googleCfg.language)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyLanguageOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"language": ""},
+	})
+
+	if !googleCfg.languageSet {
+		t.Fatal("languageSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.language != "" {
+		t.Fatalf("language = %q, want explicit empty model option", googleCfg.language)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceGenderOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"gender": "female"},
+	})
+
+	if googleCfg.gender != "female" {
+		t.Fatalf("gender = %q, want model option gender", googleCfg.gender)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyGenderOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"gender": ""},
+	})
+
+	if !googleCfg.genderSet {
+		t.Fatal("genderSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.gender != "" {
+		t.Fatalf("gender = %q, want explicit empty model option", googleCfg.gender)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceLocationOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"location": "europe-west1"},
+	})
+
+	if googleCfg.location != "europe-west1" {
+		t.Fatalf("location = %q, want model option location", googleCfg.location)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyLocationOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"location": ""},
+	})
+
+	if !googleCfg.locationSet {
+		t.Fatal("locationSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.location != "" {
+		t.Fatalf("location = %q, want explicit empty model option", googleCfg.location)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"speaking_rate": 0.92},
@@ -13596,6 +13691,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.
 
 	if googleCfg.speakingRate != 0.92 {
 		t.Fatalf("speakingRate = %v, want model option speaking_rate", googleCfg.speakingRate)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceZeroSpeakingRateOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"speaking_rate": 0.0},
+	})
+
+	if !googleCfg.speakingRateSet {
+		t.Fatal("speakingRateSet = false, want true for explicit zero model option")
+	}
+	if googleCfg.speakingRate != 0 {
+		t.Fatalf("speakingRate = %v, want explicit zero model option", googleCfg.speakingRate)
 	}
 }
 
@@ -13609,6 +13717,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferencePitchOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceZeroPitchOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"pitch": 0.0},
+	})
+
+	if !googleCfg.pitchSet {
+		t.Fatal("pitchSet = false, want true for explicit zero model option")
+	}
+	if googleCfg.pitch != 0 {
+		t.Fatalf("pitch = %v, want explicit zero model option", googleCfg.pitch)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceModelNameOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"model_name": "chirp_3"},
@@ -13616,6 +13737,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceModelNameOption(t *testing.T) 
 
 	if googleCfg.model != "chirp_3" {
 		t.Fatalf("model = %q, want model option model_name", googleCfg.model)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyModelNameOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"model_name": ""},
+	})
+
+	if !googleCfg.modelSet {
+		t.Fatal("modelSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.model != "" {
+		t.Fatalf("model = %q, want explicit empty model option", googleCfg.model)
 	}
 }
 
@@ -13629,6 +13763,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceNameOption(t *testing.T) 
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyVoiceNameOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"voice_name": ""},
+	})
+
+	if !googleCfg.voiceSet {
+		t.Fatal("voiceSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.voice != "" {
+		t.Fatalf("voice = %q, want explicit empty model option", googleCfg.voice)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceCloningKeyOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"voice_cloning_key": "clone-key-test"},
@@ -13636,6 +13783,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceCloningKeyOption(t *testi
 
 	if googleCfg.cloneKey != "clone-key-test" {
 		t.Fatalf("clone key = %q, want model option voice_cloning_key", googleCfg.cloneKey)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyVoiceCloningKeyOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"voice_cloning_key": ""},
+	})
+
+	if !googleCfg.cloneKeySet {
+		t.Fatal("cloneKeySet = false, want true for explicit empty model option")
+	}
+	if googleCfg.cloneKey != "" {
+		t.Fatalf("clone key = %q, want explicit empty model option", googleCfg.cloneKey)
 	}
 }
 
@@ -13666,6 +13826,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceUseMarkupOption(t *testing.T) 
 
 	if googleCfg.markup == nil || !*googleCfg.markup {
 		t.Fatalf("markup = %v, want model option use_markup true", googleCfg.markup)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceEnableSSMLOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{
+			"enable_ssml":   true,
+			"use_streaming": false,
+		},
+	})
+
+	if googleCfg.ssml == nil || !*googleCfg.ssml {
+		t.Fatalf("ssml = %v, want model option enable_ssml true", googleCfg.ssml)
 	}
 }
 
@@ -13873,6 +14046,182 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndSeconds(t *testing.T)
 
 	if googleCfg.speechEndTimeout != 750*time.Millisecond {
 		t.Fatalf("speechEndTimeout = %v, want 750ms", googleCfg.speechEndTimeout)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndTimeoutOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"speech_end_timeout": 0.4},
+	})
+
+	if googleCfg.speechEndTimeout != 400*time.Millisecond {
+		t.Fatalf("speechEndTimeout = %v, want model option speech_end_timeout 400ms", googleCfg.speechEndTimeout)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechStartTimeoutOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"speech_start_timeout": 1.2},
+	})
+
+	if googleCfg.speechStartTimeout != 1200*time.Millisecond {
+		t.Fatalf("speechStartTimeout = %v, want model option speech_start_timeout 1200ms", googleCfg.speechStartTimeout)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferencePunctuateOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"punctuate": false},
+	})
+
+	if googleCfg.punctuate == nil || *googleCfg.punctuate {
+		t.Fatalf("punctuate = %#v, want model option punctuate false", googleCfg.punctuate)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSpokenPunctuationOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"spoken_punctuation": true},
+	})
+
+	if googleCfg.spokenPunctuation == nil || !*googleCfg.spokenPunctuation {
+		t.Fatalf("spokenPunctuation = %#v, want model option spoken_punctuation true", googleCfg.spokenPunctuation)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSampleRateOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"sample_rate": "8000"},
+	})
+
+	if googleCfg.sampleRate == nil || *googleCfg.sampleRate != 8000 {
+		t.Fatalf("sampleRate = %#v, want model option sample_rate 8000", googleCfg.sampleRate)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceDetectLanguageOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"detect_language": false},
+	})
+
+	if googleCfg.detectLanguage == nil || *googleCfg.detectLanguage {
+		t.Fatalf("detectLanguage = %#v, want model option detect_language false", googleCfg.detectLanguage)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceLanguagesOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"languages": "id-ID|en-US|fr-FR"},
+	})
+
+	if googleCfg.language != "id-ID" {
+		t.Fatalf("language = %q, want first model option language id-ID", googleCfg.language)
+	}
+	if !reflect.DeepEqual(googleCfg.alternativeLanguages, []string{"en-US", "fr-FR"}) {
+		t.Fatalf("alternativeLanguages = %#v, want remaining model option languages", googleCfg.alternativeLanguages)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceModelOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"model": "chirp_3"},
+	})
+
+	if googleCfg.model != "chirp_3" {
+		t.Fatalf("model = %q, want model option chirp_3", googleCfg.model)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceLocationOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"location": "us-central1"},
+	})
+
+	if googleCfg.location != "us-central1" {
+		t.Fatalf("location = %q, want model option us-central1", googleCfg.location)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigPreservesReferenceEmptyLocationOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"location": ""},
+	})
+
+	if !googleCfg.locationSet {
+		t.Fatal("locationSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.location != "" {
+		t.Fatalf("location = %q, want explicit empty model option", googleCfg.location)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceProfanityFilterOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"profanity_filter": true},
+	})
+
+	if googleCfg.profanityFilter == nil || !*googleCfg.profanityFilter {
+		t.Fatalf("profanityFilter = %#v, want model option profanity_filter true", googleCfg.profanityFilter)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"use_streaming": false},
+	})
+
+	if googleCfg.streaming == nil || *googleCfg.streaming {
+		t.Fatalf("streaming = %#v, want model option use_streaming false", googleCfg.streaming)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceInterimResultsOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"interim_results": false},
+	})
+
+	if googleCfg.interimResults == nil || *googleCfg.interimResults {
+		t.Fatalf("interimResults = %#v, want model option interim_results false", googleCfg.interimResults)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceVoiceActivityEventsOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"enable_voice_activity_events": true},
+	})
+
+	if googleCfg.voiceActivityEvents == nil || !*googleCfg.voiceActivityEvents {
+		t.Fatalf("voiceActivityEvents = %#v, want model option enable_voice_activity_events true", googleCfg.voiceActivityEvents)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceWordTimeOffsetsOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"enable_word_time_offsets": false},
+	})
+
+	if googleCfg.wordTimeOffsets == nil || *googleCfg.wordTimeOffsets {
+		t.Fatalf("wordTimeOffsets = %#v, want model option enable_word_time_offsets false", googleCfg.wordTimeOffsets)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceWordConfidenceOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"enable_word_confidence": true},
+	})
+
+	if googleCfg.wordConfidence == nil || !*googleCfg.wordConfidence {
+		t.Fatalf("wordConfidence = %#v, want model option enable_word_confidence true", googleCfg.wordConfidence)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceMinConfidenceOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"min_confidence_threshold": 0.72},
+	})
+
+	if googleCfg.minConfidence == nil || *googleCfg.minConfidence != 0.72 {
+		t.Fatalf("minConfidence = %#v, want model option min_confidence_threshold 0.72", googleCfg.minConfidence)
 	}
 }
 
@@ -15089,6 +15438,19 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeReferenceModelOptions(t *testi
 	}
 	if capturedCfg.turnDetection == nil || *capturedCfg.turnDetection {
 		t.Fatalf("turnDetection = %#v, want false", capturedCfg.turnDetection)
+	}
+}
+
+func TestGoogleRealtimeConfigFromAppConfigPreservesReferenceEmptyLocationOption(t *testing.T) {
+	googleCfg := googleRealtimeConfigFromAppConfig(AppConfig{
+		RealtimeModelOptions: map[string]any{"location": ""},
+	})
+
+	if !googleCfg.locationSet {
+		t.Fatal("locationSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.location != "" {
+		t.Fatalf("location = %q, want explicit empty model option", googleCfg.location)
 	}
 }
 

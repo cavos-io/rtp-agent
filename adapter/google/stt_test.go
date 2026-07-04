@@ -158,10 +158,17 @@ func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 }
 
 func TestGoogleSTTEmptyLocationOptionMatchesReferenceEndpoint(t *testing.T) {
-	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation(""))
+	provider := newGoogleSTTWithClient(
+		nil,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation(""),
+	)
 
 	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com" {
 		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
+	}
+	if got := googleSTTRecognizer(provider); got != "projects/voice-project/locations//recognizers/_" {
+		t.Fatalf("recognizer = %q, want reference explicit empty location recognizer", got)
 	}
 }
 
@@ -186,12 +193,19 @@ func TestGoogleSTTClientOptionsUseCurrentReferenceLocation(t *testing.T) {
 }
 
 func TestGoogleSTTUpdateOptionsPreservesExplicitEmptyLocation(t *testing.T) {
-	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
+	provider := newGoogleSTTWithClient(
+		nil,
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTLocation("europe-west1"),
+	)
 
 	provider.UpdateOptions(WithGoogleSTTLocation(""))
 
 	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com" {
 		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
+	}
+	if got := googleSTTRecognizer(provider); got != "projects/voice-project/locations//recognizers/_" {
+		t.Fatalf("recognizer = %q, want reference explicit empty location recognizer", got)
 	}
 }
 

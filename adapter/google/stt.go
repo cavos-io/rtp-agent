@@ -934,9 +934,6 @@ func googleSTTRecognizer(s *GoogleSTT) string {
 		return ""
 	}
 	location := s.location
-	if location == "" {
-		location = "global"
-	}
 	return "projects/" + project + "/locations/" + location + "/recognizers/_"
 }
 

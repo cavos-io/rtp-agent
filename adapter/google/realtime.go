@@ -918,14 +918,14 @@ func googleRealtimeToolResponses(chatCtx *llm.ChatContext, vertexAI bool, schedu
 			Name:     output.Name,
 			Response: payload,
 		}
+		switch value := scheduling.(type) {
+		case genai.FunctionResponseScheduling:
+			response.Scheduling = value
+		case string:
+			response.Scheduling = genai.FunctionResponseScheduling(value)
+		}
 		if !vertexAI {
 			response.ID = output.CallID
-			switch value := scheduling.(type) {
-			case genai.FunctionResponseScheduling:
-				response.Scheduling = value
-			case string:
-				response.Scheduling = genai.FunctionResponseScheduling(value)
-			}
 		}
 		responses = append(responses, response)
 	}
@@ -1957,10 +1957,7 @@ func googleRealtimeValidOutputAudioData(data []byte) bool {
 }
 
 func googleRealtimeValidOutputAudioBlob(blob *genai.Blob) bool {
-	if blob == nil || !googleRealtimeValidOutputAudioData(blob.Data) {
-		return false
-	}
-	return blob.MIMEType == "" || strings.HasPrefix(strings.ToLower(blob.MIMEType), "audio/pcm")
+	return blob != nil && googleRealtimeValidOutputAudioData(blob.Data)
 }
 
 func (s *googleRealtimeSession) commitCompletedTranscripts() {

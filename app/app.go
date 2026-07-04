@@ -120,14 +120,23 @@ var appNewAgoraDataPublisher = workeragora.NewSDKDataPublisher
 
 type appGoogleTTSConfig struct {
 	language             string
+	languageSet          bool
 	location             string
+	locationSet          bool
 	voice                string
+	voiceSet             bool
 	gender               string
+	genderSet            bool
 	cloneKey             string
+	cloneKeySet          bool
 	model                string
+	modelSet             bool
 	prompt               string
+	promptSet            bool
 	speakingRate         float64
+	speakingRateSet      bool
 	pitch                float64
+	pitchSet             bool
 	sampleRate           *int
 	audioEncoding        *texttospeechpb.AudioEncoding
 	effectsProfileID     string
@@ -139,9 +148,10 @@ type appGoogleTTSConfig struct {
 }
 
 type appGoogleLLMConfig struct {
-	vertexAI *bool
-	project  string
-	location string
+	vertexAI    *bool
+	project     string
+	location    string
+	locationSet bool
 }
 
 func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
@@ -152,7 +162,7 @@ func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
 	if c.project != "" {
 		opts = append(opts, adaptergoogle.WithGoogleLLMProject(c.project))
 	}
-	if c.location != "" {
+	if c.locationSet {
 		opts = append(opts, adaptergoogle.WithGoogleLLMLocation(c.location))
 	}
 	return opts
@@ -162,6 +172,7 @@ type appGoogleRealtimeConfig struct {
 	vertexAI                 *bool
 	project                  string
 	location                 string
+	locationSet              bool
 	voice                    string
 	instructions             string
 	language                 string
@@ -199,7 +210,7 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	if c.project != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeProject(c.project))
 	}
-	if c.location != "" {
+	if c.locationSet {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeLocation(c.location))
 	}
 	if c.voice != "" {
@@ -289,6 +300,7 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 type appGoogleSTTConfig struct {
 	model                  string
 	location               string
+	locationSet            bool
 	language               string
 	streaming              *bool
 	sampleRate             *int
@@ -324,7 +336,7 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	if cfg.model != "" {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTModel(cfg.model))
 	}
-	if cfg.location != "" {
+	if cfg.locationSet {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTLocation(cfg.location))
 	}
 	if cfg.language != "" {
@@ -392,31 +404,31 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 
 var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (coretts.TTS, error) {
 	ttsOpts := []adaptergoogle.GoogleTTSOption{}
-	if cfg.language != "" {
+	if cfg.languageSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.language))
 	}
-	if cfg.location != "" {
+	if cfg.locationSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLocation(cfg.location))
 	}
-	if cfg.voice != "" {
+	if cfg.voiceSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.voice))
 	}
-	if cfg.gender != "" {
+	if cfg.genderSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSGender(cfg.gender))
 	}
-	if cfg.cloneKey != "" {
+	if cfg.cloneKeySet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoiceCloneKey(cfg.cloneKey))
 	}
-	if cfg.model != "" {
+	if cfg.modelSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSModel(cfg.model))
 	}
-	if cfg.prompt != "" {
+	if cfg.promptSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSPrompt(cfg.prompt))
 	}
-	if cfg.speakingRate != 0 {
+	if cfg.speakingRateSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSSpeakingRate(cfg.speakingRate))
 	}
-	if cfg.pitch != 0 {
+	if cfg.pitchSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSPitch(cfg.pitch))
 	}
 	if cfg.sampleRate != nil {
@@ -4219,6 +4231,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	googleCfg := appGoogleSTTConfig{
 		model:                  cfg.STTModel,
 		location:               cfg.STTRegion,
+		locationSet:            cfg.STTRegion != "",
 		language:               cfg.STTLanguage,
 		streaming:              cfg.STTStreaming,
 		sampleRate:             cfg.STTSampleRate,
@@ -4238,13 +4251,67 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		adaptationV2:           googleSTTAdaptationV2FromOptions(cfg.STTModelOptions),
 		endpointingSensitivity: modelOptionString(cfg.STTModelOptions, "endpointing_sensitivity"),
 	}
+	if googleCfg.model == "" {
+		googleCfg.model = modelOptionString(cfg.STTModelOptions, "model")
+	}
+	if !googleCfg.locationSet {
+		if location, ok := modelOptionStringValue(cfg.STTModelOptions, "location"); ok {
+			googleCfg.location = location
+			googleCfg.locationSet = true
+		}
+	}
+	if googleCfg.language == "" && len(googleCfg.alternativeLanguages) == 0 {
+		if languages := modelOptionStringList(cfg.STTModelOptions, "languages"); len(languages) > 0 {
+			googleCfg.language = languages[0]
+			googleCfg.alternativeLanguages = append([]string(nil), languages[1:]...)
+		}
+	}
+	if googleCfg.streaming == nil {
+		googleCfg.streaming = modelOptionBool(cfg.STTModelOptions, "use_streaming")
+	}
+	if googleCfg.sampleRate == nil {
+		if sampleRate, ok := modelOptionIntValue(cfg.STTModelOptions, "sample_rate"); ok {
+			googleCfg.sampleRate = &sampleRate
+		}
+	}
+	if googleCfg.punctuate == nil {
+		googleCfg.punctuate = modelOptionBool(cfg.STTModelOptions, "punctuate")
+	}
+	if googleCfg.spokenPunctuation == nil {
+		googleCfg.spokenPunctuation = modelOptionBool(cfg.STTModelOptions, "spoken_punctuation")
+	}
+	if googleCfg.profanityFilter == nil {
+		googleCfg.profanityFilter = modelOptionBool(cfg.STTModelOptions, "profanity_filter")
+	}
+	if googleCfg.detectLanguage == nil {
+		googleCfg.detectLanguage = modelOptionBool(cfg.STTModelOptions, "detect_language")
+	}
+	if googleCfg.interimResults == nil {
+		googleCfg.interimResults = modelOptionBool(cfg.STTModelOptions, "interim_results")
+	}
+	if googleCfg.voiceActivityEvents == nil {
+		googleCfg.voiceActivityEvents = modelOptionBool(cfg.STTModelOptions, "enable_voice_activity_events")
+	}
+	if googleCfg.wordTimeOffsets == nil {
+		googleCfg.wordTimeOffsets = modelOptionBool(cfg.STTModelOptions, "enable_word_time_offsets")
+	}
+	if googleCfg.wordConfidence == nil {
+		googleCfg.wordConfidence = modelOptionBool(cfg.STTModelOptions, "enable_word_confidence")
+	}
+	if googleCfg.minConfidence == nil {
+		googleCfg.minConfidence = modelOptionFloat(cfg.STTModelOptions, "min_confidence_threshold")
+	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
 	} else if cfg.STTEndpointingSeconds != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingSeconds * float64(time.Second))
+	} else if speechEndTimeout := modelOptionFloat(cfg.STTModelOptions, "speech_end_timeout"); speechEndTimeout != nil {
+		googleCfg.speechEndTimeout = time.Duration(*speechEndTimeout * float64(time.Second))
 	}
 	if cfg.STTSpeechStartTimeoutMS != nil {
 		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond
+	} else if speechStartTimeout := modelOptionFloat(cfg.STTModelOptions, "speech_start_timeout"); speechStartTimeout != nil {
+		googleCfg.speechStartTimeout = time.Duration(*speechStartTimeout * float64(time.Second))
 	}
 	return googleCfg
 }
@@ -4445,28 +4512,65 @@ func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adapterg
 
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
-		language:   cfg.TTSLanguage,
-		location:   cfg.TTSRegion,
-		voice:      cfg.TTSVoice,
-		gender:     cfg.TTSGender,
-		cloneKey:   cfg.TTSVoiceID,
-		model:      cfg.TTSModel,
-		prompt:     cfg.TTSInstructions,
-		sampleRate: cfg.TTSSampleRate,
-		streaming:  cfg.TTSStreaming,
-		ssml:       cfg.TTSEnableSSMLParsing,
+		language:    cfg.TTSLanguage,
+		languageSet: cfg.TTSLanguage != "",
+		location:    cfg.TTSRegion,
+		locationSet: cfg.TTSRegion != "",
+		voice:       cfg.TTSVoice,
+		voiceSet:    cfg.TTSVoice != "",
+		gender:      cfg.TTSGender,
+		genderSet:   cfg.TTSGender != "",
+		cloneKey:    cfg.TTSVoiceID,
+		cloneKeySet: cfg.TTSVoiceID != "",
+		model:       cfg.TTSModel,
+		modelSet:    cfg.TTSModel != "",
+		prompt:      cfg.TTSInstructions,
+		promptSet:   cfg.TTSInstructions != "",
+		sampleRate:  cfg.TTSSampleRate,
+		streaming:   cfg.TTSStreaming,
+		ssml:        cfg.TTSEnableSSMLParsing,
 	}
-	if googleCfg.voice == "" {
-		googleCfg.voice = modelOptionString(cfg.TTSModelOptions, "voice_name")
+	if !googleCfg.voiceSet {
+		if voice, ok := modelOptionStringValue(cfg.TTSModelOptions, "voice_name"); ok {
+			googleCfg.voice = voice
+			googleCfg.voiceSet = true
+		}
 	}
-	if googleCfg.cloneKey == "" {
-		googleCfg.cloneKey = modelOptionString(cfg.TTSModelOptions, "voice_cloning_key")
+	if !googleCfg.languageSet {
+		if language, ok := modelOptionStringValue(cfg.TTSModelOptions, "language"); ok {
+			googleCfg.language = language
+			googleCfg.languageSet = true
+		}
 	}
-	if googleCfg.model == "" {
-		googleCfg.model = modelOptionString(cfg.TTSModelOptions, "model_name")
+	if !googleCfg.locationSet {
+		if location, ok := modelOptionStringValue(cfg.TTSModelOptions, "location"); ok {
+			googleCfg.location = location
+			googleCfg.locationSet = true
+		}
 	}
-	if googleCfg.prompt == "" {
-		googleCfg.prompt = modelOptionString(cfg.TTSModelOptions, "prompt")
+	if !googleCfg.genderSet {
+		if gender, ok := modelOptionStringValue(cfg.TTSModelOptions, "gender"); ok {
+			googleCfg.gender = gender
+			googleCfg.genderSet = true
+		}
+	}
+	if !googleCfg.cloneKeySet {
+		if cloneKey, ok := modelOptionStringValue(cfg.TTSModelOptions, "voice_cloning_key"); ok {
+			googleCfg.cloneKey = cloneKey
+			googleCfg.cloneKeySet = true
+		}
+	}
+	if !googleCfg.modelSet {
+		if modelName, ok := modelOptionStringValue(cfg.TTSModelOptions, "model_name"); ok {
+			googleCfg.model = modelName
+			googleCfg.modelSet = true
+		}
+	}
+	if !googleCfg.promptSet {
+		if prompt, ok := modelOptionStringValue(cfg.TTSModelOptions, "prompt"); ok {
+			googleCfg.prompt = prompt
+			googleCfg.promptSet = true
+		}
 	}
 	if googleCfg.sampleRate == nil {
 		if sampleRate, ok := modelOptionIntValue(cfg.TTSModelOptions, "sample_rate"); ok {
@@ -4485,20 +4589,28 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		ssml := true
 		googleCfg.ssml = &ssml
 	}
-	if googleCfg.markup == nil && googleCfg.ssml == nil {
+	if googleCfg.ssml == nil {
+		googleCfg.ssml = modelOptionBool(cfg.TTSModelOptions, "enable_ssml")
+	}
+	if googleCfg.markup == nil && !boolValue(googleCfg.ssml) {
 		googleCfg.markup = modelOptionBool(cfg.TTSModelOptions, "use_markup")
 	}
 	if cfg.TTSSpeakingRate != nil {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate
+		googleCfg.speakingRateSet = true
 	} else if appTTSSpeedConfigured(cfg) {
 		googleCfg.speakingRate = cfg.TTSSpeed
+		googleCfg.speakingRateSet = true
 	} else if speakingRate := modelOptionFloat(cfg.TTSModelOptions, "speaking_rate"); speakingRate != nil {
 		googleCfg.speakingRate = *speakingRate
+		googleCfg.speakingRateSet = true
 	}
 	if cfg.TTSPitch != nil {
 		googleCfg.pitch = float64(*cfg.TTSPitch)
+		googleCfg.pitchSet = true
 	} else if pitch := modelOptionFloat(cfg.TTSModelOptions, "pitch"); pitch != nil {
 		googleCfg.pitch = *pitch
+		googleCfg.pitchSet = true
 	}
 	googleCfg.effectsProfileID = modelOptionString(cfg.TTSModelOptions, "effects_profile_id")
 	if volumeGainDB := modelOptionFloat(cfg.TTSModelOptions, "volume_gain_db"); volumeGainDB != nil {
@@ -7373,7 +7485,10 @@ func googleLLMConfigFromAppConfig(cfg AppConfig) appGoogleLLMConfig {
 		googleCfg.vertexAI = vertexAI
 	}
 	googleCfg.project = modelOptionString(cfg.LLMModelOptions, "project")
-	googleCfg.location = modelOptionString(cfg.LLMModelOptions, "location")
+	if location, ok := modelOptionStringValue(cfg.LLMModelOptions, "location"); ok {
+		googleCfg.location = location
+		googleCfg.locationSet = true
+	}
 	return googleCfg
 }
 
@@ -7383,7 +7498,10 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 		googleCfg.vertexAI = vertexAI
 	}
 	googleCfg.project = modelOptionString(cfg.RealtimeModelOptions, "project")
-	googleCfg.location = modelOptionString(cfg.RealtimeModelOptions, "location")
+	if location, ok := modelOptionStringValue(cfg.RealtimeModelOptions, "location"); ok {
+		googleCfg.location = location
+		googleCfg.locationSet = true
+	}
 	googleCfg.voice = modelOptionString(cfg.RealtimeModelOptions, "voice")
 	googleCfg.instructions = modelOptionString(cfg.RealtimeModelOptions, "instructions")
 	googleCfg.language = modelOptionString(cfg.RealtimeModelOptions, "language")
@@ -7932,15 +8050,20 @@ func boolValue(value *bool) bool {
 }
 
 func modelOptionString(options map[string]any, key string) string {
+	text, _ := modelOptionStringValue(options, key)
+	return text
+}
+
+func modelOptionStringValue(options map[string]any, key string) (string, bool) {
 	value, ok := options[key]
 	if !ok {
-		return ""
+		return "", false
 	}
 	text, ok := value.(string)
 	if !ok {
-		return ""
+		return "", false
 	}
-	return strings.TrimSpace(text)
+	return strings.TrimSpace(text), true
 }
 
 func modelOptionStringMap(options map[string]any, key string) map[string]string {

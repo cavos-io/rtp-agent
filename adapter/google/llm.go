@@ -32,6 +32,7 @@ type googleLLMOptions struct {
 	vertexAISet bool
 	project     string
 	location    string
+	locationSet bool
 }
 
 func WithGoogleLLMVertexAI(enabled bool) GoogleLLMOption {
@@ -50,6 +51,7 @@ func WithGoogleLLMProject(project string) GoogleLLMOption {
 func WithGoogleLLMLocation(location string) GoogleLLMOption {
 	return func(options *googleLLMOptions) {
 		options.location = location
+		options.locationSet = true
 	}
 }
 
@@ -91,14 +93,17 @@ func googleLLMClientConfig(apiKey string, model string, opts ...GoogleLLMOption)
 			project = os.Getenv("GOOGLE_CLOUD_PROJECT")
 		}
 		location := options.location
-		if location == "" {
+		if !options.locationSet {
 			location = os.Getenv("GOOGLE_CLOUD_LOCATION")
+			if location == "" {
+				location = "us-central1"
+			}
+		}
+		if project == "" {
+			return nil, "", false, errors.New("Project is required for VertexAI via project option or GOOGLE_CLOUD_PROJECT environment variable")
 		}
 		if location == "" {
-			location = "us-central1"
-		}
-		if project == "" || location == "" {
-			return nil, "", false, errors.New("Project is required for VertexAI via project option or GOOGLE_CLOUD_PROJECT environment variable")
+			return nil, "", false, errors.New("Location is required for VertexAI via location option or GOOGLE_CLOUD_LOCATION environment variable")
 		}
 		return &genai.ClientConfig{
 			Backend:  genai.BackendVertexAI,
