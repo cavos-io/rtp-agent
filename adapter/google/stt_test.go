@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -676,6 +677,28 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRecognizeAppliesReferenceRequestTimeout(t *testing.T) {
+	client := &fakeGoogleSpeechClient{
+		recognizeResponse: &speechpb.RecognizeResponse{
+			Results: []*speechpb.SpeechRecognitionResult{{
+				Alternatives: []*speechpb.SpeechRecognitionAlternative{{Transcript: "hello", Confidence: 0.9}},
+			}},
+		},
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event = %#v, want final transcript", event)
+	}
+	if got := googleSTTCallOptionTimeout(client.recognizeOpts); got != googleSTTRequestTimeout {
+		t.Fatalf("recognize timeout = %v, want reference %v", got, googleSTTRequestTimeout)
+	}
+}
+
 func TestGoogleSTTRecognizeMalformedAlternativesReturnsAPIConnectionError(t *testing.T) {
 	client := &fakeGoogleSpeechClient{
 		recognizeResponse: &speechpb.RecognizeResponse{
@@ -756,6 +779,28 @@ func TestGoogleSTTRecognizeUsesReferenceV2RequestForV2Model(t *testing.T) {
 	}
 	if alt := event.Alternatives[0]; alt.Text != "hello from chirp" || alt.Language != "id-ID" || alt.Confidence != 0.75 {
 		t.Fatalf("alternative = %+v, want v2 transcript/language/confidence", alt)
+	}
+}
+
+func TestGoogleSTTRecognizeV2AppliesReferenceRequestTimeout(t *testing.T) {
+	client := &fakeGoogleV2SpeechClient{
+		recognizeResponse: &speechv2pb.RecognizeResponse{
+			Results: []*speechv2pb.SpeechRecognitionResult{{
+				Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{Transcript: "hello", Confidence: 0.9}},
+			}},
+		},
+	}
+	provider := newGoogleSTTWithV2Client(client, WithGoogleSTTProject("voice-project"), WithGoogleSTTModel("chirp_3"))
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "en-US")
+	if err != nil {
+		t.Fatalf("Recognize error = %v", err)
+	}
+	if event == nil || event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event = %#v, want final transcript", event)
+	}
+	if got := googleSTTCallOptionTimeout(client.recognizeOpts); got != googleSTTRequestTimeout {
+		t.Fatalf("v2 recognize timeout = %v, want reference %v", got, googleSTTRequestTimeout)
 	}
 }
 
@@ -1114,6 +1159,38 @@ func TestGoogleSTTStreamSendsConfigAndEmitsEvents(t *testing.T) {
 	}
 	if !streamClient.closed {
 		t.Fatal("Close did not close streaming client")
+	}
+}
+
+func TestGoogleSTTStreamAppliesReferenceStartupTimeout(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	client := &fakeGoogleSpeechClient{stream: streamClient}
+	provider := newGoogleSTTWithClient(client)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if got := googleSTTCallOptionTimeout(client.streamingOpts); got != googleSTTRequestTimeout {
+		t.Fatalf("streaming recognize timeout = %v, want reference %v", got, googleSTTRequestTimeout)
+	}
+}
+
+func TestGoogleSTTStreamV2AppliesReferenceStartupTimeout(t *testing.T) {
+	streamClient := &fakeGoogleV2StreamingRecognizeClient{}
+	client := &fakeGoogleV2SpeechClient{stream: streamClient}
+	provider := newGoogleSTTWithV2Client(client, WithGoogleSTTProject("voice-project"), WithGoogleSTTModel("chirp_3"))
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if got := googleSTTCallOptionTimeout(client.streamingOpts); got != googleSTTRequestTimeout {
+		t.Fatalf("v2 streaming recognize timeout = %v, want reference %v", got, googleSTTRequestTimeout)
 	}
 }
 
@@ -4250,14 +4327,17 @@ type fakeGoogleSpeechClient struct {
 	streamErrs        []error
 	streamCallCh      chan int
 	streamCalls       int
+	streamingOpts     []gax.CallOption
 	recognizeRequest  *speechpb.RecognizeRequest
 	recognizeCalls    int
+	recognizeOpts     []gax.CallOption
 	recognizeResponse *speechpb.RecognizeResponse
 	recognizeErr      error
 }
 
 func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechpb.Speech_StreamingRecognizeClient, error) {
 	c.streamCalls++
+	c.streamingOpts = append([]gax.CallOption(nil), opts...)
 	if c.streamCallCh != nil {
 		c.streamCallCh <- c.streamCalls
 	}
@@ -4277,6 +4357,7 @@ func (c *fakeGoogleSpeechClient) StreamingRecognize(ctx context.Context, opts ..
 func (c *fakeGoogleSpeechClient) Recognize(ctx context.Context, req *speechpb.RecognizeRequest, opts ...gax.CallOption) (*speechpb.RecognizeResponse, error) {
 	c.recognizeCalls++
 	c.recognizeRequest = req
+	c.recognizeOpts = append([]gax.CallOption(nil), opts...)
 	return c.recognizeResponse, c.recognizeErr
 }
 
@@ -4286,14 +4367,17 @@ type fakeGoogleV2SpeechClient struct {
 	streamCallCh      chan int
 	streamCalls       int
 	streamErr         error
+	streamingOpts     []gax.CallOption
 	recognizeRequest  *speechv2pb.RecognizeRequest
 	recognizeCalls    int
+	recognizeOpts     []gax.CallOption
 	recognizeResponse *speechv2pb.RecognizeResponse
 	recognizeErr      error
 }
 
 func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts ...gax.CallOption) (speechv2pb.Speech_StreamingRecognizeClient, error) {
 	c.streamCalls++
+	c.streamingOpts = append([]gax.CallOption(nil), opts...)
 	if c.streamCallCh != nil {
 		c.streamCallCh <- c.streamCalls
 	}
@@ -4308,7 +4392,20 @@ func (c *fakeGoogleV2SpeechClient) StreamingRecognize(ctx context.Context, opts 
 func (c *fakeGoogleV2SpeechClient) Recognize(ctx context.Context, req *speechv2pb.RecognizeRequest, opts ...gax.CallOption) (*speechv2pb.RecognizeResponse, error) {
 	c.recognizeCalls++
 	c.recognizeRequest = req
+	c.recognizeOpts = append([]gax.CallOption(nil), opts...)
 	return c.recognizeResponse, c.recognizeErr
+}
+
+func googleSTTCallOptionTimeout(opts []gax.CallOption) time.Duration {
+	settings := &gax.CallSettings{}
+	for _, opt := range opts {
+		opt.Resolve(settings)
+	}
+	value := reflect.ValueOf(settings).Elem().FieldByName("timeout")
+	if !value.IsValid() {
+		return 0
+	}
+	return time.Duration(value.Int())
 }
 
 type fakeGoogleV2StreamingRecognizeClient struct {

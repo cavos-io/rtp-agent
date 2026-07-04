@@ -25,7 +25,10 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-const googleSTTMaxSessionDuration = 240 * time.Second
+const (
+	googleSTTMaxSessionDuration = 240 * time.Second
+	googleSTTRequestTimeout     = 10 * time.Second
+)
 
 type GoogleSTT struct {
 	mu                     sync.Mutex
@@ -584,7 +587,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 	if err != nil {
 		return nil, googleSTTStartupError(err)
 	}
-	stream, err := client.StreamingRecognize(ctx)
+	stream, err := client.StreamingRecognize(ctx, gax.WithTimeout(googleSTTRequestTimeout))
 	if err != nil {
 		return nil, googleSTTStartupError(err)
 	}
@@ -637,7 +640,7 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 	if recognizer == "" {
 		return nil, googleSTTStartupError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
 	}
-	stream, err := clientV2.StreamingRecognize(ctx)
+	stream, err := clientV2.StreamingRecognize(ctx, gax.WithTimeout(googleSTTRequestTimeout))
 	if err != nil {
 		return nil, googleSTTStartupError(err)
 	}
@@ -707,7 +710,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 			AudioSource: &speechv2pb.RecognizeRequest_Content{
 				Content: buf.Bytes(),
 			},
-		})
+		}, gax.WithTimeout(googleSTTRequestTimeout))
 		if err != nil {
 			return nil, googleSTTRecognizeError(err)
 		}
@@ -732,7 +735,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 				Content: buf.Bytes(),
 			},
 		},
-	})
+	}, gax.WithTimeout(googleSTTRequestTimeout))
 
 	if err != nil {
 		return nil, googleSTTRecognizeError(err)
