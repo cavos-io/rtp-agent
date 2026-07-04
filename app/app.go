@@ -179,6 +179,7 @@ type appGoogleRealtimeConfig struct {
 	mediaResolution          genai.MediaResolution
 	sessionResumptionHandle  string
 	connectOptions           *llm.APIConnectOptions
+	toolResponseScheduling   genai.FunctionResponseScheduling
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -248,6 +249,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.connectOptions != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeConnectOptions(*c.connectOptions))
+	}
+	if c.toolResponseScheduling != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeToolResponseScheduling(c.toolResponseScheduling))
 	}
 	return opts
 }
@@ -7156,6 +7160,7 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.mediaResolution = genai.MediaResolution(modelOptionString(cfg.RealtimeModelOptions, "media_resolution"))
 	googleCfg.sessionResumptionHandle = modelOptionString(cfg.RealtimeModelOptions, "session_resumption_handle")
 	googleCfg.connectOptions = googleRealtimeConnectOptionsFromOptions(cfg.RealtimeModelOptions)
+	googleCfg.toolResponseScheduling = genai.FunctionResponseScheduling(modelOptionString(cfg.RealtimeModelOptions, "tool_response_scheduling"))
 	return googleCfg
 }
 
