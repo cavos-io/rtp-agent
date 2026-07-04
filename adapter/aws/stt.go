@@ -38,6 +38,7 @@ type AWSSTT struct {
 	enablePartialResultsStabilization bool
 	partialResultsStability           types.PartialResultsStability
 	languageModelName                 string
+	languageModelNameSet              bool
 	identifyLanguage                  bool
 	identifyMultipleLanguages         bool
 	languageOptions                   string
@@ -157,6 +158,7 @@ func WithAWSSTTPartialResultsStability(stability types.PartialResultsStability) 
 func WithAWSSTTLanguageModelName(name string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.languageModelName = name
+		s.languageModelNameSet = true
 	}
 }
 
@@ -396,7 +398,7 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	if s.partialResultsStability != "" {
 		input.PartialResultsStability = s.partialResultsStability
 	}
-	if s.languageModelName != "" {
+	if s.languageModelNameSet {
 		input.LanguageModelName = aws.String(s.languageModelName)
 	}
 	return input
