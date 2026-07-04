@@ -371,6 +371,7 @@ func (m *AWSRealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 	session := newAWSRealtimeSession(m, client)
 	if err := session.start(context.Background()); err != nil {
+		_ = session.Close()
 		return nil, err
 	}
 	return session, nil

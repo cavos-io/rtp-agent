@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -149,6 +150,35 @@ func TestAWSRealtimeSessionStartErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AWS Nova Sonic realtime stream start failed") {
 		t.Fatalf("Session error = %q, want Nova Sonic stream context", err.Error())
+	}
+}
+
+func TestAWSRealtimeSessionStartErrorClosesReferenceAudioSender(t *testing.T) {
+	before := awsRealtimeAudioSenderGoroutines()
+	client := &fakeAWSRealtimeClient{err: errors.New("bedrock invoke failed")}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+
+	session, err := provider.Session()
+
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	deadline := time.After(100 * time.Millisecond)
+	for {
+		got := awsRealtimeAudioSenderGoroutines()
+		if got > before {
+			t.Fatalf("audio sender goroutines = %d, want %d after failed start cleanup", got, before)
+		}
+		select {
+		case <-deadline:
+			return
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
@@ -4159,6 +4189,18 @@ func awsRealtimeSentTextInputContents(t *testing.T, events []string) []string {
 		}
 	}
 	return contents
+}
+
+func awsRealtimeAudioSenderGoroutines() int {
+	size := 64 * 1024
+	for {
+		buf := make([]byte, size)
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "github.com/cavos-io/rtp-agent/adapter/aws.(*awsRealtimeSession).runAudioInputSender")
+		}
+		size *= 2
+	}
 }
 
 func awsRealtimeAudioAndInteractiveTextStartTimes(t *testing.T, stream *fakeAWSRealtimeStream) (time.Time, time.Time) {
