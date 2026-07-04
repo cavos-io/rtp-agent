@@ -2946,6 +2946,38 @@ func TestAWSRealtimeSessionPreservesReferenceProviderTextHistory(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionReplacesCumulativeProviderUserTextHistory(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TEXT","role":"USER","contentId":"user-cumulative"}}}`)
+	stream.emitJSON(`{"event":{"textOutput":{"role":"USER","content":"hello","contentId":"user-cumulative"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	stream.emitJSON(`{"event":{"textOutput":{"role":"USER","content":"hello there","contentId":"user-cumulative"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+
+	awsSession.mu.Lock()
+	chatCtx := awsSession.chatCtx
+	awsSession.mu.Unlock()
+	if chatCtx == nil || len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx items = %#v, want one user provider text history item", chatCtx)
+	}
+	userMsg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || userMsg.Role != llm.ChatRoleUser || userMsg.TextContent() != "hello there" {
+		t.Fatalf("user history = %#v, want cumulative provider ASR text replaced", chatCtx.Items[0])
+	}
+	if !awsSession.isAudioTranscriptMessage(userMsg.ID) {
+		t.Fatalf("user message id %q not marked as provider audio transcript", userMsg.ID)
+	}
+}
+
 func TestAWSRealtimeSessionPreservesReferenceRolelessUserTextHistory(t *testing.T) {
 	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
 
