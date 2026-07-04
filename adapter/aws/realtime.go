@@ -448,6 +448,7 @@ type awsRealtimeSession struct {
 	recycleTimer             *time.Timer
 	recycleVersion           int
 	lastAudioOutput          time.Time
+	awaitingAudioEndTurn     bool
 	currentUserContentID     string
 	audioBStream             *coreaudio.AudioByteStream
 	audioNorm                awsRealtimeInputAudioNormalizer
@@ -695,7 +696,7 @@ func (s *awsRealtimeSession) waitForSessionRecycleTurnBoundary(ctx context.Conte
 	for {
 		s.mu.Lock()
 		done := s.closed || version != s.recycleVersion
-		activeGeneration := s.generation != nil
+		activeGeneration := s.generation != nil || s.awaitingAudioEndTurn
 		s.mu.Unlock()
 		if done {
 			return false
@@ -1078,6 +1079,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if contentEnd := awsRealtimeNestedMap(payload, "event", "contentEnd"); contentEnd != nil &&
 		awsRealtimeMapString(contentEnd, "stopReason") == "END_TURN" &&
 		(awsRealtimeMapString(contentEnd, "type") == "AUDIO" || awsRealtimeMapString(contentEnd, "type") == "") {
+		s.markAudioEndTurnReceived()
 		s.closeGeneration()
 	}
 	if s.turns != nil {
@@ -1166,6 +1168,7 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	switch {
 	case contentType == "AUDIO":
 		streamType = "ASSISTANT_AUDIO"
+		s.markAwaitingAudioEndTurn()
 	case contentType == "TOOL":
 		streamType = "TOOL"
 	case role == "USER" && contentType == "TEXT":
@@ -1209,6 +1212,18 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	}
 	s.mu.Lock()
 	generation.contentTypes[contentID] = streamType
+	s.mu.Unlock()
+}
+
+func (s *awsRealtimeSession) markAwaitingAudioEndTurn() {
+	s.mu.Lock()
+	s.awaitingAudioEndTurn = true
+	s.mu.Unlock()
+}
+
+func (s *awsRealtimeSession) markAudioEndTurnReceived() {
+	s.mu.Lock()
+	s.awaitingAudioEndTurn = false
 	s.mu.Unlock()
 }
 
@@ -1750,6 +1765,7 @@ func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
 	s.builder = newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString())
 	s.pending = make(map[string]struct{})
 	s.recycleToolsAfterPending = false
+	s.awaitingAudioEndTurn = false
 	s.mu.Unlock()
 	if stream != nil {
 		for _, event := range closeEvents {
