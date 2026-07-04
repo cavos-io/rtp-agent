@@ -13959,6 +13959,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceSpokenPunctuationOption(t *tes
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSampleRateOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"sample_rate": "8000"},
+	})
+
+	if googleCfg.sampleRate == nil || *googleCfg.sampleRate != 8000 {
+		t.Fatalf("sampleRate = %#v, want model option sample_rate 8000", googleCfg.sampleRate)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"use_streaming": false},
