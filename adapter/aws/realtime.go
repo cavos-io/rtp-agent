@@ -47,6 +47,7 @@ const (
 	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
 	defaultAWSRealtimeGenerateReply  = 10 * time.Second
 	defaultAWSRealtimeTextStartDelay = 50 * time.Millisecond
+	defaultAWSRealtimeHistoryDelay   = 10 * time.Millisecond
 	awsRealtimeCredentialExpirySlack = 3 * time.Minute
 	awsRealtimeMinRecycleDuration    = 10 * time.Second
 	awsRealtimeAudioModalities       = AWSRealtimeModalitiesAudio
@@ -721,8 +722,18 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 	if err != nil {
 		return err
 	}
-	for _, event := range append(initEvents, historyEvents...) {
+	for _, event := range initEvents {
 		if err := s.sendRawEvent(ctx, event); err != nil {
+			s.closeStartupStream()
+			return awsRealtimeStartupSendError(err)
+		}
+	}
+	for _, event := range historyEvents {
+		if err := s.sendRawEvent(ctx, event); err != nil {
+			s.closeStartupStream()
+			return awsRealtimeStartupSendError(err)
+		}
+		if err := waitAWSRealtimeHistoryDelay(ctx); err != nil {
 			s.closeStartupStream()
 			return awsRealtimeStartupSendError(err)
 		}
@@ -767,6 +778,17 @@ func (s *awsRealtimeSession) waitInteractiveTextDelay(ctx context.Context) error
 		return nil
 	}
 	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func waitAWSRealtimeHistoryDelay(ctx context.Context) error {
+	timer := time.NewTimer(defaultAWSRealtimeHistoryDelay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

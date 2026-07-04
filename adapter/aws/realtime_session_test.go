@@ -546,6 +546,35 @@ func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionSpacesReferenceHistoryEvents(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "hi"})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	waitAWSRealtimeAudioContentStart(t, stream, 11)
+	if len(stream.sentAt) < 12 {
+		t.Fatalf("sent timestamps = %d, want startup and audio timestamps", len(stream.sentAt))
+	}
+	for i := 5; i < 11; i++ {
+		gap := stream.sentAt[i+1].Sub(stream.sentAt[i])
+		if gap < 8*time.Millisecond {
+			t.Fatalf("history event gap %d->%d = %v, want reference 10ms pacing", i, i+1, gap)
+		}
+	}
+}
+
 func TestAWSRealtimeSessionTruncatesReferenceChatContextOnStart(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
