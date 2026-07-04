@@ -14002,6 +14002,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceModelOption(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceLocationOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"location": "us-central1"},
+	})
+
+	if googleCfg.location != "us-central1" {
+		t.Fatalf("location = %q, want model option us-central1", googleCfg.location)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceProfanityFilterOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"profanity_filter": true},
