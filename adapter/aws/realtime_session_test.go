@@ -225,6 +225,35 @@ func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) 
 	}
 }
 
+func TestAWSRealtimeSessionRestartUsesReferenceUpdatedInstructions(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	first.err = errors.New("ValidationException: System instability detected. Please retry your request.")
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	session := newAWSRealtimeSession(provider, client)
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, first, 0)
+
+	if err := session.UpdateInstructions("speak like an escalation agent"); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	close(first.events)
+
+	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference restart notification")
+	}
+	waitAWSRealtimeAudioContentStart(t, second, 0)
+	texts := awsRealtimeSentTextInputContents(t, second.sent)
+	if len(texts) == 0 || texts[0] != "speak like an escalation agent" {
+		t.Fatalf("restart text inputs = %v, want updated system instructions first", texts)
+	}
+}
+
 func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
