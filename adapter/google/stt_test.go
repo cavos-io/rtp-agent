@@ -1602,7 +1602,7 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	}
 }
 
-func TestGoogleSTTStreamUsesFirstReferenceResultFinality(t *testing.T) {
+func TestGoogleSTTStreamUsesFinalResultFinalityWhenMixedWithInterim(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{
@@ -1640,8 +1640,61 @@ func TestGoogleSTTStreamUsesFirstReferenceResultFinality(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 {
-		t.Fatalf("event = %#v, want interim transcript from first result finality", event)
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want final transcript from later final result", event)
+	}
+	got := event.Alternatives[0]
+	if got.Text != "done" {
+		t.Fatalf("text = %q, want later final result text", got.Text)
+	}
+	if got.StartTime != 0.3 || got.EndTime != 0.6 {
+		t.Fatalf("timing = %v-%v, want later final result timing", got.StartTime, got.EndTime)
+	}
+}
+
+func TestGoogleSTTStreamV2UsesFinalResultFinalityWhenMixedWithInterim(t *testing.T) {
+	streamClient := &fakeGoogleV2StreamingRecognizeClient{
+		responses: []*speechv2pb.StreamingRecognizeResponse{{
+			Results: []*speechv2pb.StreamingRecognitionResult{
+				{
+					LanguageCode: "en-AU",
+					Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{
+						Transcript: "still ",
+						Confidence: 0.9,
+					}},
+				},
+				{
+					IsFinal:      true,
+					LanguageCode: "en-AU",
+					Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{
+						Transcript: "done",
+						Confidence: 0.8,
+						Words: []*speechv2pb.WordInfo{{
+							Word:        "done",
+							StartOffset: durationpb.New(300 * 1000 * 1000),
+							EndOffset:   durationpb.New(600 * 1000 * 1000),
+						}},
+					}},
+				},
+			},
+		}},
+	}
+	provider := newGoogleSTTWithV2Client(&fakeGoogleV2SpeechClient{stream: streamClient},
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want final transcript from later final result", event)
 	}
 	got := event.Alternatives[0]
 	if got.Text != "done" {
