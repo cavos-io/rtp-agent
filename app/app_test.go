@@ -13979,6 +13979,19 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceDetectLanguageOption(t *testin
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceLanguagesOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"languages": "id-ID|en-US|fr-FR"},
+	})
+
+	if googleCfg.language != "id-ID" {
+		t.Fatalf("language = %q, want first model option language id-ID", googleCfg.language)
+	}
+	if !reflect.DeepEqual(googleCfg.alternativeLanguages, []string{"en-US", "fr-FR"}) {
+		t.Fatalf("alternativeLanguages = %#v, want remaining model option languages", googleCfg.alternativeLanguages)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceProfanityFilterOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"profanity_filter": true},

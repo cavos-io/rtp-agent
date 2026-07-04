@@ -4238,6 +4238,12 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		adaptationV2:           googleSTTAdaptationV2FromOptions(cfg.STTModelOptions),
 		endpointingSensitivity: modelOptionString(cfg.STTModelOptions, "endpointing_sensitivity"),
 	}
+	if googleCfg.language == "" && len(googleCfg.alternativeLanguages) == 0 {
+		if languages := modelOptionStringList(cfg.STTModelOptions, "languages"); len(languages) > 0 {
+			googleCfg.language = languages[0]
+			googleCfg.alternativeLanguages = append([]string(nil), languages[1:]...)
+		}
+	}
 	if googleCfg.streaming == nil {
 		googleCfg.streaming = modelOptionBool(cfg.STTModelOptions, "use_streaming")
 	}
