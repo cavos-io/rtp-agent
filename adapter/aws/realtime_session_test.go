@@ -1983,6 +1983,43 @@ func TestAWSRealtimeSessionClosesReferenceGenerationOnEndTurnWithoutType(t *test
 	}
 }
 
+func TestAWSRealtimeSessionKeepsReferenceGenerationOpenOnTextEndTurn(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"contentEnd":{"contentId":"text-1","type":"TEXT","stopReason":"END_TURN"}}}`)
+
+	assertNoAWSRealtimeEvent(t, session.EventCh())
+	select {
+	case _, ok := <-msg.TextCh:
+		if !ok {
+			t.Fatal("TextCh closed, want reference text END_TURN to leave generation open")
+		}
+	default:
+	}
+	select {
+	case _, ok := <-msg.AudioCh:
+		if !ok {
+			t.Fatal("AudioCh closed, want reference text END_TURN to leave generation open")
+		}
+	default:
+	}
+}
+
 func TestAWSRealtimeSessionClosesReferenceGenerationOnBargeIn(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
