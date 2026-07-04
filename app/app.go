@@ -134,6 +134,7 @@ type appGoogleTTSConfig struct {
 	prompt               string
 	promptSet            bool
 	speakingRate         float64
+	speakingRateSet      bool
 	pitch                float64
 	sampleRate           *int
 	audioEncoding        *texttospeechpb.AudioEncoding
@@ -423,7 +424,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.promptSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSPrompt(cfg.prompt))
 	}
-	if cfg.speakingRate != 0 {
+	if cfg.speakingRateSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSSpeakingRate(cfg.speakingRate))
 	}
 	if cfg.pitch != 0 {
@@ -4595,10 +4596,13 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	}
 	if cfg.TTSSpeakingRate != nil {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate
+		googleCfg.speakingRateSet = true
 	} else if appTTSSpeedConfigured(cfg) {
 		googleCfg.speakingRate = cfg.TTSSpeed
+		googleCfg.speakingRateSet = true
 	} else if speakingRate := modelOptionFloat(cfg.TTSModelOptions, "speaking_rate"); speakingRate != nil {
 		googleCfg.speakingRate = *speakingRate
+		googleCfg.speakingRateSet = true
 	}
 	if cfg.TTSPitch != nil {
 		googleCfg.pitch = float64(*cfg.TTSPitch)

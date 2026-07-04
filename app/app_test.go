@@ -13694,6 +13694,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceZeroSpeakingRateOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"speaking_rate": 0.0},
+	})
+
+	if !googleCfg.speakingRateSet {
+		t.Fatal("speakingRateSet = false, want true for explicit zero model option")
+	}
+	if googleCfg.speakingRate != 0 {
+		t.Fatalf("speakingRate = %v, want explicit zero model option", googleCfg.speakingRate)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferencePitchOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"pitch": -1.5},
