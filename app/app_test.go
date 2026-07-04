@@ -13669,6 +13669,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceUseMarkupOption(t *testing.T) 
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceEnableSSMLOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{
+			"enable_ssml":   true,
+			"use_streaming": false,
+		},
+	})
+
+	if googleCfg.ssml == nil || !*googleCfg.ssml {
+		t.Fatalf("ssml = %v, want model option enable_ssml true", googleCfg.ssml)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"
