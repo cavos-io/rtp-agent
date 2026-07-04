@@ -1139,6 +1139,24 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceLabelsExtra(t *testing.
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceLabelsDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"labels": map[string]any{
+				"agent": "voice",
+				"turn":  "live",
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	want := map[string]string{"agent": "voice", "turn": "live"}
+	if !reflect.DeepEqual(config.Labels, want) {
+		t.Fatalf("Labels = %#v, want %#v", config.Labels, want)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigPreservesEmptyLabels(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
