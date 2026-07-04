@@ -34,11 +34,6 @@ func newAWSRealtimeTurn() *awsRealtimeTurn {
 }
 
 func (t *awsRealtimeTurn) addPartialText(text string) {
-	current := t.currentTranscript()
-	if current != "" && strings.HasPrefix(text, current) {
-		t.transcript = []string{text}
-		return
-	}
 	t.transcript = append(t.transcript, text)
 }
 

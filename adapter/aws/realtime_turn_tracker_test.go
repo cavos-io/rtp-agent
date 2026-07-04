@@ -80,7 +80,7 @@ func TestAWSRealtimeTurnTrackerEmitsReferenceTurnEvents(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeTurnTrackerReplacesCumulativeUserPartials(t *testing.T) {
+func TestAWSRealtimeTurnTrackerAppendsReferenceUserPartials(t *testing.T) {
 	var events []llm.RealtimeEvent
 	tracker := newAWSRealtimeTurnTracker(
 		func(event llm.RealtimeEvent) { events = append(events, event) },
@@ -115,8 +115,8 @@ func TestAWSRealtimeTurnTrackerReplacesCumulativeUserPartials(t *testing.T) {
 		t.Fatalf("event count = %d, want 6: %#v", len(events), events)
 	}
 	assertAWSRealtimeTurnTranscript(t, events[1], "hello", false)
-	assertAWSRealtimeTurnTranscript(t, events[2], "hello there", false)
-	assertAWSRealtimeTurnTranscript(t, events[4], "hello there", true)
+	assertAWSRealtimeTurnTranscript(t, events[2], "hello hello there", false)
+	assertAWSRealtimeTurnTranscript(t, events[4], "hello hello there", true)
 }
 
 func TestAWSRealtimeTurnTrackerToolOutputStartsReferenceGeneration(t *testing.T) {
