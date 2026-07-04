@@ -176,6 +176,7 @@ type appGoogleRealtimeConfig struct {
 	realtimeInputConfig      *genai.RealtimeInputConfig
 	contextWindowCompression *genai.ContextWindowCompressionConfig
 	thinkingConfig           *genai.ThinkingConfig
+	mediaResolution          genai.MediaResolution
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -236,6 +237,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.thinkingConfig != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeThinkingConfig(c.thinkingConfig))
+	}
+	if c.mediaResolution != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeMediaResolution(c.mediaResolution))
 	}
 	return opts
 }
@@ -7141,6 +7145,7 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.realtimeInputConfig = googleRealtimeInputConfigFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.contextWindowCompression = googleRealtimeContextWindowCompressionFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.thinkingConfig = googleRealtimeThinkingConfigFromOptions(cfg.RealtimeModelOptions)
+	googleCfg.mediaResolution = genai.MediaResolution(modelOptionString(cfg.RealtimeModelOptions, "media_resolution"))
 	return googleCfg
 }
 

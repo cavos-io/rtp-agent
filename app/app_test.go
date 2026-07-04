@@ -25,6 +25,8 @@ import (
 	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
 	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"google.golang.org/genai"
+
 	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
@@ -15074,6 +15076,32 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeContextWindowOptions(t *testin
 		capturedCfg.contextWindowCompression.SlidingWindow.TargetTokens == nil ||
 		*capturedCfg.contextWindowCompression.SlidingWindow.TargetTokens != 2048 {
 		t.Fatalf("slidingWindow = %#v, want target tokens 2048", capturedCfg.contextWindowCompression.SlidingWindow)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeMediaResolutionOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "media_resolution=MEDIA_RESOLUTION_HIGH")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.mediaResolution != genai.MediaResolutionHigh {
+		t.Fatalf("mediaResolution = %q, want %q", capturedCfg.mediaResolution, genai.MediaResolutionHigh)
 	}
 }
 
