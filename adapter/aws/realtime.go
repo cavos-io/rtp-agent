@@ -1030,9 +1030,6 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		}) {
 			return true
 		}
-		s.mu.Lock()
-		s.pending[toolUseID] = struct{}{}
-		s.mu.Unlock()
 	}
 	if usage := awsRealtimeNestedMap(payload, "event", "usageEvent"); usage != nil {
 		s.emitUsageMetrics(usage)
@@ -1279,6 +1276,9 @@ func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
 func (s *awsRealtimeSession) sendGenerationFunction(call *llm.FunctionCall) bool {
 	s.mu.Lock()
 	generation := s.generation
+	if generation != nil && call != nil && call.CallID != "" {
+		s.pending[call.CallID] = struct{}{}
+	}
 	s.mu.Unlock()
 	if generation == nil {
 		return false

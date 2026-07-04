@@ -2452,6 +2452,40 @@ func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
 	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
 }
 
+func TestAWSRealtimeSessionMarksReferenceToolPendingDuringEmission(t *testing.T) {
+	provider := NewAWSRealtimeModel("")
+	session := newAWSRealtimeSession(provider, nil)
+	generation, _ := session.ensureGenerationWithCreated("response-1")
+
+	ok := session.sendGenerationFunction(&llm.FunctionCall{
+		CallID:    "tool-1",
+		Name:      "lookup",
+		Arguments: `{"query":"weather"}`,
+	})
+	if !ok {
+		t.Fatal("sendGenerationFunction = false, want emitted tool call")
+	}
+	session.mu.Lock()
+	_, pending := session.pending["tool-1"]
+	activeGeneration := session.generation != nil
+	session.mu.Unlock()
+	if !pending {
+		t.Fatal("tool-1 pending = false, want registered before generation close")
+	}
+	if activeGeneration {
+		t.Fatal("generation still active, want closed after tool call emission")
+	}
+	var call *llm.FunctionCall
+	select {
+	case call = <-generation.functionCh:
+	default:
+		t.Fatal("function channel empty, want emitted tool call")
+	}
+	if call.CallID != "tool-1" || call.Name != "lookup" {
+		t.Fatalf("function call = %#v, want lookup tool-1", call)
+	}
+}
+
 func TestAWSRealtimeSessionUnwrapsReferenceDoubleEncodedToolArguments(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
