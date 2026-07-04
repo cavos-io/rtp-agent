@@ -1957,10 +1957,7 @@ func googleRealtimeValidOutputAudioData(data []byte) bool {
 }
 
 func googleRealtimeValidOutputAudioBlob(blob *genai.Blob) bool {
-	if blob == nil || !googleRealtimeValidOutputAudioData(blob.Data) {
-		return false
-	}
-	return blob.MIMEType == "" || strings.HasPrefix(strings.ToLower(blob.MIMEType), "audio/pcm")
+	return blob != nil && googleRealtimeValidOutputAudioData(blob.Data)
 }
 
 func (s *googleRealtimeSession) commitCompletedTranscripts() {

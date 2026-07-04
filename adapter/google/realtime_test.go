@@ -3783,8 +3783,8 @@ func TestGoogleRealtimeSessionDropsInvalidReferenceAudioFrame(t *testing.T) {
 	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
 }
 
-func TestGoogleRealtimeSessionDropsNonAudioInlineDataLikeReference(t *testing.T) {
-	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
+func TestGoogleRealtimeSessionAcceptsReferenceInlineDataRegardlessOfMIME(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
@@ -3795,24 +3795,25 @@ func TestGoogleRealtimeSessionDropsNonAudioInlineDataLikeReference(t *testing.T)
 	}
 	defer session.Close()
 
+	audioData := []byte{1, 2, 3, 4}
 	liveSession.serverMessages <- &genai.LiveServerMessage{
 		ServerContent: &genai.LiveServerContent{
 			ModelTurn: &genai.Content{Parts: []*genai.Part{{
-				InlineData: &genai.Blob{Data: []byte{1, 2, 3, 4}, MIMEType: "image/jpeg"},
+				InlineData: &genai.Blob{Data: audioData, MIMEType: "application/octet-stream"},
 			}}},
 		},
-	}
-	liveSession.serverMessages <- &genai.LiveServerMessage{
-		ServerContent: &genai.LiveServerContent{TurnComplete: true},
 	}
 
 	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
 	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
-	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
-	if event.Type != llm.RealtimeEventTypeSpeechStopped {
-		t.Fatalf("event after non-audio inline data = %#v, want speech_stopped without audio delta", event)
+	frame := nextGoogleRealtimeTestAudio(t, message.AudioCh)
+	if !bytes.Equal(frame.Data, audioData) || frame.SampleRate != 24000 || frame.NumChannels != 1 || frame.SamplesPerChannel != 2 {
+		t.Fatalf("message audio frame = %#v, want reference inline bytes as 24 kHz mono audio", frame)
 	}
-	expectGoogleRealtimeTestAudioClosed(t, message.AudioCh)
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if event.Type != llm.RealtimeEventTypeAudio || !bytes.Equal(event.Data, audioData) {
+		t.Fatalf("event = %#v, want reference audio delta", event)
+	}
 }
 
 func TestGoogleRealtimeSessionClonesReferenceOutputAudio(t *testing.T) {
