@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -396,7 +397,7 @@ func TestAWSLLMStreamCloseClosesLateReferenceProviderStartup(t *testing.T) {
 	close(client.release)
 
 	deadline := time.After(time.Second)
-	for !reader.closed {
+	for !reader.isClosed() {
 		select {
 		case <-deadline:
 			t.Fatal("late provider stream closed = false, want Close to release Bedrock stream returned after cancellation")
@@ -578,7 +579,7 @@ func TestAWSLLMStreamNextAfterCloseReturnsReferenceEOF(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if !reader.closed {
+	if !reader.isClosed() {
 		t.Fatal("provider stream closed = false, want Close to cancel Bedrock stream")
 	}
 	chunk, err := stream.Next()
@@ -1589,6 +1590,7 @@ func assertToolResultTextBlock(t *testing.T, blocks []awstypes.ContentBlock, ind
 }
 
 type fakeAWSLLMReader struct {
+	mu     sync.Mutex
 	events chan awstypes.ConverseStreamOutput
 	err    error
 	closed bool
@@ -1660,8 +1662,16 @@ func (r *fakeAWSLLMReader) Events() <-chan awstypes.ConverseStreamOutput {
 }
 
 func (r *fakeAWSLLMReader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.closed = true
 	return nil
+}
+
+func (r *fakeAWSLLMReader) isClosed() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.closed
 }
 
 func (r *fakeAWSLLMReader) Err() error {

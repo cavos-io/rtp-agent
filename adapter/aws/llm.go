@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
@@ -430,6 +431,7 @@ func buildAWSToolChoice(choice llm.ToolChoice) types.ToolChoice {
 }
 
 type awsLLMStream struct {
+	mu           sync.Mutex
 	client       awsLLMClient
 	ctx          context.Context
 	request      *bedrockruntime.ConverseStreamInput
@@ -721,7 +723,7 @@ func awsGroupID(itemID string, groupID *string) string {
 }
 
 func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
-	if s.closed {
+	if s.isClosed() {
 		return nil, io.EOF
 	}
 	if s.chunks != nil {
@@ -729,7 +731,7 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		if ok {
 			return chunk, nil
 		}
-		if s.closed {
+		if s.isClosed() {
 			return nil, io.EOF
 		}
 		select {
@@ -752,9 +754,9 @@ func (s *awsLLMStream) readLoop() {
 		}
 		return
 	}
-	if s.closed {
-		if s.stream != nil {
-			_ = s.stream.Close()
+	if s.isClosed() {
+		if stream := s.currentProviderStream(); stream != nil {
+			_ = stream.Close()
 		}
 		return
 	}
@@ -776,7 +778,7 @@ func (s *awsLLMStream) readLoop() {
 }
 
 func (s *awsLLMStream) open() error {
-	if s.stream != nil {
+	if s.currentProviderStream() != nil {
 		return nil
 	}
 	if s.client == nil {
@@ -801,7 +803,17 @@ func (s *awsLLMStream) open() error {
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
 	}
 	s.requestID, _ = awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
-	s.stream = out.GetStream()
+	stream := out.GetStream()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		if stream != nil {
+			_ = stream.Close()
+		}
+		return io.EOF
+	}
+	s.stream = stream
+	s.mu.Unlock()
 	return nil
 }
 
@@ -913,20 +925,37 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 
 func (s *awsLLMStream) Close() error {
 	s.closeContext()
+	s.mu.Lock()
 	s.closed = true
+	stream := s.stream
+	s.mu.Unlock()
 	if s.chunkStream != nil {
 		s.chunkStream.Close()
 	}
-	if s.stream == nil {
+	if stream == nil {
 		return nil
 	}
-	s.stream.Close()
+	stream.Close()
 	return nil
 }
 
 func (s *awsLLMStream) closeContext() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
 	}
+}
+
+func (s *awsLLMStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
+}
+
+func (s *awsLLMStream) currentProviderStream() *bedrockruntime.ConverseStreamEventStream {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stream
 }
