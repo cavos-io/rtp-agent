@@ -845,6 +845,10 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 				continue
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStart:
+			if v.Value.Start == nil {
+				s.closeContext()
+				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: contentBlockStart missing start", !s.emittedChunk)
+			}
 			if toolStart, ok := v.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
 				if toolStart.Value.ToolUseId == nil || toolStart.Value.Name == nil {
 					s.closeContext()
