@@ -3377,13 +3377,14 @@ func TestAWSRealtimeSessionToolUpdateRecycleClearsStalePendingTool(t *testing.T)
 	if event.Reconnect == nil {
 		t.Fatal("Reconnect = nil, want reference tool recycle")
 	}
-	if !first.closed {
+	if !first.isClosed() {
 		t.Fatal("first stream closed = false, want stale pending tool recycle")
 	}
-	if len(second.sent) == 0 {
+	secondSent := second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no events, want restarted prompt with new tools")
 	}
-	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, second.sent[1]), "event", "promptStart", "toolConfiguration")
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, secondSent[1]), "event", "promptStart", "toolConfiguration")
 	tools, ok := toolConfig["tools"].([]any)
 	if !ok || len(tools) != 1 {
 		t.Fatalf("recycled tools = %#v, want one tool", toolConfig["tools"])
