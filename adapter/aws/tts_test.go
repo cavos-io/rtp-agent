@@ -903,6 +903,27 @@ func TestAWSTTSChunkedStreamEOFAndClose(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamClosesReferenceBodyAfterFinalEOF(t *testing.T) {
+	body := &countingAWSReadCloser{}
+	stream := &awsTTSChunkedStream{
+		stream: body,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next err = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("Next = %+v, want final marker", audio)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker = %v, want EOF", err)
+	}
+	if body.closed != 1 {
+		t.Fatalf("body Close calls = %d, want 1 after clean final EOF", body.closed)
+	}
+}
+
 func TestAWSTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	body := &countingAWSReadCloser{}
 	provider := newAWSTTSWithClient(nil, "")
