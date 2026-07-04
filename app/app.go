@@ -107,6 +107,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -183,6 +184,7 @@ type appGoogleRealtimeConfig struct {
 	contextWindowCompression *genai.ContextWindowCompressionConfig
 	thinkingConfig           *genai.ThinkingConfig
 	mediaResolution          genai.MediaResolution
+	imageEncodeOptions       *images.EncodeOptions
 	sessionResumptionHandle  string
 	connectOptions           *llm.APIConnectOptions
 	toolResponseScheduling   genai.FunctionResponseScheduling
@@ -265,6 +267,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.mediaResolution != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeMediaResolution(c.mediaResolution))
+	}
+	if c.imageEncodeOptions != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeImageEncodeOptions(*c.imageEncodeOptions))
 	}
 	if c.sessionResumptionHandle != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeSessionResumptionHandle(c.sessionResumptionHandle))
@@ -7194,6 +7199,7 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.contextWindowCompression = googleRealtimeContextWindowCompressionFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.thinkingConfig = googleRealtimeThinkingConfigFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.mediaResolution = genai.MediaResolution(modelOptionString(cfg.RealtimeModelOptions, "media_resolution"))
+	googleCfg.imageEncodeOptions = googleRealtimeImageEncodeOptionsFromModelOption(cfg.RealtimeModelOptions["image_encode_options"])
 	googleCfg.sessionResumptionHandle = modelOptionString(cfg.RealtimeModelOptions, "session_resumption_handle")
 	googleCfg.connectOptions = googleRealtimeConnectOptionsFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.toolResponseScheduling = genai.FunctionResponseScheduling(modelOptionString(cfg.RealtimeModelOptions, "tool_response_scheduling"))
@@ -7268,6 +7274,41 @@ func googleRealtimeInputConfigFromOptions(options map[string]any) *genai.Realtim
 		return nil
 	}
 	return &config
+}
+
+func googleRealtimeImageEncodeOptionsFromModelOption(value any) *images.EncodeOptions {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	result := images.NewEncodeOptions()
+	if format := modelOptionString(options, "format"); format != "" {
+		result.Format = format
+	}
+	if quality, ok := modelOptionIntValue(options, "quality"); ok {
+		result.Quality = quality
+	}
+	if width, ok := modelOptionIntValue(options, "width"); ok {
+		result.Width = width
+	}
+	if height, ok := modelOptionIntValue(options, "height"); ok {
+		result.Height = height
+	}
+	if strategy := modelOptionString(options, "strategy"); strategy != "" {
+		result.Strategy = strategy
+	}
+	if resizeOptions, ok := options["resize_options"].(map[string]any); ok {
+		if width, ok := modelOptionIntValue(resizeOptions, "width"); ok {
+			result.Width = width
+		}
+		if height, ok := modelOptionIntValue(resizeOptions, "height"); ok {
+			result.Height = height
+		}
+		if strategy := modelOptionString(resizeOptions, "strategy"); strategy != "" {
+			result.Strategy = strategy
+		}
+	}
+	return &result
 }
 
 var googleLLMExtraParamKeys = []string{

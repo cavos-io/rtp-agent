@@ -15138,6 +15138,47 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeMediaResolutionOptions(t *test
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeImageEncodeOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", `image_encode_options={"format":"PNG","quality":88,"resize_options":{"width":320,"height":180,"strategy":"skew"}}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.imageEncodeOptions == nil {
+		t.Fatal("imageEncodeOptions = nil, want reference encode options")
+	}
+	if capturedCfg.imageEncodeOptions.Format != "PNG" {
+		t.Fatalf("Format = %q, want PNG", capturedCfg.imageEncodeOptions.Format)
+	}
+	if capturedCfg.imageEncodeOptions.Quality != 88 {
+		t.Fatalf("Quality = %d, want 88", capturedCfg.imageEncodeOptions.Quality)
+	}
+	if capturedCfg.imageEncodeOptions.Width != 320 {
+		t.Fatalf("Width = %d, want 320", capturedCfg.imageEncodeOptions.Width)
+	}
+	if capturedCfg.imageEncodeOptions.Height != 180 {
+		t.Fatalf("Height = %d, want 180", capturedCfg.imageEncodeOptions.Height)
+	}
+	if capturedCfg.imageEncodeOptions.Strategy != "skew" {
+		t.Fatalf("Strategy = %q, want skew", capturedCfg.imageEncodeOptions.Strategy)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleRealtimeSessionResumptionOptions(t *testing.T) {
 	original := appNewGoogleRealtime
 	defer func() { appNewGoogleRealtime = original }()
