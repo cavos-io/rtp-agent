@@ -944,9 +944,6 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		s.emitGenerationCreated()
 	}
 	s.trackGenerationContentStart(payload)
-	if s.turns != nil {
-		s.turns.feed(payload)
-	}
 	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
@@ -977,14 +974,14 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			if !s.hasPendingTools() {
 				s.closeGeneration()
 			}
-			return true
-		}
-		if s.shouldStoreProviderUserText(contentID, role) {
-			s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
-		}
-		if s.isProviderAssistantText(contentID) {
-			s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
-			s.sendGenerationText(contentID, textContent)
+		} else {
+			if s.shouldStoreProviderUserText(contentID, role) {
+				s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
+			}
+			if s.isProviderAssistantText(contentID) {
+				s.updateProviderTextHistory(llm.ChatRoleAssistant, textContent, "")
+				s.sendGenerationText(contentID, textContent)
+			}
 		}
 	}
 	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
@@ -1008,6 +1005,9 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if awsRealtimeNestedString(payload, "event", "contentEnd", "type") == "AUDIO" &&
 		awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
 		s.closeGeneration()
+	}
+	if s.turns != nil {
+		s.turns.feed(payload)
 	}
 	return true
 }

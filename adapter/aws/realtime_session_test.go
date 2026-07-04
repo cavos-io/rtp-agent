@@ -1842,6 +1842,38 @@ func TestAWSRealtimeSessionClosesReferenceGenerationOnBargeIn(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionClosesReferenceGenerationBeforeBargeInSpeechStart(t *testing.T) {
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
+	generation, _ := session.ensureGenerationWithCreated("response-1")
+	checked := false
+	session.turns = newAWSRealtimeTurnTracker(func(event llm.RealtimeEvent) {
+		if event.Type != llm.RealtimeEventTypeSpeechStarted {
+			return
+		}
+		checked = true
+		select {
+		case _, ok := <-generation.textCh:
+			if ok {
+				t.Fatal("generation TextCh still open when barge-in speech_started emitted")
+			}
+		default:
+			t.Fatal("generation TextCh still open when barge-in speech_started emitted")
+		}
+	}, session.emitGenerationCreated)
+
+	session.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{
+				"content":   awsRealtimeBargeInContent,
+				"contentId": "barge-in-1",
+			},
+		},
+	})
+	if !checked {
+		t.Fatal("barge-in did not emit speech_started")
+	}
+}
+
 func TestAWSRealtimeSessionMarksReferenceAssistantMessageInterruptedOnBargeIn(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -2567,6 +2599,7 @@ func TestAWSRealtimeSessionUpdateChatContextSendsInteractiveUserText(t *testing.
 		t.Fatalf("Session error = %v", err)
 	}
 	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
 
 	ctx := llm.NewChatContext()
 	ctx.Append(&llm.ChatMessage{
