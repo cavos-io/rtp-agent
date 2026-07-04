@@ -26,12 +26,19 @@ import (
 )
 
 const (
-	defaultAWSRealtimeModel          = "amazon.nova-2-sonic-v1:0"
-	defaultAWSRealtimeNovaSonic1     = "amazon.nova-sonic-v1:0"
-	defaultAWSRealtimeNovaSonic2     = "amazon.nova-2-sonic-v1:0"
+	AWSRealtimeModelNovaSonic1       = "amazon.nova-sonic-v1:0"
+	AWSRealtimeModelNovaSonic2       = "amazon.nova-2-sonic-v1:0"
+	AWSRealtimeModalitiesAudio       = "audio"
+	AWSRealtimeModalitiesMixed       = "mixed"
+	AWSRealtimeTurnDetectionHigh     = "HIGH"
+	AWSRealtimeTurnDetectionMedium   = "MEDIUM"
+	AWSRealtimeTurnDetectionLow      = "LOW"
+	defaultAWSRealtimeModel          = AWSRealtimeModelNovaSonic2
+	defaultAWSRealtimeNovaSonic1     = AWSRealtimeModelNovaSonic1
+	defaultAWSRealtimeNovaSonic2     = AWSRealtimeModelNovaSonic2
 	defaultAWSRealtimeVoice          = "tiffany"
-	defaultAWSRealtimeTurnDetection  = "MEDIUM"
-	defaultAWSRealtimeModalities     = "mixed"
+	defaultAWSRealtimeTurnDetection  = AWSRealtimeTurnDetectionMedium
+	defaultAWSRealtimeModalities     = AWSRealtimeModalitiesMixed
 	defaultAWSRealtimeMaxMessages    = 40
 	defaultAWSRealtimeMaxMessageSize = 1024
 	defaultAWSRealtimeMaxRestarts    = 3
@@ -41,7 +48,7 @@ const (
 	defaultAWSRealtimeGenerateReply  = 10 * time.Second
 	awsRealtimeCredentialExpirySlack = 3 * time.Minute
 	awsRealtimeMinRecycleDuration    = 10 * time.Second
-	awsRealtimeAudioModalities       = "audio"
+	awsRealtimeAudioModalities       = AWSRealtimeModalitiesAudio
 	awsRealtimeProvider              = "Amazon"
 	defaultAWSRealtimeSystemPrompt   = "Your name is Sonic, and you are a friendly and enthusiastic voice assistant. " +
 		"You love helping people and having natural conversations. " +
@@ -70,6 +77,47 @@ var awsRealtimeRecoverableReadErrorMessages = []string{
 	"ModelStreamErrorException",
 	"ModelTimeoutException",
 	"InvalidEventBytes",
+}
+
+var awsRealtimeSonic1Voices = []string{
+	"matthew",
+	"tiffany",
+	"amy",
+	"lupe",
+	"carlos",
+	"ambre",
+	"florian",
+	"greta",
+	"lennart",
+	"beatrice",
+	"lorenzo",
+}
+
+var awsRealtimeSonic2Voices = []string{
+	"matthew",
+	"tiffany",
+	"amy",
+	"olivia",
+	"lupe",
+	"carlos",
+	"ambre",
+	"florian",
+	"tina",
+	"lennart",
+	"beatrice",
+	"lorenzo",
+	"carolina",
+	"leo",
+	"arjun",
+	"kiara",
+}
+
+func AWSRealtimeSonic1Voices() []string {
+	return append([]string(nil), awsRealtimeSonic1Voices...)
+}
+
+func AWSRealtimeSonic2Voices() []string {
+	return append([]string(nil), awsRealtimeSonic2Voices...)
 }
 
 type AWSRealtimeModel struct {
