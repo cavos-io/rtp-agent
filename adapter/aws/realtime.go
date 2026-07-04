@@ -202,17 +202,13 @@ func WithAWSRealtimeRegion(region string) AWSRealtimeOption {
 
 func WithAWSRealtimeVoice(voice string) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
-		if voice != "" {
-			provider.voice = voice
-		}
+		provider.voice = voice
 	}
 }
 
 func WithAWSRealtimeTurnDetection(turnDetection string) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
-		if turnDetection != "" {
-			provider.turnDetection = turnDetection
-		}
+		provider.turnDetection = turnDetection
 	}
 }
 

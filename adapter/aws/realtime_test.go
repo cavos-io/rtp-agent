@@ -59,6 +59,20 @@ func TestAWSRealtimeDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeOptionsAllowReferenceEmptyVoiceAndTurnDetection(t *testing.T) {
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeVoice(""),
+		WithAWSRealtimeTurnDetection(""),
+	)
+
+	if provider.Voice() != "" {
+		t.Fatalf("Voice = %q, want explicit empty reference voice", provider.Voice())
+	}
+	if provider.TurnDetection() != "" {
+		t.Fatalf("TurnDetection = %q, want explicit empty reference turn detection", provider.TurnDetection())
+	}
+}
+
 func TestAWSRealtimeMaxSessionDurationUsesReferenceEnv(t *testing.T) {
 	t.Setenv("LK_SESSION_MAX_DURATION", "45")
 
