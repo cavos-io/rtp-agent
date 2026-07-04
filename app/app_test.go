@@ -13675,6 +13675,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceModelNameOption(t *testing.T) 
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyModelNameOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"model_name": ""},
+	})
+
+	if !googleCfg.modelSet {
+		t.Fatal("modelSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.model != "" {
+		t.Fatalf("model = %q, want explicit empty model option", googleCfg.model)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceNameOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"voice_name": "en-US-Chirp3-HD-Charon"},

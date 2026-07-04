@@ -127,6 +127,7 @@ type appGoogleTTSConfig struct {
 	gender               string
 	cloneKey             string
 	model                string
+	modelSet             bool
 	prompt               string
 	speakingRate         float64
 	pitch                float64
@@ -412,7 +413,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.cloneKey != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoiceCloneKey(cfg.cloneKey))
 	}
-	if cfg.model != "" {
+	if cfg.modelSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSModel(cfg.model))
 	}
 	if cfg.prompt != "" {
@@ -4513,6 +4514,7 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		gender:      cfg.TTSGender,
 		cloneKey:    cfg.TTSVoiceID,
 		model:       cfg.TTSModel,
+		modelSet:    cfg.TTSModel != "",
 		prompt:      cfg.TTSInstructions,
 		sampleRate:  cfg.TTSSampleRate,
 		streaming:   cfg.TTSStreaming,
@@ -4539,8 +4541,11 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	if googleCfg.cloneKey == "" {
 		googleCfg.cloneKey = modelOptionString(cfg.TTSModelOptions, "voice_cloning_key")
 	}
-	if googleCfg.model == "" {
-		googleCfg.model = modelOptionString(cfg.TTSModelOptions, "model_name")
+	if !googleCfg.modelSet {
+		if modelName, ok := modelOptionStringValue(cfg.TTSModelOptions, "model_name"); ok {
+			googleCfg.model = modelName
+			googleCfg.modelSet = true
+		}
 	}
 	if googleCfg.prompt == "" {
 		googleCfg.prompt = modelOptionString(cfg.TTSModelOptions, "prompt")
