@@ -14923,7 +14923,7 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeGenerationOptions(t *testing.T
 
 	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
-	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "temperature=0.2,max_output_tokens=96,top_p=0.7,top_k=32")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "temperature=0.2,max_output_tokens=96,top_p=0.7,top_k=32,candidate_count=2,presence_penalty=0.2,frequency_penalty=0.3")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -14943,6 +14943,15 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeGenerationOptions(t *testing.T
 	}
 	if capturedCfg.topK != 32 {
 		t.Fatalf("topK = %d, want 32", capturedCfg.topK)
+	}
+	if capturedCfg.candidateCount != 2 {
+		t.Fatalf("candidateCount = %d, want 2", capturedCfg.candidateCount)
+	}
+	if capturedCfg.presencePenalty == nil || *capturedCfg.presencePenalty != 0.2 {
+		t.Fatalf("presencePenalty = %#v, want 0.2", capturedCfg.presencePenalty)
+	}
+	if capturedCfg.frequencyPenalty == nil || *capturedCfg.frequencyPenalty != 0.3 {
+		t.Fatalf("frequencyPenalty = %#v, want 0.3", capturedCfg.frequencyPenalty)
 	}
 }
 

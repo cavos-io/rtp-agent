@@ -170,6 +170,9 @@ type appGoogleRealtimeConfig struct {
 	maxOutputTokens          int
 	topP                     *float64
 	topK                     int
+	candidateCount           int
+	presencePenalty          *float64
+	frequencyPenalty         *float64
 	proactivity              *bool
 	affectiveDialog          *bool
 	apiVersion               string
@@ -223,6 +226,15 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.topK > 0 {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeTopK(c.topK))
+	}
+	if c.candidateCount > 0 {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeCandidateCount(c.candidateCount))
+	}
+	if c.presencePenalty != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimePresencePenalty(*c.presencePenalty))
+	}
+	if c.frequencyPenalty != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeFrequencyPenalty(*c.frequencyPenalty))
 	}
 	if c.proactivity != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeProactivity(*c.proactivity))
@@ -7151,6 +7163,9 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.maxOutputTokens = modelOptionInt(cfg.RealtimeModelOptions, "max_output_tokens")
 	googleCfg.topP = modelOptionFloat(cfg.RealtimeModelOptions, "top_p")
 	googleCfg.topK = modelOptionInt(cfg.RealtimeModelOptions, "top_k")
+	googleCfg.candidateCount = modelOptionInt(cfg.RealtimeModelOptions, "candidate_count")
+	googleCfg.presencePenalty = modelOptionFloat(cfg.RealtimeModelOptions, "presence_penalty")
+	googleCfg.frequencyPenalty = modelOptionFloat(cfg.RealtimeModelOptions, "frequency_penalty")
 	if proactivity := modelOptionBool(cfg.RealtimeModelOptions, "proactivity"); proactivity != nil {
 		googleCfg.proactivity = proactivity
 	}
