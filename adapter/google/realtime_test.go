@@ -1559,6 +1559,56 @@ func TestGoogleRealtimeSessionClearAudioPreservesReferenceBufferedTail(t *testin
 	}
 }
 
+func TestGoogleRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	for i := 0; i < 800; i++ {
+		err = session.PushAudio(&audiomodel.AudioFrame{
+			Data:              []byte{1, 0},
+			SampleRate:        48000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		})
+		if err != nil {
+			t.Fatalf("PushAudio first phase frame %d error = %v", i, err)
+		}
+	}
+	if len(liveSession.inputs) != 0 {
+		t.Fatalf("live inputs after 800 source samples = %d, want no 16 kHz chunk yet", len(liveSession.inputs))
+	}
+
+	for i := 800; i < 2400; i++ {
+		err = session.PushAudio(&audiomodel.AudioFrame{
+			Data:              []byte{1, 0},
+			SampleRate:        48000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		})
+		if err != nil {
+			t.Fatalf("PushAudio second phase frame %d error = %v", i, err)
+		}
+	}
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs after 2400 source samples = %d, want one 800-sample 16 kHz chunk", len(liveSession.inputs))
+	}
+	audio := liveSession.inputs[0].Audio
+	if audio == nil || audio.MIMEType != "audio/pcm;rate=16000" {
+		t.Fatalf("audio input = %#v, want reference PCM 16 kHz blob", audio)
+	}
+	if len(audio.Data) != 1600 {
+		t.Fatalf("audio data bytes = %d, want 800 mono samples", len(audio.Data))
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
