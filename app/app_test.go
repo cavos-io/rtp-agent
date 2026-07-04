@@ -13629,6 +13629,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceNameOption(t *testing.T) 
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceCloningKeyOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"voice_cloning_key": "clone-key-test"},
+	})
+
+	if googleCfg.cloneKey != "clone-key-test" {
+		t.Fatalf("clone key = %q, want model option voice_cloning_key", googleCfg.cloneKey)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"
