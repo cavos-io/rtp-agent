@@ -312,6 +312,55 @@ func TestAWSLLMChatReturnsBeforeReferenceProviderStreamStarts(t *testing.T) {
 	close(client.release)
 }
 
+func TestAWSLLMStreamCloseUnblocksPendingReferenceStartupNext(t *testing.T) {
+	client := &blockingAWSLLMClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	defer close(client.release)
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider stream did not start")
+	}
+
+	nextDone := make(chan error, 1)
+	go func() {
+		chunk, err := stream.Next()
+		if chunk != nil {
+			nextDone <- fmt.Errorf("Next chunk = %#v, want nil after Close", chunk)
+			return
+		}
+		nextDone <- err
+	}()
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next error = %v, want EOF after Close", err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("Next remained blocked behind provider startup after Close")
+	}
+}
+
 func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
 	provider := &AWSLLM{
 		client: fakeAWSLLMClient{err: errors.New("stop after capture")},

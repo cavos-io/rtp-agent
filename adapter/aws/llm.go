@@ -729,6 +729,9 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		if ok {
 			return chunk, nil
 		}
+		if s.closed {
+			return nil, io.EOF
+		}
 		select {
 		case err := <-s.errCh:
 			return nil, err
@@ -902,15 +905,14 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 
 func (s *awsLLMStream) Close() error {
 	s.closeContext()
-	if s.stream == nil {
-		s.closed = true
-		return nil
-	}
-	s.stream.Close()
+	s.closed = true
 	if s.chunkStream != nil {
 		s.chunkStream.Close()
 	}
-	s.closed = true
+	if s.stream == nil {
+		return nil
+	}
+	s.stream.Close()
 	return nil
 }
 
