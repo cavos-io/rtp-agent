@@ -13730,6 +13730,19 @@ func TestGoogleTTSConfigFromAppConfigPreservesReferenceZeroPitchOption(t *testin
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceZeroVolumeGainOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"volume_gain_db": 0.0},
+	})
+
+	if !googleCfg.volumeGainDBSet {
+		t.Fatal("volumeGainDBSet = false, want true for explicit zero model option")
+	}
+	if googleCfg.volumeGainDB != 0 {
+		t.Fatalf("volumeGainDB = %v, want explicit zero model option", googleCfg.volumeGainDB)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceModelNameOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"model_name": "chirp_3"},
