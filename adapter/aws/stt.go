@@ -693,22 +693,8 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 }
 
 func (s *awsSTTStream) Flush() error {
-	stream, closed := s.streamForSend()
-	if closed {
+	if s.isClosed() {
 		return io.ErrClosedPipe
-	}
-	if stream == nil {
-		return llm.NewAPIConnectionError("AWS Transcribe stream is not initialized")
-	}
-	if err := stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
-		Value: types.AudioEvent{
-			AudioChunk: []byte{},
-		},
-	}); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
-		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
 	}
 	return nil
 }
@@ -731,12 +717,6 @@ func (s *awsSTTStream) Close() error {
 	})
 	_ = stream.Close()
 	return nil
-}
-
-func (s *awsSTTStream) streamForSend() (awsSTTEventStream, bool) {
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
-	return s.stream, s.closed
 }
 
 func (s *awsSTTStream) closeStream() (awsSTTEventStream, bool) {
