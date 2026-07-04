@@ -3781,10 +3781,10 @@ func TestAWSRealtimeSessionGenerateReplyUsesReferenceTimeout(t *testing.T) {
 		t.Fatalf("Session error = %v", err)
 	}
 	defer func() {
-		stream.blockSend = false
+		stream.setBlocked(false)
 		_ = session.Close()
 	}()
-	stream.blockSend = true
+	stream.setBlocked(true)
 
 	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask for the card number"})
 
@@ -4450,15 +4450,23 @@ func (s *fakeAWSRealtimeStream) Err() error {
 
 type blockingAWSRealtimeStream struct {
 	*fakeAWSRealtimeStream
-	blockSend bool
+	blockSend atomic.Bool
 }
 
 func (s *blockingAWSRealtimeStream) Send(ctx context.Context, event awstypes.InvokeModelWithBidirectionalStreamInput) error {
-	if !s.blockSend {
+	if !s.isBlocked() {
 		return s.fakeAWSRealtimeStream.Send(ctx, event)
 	}
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+func (s *blockingAWSRealtimeStream) setBlocked(block bool) {
+	s.blockSend.Store(block)
+}
+
+func (s *blockingAWSRealtimeStream) isBlocked() bool {
+	return s.blockSend.Load()
 }
 
 type blockingAudioInputAWSRealtimeStream struct {
