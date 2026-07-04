@@ -178,6 +178,7 @@ type appGoogleRealtimeConfig struct {
 	proactivity              *bool
 	affectiveDialog          *bool
 	apiVersion               string
+	httpOptions              *genai.HTTPOptions
 	realtimeInputConfig      *genai.RealtimeInputConfig
 	contextWindowCompression *genai.ContextWindowCompressionConfig
 	thinkingConfig           *genai.ThinkingConfig
@@ -249,6 +250,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.apiVersion != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeAPIVersion(c.apiVersion))
+	}
+	if c.httpOptions != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeHTTPOptions(c.httpOptions))
 	}
 	if c.realtimeInputConfig != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeInputConfig(c.realtimeInputConfig))
@@ -7127,7 +7131,7 @@ func llmExtraParamsFromConfig(cfg AppConfig) map[string]any {
 				params = make(map[string]any)
 			}
 			if key == "http_options" {
-				if httpOptions := googleLLMHTTPOptionsFromModelOption(value); httpOptions != nil {
+				if httpOptions := googleHTTPOptionsFromModelOption(value); httpOptions != nil {
 					params[key] = httpOptions
 				}
 				continue
@@ -7185,6 +7189,7 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 		googleCfg.affectiveDialog = affectiveDialog
 	}
 	googleCfg.apiVersion = modelOptionString(cfg.RealtimeModelOptions, "api_version")
+	googleCfg.httpOptions = googleHTTPOptionsFromModelOption(cfg.RealtimeModelOptions["http_options"])
 	googleCfg.realtimeInputConfig = googleRealtimeInputConfigFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.contextWindowCompression = googleRealtimeContextWindowCompressionFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.thinkingConfig = googleRealtimeThinkingConfigFromOptions(cfg.RealtimeModelOptions)
@@ -7299,7 +7304,7 @@ var googleLLMExtraParamKeys = []string{
 	"retrieval_config",
 }
 
-func googleLLMHTTPOptionsFromModelOption(value any) *genai.HTTPOptions {
+func googleHTTPOptionsFromModelOption(value any) *genai.HTTPOptions {
 	options, ok := value.(map[string]any)
 	if !ok {
 		return nil

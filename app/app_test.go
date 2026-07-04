@@ -15251,6 +15251,41 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeToolBehaviorOptions(t *testing
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeHTTPOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", `http_options={"timeout":2500,"api_version":"v1alpha","headers":{"x-test":["yes"]}}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.httpOptions == nil {
+		t.Fatal("httpOptions = nil, want reference HTTP options")
+	}
+	if capturedCfg.httpOptions.Timeout == nil || *capturedCfg.httpOptions.Timeout != 2500*time.Millisecond {
+		t.Fatalf("httpOptions timeout = %#v, want 2.5s", capturedCfg.httpOptions.Timeout)
+	}
+	if capturedCfg.httpOptions.APIVersion != "v1alpha" {
+		t.Fatalf("httpOptions api version = %q, want v1alpha", capturedCfg.httpOptions.APIVersion)
+	}
+	if got := capturedCfg.httpOptions.Headers["x-test"]; len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("httpOptions headers = %#v, want x-test yes", capturedCfg.httpOptions.Headers)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
