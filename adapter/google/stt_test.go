@@ -3352,13 +3352,16 @@ func TestGoogleSTTStreamRestartsV2AfterReference409(t *testing.T) {
 	close(restartedRecv)
 }
 
-func TestGoogleSTTStreamPropagatesClientErrors(t *testing.T) {
-	wantErr := errors.New("stream error")
-	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: wantErr})
+func TestGoogleSTTStreamStartupErrorReturnsAPIConnectionError(t *testing.T) {
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{streamErr: errors.New("stream error")})
 
 	_, err := provider.Stream(context.Background(), "")
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Stream error = %v, want %v", err, wantErr)
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Stream error = %T %v, want APIConnectionError like reference generic stream wrapper", err, err)
+	}
+	if !connErr.Retryable {
+		t.Fatal("Stream APIConnectionError retryable = false, want true for startup connection failure")
 	}
 }
 

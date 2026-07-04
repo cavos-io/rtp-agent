@@ -582,11 +582,11 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language string, includeAlternativeLanguages bool) (speechpb.Speech_StreamingRecognizeClient, error) {
 	client, err := s.ensureClient(ctx)
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	stream, err := client.StreamingRecognize(ctx)
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	err = stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
@@ -599,7 +599,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 	})
 	if err != nil {
 		_ = stream.CloseSend()
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	return stream, nil
 }
@@ -631,15 +631,15 @@ func (s *GoogleSTT) ensureClient(ctx context.Context) (googleSpeechClient, error
 func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language string, includeAlternativeLanguages bool) (speechv2pb.Speech_StreamingRecognizeClient, error) {
 	clientV2, err := s.ensureClientV2(ctx)
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	recognizer := googleSTTRecognizer(s)
 	if recognizer == "" {
-		return nil, googleSTTStreamError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
+		return nil, googleSTTStartupError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
 	}
 	stream, err := clientV2.StreamingRecognize(ctx)
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	err = stream.Send(&speechv2pb.StreamingRecognizeRequest{
 		Recognizer: recognizer,
@@ -649,7 +649,7 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 	})
 	if err != nil {
 		_ = stream.CloseSend()
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	return stream, nil
 }
@@ -1775,6 +1775,29 @@ func googleSTTStreamError(err error) error {
 		return llm.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleSTTStatusRetryable(st.Code()))
 	}
 	return err
+}
+
+func googleSTTStartupError(err error) error {
+	mapped := googleSTTStreamError(err)
+	if mapped == nil {
+		return nil
+	}
+	if errors.Is(mapped, context.Canceled) {
+		return mapped
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(mapped, &timeoutErr) {
+		return mapped
+	}
+	var statusErr *llm.APIStatusError
+	if errors.As(mapped, &statusErr) {
+		return mapped
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(mapped, &connectionErr) {
+		return mapped
+	}
+	return llm.NewAPIConnectionError(mapped.Error())
 }
 
 func googleSTTStatusRetryable(code codes.Code) bool {
