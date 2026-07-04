@@ -13602,6 +13602,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferencePromptOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyPromptOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"prompt": ""},
+	})
+
+	if !googleCfg.promptSet {
+		t.Fatal("promptSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.prompt != "" {
+		t.Fatalf("prompt = %q, want explicit empty model option", googleCfg.prompt)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceLanguageOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"language": "id-ID"},

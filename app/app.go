@@ -131,6 +131,7 @@ type appGoogleTTSConfig struct {
 	model                string
 	modelSet             bool
 	prompt               string
+	promptSet            bool
 	speakingRate         float64
 	pitch                float64
 	sampleRate           *int
@@ -418,7 +419,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.modelSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSModel(cfg.model))
 	}
-	if cfg.prompt != "" {
+	if cfg.promptSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSPrompt(cfg.prompt))
 	}
 	if cfg.speakingRate != 0 {
@@ -4520,6 +4521,7 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		model:       cfg.TTSModel,
 		modelSet:    cfg.TTSModel != "",
 		prompt:      cfg.TTSInstructions,
+		promptSet:   cfg.TTSInstructions != "",
 		sampleRate:  cfg.TTSSampleRate,
 		streaming:   cfg.TTSStreaming,
 		ssml:        cfg.TTSEnableSSMLParsing,
@@ -4557,8 +4559,11 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 			googleCfg.modelSet = true
 		}
 	}
-	if googleCfg.prompt == "" {
-		googleCfg.prompt = modelOptionString(cfg.TTSModelOptions, "prompt")
+	if !googleCfg.promptSet {
+		if prompt, ok := modelOptionStringValue(cfg.TTSModelOptions, "prompt"); ok {
+			googleCfg.prompt = prompt
+			googleCfg.promptSet = true
+		}
 	}
 	if googleCfg.sampleRate == nil {
 		if sampleRate, ok := modelOptionIntValue(cfg.TTSModelOptions, "sample_rate"); ok {
