@@ -535,6 +535,17 @@ func TestGoogleSTTExposesInputSampleRate(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTPreservesReferenceExplicitZeroSampleRate(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTSampleRate(0))
+	if got := provider.InputSampleRate(); got != 0 {
+		t.Fatalf("InputSampleRate = %d, want explicit zero", got)
+	}
+	config := googleRecognitionConfig(provider, "en-US")
+	if got := config.GetSampleRateHertz(); got != 0 {
+		t.Fatalf("stream sample rate = %d, want explicit zero", got)
+	}
+}
+
 func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	client := &fakeGoogleSpeechClient{
 		recognizeResponse: &speechpb.RecognizeResponse{

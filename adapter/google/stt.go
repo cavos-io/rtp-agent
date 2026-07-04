@@ -172,9 +172,7 @@ func WithGoogleSTTWordTimeOffsets(enabled bool) GoogleSTTOption {
 
 func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if sampleRate > 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
