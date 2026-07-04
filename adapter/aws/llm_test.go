@@ -474,7 +474,7 @@ func TestAWSLLMChatAppliesReferenceProviderInferenceDefaults(t *testing.T) {
 	}
 }
 
-func TestAWSLLMChatForwardsReferenceAdditionalRequestFields(t *testing.T) {
+func TestAWSLLMChatIgnoresReferencePerCallAdditionalRequestFields(t *testing.T) {
 	provider := &AWSLLM{
 		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
@@ -494,8 +494,11 @@ func TestAWSLLMChatForwardsReferenceAdditionalRequestFields(t *testing.T) {
 	}
 	input := stream.(*awsLLMStream).request
 
-	if input == nil || input.AdditionalModelRequestFields == nil {
-		t.Fatalf("AdditionalModelRequestFields = %#v, want reference additional request fields", input)
+	if input == nil {
+		t.Fatal("ConverseStreamInput = nil")
+	}
+	if input.AdditionalModelRequestFields != nil {
+		t.Fatalf("AdditionalModelRequestFields = %#v, want nil for per-call reference extra_kwargs", input.AdditionalModelRequestFields)
 	}
 }
 
