@@ -434,21 +434,25 @@ func TestAWSRealtimeSessionUpdateToolsDefersReferenceActiveRecycle(t *testing.T)
 	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
 		t.Fatalf("UpdateTools active error = %v", err)
 	}
-	if first.closed {
+	firstClosed := first.isClosed()
+	if firstClosed {
 		t.Fatal("first stream closed synchronously, want reference deferred recycle")
 	}
-	if len(second.sent) != 0 {
-		t.Fatalf("second stream sent %d events synchronously, want deferred recycle", len(second.sent))
+	secondSent := second.snapshotSent()
+	if len(secondSent) != 0 {
+		t.Fatalf("second stream sent %d events synchronously, want deferred recycle", len(secondSent))
 	}
 
 	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 	if event.Reconnect == nil {
 		t.Fatal("Reconnect = nil, want deferred reference recycle notification")
 	}
-	if !first.closed {
+	firstClosed = first.isClosed()
+	if !firstClosed {
 		t.Fatal("first stream closed = false, want deferred active recycle")
 	}
-	if len(second.sent) == 0 {
+	secondSent = second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no events, want restarted prompt with new tools")
 	}
 }
