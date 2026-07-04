@@ -1065,6 +1065,30 @@ func TestGoogleRealtimeSessionAPIVersionOptionMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionExplicitEmptyAPIVersionMatchesReference(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeAPIVersion(""),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	config := connector.config
+	if config == nil || config.HTTPOptions == nil {
+		t.Fatalf("config = %#v, want HTTP options", config)
+	}
+	if config.HTTPOptions.APIVersion != "" {
+		t.Fatalf("api version = %q, want explicit empty reference value", config.HTTPOptions.APIVersion)
+	}
+}
+
 func TestGoogleRealtimeDefaultConnectorKeepsHTTPOptionsClientScoped(t *testing.T) {
 	timeout := 10 * time.Millisecond
 	model := &RealtimeModel{
