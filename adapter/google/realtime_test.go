@@ -2651,6 +2651,37 @@ func TestGoogleRealtimeSessionRetriesReferenceActiveReconnectFailure(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionActiveReconnectFailureIncludesReference1008Hint(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages: make(chan *genai.LiveServerMessage),
+		recvErr:        errors.New("websocket receive failed"),
+	}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	connector.connectErrs = []error{errors.New("websocket close 1008: policy violation")}
+	close(firstSession.serverMessages)
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	var connectionErr *llm.APIConnectionError
+	if event.Type != llm.RealtimeEventTypeError || !errors.As(event.Error, &connectionErr) {
+		t.Fatalf("event = %#v, want APIConnectionError event", event)
+	}
+	if !strings.Contains(connectionErr.Error(), "Hint: A 1008 policy violation error often indicates") {
+		t.Fatalf("active reconnect error = %v, want reference 1008 policy violation hint", connectionErr)
+	}
+}
+
 func TestGoogleRealtimeConnectWithRetryAppliesReferenceAttemptTimeout(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{
 		session: &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)},
