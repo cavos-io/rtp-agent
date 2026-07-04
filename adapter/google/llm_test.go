@@ -1102,6 +1102,25 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceModelSelectionConfigExt
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceModelSelectionConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"model_selection_config": map[string]any{
+				"feature_selection_preference": "PRIORITIZE_QUALITY",
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ModelSelectionConfig == nil {
+		t.Fatal("ModelSelectionConfig = nil, want dict-derived model selection config")
+	}
+	if config.ModelSelectionConfig.FeatureSelectionPreference != genai.FeatureSelectionPreferencePrioritizeQuality {
+		t.Fatalf("FeatureSelectionPreference = %q, want prioritize quality", config.ModelSelectionConfig.FeatureSelectionPreference)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceLabelsExtra(t *testing.T) {
 	labels := map[string]string{
 		"agent": "voice",

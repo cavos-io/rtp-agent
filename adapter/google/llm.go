@@ -651,8 +651,22 @@ func googleRoutingAutoModeParam(value any) (*genai.GenerationConfigRoutingConfig
 }
 
 func googleModelSelectionConfigParam(value any) (*genai.ModelSelectionConfig, bool) {
-	config, ok := value.(*genai.ModelSelectionConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.ModelSelectionConfig:
+		return config, config != nil
+	case genai.ModelSelectionConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.ModelSelectionConfig{}
+		if preference := googleStringParam(config["feature_selection_preference"]); preference != "" {
+			result.FeatureSelectionPreference = genai.FeatureSelectionPreference(preference)
+		} else if preference := googleStringParam(config["featureSelectionPreference"]); preference != "" {
+			result.FeatureSelectionPreference = genai.FeatureSelectionPreference(preference)
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleLabelsParam(value any) (map[string]string, bool) {
