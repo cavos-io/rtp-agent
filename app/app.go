@@ -156,13 +156,15 @@ func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
 }
 
 type appGoogleRealtimeConfig struct {
-	vertexAI      *bool
-	project       string
-	location      string
-	voice         string
-	language      string
-	modalities    []string
-	turnDetection *bool
+	vertexAI                 *bool
+	project                  string
+	location                 string
+	voice                    string
+	language                 string
+	modalities               []string
+	turnDetection            *bool
+	inputAudioTranscription  *bool
+	outputAudioTranscription *bool
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -187,6 +189,12 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.turnDetection != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeTurnDetection(*c.turnDetection))
+	}
+	if c.inputAudioTranscription != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeInputAudioTranscription(*c.inputAudioTranscription))
+	}
+	if c.outputAudioTranscription != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeOutputAudioTranscription(*c.outputAudioTranscription))
 	}
 	return opts
 }
@@ -7071,6 +7079,12 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.modalities = modelOptionStringList(cfg.RealtimeModelOptions, "modalities")
 	if turnDetection := modelOptionBool(cfg.RealtimeModelOptions, "turn_detection"); turnDetection != nil {
 		googleCfg.turnDetection = turnDetection
+	}
+	if inputAudioTranscription := modelOptionBool(cfg.RealtimeModelOptions, "input_audio_transcription"); inputAudioTranscription != nil {
+		googleCfg.inputAudioTranscription = inputAudioTranscription
+	}
+	if outputAudioTranscription := modelOptionBool(cfg.RealtimeModelOptions, "output_audio_transcription"); outputAudioTranscription != nil {
+		googleCfg.outputAudioTranscription = outputAudioTranscription
 	}
 	return googleCfg
 }
