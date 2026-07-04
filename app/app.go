@@ -174,6 +174,7 @@ type appGoogleRealtimeConfig struct {
 	affectiveDialog          *bool
 	apiVersion               string
 	realtimeInputConfig      *genai.RealtimeInputConfig
+	contextWindowCompression *genai.ContextWindowCompressionConfig
 	thinkingConfig           *genai.ThinkingConfig
 }
 
@@ -229,6 +230,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.realtimeInputConfig != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeInputConfig(c.realtimeInputConfig))
+	}
+	if c.contextWindowCompression != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeContextWindowCompression(c.contextWindowCompression))
 	}
 	if c.thinkingConfig != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeThinkingConfig(c.thinkingConfig))
@@ -7135,8 +7139,25 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	}
 	googleCfg.apiVersion = modelOptionString(cfg.RealtimeModelOptions, "api_version")
 	googleCfg.realtimeInputConfig = googleRealtimeInputConfigFromOptions(cfg.RealtimeModelOptions)
+	googleCfg.contextWindowCompression = googleRealtimeContextWindowCompressionFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.thinkingConfig = googleRealtimeThinkingConfigFromOptions(cfg.RealtimeModelOptions)
 	return googleCfg
+}
+
+func googleRealtimeContextWindowCompressionFromOptions(options map[string]any) *genai.ContextWindowCompressionConfig {
+	var config genai.ContextWindowCompressionConfig
+	if trigger, ok := modelOptionIntValue(options, "context_window_trigger_tokens"); ok {
+		value := int64(trigger)
+		config.TriggerTokens = &value
+	}
+	if target, ok := modelOptionIntValue(options, "context_window_target_tokens"); ok {
+		value := int64(target)
+		config.SlidingWindow = &genai.SlidingWindow{TargetTokens: &value}
+	}
+	if config.TriggerTokens == nil && config.SlidingWindow == nil {
+		return nil
+	}
+	return &config
 }
 
 func googleRealtimeThinkingConfigFromOptions(options map[string]any) *genai.ThinkingConfig {

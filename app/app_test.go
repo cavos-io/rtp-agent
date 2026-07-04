@@ -15043,6 +15043,40 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeThinkingConfigOptions(t *testi
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeContextWindowOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "context_window_trigger_tokens=4096,context_window_target_tokens=2048")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.contextWindowCompression == nil {
+		t.Fatal("contextWindowCompression = nil, want reference config")
+	}
+	if capturedCfg.contextWindowCompression.TriggerTokens == nil || *capturedCfg.contextWindowCompression.TriggerTokens != 4096 {
+		t.Fatalf("triggerTokens = %#v, want 4096", capturedCfg.contextWindowCompression.TriggerTokens)
+	}
+	if capturedCfg.contextWindowCompression.SlidingWindow == nil ||
+		capturedCfg.contextWindowCompression.SlidingWindow.TargetTokens == nil ||
+		*capturedCfg.contextWindowCompression.SlidingWindow.TargetTokens != 2048 {
+		t.Fatalf("slidingWindow = %#v, want target tokens 2048", capturedCfg.contextWindowCompression.SlidingWindow)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
