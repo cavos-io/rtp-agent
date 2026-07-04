@@ -989,7 +989,10 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	}
 	s.trackGenerationContentStart(payload)
 	if audioOutput := awsRealtimeNestedMap(payload, "event", "audioOutput"); audioOutput != nil {
-		audioContent := awsRealtimeMapString(audioOutput, "content")
+		audioContent, ok := awsRealtimeRequiredMapString(audioOutput, "content")
+		if !ok {
+			return true
+		}
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
 			s.closeGeneration()

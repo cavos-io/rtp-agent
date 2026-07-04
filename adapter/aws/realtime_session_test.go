@@ -1830,6 +1830,35 @@ func TestAWSRealtimeSessionStreamsReferenceEmptyAudioOutput(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionIgnoresReferenceAudioOutputMissingContent(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEventEventually(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","contentId":"audio-missing"}}}`)
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-missing"}}}`)
+
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	select {
+	case frame := <-msg.AudioCh:
+		t.Fatalf("generated audio frame = %#v, want none for missing reference content", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
