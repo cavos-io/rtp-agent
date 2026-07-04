@@ -1131,7 +1131,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		if !ok {
 			return true
 		}
-		data, err := base64.StdEncoding.DecodeString(audioContent)
+		data, err := decodeAWSRealtimeAudioContent(audioContent)
 		if err != nil {
 			s.closeGeneration()
 			s.emit(llm.RealtimeEvent{
@@ -1216,6 +1216,27 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		s.turns.feed(payload)
 	}
 	return true
+}
+
+func decodeAWSRealtimeAudioContent(content string) ([]byte, error) {
+	if content == "" {
+		return []byte{}, nil
+	}
+	filtered := make([]byte, 0, len(content))
+	for i := 0; i < len(content); i++ {
+		c := content[i]
+		switch {
+		case c >= 'A' && c <= 'Z',
+			c >= 'a' && c <= 'z',
+			c >= '0' && c <= '9',
+			c == '+', c == '/', c == '=':
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) == 0 {
+		return []byte{}, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
 
 func (s *awsRealtimeSession) handleMalformedContentStart(contentStart map[string]any) {
