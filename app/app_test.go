@@ -13949,6 +13949,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceVoiceActivityEventsOption(t *t
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceWordTimeOffsetsOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"enable_word_time_offsets": false},
+	})
+
+	if googleCfg.wordTimeOffsets == nil || *googleCfg.wordTimeOffsets {
+		t.Fatalf("wordTimeOffsets = %#v, want model option enable_word_time_offsets false", googleCfg.wordTimeOffsets)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{
