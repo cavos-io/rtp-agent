@@ -140,9 +140,10 @@ type appGoogleTTSConfig struct {
 }
 
 type appGoogleLLMConfig struct {
-	vertexAI *bool
-	project  string
-	location string
+	vertexAI    *bool
+	project     string
+	location    string
+	locationSet bool
 }
 
 func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
@@ -153,7 +154,7 @@ func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
 	if c.project != "" {
 		opts = append(opts, adaptergoogle.WithGoogleLLMProject(c.project))
 	}
-	if c.location != "" {
+	if c.locationSet {
 		opts = append(opts, adaptergoogle.WithGoogleLLMLocation(c.location))
 	}
 	return opts
@@ -7447,7 +7448,10 @@ func googleLLMConfigFromAppConfig(cfg AppConfig) appGoogleLLMConfig {
 		googleCfg.vertexAI = vertexAI
 	}
 	googleCfg.project = modelOptionString(cfg.LLMModelOptions, "project")
-	googleCfg.location = modelOptionString(cfg.LLMModelOptions, "location")
+	if location, ok := modelOptionStringValue(cfg.LLMModelOptions, "location"); ok {
+		googleCfg.location = location
+		googleCfg.locationSet = true
+	}
 	return googleCfg
 }
 

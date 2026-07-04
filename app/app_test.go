@@ -13430,6 +13430,19 @@ func TestDefaultConfigFromEnvSelectsGoogleLLMVertexModelOptions(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMConfigFromAppConfigPreservesReferenceEmptyLocationOption(t *testing.T) {
+	googleCfg := googleLLMConfigFromAppConfig(AppConfig{
+		LLMModelOptions: map[string]any{"location": ""},
+	})
+
+	if !googleCfg.locationSet {
+		t.Fatal("locationSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.location != "" {
+		t.Fatalf("location = %q, want explicit empty model option", googleCfg.location)
+	}
+}
+
 func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")

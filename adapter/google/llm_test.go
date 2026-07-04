@@ -129,6 +129,22 @@ func TestGoogleLLMClientConfigUsesReferenceVertexOptions(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMClientConfigRejectsReferenceEmptyVertexLocation(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_LOCATION", "europe-west1")
+
+	_, _, _, err := googleLLMClientConfig("", "gemini-test",
+		WithGoogleLLMVertexAI(true),
+		WithGoogleLLMProject("voice-project"),
+		WithGoogleLLMLocation(""),
+	)
+	if err == nil {
+		t.Fatal("googleLLMClientConfig error = nil, want reference empty Vertex location error")
+	}
+	if !strings.Contains(err.Error(), "Location is required for VertexAI") {
+		t.Fatalf("error = %v, want reference Vertex location guidance", err)
+	}
+}
+
 func TestGoogleLLMClientConfigUsesReferenceVertexEnvironment(t *testing.T) {
 	t.Setenv("GOOGLE_GENAI_USE_VERTEXAI", "1")
 	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project")
