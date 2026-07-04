@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -1873,6 +1874,44 @@ func TestAWSRealtimeSessionStreamsReferenceEmptyAudioOutput(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionPreservesReferenceQueuedGenerationAudio(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","contentId":"audio-queued"}}}`)
+
+	const total = 20
+	for i := range total {
+		audioBytes := []byte{byte(i), byte(i + 1)}
+		stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-queued","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	}
+
+	for i := range total {
+		select {
+		case frame := <-msg.AudioCh:
+			want := []byte{byte(i), byte(i + 1)}
+			if !bytes.Equal(frame.Data, want) {
+				t.Fatalf("queued audio frame %d = %v, want %v", i, frame.Data, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for queued audio frame %d of %d", i+1, total)
+		}
+	}
+}
+
 func TestAWSRealtimeSessionIgnoresReferenceAudioOutputMissingContent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -2855,8 +2894,8 @@ func TestAWSRealtimeSessionMarksReferenceToolPendingDuringEmission(t *testing.T)
 	var call *llm.FunctionCall
 	select {
 	case call = <-generation.functionCh:
-	default:
-		t.Fatal("function channel empty, want emitted tool call")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for emitted tool call")
 	}
 	if call.CallID != "tool-1" || call.Name != "lookup" {
 		t.Fatalf("function call = %#v, want lookup tool-1", call)

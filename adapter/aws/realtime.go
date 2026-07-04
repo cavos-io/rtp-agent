@@ -465,15 +465,122 @@ type awsRealtimeSession struct {
 }
 
 type awsRealtimeGeneration struct {
-	responseID   string
-	messageCh    chan llm.MessageGeneration
-	functionCh   chan *llm.FunctionCall
-	textCh       chan string
-	audioCh      chan *model.AudioFrame
-	modalitiesCh chan []string
-	contentTypes map[string]string
-	restarts     int
-	closeOnce    sync.Once
+	responseID     string
+	messageCh      chan llm.MessageGeneration
+	functionCh     <-chan *llm.FunctionCall
+	functionStream *awsRealtimeQueuedStream[*llm.FunctionCall]
+	textCh         <-chan string
+	textStream     *awsRealtimeQueuedStream[string]
+	audioCh        <-chan *model.AudioFrame
+	audioStream    *awsRealtimeQueuedStream[*model.AudioFrame]
+	modalitiesCh   chan []string
+	contentTypes   map[string]string
+	restarts       int
+	closeOnce      sync.Once
+}
+
+type awsRealtimeQueuedStream[T any] struct {
+	out       chan T
+	wake      chan struct{}
+	mu        sync.Mutex
+	queue     []T
+	closed    bool
+	outClosed bool
+	sending   bool
+}
+
+func newAWSRealtimeQueuedStream[T any]() *awsRealtimeQueuedStream[T] {
+	stream := &awsRealtimeQueuedStream[T]{
+		out:  make(chan T),
+		wake: make(chan struct{}, 1),
+	}
+	go stream.run()
+	return stream
+}
+
+func (s *awsRealtimeQueuedStream[T]) Chan() <-chan T {
+	if s == nil {
+		return nil
+	}
+	return s.out
+}
+
+func (s *awsRealtimeQueuedStream[T]) Send(value T) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.queue = append(s.queue, value)
+	s.notifyLocked()
+	return true
+}
+
+func (s *awsRealtimeQueuedStream[T]) Close() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if len(s.queue) == 0 && !s.sending {
+		s.closeOutLocked()
+		s.notifyLocked()
+		return
+	}
+	s.notifyLocked()
+}
+
+func (s *awsRealtimeQueuedStream[T]) closeOutLocked() {
+	if s.outClosed {
+		return
+	}
+	s.outClosed = true
+	close(s.out)
+}
+
+func (s *awsRealtimeQueuedStream[T]) notifyLocked() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (s *awsRealtimeQueuedStream[T]) run() {
+	for {
+		s.mu.Lock()
+		for len(s.queue) == 0 && !s.closed {
+			s.mu.Unlock()
+			<-s.wake
+			s.mu.Lock()
+		}
+		if len(s.queue) == 0 && s.closed {
+			s.closeOutLocked()
+			s.mu.Unlock()
+			return
+		}
+		value := s.queue[0]
+		var zero T
+		s.queue[0] = zero
+		s.queue = s.queue[1:]
+		s.sending = true
+		s.mu.Unlock()
+		s.out <- value
+		s.mu.Lock()
+		s.sending = false
+		if len(s.queue) == 0 && s.closed {
+			s.closeOutLocked()
+			s.mu.Unlock()
+			return
+		}
+		s.mu.Unlock()
+	}
 }
 
 type awsRealtimePendingGenerationStart struct {
@@ -1152,14 +1259,20 @@ func (s *awsRealtimeSession) ensureGenerationWithCreated(responseID string) (*aw
 	if responseID == "" {
 		responseID = uuid.NewString()
 	}
+	functionStream := newAWSRealtimeQueuedStream[*llm.FunctionCall]()
+	textStream := newAWSRealtimeQueuedStream[string]()
+	audioStream := newAWSRealtimeQueuedStream[*model.AudioFrame]()
 	generation := &awsRealtimeGeneration{
-		responseID:   responseID,
-		messageCh:    make(chan llm.MessageGeneration, 1),
-		functionCh:   make(chan *llm.FunctionCall, 8),
-		textCh:       make(chan string, 16),
-		audioCh:      make(chan *model.AudioFrame, 16),
-		modalitiesCh: make(chan []string, 1),
-		contentTypes: make(map[string]string),
+		responseID:     responseID,
+		messageCh:      make(chan llm.MessageGeneration, 1),
+		functionCh:     functionStream.Chan(),
+		functionStream: functionStream,
+		textCh:         textStream.Chan(),
+		textStream:     textStream,
+		audioCh:        audioStream.Chan(),
+		audioStream:    audioStream,
+		modalitiesCh:   make(chan []string, 1),
+		contentTypes:   make(map[string]string),
 	}
 	generation.modalitiesCh <- []string{"audio", "text"}
 	generation.messageCh <- llm.MessageGeneration{
@@ -1333,11 +1446,7 @@ func (s *awsRealtimeSession) sendGenerationAudio(contentID string, data []byte) 
 		NumChannels:       defaultAWSRealtimeChannels,
 		SamplesPerChannel: uint32(len(data) / 2),
 	}
-	select {
-	case generation.audioCh <- frame:
-	default:
-	}
-	return true
+	return generation.audioStream.Send(frame)
 }
 
 func (s *awsRealtimeSession) markLastAudioOutput() {
@@ -1357,10 +1466,7 @@ func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
 	if generation == nil || streamType != "ASSISTANT_TEXT" {
 		return
 	}
-	select {
-	case generation.textCh <- text:
-	default:
-	}
+	generation.textStream.Send(text)
 }
 
 func (s *awsRealtimeSession) sendGenerationFunction(call *llm.FunctionCall) bool {
@@ -1373,10 +1479,7 @@ func (s *awsRealtimeSession) sendGenerationFunction(call *llm.FunctionCall) bool
 	if generation == nil {
 		return false
 	}
-	select {
-	case generation.functionCh <- call:
-	default:
-	}
+	generation.functionStream.Send(call)
 	s.closeGeneration()
 	return true
 }
@@ -1392,11 +1495,11 @@ func (s *awsRealtimeSession) closeGeneration() {
 		return
 	}
 	generation.closeOnce.Do(func() {
-		close(generation.textCh)
-		close(generation.audioCh)
+		generation.textStream.Close()
+		generation.audioStream.Close()
 		close(generation.modalitiesCh)
 		close(generation.messageCh)
-		close(generation.functionCh)
+		generation.functionStream.Close()
 	})
 }
 
