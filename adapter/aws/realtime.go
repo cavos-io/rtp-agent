@@ -1716,6 +1716,7 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 				continue
 			}
 			if strings.TrimSpace(msg.TextContent()) == "" {
+				s.markInteractiveUserTextSent(msg.ID)
 				continue
 			}
 			if s.markInteractiveUserTextSent(msg.ID) {

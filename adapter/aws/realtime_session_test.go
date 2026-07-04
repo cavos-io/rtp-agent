@@ -852,6 +852,20 @@ func TestAWSRealtimeSessionUpdateChatContextIgnoresReferenceBlankUserText(t *tes
 	if len(stream.sent) != sentCount {
 		t.Fatalf("UpdateChatContext blank user sent %d events, want none", len(stream.sent)-sentCount)
 	}
+
+	ctx = llm.NewChatContext()
+	ctx.Append(&llm.ChatMessage{
+		ID:      "blank-user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "now has text"}},
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext rewritten blank user error = %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if len(stream.sent) != sentCount {
+		t.Fatalf("UpdateChatContext rewritten blank user sent %d events, want none after reference sent-id mark", len(stream.sent)-sentCount)
+	}
 }
 
 func TestAWSRealtimeSessionStripsReferenceLeadingAssistantOnInitialChatContext(t *testing.T) {
