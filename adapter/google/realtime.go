@@ -1357,10 +1357,6 @@ func googleRealtimeSetConfigInstructions(config *genai.LiveConnectConfig, instru
 	if config == nil {
 		return
 	}
-	if instructions == "" {
-		config.SystemInstruction = nil
-		return
-	}
 	config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: instructions}}}
 }
 

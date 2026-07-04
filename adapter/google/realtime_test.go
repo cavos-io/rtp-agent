@@ -2415,6 +2415,43 @@ func TestGoogleRealtimeSessionReconnectUsesReferenceUpdatedInstructions(t *testi
 	}
 }
 
+func TestGoogleRealtimeSessionReconnectPreservesReferenceEmptyInstructions(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages: make(chan *genai.LiveServerMessage),
+		recvErr:        errors.New("websocket receive failed"),
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeInstructions("old prompt"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if err := session.UpdateInstructions(""); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	close(firstSession.serverMessages)
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected", reconnected)
+	}
+	if len(connector.configs) != 2 {
+		t.Fatalf("connect configs = %d, want reconnect config", len(connector.configs))
+	}
+	instruction := connector.configs[1].SystemInstruction
+	if instruction == nil || len(instruction.Parts) != 1 || instruction.Parts[0].Text != "" {
+		t.Fatalf("reconnect system instruction = %#v, want explicit empty prompt", instruction)
+	}
+}
+
 func TestGoogleRealtimeSessionReconnectsAfterReferenceGoAway(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
