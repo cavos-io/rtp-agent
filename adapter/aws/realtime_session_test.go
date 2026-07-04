@@ -3201,12 +3201,14 @@ func TestAWSRealtimeSessionIgnoresReferenceToolUseWithoutGeneration(t *testing.T
 		Name:   "lookup",
 		Output: `{"forecast":"sunny"}`,
 	})
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.UpdateChatContext(ctx); err != nil {
 		t.Fatalf("UpdateChatContext error = %v", err)
 	}
-	if len(stream.sent) != sentCount {
-		t.Fatalf("stray tool result sent %d events, want none", len(stream.sent)-sentCount)
+	sent = stream.snapshotSent()
+	if len(sent) != sentCount {
+		t.Fatalf("stray tool result sent %d events, want none", len(sent)-sentCount)
 	}
 }
 
