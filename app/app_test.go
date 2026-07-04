@@ -14826,6 +14826,60 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeModel(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeReferenceModelOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedAPIKey string
+	var capturedModel string
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(apiKey string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedAPIKey = apiKey
+		capturedModel = model
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Vertex AI", model: model}, nil
+	}
+
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL", "gemini-live-2.5-flash-native-audio")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "vertexai=true,project=voice-project,location=asia-southeast1,voice=Kore,language=id-ID,modalities=TEXT|AUDIO,turn_detection=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedAPIKey != "" {
+		t.Fatalf("api key = %q, want empty explicit Vertex API key", capturedAPIKey)
+	}
+	if capturedModel != "gemini-live-2.5-flash-native-audio" {
+		t.Fatalf("model = %q, want Vertex realtime model", capturedModel)
+	}
+	if capturedCfg.vertexAI == nil || !*capturedCfg.vertexAI {
+		t.Fatalf("vertexAI = %#v, want true", capturedCfg.vertexAI)
+	}
+	if capturedCfg.project != "voice-project" {
+		t.Fatalf("project = %q, want voice-project", capturedCfg.project)
+	}
+	if capturedCfg.location != "asia-southeast1" {
+		t.Fatalf("location = %q, want asia-southeast1", capturedCfg.location)
+	}
+	if capturedCfg.voice != "Kore" {
+		t.Fatalf("voice = %q, want Kore", capturedCfg.voice)
+	}
+	if capturedCfg.language != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", capturedCfg.language)
+	}
+	if !reflect.DeepEqual(capturedCfg.modalities, []string{"TEXT", "AUDIO"}) {
+		t.Fatalf("modalities = %#v, want TEXT,AUDIO", capturedCfg.modalities)
+	}
+	if capturedCfg.turnDetection == nil || *capturedCfg.turnDetection {
+		t.Fatalf("turnDetection = %#v, want false", capturedCfg.turnDetection)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
@@ -14920,6 +14974,19 @@ type fakeAppLLMStream struct{}
 
 func (f *fakeAppLLMStream) Next() (*llm.ChatChunk, error) { return nil, io.EOF }
 func (f *fakeAppLLMStream) Close() error                  { return nil }
+
+type fakeAppRealtimeModel struct {
+	provider string
+	model    string
+}
+
+func (f fakeAppRealtimeModel) Capabilities() llm.RealtimeCapabilities {
+	return llm.RealtimeCapabilities{}
+}
+func (f fakeAppRealtimeModel) Session() (llm.RealtimeSession, error) { return nil, nil }
+func (f fakeAppRealtimeModel) Close() error                          { return nil }
+func (f fakeAppRealtimeModel) Provider() string                      { return f.provider }
+func (f fakeAppRealtimeModel) Model() string                         { return f.model }
 
 type fakeEvalLLM struct {
 	stream llm.LLMStream

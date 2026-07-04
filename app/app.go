@@ -155,6 +155,42 @@ func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
 	return opts
 }
 
+type appGoogleRealtimeConfig struct {
+	vertexAI      *bool
+	project       string
+	location      string
+	voice         string
+	language      string
+	modalities    []string
+	turnDetection *bool
+}
+
+func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
+	opts := []adaptergoogle.GoogleRealtimeOption{adaptergoogle.WithGoogleRealtimeModel(model)}
+	if c.vertexAI != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeVertexAI(*c.vertexAI))
+	}
+	if c.project != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeProject(c.project))
+	}
+	if c.location != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeLocation(c.location))
+	}
+	if c.voice != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeVoice(c.voice))
+	}
+	if c.language != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeLanguage(c.language))
+	}
+	if len(c.modalities) > 0 {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeModalities(c.modalities))
+	}
+	if c.turnDetection != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeTurnDetection(*c.turnDetection))
+	}
+	return opts
+}
+
 type appGoogleSTTConfig struct {
 	model                  string
 	location               string
@@ -182,6 +218,10 @@ type appGoogleSTTConfig struct {
 
 var appNewGoogleLLM = func(apiKey string, model string, cfg appGoogleLLMConfig) (llm.LLM, error) {
 	return adaptergoogle.NewGoogleLLM(apiKey, model, cfg.options()...)
+}
+
+var appNewGoogleRealtime = func(apiKey string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+	return adaptergoogle.NewRealtimeModel(apiKey, cfg.options(model)...)
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
@@ -6869,7 +6909,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerOpenAI:
 		return openai.NewRealtimeModel(cfg.OpenAIAPIKey, cfg.RealtimeModel), nil
 	case providerGoogle:
-		return adaptergoogle.NewRealtimeModel(cfg.GoogleAPIKey, adaptergoogle.WithGoogleRealtimeModel(cfg.RealtimeModel))
+		return appNewGoogleRealtime(cfg.GoogleAPIKey, cfg.RealtimeModel, googleRealtimeConfigFromAppConfig(cfg))
 	case providerXAI:
 		opts := []xai.XaiRealtimeOption{}
 		if cfg.RealtimeModel != "" {
@@ -7016,6 +7056,22 @@ func googleLLMConfigFromAppConfig(cfg AppConfig) appGoogleLLMConfig {
 	}
 	googleCfg.project = modelOptionString(cfg.LLMModelOptions, "project")
 	googleCfg.location = modelOptionString(cfg.LLMModelOptions, "location")
+	return googleCfg
+}
+
+func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
+	googleCfg := appGoogleRealtimeConfig{}
+	if vertexAI := modelOptionBool(cfg.RealtimeModelOptions, "vertexai"); vertexAI != nil {
+		googleCfg.vertexAI = vertexAI
+	}
+	googleCfg.project = modelOptionString(cfg.RealtimeModelOptions, "project")
+	googleCfg.location = modelOptionString(cfg.RealtimeModelOptions, "location")
+	googleCfg.voice = modelOptionString(cfg.RealtimeModelOptions, "voice")
+	googleCfg.language = modelOptionString(cfg.RealtimeModelOptions, "language")
+	googleCfg.modalities = modelOptionStringList(cfg.RealtimeModelOptions, "modalities")
+	if turnDetection := modelOptionBool(cfg.RealtimeModelOptions, "turn_detection"); turnDetection != nil {
+		googleCfg.turnDetection = turnDetection
+	}
 	return googleCfg
 }
 
