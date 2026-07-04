@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -383,7 +384,7 @@ func TestAWSRealtimeSessionUpdateToolsRecycleKeepsBufferedInputTail(t *testing.T
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
 		t.Fatalf("PushAudio second tail error = %v", err)
 	}
-	audioInputs := collectAWSRealtimeAudioInputPayloads(t, second.sent[sentSecondBeforeAudio:])
+	audioInputs := waitAWSRealtimeAudioInputPayloads(t, second, sentSecondBeforeAudio, 1)
 	if len(audioInputs) != 1 {
 		t.Fatalf("new stream audioInput events after tail completion = %d, want one", len(audioInputs))
 	}
@@ -546,11 +547,12 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	}
 
 	frame := awsRealtimeTestMonoFrame(16000, make([]int16, 512))
+	sentCount := len(stream.sent)
 	if err := session.PushAudio(frame); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
-	audioInput := mustAWSRealtimeJSONEvent(t, stream.sent[len(stream.sent)-1])
-	if got := awsRealtimeNestedString(audioInput, "event", "audioInput", "content"); got != base64.StdEncoding.EncodeToString(frame.Data) {
+	audioInputs := waitAWSRealtimeAudioInputPayloads(t, stream, sentCount, 1)
+	if got := audioInputs[0]; got != base64.StdEncoding.EncodeToString(frame.Data) {
 		t.Fatalf("audioInput content = %q, want base64 PCM", got)
 	}
 
@@ -572,7 +574,7 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeSessionPushAudioSendErrorReturnsAPIConnectionError(t *testing.T) {
+func TestAWSRealtimeSessionPushAudioSendErrorDoesNotBlockReferenceInput(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -584,12 +586,42 @@ func TestAWSRealtimeSessionPushAudioSendErrorReturnsAPIConnectionError(t *testin
 
 	err = session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512)))
 
-	var connectionErr *llm.APIConnectionError
-	if !errors.As(err, &connectionErr) {
-		t.Fatalf("PushAudio error = %T %v, want APIConnectionError", err, err)
+	if err != nil {
+		t.Fatalf("PushAudio error = %v, want nil because reference queues mic audio before provider send", err)
 	}
-	if !strings.Contains(err.Error(), "AWS Nova Sonic realtime send failed") {
-		t.Fatalf("PushAudio error = %q, want realtime send context", err.Error())
+}
+
+func TestAWSRealtimeSessionPushAudioDoesNotBlockOnReferenceProviderSend(t *testing.T) {
+	stream := &blockingAudioInputAWSRealtimeStream{
+		fakeAWSRealtimeStream: newFakeAWSRealtimeStream(),
+		started:               make(chan struct{}),
+		release:               make(chan struct{}),
+	}
+	t.Cleanup(func() { close(stream.release) })
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512)))
+	}()
+
+	select {
+	case <-stream.started:
+	case <-time.After(time.Second):
+		t.Fatal("PushAudio did not start provider audio send")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("PushAudio error = %v, want nil while provider send continues asynchronously", err)
+		}
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("PushAudio blocked on provider audio send")
 	}
 }
 
@@ -725,12 +757,13 @@ func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T)
 		samples[i] = [2]int16{10, 30}
 	}
 	frame := awsRealtimeTestStereoFrame(48000, samples)
+	sentCount := len(stream.sent)
 	if err := session.PushAudio(frame); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
 
-	audioInput := mustAWSRealtimeJSONEvent(t, stream.sent[len(stream.sent)-1])
-	content := awsRealtimeNestedString(audioInput, "event", "audioInput", "content")
+	audioInputs := waitAWSRealtimeAudioInputPayloads(t, stream, sentCount, 1)
+	content := audioInputs[0]
 	decoded, err := base64.StdEncoding.DecodeString(content)
 	if err != nil {
 		t.Fatalf("audioInput base64 decode error = %v", err)
@@ -763,7 +796,7 @@ func TestAWSRealtimeSessionPushAudioChunksReferenceInput(t *testing.T) {
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
 		t.Fatalf("PushAudio second error = %v", err)
 	}
-	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	audioInputs := waitAWSRealtimeAudioInputPayloads(t, stream, sentCount, 1)
 	if len(audioInputs) != 1 {
 		t.Fatalf("audioInput events = %d, want one 512-sample chunk", len(audioInputs))
 	}
@@ -831,7 +864,7 @@ func TestAWSRealtimeSessionCloseKeepsCompletedInputChunks(t *testing.T) {
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
 		t.Fatalf("PushAudio tail error = %v", err)
 	}
-	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	audioInputs := waitAWSRealtimeAudioInputPayloads(t, stream, sentCount, 1)
 	if len(audioInputs) != 1 {
 		t.Fatalf("audioInput events before Close = %d, want one completed chunk", len(audioInputs))
 	}
@@ -930,7 +963,7 @@ func TestAWSRealtimeSessionPushAudioPreservesResampleDurationAcrossFrames(t *tes
 			t.Fatalf("PushAudio error = %v", err)
 		}
 	}
-	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	audioInputs := waitAWSRealtimeAudioInputPayloads(t, stream, sentCount, 12)
 	if len(audioInputs) != 12 {
 		t.Fatalf("audioInput chunks = %d, want 12 with cumulative 44.1kHz->16kHz resampling", len(audioInputs))
 	}
@@ -2868,6 +2901,24 @@ func collectAWSRealtimeAudioInputPayloads(t *testing.T, events []string) []strin
 	return payloads
 }
 
+func waitAWSRealtimeAudioInputPayloads(t *testing.T, stream *fakeAWSRealtimeStream, start int, want int) []string {
+	t.Helper()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		payloads := collectAWSRealtimeAudioInputPayloads(t, stream.sent[start:])
+		if len(payloads) >= want {
+			return payloads
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("audioInput events = %d, want at least %d", len(payloads), want)
+		case <-ticker.C:
+		}
+	}
+}
+
 func awsRealtimeSentTextInputContents(t *testing.T, events []string) []string {
 	t.Helper()
 	var contents []string
@@ -2968,6 +3019,29 @@ func (s *blockingAWSRealtimeStream) Send(ctx context.Context, event awstypes.Inv
 	}
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+type blockingAudioInputAWSRealtimeStream struct {
+	*fakeAWSRealtimeStream
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingAudioInputAWSRealtimeStream) Send(ctx context.Context, event awstypes.InvokeModelWithBidirectionalStreamInput) error {
+	chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamInputMemberChunk)
+	if ok {
+		var decoded map[string]any
+		if err := json.Unmarshal(chunk.Value.Bytes, &decoded); err == nil && awsRealtimeNestedString(decoded, "event", "audioInput", "content") != "" {
+			s.once.Do(func() { close(s.started) })
+			select {
+			case <-s.release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	}
+	return s.fakeAWSRealtimeStream.Send(ctx, event)
 }
 
 type awsSecondRequestTestTool struct{}
