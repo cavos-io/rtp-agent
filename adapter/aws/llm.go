@@ -699,16 +699,25 @@ func (g *awsChatItemGroup) removeInvalidToolItems() {
 		return
 	}
 
-	outputsByCallID := make(map[string]*llm.FunctionCallOutput)
+	callIDs := make(map[string]struct{}, len(g.toolCalls))
+	outputIDs := make(map[string]struct{}, len(g.toolOutputs))
+	for _, toolCall := range g.toolCalls {
+		callIDs[toolCall.CallID] = struct{}{}
+	}
 	for _, toolOutput := range g.toolOutputs {
-		outputsByCallID[toolOutput.CallID] = toolOutput
+		outputIDs[toolOutput.CallID] = struct{}{}
 	}
 
 	validCalls := make([]*llm.FunctionCall, 0, len(g.toolCalls))
-	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
 	for _, toolCall := range g.toolCalls {
-		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+		if _, ok := outputIDs[toolCall.CallID]; ok {
 			validCalls = append(validCalls, toolCall)
+		}
+	}
+
+	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
+	for _, toolOutput := range g.toolOutputs {
+		if _, ok := callIDs[toolOutput.CallID]; ok {
 			validOutputs = append(validOutputs, toolOutput)
 		}
 	}
