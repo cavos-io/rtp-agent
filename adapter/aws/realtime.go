@@ -435,6 +435,7 @@ type awsRealtimeSession struct {
 	generation               *awsRealtimeGeneration
 	chatCtx                  *llm.ChatContext
 	instructions             string
+	instructionsSet          bool
 	tools                    []llm.Tool
 	pending                  map[string]struct{}
 	sent                     map[string]struct{}
@@ -686,7 +687,7 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 	chatCtx := s.chatCtx
 	tools := append([]llm.Tool(nil), s.tools...)
 	s.mu.Unlock()
-	if systemPrompt == "" {
+	if systemPrompt == "" && !s.instructionsSet {
 		systemPrompt = defaultAWSRealtimeSystemPrompt
 	}
 	if chatCtx != nil && len(chatCtx.Items) > defaultAWSRealtimeMaxMessages {
@@ -1686,6 +1687,7 @@ func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
 func (s *awsRealtimeSession) UpdateInstructions(instructions string) error {
 	s.mu.Lock()
 	s.instructions = instructions
+	s.instructionsSet = true
 	s.mu.Unlock()
 	return nil
 }

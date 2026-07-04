@@ -259,6 +259,25 @@ func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) 
 	}
 }
 
+func TestAWSRealtimeSessionStartsWithReferenceEmptyInstructions(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	if err := session.UpdateInstructions(""); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	sent := stream.snapshotSent()
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, sent[3]), "event", "textInput", "content"); got != "" {
+		t.Fatalf("system prompt = %q, want explicit empty instructions", got)
+	}
+}
+
 func TestAWSRealtimeSessionRestartUsesReferenceUpdatedInstructions(t *testing.T) {
 	first := newFakeAWSRealtimeStream()
 	second := newFakeAWSRealtimeStream()
