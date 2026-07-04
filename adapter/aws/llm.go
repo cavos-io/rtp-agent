@@ -770,9 +770,13 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStart:
 			if toolStart, ok := v.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
+				if toolStart.Value.ToolUseId == nil || toolStart.Value.Name == nil {
+					s.closeContext()
+					return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: malformed toolUse start missing required fields", !s.emittedChunk)
+				}
 				s.toolCallID = aws.ToString(toolStart.Value.ToolUseId)
 				s.toolName = aws.ToString(toolStart.Value.Name)
-				s.toolNameSet = toolStart.Value.Name != nil
+				s.toolNameSet = true
 				s.toolArgs = ""
 				continue
 			}

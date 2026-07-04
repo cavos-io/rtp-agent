@@ -490,7 +490,7 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 }
 
-func TestAWSLLMStreamDropsReferenceToolUseWithoutName(t *testing.T) {
+func TestAWSLLMStreamRejectsReferenceToolUseWithoutName(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStart{
 		Value: awstypes.ContentBlockStartEvent{
@@ -519,10 +519,14 @@ func TestAWSLLMStreamDropsReferenceToolUseWithoutName(t *testing.T) {
 
 	chunk, err := stream.Next()
 	if chunk != nil {
-		t.Fatalf("Next chunk = %#v, want malformed tool call suppressed", chunk)
+		t.Fatalf("Next chunk = %#v, want nil for malformed tool call", chunk)
 	}
-	if err != io.EOF {
-		t.Fatalf("Next error = %v, want EOF after suppressed malformed tool call", err)
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
 	}
 }
 
