@@ -135,6 +135,26 @@ type appGoogleTTSConfig struct {
 	customPronunciations *texttospeechpb.CustomPronunciations
 }
 
+type appGoogleLLMConfig struct {
+	vertexAI *bool
+	project  string
+	location string
+}
+
+func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
+	opts := []adaptergoogle.GoogleLLMOption{}
+	if c.vertexAI != nil {
+		opts = append(opts, adaptergoogle.WithGoogleLLMVertexAI(*c.vertexAI))
+	}
+	if c.project != "" {
+		opts = append(opts, adaptergoogle.WithGoogleLLMProject(c.project))
+	}
+	if c.location != "" {
+		opts = append(opts, adaptergoogle.WithGoogleLLMLocation(c.location))
+	}
+	return opts
+}
+
 type appGoogleSTTConfig struct {
 	model                  string
 	location               string
@@ -158,6 +178,10 @@ type appGoogleSTTConfig struct {
 	adaptation             *speechpb.SpeechAdaptation
 	adaptationV2           *speechv2pb.SpeechAdaptation
 	endpointingSensitivity string
+}
+
+var appNewGoogleLLM = func(apiKey string, model string, cfg appGoogleLLMConfig) (llm.LLM, error) {
+	return adaptergoogle.NewGoogleLLM(apiKey, model, cfg.options()...)
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
@@ -2556,7 +2580,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		}
 		return anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, llmOpts...)
 	case providerGoogle:
-		return adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
+		return appNewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel, googleLLMConfigFromAppConfig(cfg))
 	case providerBaseten:
 		return baseten.NewBasetenLLM("", cfg.LLMModel)
 	case providerLangChain:
@@ -5069,7 +5093,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerGoogle:
-		provider, err := adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
+		provider, err := appNewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel, googleLLMConfigFromAppConfig(cfg))
 		if err != nil {
 			return nil, err
 		}
@@ -6983,6 +7007,16 @@ func llmExtraParamsFromConfig(cfg AppConfig) map[string]any {
 		return nil
 	}
 	return params
+}
+
+func googleLLMConfigFromAppConfig(cfg AppConfig) appGoogleLLMConfig {
+	googleCfg := appGoogleLLMConfig{}
+	if vertexAI := modelOptionBool(cfg.LLMModelOptions, "vertexai"); vertexAI != nil {
+		googleCfg.vertexAI = vertexAI
+	}
+	googleCfg.project = modelOptionString(cfg.LLMModelOptions, "project")
+	googleCfg.location = modelOptionString(cfg.LLMModelOptions, "location")
+	return googleCfg
 }
 
 var googleLLMExtraParamKeys = []string{

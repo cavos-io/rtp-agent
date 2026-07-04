@@ -13378,11 +13378,53 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 	if app.Session == nil || app.Session.LLM == nil {
 		t.Fatal("Session LLM is nil")
 	}
-	if got := llm.Provider(app.Session.LLM); got != "google" {
-		t.Fatalf("LLM provider = %q, want google", got)
+	if got := llm.Provider(app.Session.LLM); got != "Gemini" {
+		t.Fatalf("LLM provider = %q, want Gemini", got)
 	}
 	if got := llm.Model(app.Session.LLM); got != "gemini-test" {
 		t.Fatalf("LLM model = %q, want gemini-test", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleLLMVertexModelOptions(t *testing.T) {
+	original := appNewGoogleLLM
+	defer func() { appNewGoogleLLM = original }()
+
+	var capturedAPIKey string
+	var capturedModel string
+	var capturedCfg appGoogleLLMConfig
+	appNewGoogleLLM = func(apiKey string, model string, cfg appGoogleLLMConfig) (llm.LLM, error) {
+		capturedAPIKey = apiKey
+		capturedModel = model
+		capturedCfg = cfg
+		return &fakeAppLLM{}, nil
+	}
+
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gemini-live-2.5-flash-native-audio")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "vertexai=true,project=voice-project,location=asia-southeast1")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if capturedAPIKey != "" {
+		t.Fatalf("api key = %q, want empty explicit Vertex API key", capturedAPIKey)
+	}
+	if capturedModel != "gemini-live-2.5-flash-native-audio" {
+		t.Fatalf("model = %q, want Vertex model", capturedModel)
+	}
+	if capturedCfg.vertexAI == nil || !*capturedCfg.vertexAI {
+		t.Fatalf("vertexAI = %#v, want true", capturedCfg.vertexAI)
+	}
+	if capturedCfg.project != "voice-project" {
+		t.Fatalf("project = %q, want voice-project", capturedCfg.project)
+	}
+	if capturedCfg.location != "asia-southeast1" {
+		t.Fatalf("location = %q, want asia-southeast1", capturedCfg.location)
 	}
 }
 
