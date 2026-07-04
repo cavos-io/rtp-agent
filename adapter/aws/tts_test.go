@@ -470,6 +470,31 @@ func TestAWSTTSSynthesizeErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamErrorsWhenReferenceResponseHasNoAudioStream(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "")
+	stream := &awsTTSChunkedStream{
+		text:     "hello",
+		provider: provider,
+	}
+	provider.registerStream(stream)
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil without provider AudioStream", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+	if len(provider.streams) != 0 {
+		t.Fatalf("registered streams = %d, want no-audio stream unregistered", len(provider.streams))
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after no-audio error = %v, want EOF", err)
+	}
+}
+
 func TestAWSTTSSynthesizeAllowsReferenceBlankTextWithoutAudio(t *testing.T) {
 	body := &countingAWSReadCloser{}
 	client := polly.New(polly.Options{

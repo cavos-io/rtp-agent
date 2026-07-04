@@ -307,6 +307,10 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	}
 	if s.stream == nil {
+		if strings.TrimSpace(s.text) != "" {
+			_ = s.Close()
+			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		}
 		return nil, io.EOF
 	}
 	if s.finalSent {
