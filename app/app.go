@@ -4485,6 +4485,9 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		ssml := true
 		googleCfg.ssml = &ssml
 	}
+	if googleCfg.markup == nil && googleCfg.ssml == nil {
+		googleCfg.markup = modelOptionBool(cfg.TTSModelOptions, "use_markup")
+	}
 	if cfg.TTSSpeakingRate != nil {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate
 	} else if appTTSSpeedConfigured(cfg) {

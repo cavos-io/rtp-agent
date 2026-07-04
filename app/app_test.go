@@ -13659,6 +13659,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceUseMarkupOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"use_markup": true},
+	})
+
+	if googleCfg.markup == nil || !*googleCfg.markup {
+		t.Fatalf("markup = %v, want model option use_markup true", googleCfg.markup)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"
