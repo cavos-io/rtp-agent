@@ -692,17 +692,38 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if stream == nil {
 		return llm.NewAPIConnectionError("AWS Transcribe stream is not initialized")
 	}
-	if err := stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+	ctx, cancel := s.writeContext()
+	defer cancel()
+	if err := stream.Send(ctx, &types.AudioStreamMemberAudioEvent{
 		Value: types.AudioEvent{
 			AudioChunk: frame.Data,
 		},
 	}); err != nil {
+		if s.isClosed() && (errors.Is(err, context.Canceled) || errors.Is(err, io.ErrClosedPipe)) {
+			return nil
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Transcribe audio write failed: %v", err))
 	}
 	return nil
+}
+
+func (s *awsSTTStream) writeContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-s.closedSignal():
+			cancel()
+		case <-done:
+		}
+	}()
+	return ctx, func() {
+		close(done)
+		cancel()
+	}
 }
 
 func (s *awsSTTStream) Flush() error {

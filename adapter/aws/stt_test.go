@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -968,6 +969,42 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamCloseUnblocksInFlightReferencePushFrame(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := newBlockingAWSSTTWriter()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- providerStream.PushFrame(&model.AudioFrame{Data: []byte("pcm")})
+	}()
+
+	select {
+	case <-writer.sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("PushFrame did not start provider send")
+	}
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("in-flight PushFrame error = %v, want nil for reference close cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-flight PushFrame remained blocked after Close")
+	}
+}
+
 func TestAWSSTTStreamPushNilFrameIsReferenceNoop(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}
@@ -1480,6 +1517,46 @@ type fakeAWSSTTWriter struct {
 	err         error
 	closeErr    error
 }
+
+type blockingAWSSTTWriter struct {
+	sendStarted   chan struct{}
+	closeCh       chan struct{}
+	sendStartOnce sync.Once
+}
+
+func newBlockingAWSSTTWriter() *blockingAWSSTTWriter {
+	return &blockingAWSSTTWriter{
+		sendStarted: make(chan struct{}),
+		closeCh:     make(chan struct{}),
+	}
+}
+
+func (w *blockingAWSSTTWriter) Send(ctx context.Context, event types.AudioStream) error {
+	audioEvent, ok := event.(*types.AudioStreamMemberAudioEvent)
+	if !ok || len(audioEvent.Value.AudioChunk) == 0 {
+		return nil
+	}
+	w.sendStartOnce.Do(func() {
+		close(w.sendStarted)
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.closeCh:
+		return io.ErrClosedPipe
+	}
+}
+
+func (w *blockingAWSSTTWriter) Close() error {
+	select {
+	case <-w.closeCh:
+	default:
+		close(w.closeCh)
+	}
+	return nil
+}
+
+func (w *blockingAWSSTTWriter) Err() error { return nil }
 
 func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) error {
 	if w.err != nil {
