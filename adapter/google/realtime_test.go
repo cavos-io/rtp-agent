@@ -2429,6 +2429,28 @@ func TestGoogleRealtimeSessionRetriesReferenceActiveReconnectFailure(t *testing.
 	}
 }
 
+func TestGoogleRealtimeConnectWithRetryAppliesReferenceAttemptTimeout(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{
+		session: &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)},
+	}
+	options := llm.DefaultAPIConnectOptions()
+	options.Timeout = 150 * time.Millisecond
+
+	session, err := googleRealtimeConnectWithRetry(context.Background(), connector, "gemini-live", &genai.LiveConnectConfig{}, options)
+	if err != nil {
+		t.Fatalf("googleRealtimeConnectWithRetry error = %v", err)
+	}
+	if session == nil {
+		t.Fatal("googleRealtimeConnectWithRetry session = nil")
+	}
+	if len(connector.contexts) != 1 {
+		t.Fatalf("connect contexts = %d, want 1", len(connector.contexts))
+	}
+	if !googleRealtimeContextHasTimeout(connector.contexts[0], options.Timeout) {
+		t.Fatalf("connect context deadline = %v, want reference timeout %v", googleRealtimeContextDeadline(connector.contexts[0]), options.Timeout)
+	}
+}
+
 func TestGoogleRealtimeSessionReconnectReplaysReferenceChatContext(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages: make(chan *genai.LiveServerMessage),
@@ -4568,11 +4590,28 @@ func waitGoogleRealtimeGenerationCompleted(session *googleRealtimeSession) bool 
 	return false
 }
 
+func googleRealtimeContextHasTimeout(ctx context.Context, want time.Duration) bool {
+	remaining := googleRealtimeContextDeadline(ctx)
+	return remaining > 0 && remaining <= want
+}
+
+func googleRealtimeContextDeadline(ctx context.Context) time.Duration {
+	if ctx == nil {
+		return 0
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return time.Until(deadline)
+}
+
 type fakeGoogleRealtimeConnector struct {
 	model       string
 	models      []string
 	config      *genai.LiveConnectConfig
 	configs     []*genai.LiveConnectConfig
+	contexts    []context.Context
 	session     *fakeGoogleRealtimeLiveSession
 	sessions    []googleRealtimeLiveSession
 	connectErrs []error
@@ -4583,6 +4622,7 @@ func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string,
 	c.models = append(c.models, model)
 	c.config = config
 	c.configs = append(c.configs, config)
+	c.contexts = append(c.contexts, ctx)
 	if len(c.connectErrs) > 0 {
 		err := c.connectErrs[0]
 		c.connectErrs = c.connectErrs[1:]

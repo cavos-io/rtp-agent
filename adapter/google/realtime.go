@@ -675,7 +675,13 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 func googleRealtimeConnectWithRetry(ctx context.Context, connector googleRealtimeConnector, modelName string, config *genai.LiveConnectConfig, options llm.APIConnectOptions) (googleRealtimeLiveSession, error) {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		liveSession, err := connector.Connect(ctx, modelName, config)
+		connectCtx := ctx
+		cancel := func() {}
+		if options.Timeout > 0 {
+			connectCtx, cancel = context.WithTimeout(ctx, options.Timeout)
+		}
+		liveSession, err := connector.Connect(connectCtx, modelName, config)
+		cancel()
 		if err == nil {
 			return liveSession, nil
 		}
