@@ -581,6 +581,20 @@ func validateGoogleRealtimeModelAPI(model string, vertexAI bool) error {
 	return nil
 }
 
+func googleRealtime1008ErrorHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "1008") && !strings.Contains(message, "policy violation") {
+		return ""
+	}
+	return "\n\nHint: A 1008 policy violation error often indicates that the model name " +
+		"doesn't match the API being used. VertexAI models typically start with " +
+		"'gemini-live-', while Gemini API models start with 'gemini-2.' or similar. " +
+		"Please verify your model name matches your API configuration."
+}
+
 func (m *RealtimeModel) Model() string {
 	if m == nil {
 		return defaultGoogleRealtimeGeminiModel
@@ -636,7 +650,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	liveSession, err := googleRealtimeConnectWithRetry(ctx, connector, m.Model(), config, m.connectOptions)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Failed to connect to Gemini Live: %v%s", err, googleRealtime1008ErrorHint(err)))
 	}
 	capabilities := m.Capabilities()
 	session := &googleRealtimeSession{
@@ -1001,7 +1015,11 @@ func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
 	}
 	s.instructions = instructions
 	googleRealtimeSetConfigInstructions(s.liveConfig, instructions)
-	if !s.mutableInstructions || s.liveSession == nil || s.isClosed() {
+	if !s.mutableInstructions || s.isClosed() {
+		return nil
+	}
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
 		return nil
 	}
 	role := ""
@@ -1009,7 +1027,7 @@ func (s *googleRealtimeSession) UpdateInstructions(instructions string) error {
 		role = "model"
 	}
 	turnComplete := false
-	return s.liveSession.SendClientContent(genai.LiveClientContentInput{
+	return s.sendClientContentWithReconnect(liveSession, genai.LiveClientContentInput{
 		Turns: []*genai.Content{{
 			Role:  role,
 			Parts: []*genai.Part{{Text: instructions}},
@@ -1042,7 +1060,11 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 		}
 	}
 	s.chatCtx = nextCtx
-	if len(appendCtx.Items) == 0 || s.liveSession == nil || s.isClosed() {
+	if len(appendCtx.Items) == 0 || s.isClosed() {
+		return nil
+	}
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
 		return nil
 	}
 	if s.mutableChatContext {
@@ -1052,7 +1074,7 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 		}
 		if len(turns) > 0 {
 			turnComplete := false
-			if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
+			if err := s.sendClientContentWithReconnect(liveSession, genai.LiveClientContentInput{
 				Turns:        turns,
 				TurnComplete: &turnComplete,
 			}); err != nil {
@@ -1064,7 +1086,7 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 	if len(responses) == 0 {
 		return nil
 	}
-	return s.liveSession.SendToolResponse(genai.LiveToolResponseInput{FunctionResponses: responses})
+	return s.sendToolResponseWithReconnect(liveSession, genai.LiveToolResponseInput{FunctionResponses: responses})
 }
 func (s *googleRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	return s.reconnectWithTools(tools)
@@ -1154,7 +1176,7 @@ func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, vo
 	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
-		return err
+		return googleRealtimeReconnectError(err)
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -1230,7 +1252,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
-		return err
+		return googleRealtimeReconnectError(err)
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -1297,7 +1319,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
-		return err
+		return googleRealtimeReconnectError(err)
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -1405,7 +1427,11 @@ func googleRealtimeToolBehavior(value any) genai.Behavior {
 }
 
 func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOptions) error {
-	if s == nil || s.liveSession == nil || s.isClosed() {
+	if s == nil || s.isClosed() {
+		return nil
+	}
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
 		return nil
 	}
 	if !s.mutableChatContext {
@@ -1427,7 +1453,7 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		Parts: []*genai.Part{{Text: "."}},
 	})
 	turnComplete := true
-	if err := s.liveSession.SendClientContent(genai.LiveClientContentInput{
+	if err := s.sendClientContentWithReconnect(liveSession, genai.LiveClientContentInput{
 		Turns:        turns,
 		TurnComplete: &turnComplete,
 	}); err != nil {
@@ -1436,14 +1462,18 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 	return nil
 }
 func (s *googleRealtimeSession) Say(text string) error {
-	if s == nil || s.liveSession == nil || text == "" || s.isClosed() {
+	if s == nil || text == "" || s.isClosed() {
 		return nil
 	}
-	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{Text: text})
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
+		return nil
+	}
+	return s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{Text: text}, "text")
 }
 func (s *googleRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *googleRealtimeSession) Interrupt() error {
-	if s == nil || s.liveSession == nil || s.isClosed() {
+	if s == nil || s.isClosed() {
 		return nil
 	}
 	s.mu.Lock()
@@ -1452,10 +1482,14 @@ func (s *googleRealtimeSession) Interrupt() error {
 		return nil
 	}
 	s.inUserActivity = true
+	liveSession := s.liveSession
 	s.mu.Unlock()
-	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+	if liveSession == nil {
+		return nil
+	}
+	return s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{
 		ActivityStart: &genai.ActivityStart{},
-	})
+	}, "activity start")
 }
 
 func googleRealtimeManualActivityDetection(config *genai.RealtimeInputConfig) bool {
@@ -1473,10 +1507,14 @@ func (s *googleRealtimeSession) endManualActivity() error {
 		return nil
 	}
 	s.inUserActivity = false
+	liveSession := s.liveSession
 	s.mu.Unlock()
-	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+	if liveSession == nil {
+		return nil
+	}
+	return s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{
 		ActivityEnd: &genai.ActivityEnd{},
-	})
+	}, "activity end")
 }
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
 
@@ -1537,7 +1575,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	if err != nil {
 		s.emitEvent(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: llm.NewAPIConnectionError(fmt.Sprintf(reconnectMessage, err)),
+			Error: llm.NewAPIConnectionError(fmt.Sprintf(reconnectMessage, err) + googleRealtime1008ErrorHint(err)),
 		})
 		return
 	}
@@ -1575,6 +1613,17 @@ func (s *googleRealtimeSession) currentConnectOptions() llm.APIConnectOptions {
 		return s.owner.connectOptions
 	}
 	return llm.DefaultAPIConnectOptions()
+}
+
+func googleRealtimeReconnectError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		return err
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect Google realtime: %v%s", err, googleRealtime1008ErrorHint(err)))
 }
 
 func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {
@@ -2123,12 +2172,12 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	chunks := s.audioStream.Write(resampled.Data)
 	s.mu.Unlock()
 	for _, chunk := range chunks {
-		if err := liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+		if err := s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{
 			Audio: &genai.Blob{
 				Data:     chunk.Data,
 				MIMEType: "audio/pcm;rate=16000",
 			},
-		}); err != nil {
+		}, "audio"); err != nil {
 			return err
 		}
 	}
@@ -2248,20 +2297,67 @@ func (n *googleRealtimeInputAudioNormalizer) reset() {
 }
 
 func (s *googleRealtimeSession) PushVideo(frame *images.VideoFrame) error {
-	if s == nil || s.liveSession == nil || frame == nil || s.isClosed() {
+	if s == nil || frame == nil || s.isClosed() {
 		return nil
 	}
 	data, err := images.Encode(frame, images.NewEncodeOptions())
 	if err != nil {
 		return err
 	}
-	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
+		return nil
+	}
+	return s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{
 		Video: &genai.Blob{
 			Data:     data,
 			MIMEType: "image/jpeg",
 		},
-	})
+	}, "video")
 }
+
+func (s *googleRealtimeSession) sendRealtimeInputWithReconnect(liveSession googleRealtimeLiveSession, input genai.LiveRealtimeInput, label string) error {
+	if liveSession == nil {
+		return nil
+	}
+	if err := liveSession.SendRealtimeInput(input); err != nil {
+		s.reconnectActiveSession(liveSession,
+			fmt.Sprintf("google realtime %s send failed: %v", label, err),
+			fmt.Sprintf("failed to reconnect Google realtime after %s send error: %%v", label),
+		)
+		return err
+	}
+	return nil
+}
+
+func (s *googleRealtimeSession) sendClientContentWithReconnect(liveSession googleRealtimeLiveSession, input genai.LiveClientContentInput) error {
+	if liveSession == nil {
+		return nil
+	}
+	if err := liveSession.SendClientContent(input); err != nil {
+		s.reconnectActiveSession(liveSession,
+			fmt.Sprintf("google realtime client content send failed: %v", err),
+			"failed to reconnect Google realtime after client content send error: %v",
+		)
+		return err
+	}
+	return nil
+}
+
+func (s *googleRealtimeSession) sendToolResponseWithReconnect(liveSession googleRealtimeLiveSession, input genai.LiveToolResponseInput) error {
+	if liveSession == nil {
+		return nil
+	}
+	if err := liveSession.SendToolResponse(input); err != nil {
+		s.reconnectActiveSession(liveSession,
+			fmt.Sprintf("google realtime tool response send failed: %v", err),
+			"failed to reconnect Google realtime after tool response send error: %v",
+		)
+		return err
+	}
+	return nil
+}
+
 func (s *googleRealtimeSession) CommitAudio() error { return nil }
 func (s *googleRealtimeSession) ClearAudio() error  { return nil }
 

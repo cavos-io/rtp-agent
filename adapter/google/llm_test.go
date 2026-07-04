@@ -96,6 +96,68 @@ func TestGoogleLLMProviderMatchesReference(t *testing.T) {
 	if got := model.Provider(); got != "Gemini" {
 		t.Fatalf("Provider() = %q, want Gemini", got)
 	}
+
+	model.vertexAI = true
+	if got := model.Provider(); got != "Vertex AI" {
+		t.Fatalf("Vertex Provider() = %q, want Vertex AI", got)
+	}
+}
+
+func TestGoogleLLMClientConfigUsesReferenceVertexOptions(t *testing.T) {
+	config, model, vertexAI, err := googleLLMClientConfig("", "gemini-test",
+		WithGoogleLLMVertexAI(true),
+		WithGoogleLLMProject("voice-project"),
+		WithGoogleLLMLocation("asia-southeast1"),
+	)
+	if err != nil {
+		t.Fatalf("googleLLMClientConfig error = %v", err)
+	}
+	if model != "gemini-test" {
+		t.Fatalf("model = %q, want gemini-test", model)
+	}
+	if !vertexAI {
+		t.Fatal("vertexAI = false, want true")
+	}
+	if config.Backend != genai.BackendVertexAI {
+		t.Fatalf("Backend = %v, want Vertex AI", config.Backend)
+	}
+	if config.APIKey != "" {
+		t.Fatalf("APIKey = %q, want empty for Vertex AI", config.APIKey)
+	}
+	if config.Project != "voice-project" || config.Location != "asia-southeast1" {
+		t.Fatalf("project/location = %q/%q, want voice-project/asia-southeast1", config.Project, config.Location)
+	}
+}
+
+func TestGoogleLLMClientConfigUsesReferenceVertexEnvironment(t *testing.T) {
+	t.Setenv("GOOGLE_GENAI_USE_VERTEXAI", "1")
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "env-project")
+	t.Setenv("GOOGLE_CLOUD_LOCATION", "")
+
+	config, _, vertexAI, err := googleLLMClientConfig("", "", nil)
+	if err != nil {
+		t.Fatalf("googleLLMClientConfig error = %v", err)
+	}
+	if !vertexAI || config.Backend != genai.BackendVertexAI {
+		t.Fatalf("vertex/backend = %v/%v, want Vertex AI", vertexAI, config.Backend)
+	}
+	if config.Project != "env-project" || config.Location != "us-central1" {
+		t.Fatalf("project/location = %q/%q, want env-project/us-central1", config.Project, config.Location)
+	}
+}
+
+func TestGoogleLLMClientConfigRequiresReferenceVertexProject(t *testing.T) {
+	t.Setenv("GOOGLE_GENAI_USE_VERTEXAI", "")
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "")
+	t.Setenv("GOOGLE_CLOUD_LOCATION", "")
+
+	_, _, _, err := googleLLMClientConfig("", "", WithGoogleLLMVertexAI(true))
+	if err == nil {
+		t.Fatal("googleLLMClientConfig error = nil, want missing Vertex project error")
+	}
+	if !strings.Contains(err.Error(), "Project is required for VertexAI") {
+		t.Fatalf("error = %v, want reference Vertex project guidance", err)
+	}
 }
 
 func TestBuildGoogleContentsGroupsToolCallsWithResponses(t *testing.T) {

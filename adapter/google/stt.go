@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"sync"
@@ -634,6 +635,9 @@ func (s *GoogleSTT) ensureClient(ctx context.Context) (googleSpeechClient, error
 }
 
 func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language string, includeAlternativeLanguages bool) (speechv2pb.Speech_StreamingRecognizeClient, error) {
+	if err := googleValidateEndpointingSensitivityV2(s.model, s.endpointingSensitivity); err != nil {
+		return nil, googleSTTStartupError(err)
+	}
 	clientV2, err := s.ensureClientV2(ctx)
 	if err != nil {
 		return nil, googleSTTStartupError(err)
@@ -906,6 +910,16 @@ func googleEndpointingSensitivityV2(model string, value string) speechv2pb.Strea
 		return speechv2pb.StreamingRecognitionFeatures_EndpointingSensitivity(enum)
 	}
 	return speechv2pb.StreamingRecognitionFeatures_ENDPOINTING_SENSITIVITY_UNSPECIFIED
+}
+
+func googleValidateEndpointingSensitivityV2(model string, value string) error {
+	if model != "chirp_3" || value == "" {
+		return nil
+	}
+	if _, ok := speechv2pb.StreamingRecognitionFeatures_EndpointingSensitivity_value[value]; ok {
+		return nil
+	}
+	return fmt.Errorf("invalid Google STT endpointing_sensitivity %q", value)
 }
 
 func googleSTTRecognizer(s *GoogleSTT) string {

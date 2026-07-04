@@ -675,6 +675,67 @@ func TestGoogleRealtimeSessionRetriesReferenceUpdateReconnectFailure(t *testing.
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateReconnectFailureReturnsAPIConnectionError(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	connector.connectErrs = []error{
+		errors.New("temporary reconnect failure"),
+		errors.New("still down"),
+	}
+	err = session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true})
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("UpdateOptions error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "failed to reconnect Google realtime") {
+		t.Fatalf("UpdateOptions error = %v, want reconnect failure message", connectionErr)
+	}
+}
+
+func TestGoogleRealtimeSessionUpdateReconnectFailureIncludesReference1008Hint(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	connector.connectErrs = []error{
+		errors.New("websocket close 1008: policy violation"),
+	}
+	err = session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true})
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("UpdateOptions error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "Hint: A 1008 policy violation error often indicates") {
+		t.Fatalf("UpdateOptions error = %v, want reference 1008 policy violation hint", connectionErr)
+	}
+}
+
 func TestGoogleRealtimeModelVoiceUpdatePropagatesReferenceActiveSession(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
@@ -1271,6 +1332,61 @@ func TestGoogleRealtimeSessionRetriesReferenceConnectFailure(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionConnectFailureReturnsAPIConnectionError(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{
+		connectErrs: []error{
+			errors.New("temporary dial failure"),
+			errors.New("still down"),
+		},
+	}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "Failed to connect to Gemini Live") {
+		t.Fatalf("Session error = %v, want reference connect failure message", connectionErr)
+	}
+}
+
+func TestGoogleRealtimeSessionConnectFailureIncludesReference1008Hint(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{
+		connectErrs: []error{
+			errors.New("websocket close 1008: policy violation"),
+		},
+	}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "Hint: A 1008 policy violation error often indicates") {
+		t.Fatalf("Session error = %v, want reference 1008 policy violation hint", connectionErr)
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",
@@ -1472,6 +1588,57 @@ func TestGoogleRealtimeSessionPushAudioSendsReferenceRealtimeInput(t *testing.T)
 	}
 	if !liveSession.closed {
 		t.Fatal("live session closed = false")
+	}
+}
+
+func TestGoogleRealtimeSessionReconnectsAfterReferenceAudioSendError(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages:   make(chan *genai.LiveServerMessage, 1),
+		sendRealtimeErrs: []error{errors.New("websocket send failed")},
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	err = session.PushAudio(&audiomodel.AudioFrame{
+		Data:              bytes.Repeat([]byte{1, 2}, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	})
+	if err == nil || !strings.Contains(err.Error(), "websocket send failed") {
+		t.Fatalf("PushAudio error = %v, want websocket send failed", err)
+	}
+
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected after audio send error", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after audio send error reconnect")
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
+	}
+
+	secondSession.serverMessages <- &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			OutputTranscription: &genai.Transcription{Text: "after audio send error"},
+		},
+	}
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "after audio send error" {
+		t.Fatalf("post-reconnect text = %q, want after audio send error", text)
 	}
 }
 
@@ -1769,11 +1936,13 @@ func TestGoogleRealtimeSessionGenerateReplyPreservesReferenceEmptyInstructions(t
 }
 
 func TestGoogleRealtimeSessionGenerateReplySendFailureKeepsReferencePending(t *testing.T) {
-	liveSession := &fakeGoogleRealtimeLiveSession{
+	firstSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages:       make(chan *genai.LiveServerMessage, 1),
 		sendClientContentErr: errors.New("send failed"),
 	}
-	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
 	if err != nil {
 		t.Fatalf("NewRealtimeModel error = %v", err)
 	}
@@ -1788,7 +1957,15 @@ func TestGoogleRealtimeSessionGenerateReplySendFailureKeepsReferencePending(t *t
 		t.Fatalf("GenerateReply error = %v, want send failure", err)
 	}
 
-	liveSession.serverMessages <- &genai.LiveServerMessage{
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("first event = %#v, want session_reconnected after GenerateReply send failure", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after GenerateReply send failure")
+	}
+
+	secondSession.serverMessages <- &genai.LiveServerMessage{
 		ServerContent: &genai.LiveServerContent{
 			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "late reply"}}},
 		},
@@ -1826,6 +2003,11 @@ func TestGoogleRealtimeSessionGenerateReplyActivityEndFailureKeepsReferencePendi
 	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{})
 	if err == nil || !strings.Contains(err.Error(), "activity end failed") {
 		t.Fatalf("GenerateReply error = %v, want activity end failure", err)
+	}
+
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("first event = %#v, want session_reconnected after activity end send failure", reconnected)
 	}
 
 	liveSession.serverMessages <- &genai.LiveServerMessage{
@@ -2001,6 +2183,46 @@ func TestGoogleRealtimeSessionUpdateChatContextSendsReferenceToolResponse(t *tes
 	}
 	if response.Scheduling != genai.FunctionResponseSchedulingInterrupt {
 		t.Fatalf("function response scheduling = %q, want INTERRUPT", response.Scheduling)
+	}
+}
+
+func TestGoogleRealtimeSessionReconnectsAfterReferenceToolResponseSendError(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages:      make(chan *genai.LiveServerMessage, 1),
+		sendToolResponseErr: errors.New("tool response failed"),
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.FunctionCall{ID: "call-item", CallID: "call_weather", Name: "weather", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "output-item", CallID: "call_weather", Name: "weather", Output: "sunny"},
+	}
+	err = session.UpdateChatContext(chatCtx)
+	if err == nil || !strings.Contains(err.Error(), "tool response failed") {
+		t.Fatalf("UpdateChatContext error = %v, want tool response failed", err)
+	}
+
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected after tool response send failure", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after tool response send failure")
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
 	}
 }
 
@@ -2426,6 +2648,37 @@ func TestGoogleRealtimeSessionRetriesReferenceActiveReconnectFailure(t *testing.
 	}
 	if len(connector.models) != 3 {
 		t.Fatalf("connect attempts = %d, want initial plus failed reconnect plus retry", len(connector.models))
+	}
+}
+
+func TestGoogleRealtimeSessionActiveReconnectFailureIncludesReference1008Hint(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages: make(chan *genai.LiveServerMessage),
+		recvErr:        errors.New("websocket receive failed"),
+	}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	connector.connectErrs = []error{errors.New("websocket close 1008: policy violation")}
+	close(firstSession.serverMessages)
+	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	var connectionErr *llm.APIConnectionError
+	if event.Type != llm.RealtimeEventTypeError || !errors.As(event.Error, &connectionErr) {
+		t.Fatalf("event = %#v, want APIConnectionError event", event)
+	}
+	if !strings.Contains(connectionErr.Error(), "Hint: A 1008 policy violation error often indicates") {
+		t.Fatalf("active reconnect error = %v, want reference 1008 policy violation hint", connectionErr)
 	}
 }
 
@@ -2916,6 +3169,44 @@ func TestGoogleRealtimeSessionInterruptSendsManualActivityStart(t *testing.T) {
 	}
 	if liveSession.inputs[0].ActivityStart == nil {
 		t.Fatalf("activity start = nil, input %#v", liveSession.inputs[0])
+	}
+}
+
+func TestGoogleRealtimeSessionReconnectsAfterReferenceActivityStartSendError(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages:   make(chan *genai.LiveServerMessage, 1),
+		sendRealtimeErrs: []error{errors.New("activity start failed")},
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	err = session.Interrupt()
+	if err == nil || !strings.Contains(err.Error(), "activity start failed") {
+		t.Fatalf("Interrupt error = %v, want activity start failed", err)
+	}
+
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected after activity start send error", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after activity start send error reconnect")
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
 	}
 }
 
@@ -4646,6 +4937,7 @@ type fakeGoogleRealtimeLiveSession struct {
 	closeErr             error
 	recvErr              error
 	sendClientContentErr error
+	sendToolResponseErr  error
 	sendRealtimeErrs     []error
 	sendRealtimeBlock    chan struct{}
 	sendRealtimeRelease  chan struct{}
@@ -4681,6 +4973,9 @@ func (s *fakeGoogleRealtimeLiveSession) SendClientContent(input genai.LiveClient
 
 func (s *fakeGoogleRealtimeLiveSession) SendToolResponse(input genai.LiveToolResponseInput) error {
 	s.toolResponses = append(s.toolResponses, input)
+	if s.sendToolResponseErr != nil {
+		return s.sendToolResponseErr
+	}
 	return nil
 }
 
