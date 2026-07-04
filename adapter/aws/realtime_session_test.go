@@ -4295,7 +4295,8 @@ func waitAWSRealtimeTextInput(t *testing.T, stream *fakeAWSRealtimeStream, conte
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
-		for _, raw := range stream.sent {
+		sent := stream.snapshotSent()
+		for _, raw := range sent {
 			event := mustAWSRealtimeJSONEvent(t, raw)
 			if awsRealtimeNestedString(event, "event", "textInput", "content") == content {
 				return
