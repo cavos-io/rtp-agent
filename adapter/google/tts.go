@@ -168,10 +168,8 @@ func WithGoogleTTSSampleRate(sampleRate int32) GoogleTTSOption {
 
 func WithGoogleTTSAudioEncoding(encoding texttospeechpb.AudioEncoding) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if encoding != texttospeechpb.AudioEncoding_AUDIO_ENCODING_UNSPECIFIED {
-			cfg.encoding = encoding
-			cfg.encodingSet = true
-		}
+		cfg.encoding = encoding
+		cfg.encodingSet = true
 	}
 }
 

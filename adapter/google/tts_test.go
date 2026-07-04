@@ -797,6 +797,42 @@ func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSPreservesReferenceUnspecifiedAudioEncoding(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6, 7, 8}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_AUDIO_ENCODING_UNSPECIFIED))
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_AUDIO_ENCODING_UNSPECIFIED {
+		t.Fatalf("synthesize audio encoding = %v, want explicit unspecified", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("stream audio encoding = %v, want reference PCM fallback for unspecified", got)
+	}
+}
+
 func TestGoogleTTSUpdateOptionsKeepsReferenceAudioFormat(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
