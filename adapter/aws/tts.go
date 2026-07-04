@@ -55,17 +55,13 @@ func WithAWSTTSCredentials(creds AWSCredentials) AWSTTSOption {
 
 func WithAWSTTSEngine(engine types.Engine) AWSTTSOption {
 	return func(t *AWSTTS) {
-		if engine != "" {
-			t.engine = engine
-		}
+		t.engine = engine
 	}
 }
 
 func WithAWSTTSTextType(textType types.TextType) AWSTTSOption {
 	return func(t *AWSTTS) {
-		if textType != "" {
-			t.textType = textType
-		}
+		t.textType = textType
 	}
 }
 

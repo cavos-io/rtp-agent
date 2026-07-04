@@ -167,6 +167,25 @@ func TestAWSTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
 	}
 }
 
+func TestAWSTTSUpdateOptionsAllowsReferenceEmptySynthesisFields(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "",
+		WithAWSTTSEngine(types.EngineStandard),
+		WithAWSTTSTextType(types.TextTypeSsml),
+	)
+
+	provider.UpdateOptions(
+		WithAWSTTSEngine(""),
+		WithAWSTTSTextType(""),
+	)
+
+	if provider.engine != "" {
+		t.Fatalf("engine = %q, want explicit empty reference engine update", provider.engine)
+	}
+	if provider.textType != "" {
+		t.Fatalf("text type = %q, want explicit empty reference text type update", provider.textType)
+	}
+}
+
 func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	var requests int
 	client := polly.New(polly.Options{
