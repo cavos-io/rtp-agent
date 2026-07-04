@@ -3066,6 +3066,49 @@ func TestAWSRealtimeSessionGenerateReplyWithoutInstructionsJoinsReferencePending
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplyKeepsReferenceLatestPendingGeneration(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(
+		WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}),
+		WithAWSRealtimeGenerateReplyTimeout(60*time.Millisecond),
+	)
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "first prompt"})
+	}()
+	waitAWSRealtimeTextInput(t, stream, "first prompt")
+
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "second prompt"})
+	}()
+	waitAWSRealtimeTextInput(t, stream, "second prompt")
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second GenerateReply error after generation start = %v", err)
+	}
+	select {
+	case err := <-firstDone:
+		var realtimeErr llm.RealtimeError
+		if !errors.As(err, &realtimeErr) {
+			t.Fatalf("first GenerateReply error = %T %v, want RealtimeError", err, err)
+		}
+		if !strings.Contains(err.Error(), "generate_reply timed out waiting for generation") {
+			t.Fatalf("first GenerateReply error = %v, want generation timeout", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first GenerateReply did not time out after newer pending generation resolved")
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyWaitsForReferenceChatContextGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic2(
