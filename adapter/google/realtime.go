@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"google.golang.org/genai"
@@ -955,7 +956,6 @@ type googleRealtimeSession struct {
 	inputAudio               *googleRealtimeInputAudioNormalizer
 	generation               *googleRealtimeGeneration
 	responseSeq              int
-	functionSeq              int
 	pendingReply             bool
 	pendingReplyAt           time.Time
 	sessionResumptionHandle  string
@@ -1715,8 +1715,7 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 		}
 		callID := functionCall.ID
 		if callID == "" {
-			s.functionSeq++
-			callID = fmt.Sprintf("fnc-call-%d", s.functionSeq)
+			callID = cavosmath.ShortUUID("fnc-call-")
 		}
 		select {
 		case s.generation.functionCh <- &llm.FunctionCall{

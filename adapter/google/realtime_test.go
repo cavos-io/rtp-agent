@@ -3664,6 +3664,43 @@ func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionGeneratesReferenceToolCallIDs(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ToolCall: &genai.LiveServerToolCall{
+			FunctionCalls: []*genai.FunctionCall{
+				{Name: "lookup", Args: map[string]any{"query": "weather"}},
+				{Name: "search", Args: map[string]any{"query": "news"}},
+			},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	first := nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
+	second := nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
+	for _, call := range []*llm.FunctionCall{first, second} {
+		if !strings.HasPrefix(call.CallID, "fnc-call-") {
+			t.Fatalf("generated call id = %q, want reference fnc-call- prefix", call.CallID)
+		}
+		if call.CallID == "fnc-call-1" || call.CallID == "fnc-call-2" {
+			t.Fatalf("generated call id = %q, want reference shortuuid, not sequence", call.CallID)
+		}
+	}
+	if first.CallID == second.CallID {
+		t.Fatalf("generated call ids both %q, want distinct ids", first.CallID)
+	}
+}
+
 func TestGoogleRealtimeSessionMalformedToolArgsReconnectsLikeReference(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
