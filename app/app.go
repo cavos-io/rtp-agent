@@ -163,6 +163,7 @@ type appGoogleRealtimeConfig struct {
 	vertexAI                 *bool
 	project                  string
 	location                 string
+	locationSet              bool
 	voice                    string
 	instructions             string
 	language                 string
@@ -200,7 +201,7 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	if c.project != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeProject(c.project))
 	}
-	if c.location != "" {
+	if c.locationSet {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeLocation(c.location))
 	}
 	if c.voice != "" {
@@ -7456,7 +7457,10 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 		googleCfg.vertexAI = vertexAI
 	}
 	googleCfg.project = modelOptionString(cfg.RealtimeModelOptions, "project")
-	googleCfg.location = modelOptionString(cfg.RealtimeModelOptions, "location")
+	if location, ok := modelOptionStringValue(cfg.RealtimeModelOptions, "location"); ok {
+		googleCfg.location = location
+		googleCfg.locationSet = true
+	}
 	googleCfg.voice = modelOptionString(cfg.RealtimeModelOptions, "voice")
 	googleCfg.instructions = modelOptionString(cfg.RealtimeModelOptions, "instructions")
 	googleCfg.language = modelOptionString(cfg.RealtimeModelOptions, "language")

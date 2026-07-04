@@ -15324,6 +15324,19 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeReferenceModelOptions(t *testi
 	}
 }
 
+func TestGoogleRealtimeConfigFromAppConfigPreservesReferenceEmptyLocationOption(t *testing.T) {
+	googleCfg := googleRealtimeConfigFromAppConfig(AppConfig{
+		RealtimeModelOptions: map[string]any{"location": ""},
+	})
+
+	if !googleCfg.locationSet {
+		t.Fatal("locationSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.location != "" {
+		t.Fatalf("location = %q, want explicit empty model option", googleCfg.location)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleRealtimeTranscriptionOptions(t *testing.T) {
 	original := appNewGoogleRealtime
 	defer func() { appNewGoogleRealtime = original }()
