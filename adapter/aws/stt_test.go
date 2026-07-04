@@ -1540,6 +1540,53 @@ func TestAWSSTTRestartsReferenceStreamAfterIdleTimeout(t *testing.T) {
 	}
 }
 
+func TestAWSSTTRestartAfterInputEndedClosesReferenceInput(t *testing.T) {
+	firstReader := newFakeAWSSTTReader()
+	firstReader.err = errors.New("Your request timed out because no new audio was received")
+	close(firstReader.events)
+	firstWriter := &fakeAWSSTTWriter{}
+	firstStream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = firstReader
+		es.Writer = firstWriter
+	})
+	secondReader := newFakeAWSSTTReader()
+	secondWriter := &fakeAWSSTTWriter{}
+	secondStream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = secondReader
+		es.Writer = secondWriter
+	})
+	providerStream := &awsSTTStream{
+		stream:  firstStream,
+		restart: func() (awsSTTEventStream, error) { return secondStream, nil },
+		events:  make(chan *stt.SpeechEvent),
+		errCh:   make(chan error, 1),
+	}
+	ending, ok := interface{}(providerStream).(stt.InputEnding)
+	if !ok {
+		t.Fatal("aws STT stream does not implement stt.InputEnding")
+	}
+
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	go providerStream.readLoop()
+	defer providerStream.Close()
+	defer close(secondReader.events)
+
+	deadline := time.After(time.Second)
+	for !secondWriter.closed {
+		select {
+		case <-deadline:
+			t.Fatalf("second stream writer closed = false, chunks = %#v; want reference restart to send empty close sentinel for already-ended input", secondWriter.chunks)
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	if len(secondWriter.chunks) != 1 || len(secondWriter.chunks[0]) != 0 || secondWriter.chunkWasNil[0] {
+		t.Fatalf("second stream chunks = %#v nil=%#v, want one non-nil empty close sentinel", secondWriter.chunks, secondWriter.chunkWasNil)
+	}
+}
+
 func TestAWSSTTInvalidStateErrorReturnsEOF(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	reader.err = errors.New("concurrent.futures.InvalidStateError: invalid state")

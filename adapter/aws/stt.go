@@ -572,8 +572,17 @@ func (s *awsSTTStream) restartAfterTimeout() bool {
 		_ = stream.Close()
 		return false
 	}
+	inputEnded := s.inputEnded
 	s.stream = stream
 	s.streamMu.Unlock()
+	if inputEnded {
+		_ = stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+			Value: types.AudioEvent{
+				AudioChunk: []byte{},
+			},
+		})
+		_ = closeAWSSTTEventStreamInput(stream)
+	}
 	return true
 }
 
