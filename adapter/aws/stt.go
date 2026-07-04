@@ -29,6 +29,7 @@ type AWSSTT struct {
 	vocabularyName                    string
 	vocabularyNameSet                 bool
 	sessionID                         string
+	sessionIDSet                      bool
 	vocabularyFilterMethod            types.VocabularyFilterMethod
 	vocabularyFilterName              string
 	vocabularyFilterNameSet           bool
@@ -113,6 +114,7 @@ func WithAWSSTTVocabularyName(name string) AWSSTTOption {
 func WithAWSSTTSessionID(sessionID string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.sessionID = sessionID
+		s.sessionIDSet = true
 	}
 }
 
@@ -388,7 +390,7 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	if s.vocabularyNameSet {
 		input.VocabularyName = aws.String(s.vocabularyName)
 	}
-	if s.sessionID != "" {
+	if s.sessionIDSet {
 		input.SessionId = aws.String(s.sessionID)
 	}
 	if s.vocabularyFilterMethod != "" {

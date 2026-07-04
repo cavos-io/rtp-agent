@@ -343,6 +343,21 @@ func TestAWSSTTStreamInputPreservesReferenceEmptyVocabularyFilterName(t *testing
 	}
 }
 
+func TestAWSSTTStreamInputPreservesReferenceEmptySessionID(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTSessionID(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.SessionId == nil || *input.SessionId != "" {
+		t.Fatalf("session ID = %v, want explicit empty reference value", input.SessionId)
+	}
+}
+
 func TestAWSSTTStreamInputOmitsLanguageWhenIdentifyingLanguage(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTIdentifyLanguage(true),
