@@ -127,6 +127,7 @@ type appGoogleTTSConfig struct {
 	voiceSet             bool
 	gender               string
 	cloneKey             string
+	cloneKeySet          bool
 	model                string
 	modelSet             bool
 	prompt               string
@@ -411,7 +412,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.gender != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSGender(cfg.gender))
 	}
-	if cfg.cloneKey != "" {
+	if cfg.cloneKeySet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoiceCloneKey(cfg.cloneKey))
 	}
 	if cfg.modelSet {
@@ -4515,6 +4516,7 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		voiceSet:    cfg.TTSVoice != "",
 		gender:      cfg.TTSGender,
 		cloneKey:    cfg.TTSVoiceID,
+		cloneKeySet: cfg.TTSVoiceID != "",
 		model:       cfg.TTSModel,
 		modelSet:    cfg.TTSModel != "",
 		prompt:      cfg.TTSInstructions,
@@ -4543,8 +4545,11 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	if googleCfg.gender == "" {
 		googleCfg.gender = modelOptionString(cfg.TTSModelOptions, "gender")
 	}
-	if googleCfg.cloneKey == "" {
-		googleCfg.cloneKey = modelOptionString(cfg.TTSModelOptions, "voice_cloning_key")
+	if !googleCfg.cloneKeySet {
+		if cloneKey, ok := modelOptionStringValue(cfg.TTSModelOptions, "voice_cloning_key"); ok {
+			googleCfg.cloneKey = cloneKey
+			googleCfg.cloneKeySet = true
+		}
 	}
 	if !googleCfg.modelSet {
 		if modelName, ok := modelOptionStringValue(cfg.TTSModelOptions, "model_name"); ok {
