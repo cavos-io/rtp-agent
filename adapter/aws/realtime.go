@@ -1394,6 +1394,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			if s.isAudioTranscriptMessage(msg.ID) {
 				continue
 			}
+			if strings.TrimSpace(msg.TextContent()) == "" {
+				continue
+			}
 			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
 				return err
 			}

@@ -645,6 +645,30 @@ func TestAWSRealtimeSessionUpdateChatContextAfterCloseIsIgnored(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionUpdateChatContextIgnoresReferenceBlankUserText(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	sentCount := len(stream.sent)
+
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.ChatMessage{
+		ID:      "blank-user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: " \n\t "}},
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext blank user error = %v", err)
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("UpdateChatContext blank user sent %d events, want none", len(stream.sent)-sentCount)
+	}
+}
+
 func TestAWSRealtimeSessionStripsReferenceLeadingAssistantOnInitialChatContext(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	client := &fakeAWSRealtimeClient{stream: stream}
