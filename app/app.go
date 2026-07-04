@@ -121,6 +121,7 @@ var appNewAgoraDataPublisher = workeragora.NewSDKDataPublisher
 type appGoogleTTSConfig struct {
 	language             string
 	location             string
+	locationSet          bool
 	voice                string
 	gender               string
 	cloneKey             string
@@ -396,7 +397,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.language != "" {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.language))
 	}
-	if cfg.location != "" {
+	if cfg.locationSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLocation(cfg.location))
 	}
 	if cfg.voice != "" {
@@ -4501,16 +4502,17 @@ func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adapterg
 
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
-		language:   cfg.TTSLanguage,
-		location:   cfg.TTSRegion,
-		voice:      cfg.TTSVoice,
-		gender:     cfg.TTSGender,
-		cloneKey:   cfg.TTSVoiceID,
-		model:      cfg.TTSModel,
-		prompt:     cfg.TTSInstructions,
-		sampleRate: cfg.TTSSampleRate,
-		streaming:  cfg.TTSStreaming,
-		ssml:       cfg.TTSEnableSSMLParsing,
+		language:    cfg.TTSLanguage,
+		location:    cfg.TTSRegion,
+		locationSet: cfg.TTSRegion != "",
+		voice:       cfg.TTSVoice,
+		gender:      cfg.TTSGender,
+		cloneKey:    cfg.TTSVoiceID,
+		model:       cfg.TTSModel,
+		prompt:      cfg.TTSInstructions,
+		sampleRate:  cfg.TTSSampleRate,
+		streaming:   cfg.TTSStreaming,
+		ssml:        cfg.TTSEnableSSMLParsing,
 	}
 	if googleCfg.voice == "" {
 		googleCfg.voice = modelOptionString(cfg.TTSModelOptions, "voice_name")
@@ -4518,8 +4520,11 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	if googleCfg.language == "" {
 		googleCfg.language = modelOptionString(cfg.TTSModelOptions, "language")
 	}
-	if googleCfg.location == "" {
-		googleCfg.location = modelOptionString(cfg.TTSModelOptions, "location")
+	if !googleCfg.locationSet {
+		if location, ok := modelOptionStringValue(cfg.TTSModelOptions, "location"); ok {
+			googleCfg.location = location
+			googleCfg.locationSet = true
+		}
 	}
 	if googleCfg.gender == "" {
 		googleCfg.gender = modelOptionString(cfg.TTSModelOptions, "gender")

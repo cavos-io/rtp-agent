@@ -13619,6 +13619,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceLocationOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyLocationOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"location": ""},
+	})
+
+	if !googleCfg.locationSet {
+		t.Fatal("locationSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.location != "" {
+		t.Fatalf("location = %q, want explicit empty model option", googleCfg.location)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"speaking_rate": 0.92},
