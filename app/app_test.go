@@ -14909,6 +14909,41 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeTranscriptionOptions(t *testin
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeGenerationOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "temperature=0.2,max_output_tokens=96,top_p=0.7,top_k=32")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.temperature == nil || *capturedCfg.temperature != 0.2 {
+		t.Fatalf("temperature = %#v, want 0.2", capturedCfg.temperature)
+	}
+	if capturedCfg.maxOutputTokens != 96 {
+		t.Fatalf("maxOutputTokens = %d, want 96", capturedCfg.maxOutputTokens)
+	}
+	if capturedCfg.topP == nil || *capturedCfg.topP != 0.7 {
+		t.Fatalf("topP = %#v, want 0.7", capturedCfg.topP)
+	}
+	if capturedCfg.topK != 32 {
+		t.Fatalf("topK = %d, want 32", capturedCfg.topK)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")

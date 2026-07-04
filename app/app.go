@@ -165,6 +165,10 @@ type appGoogleRealtimeConfig struct {
 	turnDetection            *bool
 	inputAudioTranscription  *bool
 	outputAudioTranscription *bool
+	temperature              *float64
+	maxOutputTokens          int
+	topP                     *float64
+	topK                     int
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -195,6 +199,18 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.outputAudioTranscription != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeOutputAudioTranscription(*c.outputAudioTranscription))
+	}
+	if c.temperature != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeTemperature(*c.temperature))
+	}
+	if c.maxOutputTokens > 0 {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeMaxOutputTokens(c.maxOutputTokens))
+	}
+	if c.topP != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeTopP(*c.topP))
+	}
+	if c.topK > 0 {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeTopK(c.topK))
 	}
 	return opts
 }
@@ -7086,6 +7102,10 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	if outputAudioTranscription := modelOptionBool(cfg.RealtimeModelOptions, "output_audio_transcription"); outputAudioTranscription != nil {
 		googleCfg.outputAudioTranscription = outputAudioTranscription
 	}
+	googleCfg.temperature = modelOptionFloat(cfg.RealtimeModelOptions, "temperature")
+	googleCfg.maxOutputTokens = modelOptionInt(cfg.RealtimeModelOptions, "max_output_tokens")
+	googleCfg.topP = modelOptionFloat(cfg.RealtimeModelOptions, "top_p")
+	googleCfg.topK = modelOptionInt(cfg.RealtimeModelOptions, "top_k")
 	return googleCfg
 }
 
