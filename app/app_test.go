@@ -13892,6 +13892,41 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceV1Adaptation(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceV1AdaptationJSON(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"adaptation": map[string]any{
+				"phrase_sets": []any{map[string]any{
+					"name": "domain",
+					"phrases": []any{map[string]any{
+						"value": "Acrux",
+						"boost": 20.0,
+					}},
+				}},
+			},
+		},
+	})
+
+	adaptation := googleCfg.adaptation
+	if adaptation == nil || len(adaptation.PhraseSets) != 1 {
+		t.Fatalf("adaptation = %#v, want one parsed phrase set", adaptation)
+	}
+	phraseSet := adaptation.PhraseSets[0]
+	if phraseSet.Name != "domain" {
+		t.Fatalf("phrase set name = %q, want domain", phraseSet.Name)
+	}
+	if len(phraseSet.Phrases) != 1 {
+		t.Fatalf("phrases = %#v, want one parsed phrase", phraseSet.Phrases)
+	}
+	phrase := phraseSet.Phrases[0]
+	if phrase.Value != "Acrux" {
+		t.Fatalf("phrase value = %q, want Acrux", phrase.Value)
+	}
+	if phrase.Boost != 20 {
+		t.Fatalf("phrase boost = %v, want 20", phrase.Boost)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceEndpointingSensitivity(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{

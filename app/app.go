@@ -4285,7 +4285,67 @@ func googleSTTAdaptationFromOptions(options map[string]any) *speechpb.SpeechAdap
 	if adaptation, ok := options["speech_adaptation"].(*speechpb.SpeechAdaptation); ok {
 		return adaptation
 	}
+	if adaptation := googleSTTAdaptationFromModelOption(options["adaptation"]); adaptation != nil {
+		return adaptation
+	}
+	if adaptation := googleSTTAdaptationFromModelOption(options["speech_adaptation"]); adaptation != nil {
+		return adaptation
+	}
 	return nil
+}
+
+func googleSTTAdaptationFromModelOption(value any) *speechpb.SpeechAdaptation {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	phraseSetValues, ok := anySlice(options["phrase_sets"])
+	if !ok {
+		return nil
+	}
+	adaptation := &speechpb.SpeechAdaptation{}
+	for _, phraseSetValue := range phraseSetValues {
+		phraseSetOptions, ok := phraseSetValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		phrases := googleSTTPhraseSetPhrasesFromModelOption(phraseSetOptions["phrases"])
+		if len(phrases) == 0 {
+			continue
+		}
+		adaptation.PhraseSets = append(adaptation.PhraseSets, &speechpb.PhraseSet{
+			Name:    modelOptionString(phraseSetOptions, "name"),
+			Phrases: phrases,
+		})
+	}
+	if len(adaptation.PhraseSets) == 0 {
+		return nil
+	}
+	return adaptation
+}
+
+func googleSTTPhraseSetPhrasesFromModelOption(value any) []*speechpb.PhraseSet_Phrase {
+	phraseValues, ok := anySlice(value)
+	if !ok {
+		return nil
+	}
+	phrases := make([]*speechpb.PhraseSet_Phrase, 0, len(phraseValues))
+	for _, phraseValue := range phraseValues {
+		phraseOptions, ok := phraseValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := modelOptionString(phraseOptions, "value")
+		if text == "" {
+			continue
+		}
+		phrase := &speechpb.PhraseSet_Phrase{Value: text}
+		if boost := modelOptionFloat(phraseOptions, "boost"); boost != nil {
+			phrase.Boost = float32(*boost)
+		}
+		phrases = append(phrases, phrase)
+	}
+	return phrases
 }
 
 func googleSTTAdaptationV2FromOptions(options map[string]any) *speechv2pb.SpeechAdaptation {
