@@ -907,14 +907,8 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	if err := providerStream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v, want nil", err)
 	}
-	if len(writer.chunks) != 2 {
-		t.Fatalf("chunks after Flush = %d, want audio plus empty flush sentinel", len(writer.chunks))
-	}
-	if len(writer.chunks[1]) != 0 {
-		t.Fatalf("flush chunk = %q, want empty AWS Transcribe sentinel", string(writer.chunks[1]))
-	}
-	if writer.chunkWasNil[1] {
-		t.Fatal("flush chunk = nil, want non-nil empty AWS Transcribe sentinel")
+	if len(writer.chunks) != 1 {
+		t.Fatalf("chunks after Flush = %d, want no provider close sentinel until Close", len(writer.chunks))
 	}
 	providerStream.errCh <- errors.New("stream failed")
 	if _, err := providerStream.Next(); err == nil || !strings.Contains(err.Error(), "stream failed") {
@@ -923,19 +917,19 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	if err := providerStream.Close(); err != nil {
 		t.Fatalf("Close error = %v, want nil", err)
 	}
-	if len(writer.chunks) != 3 {
-		t.Fatalf("chunks after Close = %d, want audio plus flush and close sentinels", len(writer.chunks))
+	if len(writer.chunks) != 2 {
+		t.Fatalf("chunks after Close = %d, want audio plus close sentinel", len(writer.chunks))
 	}
-	if len(writer.chunks[2]) != 0 {
-		t.Fatalf("close chunk = %q, want empty AWS Transcribe sentinel", string(writer.chunks[2]))
+	if len(writer.chunks[1]) != 0 {
+		t.Fatalf("close chunk = %q, want empty AWS Transcribe sentinel", string(writer.chunks[1]))
 	}
-	if writer.chunkWasNil[2] {
+	if writer.chunkWasNil[1] {
 		t.Fatal("close chunk = nil, want non-nil empty AWS Transcribe sentinel")
 	}
 	if err := providerStream.Close(); err != nil {
 		t.Fatalf("second Close error = %v, want nil", err)
 	}
-	if len(writer.chunks) != 3 {
+	if len(writer.chunks) != 2 {
 		t.Fatalf("chunks after second Close = %d, want idempotent close", len(writer.chunks))
 	}
 	if !writer.closed || !reader.closed {
@@ -993,6 +987,32 @@ func TestAWSSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
 	})
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("PushFrame after close error = %v, want ErrClosedPipe before sample-rate check", err)
+	}
+}
+
+func TestAWSSTTStreamFlushDoesNotSendReferenceCloseSentinel(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := &fakeAWSSTTWriter{}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = reader
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	if err := providerStream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v, want nil", err)
+	}
+	if len(writer.chunks) != 0 {
+		t.Fatalf("chunks after Flush = %#v, want no AWS close sentinel", writer.chunks)
+	}
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
+		t.Fatalf("chunks after Close = %#v, want one empty AWS close sentinel", writer.chunks)
 	}
 }
 
@@ -1055,6 +1075,28 @@ func TestAWSSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamAfterCloseIsRejected(t *testing.T) {
+	client := &fakeAWSSTTClient{}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream after Close = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want ErrClosedPipe", err)
+	}
+	if calls := atomic.LoadInt32(&client.calls); calls != 0 {
+		t.Fatalf("client calls after Stream on closed provider = %d, want 0", calls)
+	}
+}
+
 func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	writer := &fakeAWSSTTWriter{err: errors.New("transcribe write failed")}
 	providerStream := &awsSTTStream{
@@ -1077,8 +1119,8 @@ func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 
 	err = providerStream.Flush()
-	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	if err != nil {
+		t.Fatalf("Flush error = %v, want nil because reference FlushSentinel does not write to AWS", err)
 	}
 }
 
@@ -1100,8 +1142,8 @@ func TestAWSSTTStreamWriteDeadlineReturnsAPITimeoutError(t *testing.T) {
 	}
 
 	err = providerStream.Flush()
-	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Flush error = %T %v, want APITimeoutError", err, err)
+	if err != nil {
+		t.Fatalf("Flush error = %v, want nil because reference FlushSentinel does not write to AWS", err)
 	}
 }
 
@@ -1328,6 +1370,54 @@ func TestAWSSTTClosedStreamNextReturnsEOF(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for Next after Close")
+	}
+}
+
+func TestAWSSTTReadLoopUnblocksWhenClosedWithFullEventQueue(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := &fakeAWSSTTWriter{}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = reader
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+	done := make(chan struct{})
+	go func() {
+		providerStream.readLoop()
+		close(done)
+	}()
+
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{{
+					StartTime: 0,
+					EndTime:   0.4,
+					IsPartial: true,
+					Alternatives: []types.Alternative{{
+						Transcript: awsconfig.String("queued"),
+					}},
+				}},
+			},
+		},
+	}
+
+	select {
+	case <-done:
+		t.Fatal("readLoop returned before close; want blocked on full event queue")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not unblock after Close with full event queue")
 	}
 }
 

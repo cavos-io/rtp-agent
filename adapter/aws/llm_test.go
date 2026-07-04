@@ -155,6 +155,26 @@ func TestAWSLLMChatReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatCallerCancelReturnsContextCanceled(t *testing.T) {
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: context.Canceled},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Chat error = %T %v, want context.Canceled", err, err)
+	}
+}
+
 func TestAWSLLMChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	var captured context.Context
 	provider := &AWSLLM{
@@ -933,8 +953,11 @@ func TestBuildAWSMessagesCollectsSystemText(t *testing.T) {
 
 	messages, systemText := buildAWSMessages(ctx)
 
-	if systemText != "base\n" {
+	if systemText != "base" {
 		t.Fatalf("systemText = %q, want base", systemText)
+	}
+	if strings.HasSuffix(systemText, "\n") {
+		t.Fatalf("systemText = %q, want no reference trailing newline", systemText)
 	}
 	if len(messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(messages))
@@ -955,7 +978,7 @@ func TestBuildAWSMessagesConvertsReferenceMidConversationInstructions(t *testing
 
 	messages, systemText := buildAWSMessages(ctx)
 
-	if systemText != "base\n" {
+	if systemText != "base" {
 		t.Fatalf("systemText = %q, want only first system message", systemText)
 	}
 	if len(messages) != 3 {

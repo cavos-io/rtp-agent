@@ -46,6 +46,7 @@ const (
 	defaultAWSRealtimeRecycleQuiet   = time.Second
 	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
 	defaultAWSRealtimeGenerateReply  = 10 * time.Second
+	defaultAWSRealtimeTextStartDelay = 50 * time.Millisecond
 	awsRealtimeCredentialExpirySlack = 3 * time.Minute
 	awsRealtimeMinRecycleDuration    = 10 * time.Second
 	awsRealtimeAudioModalities       = AWSRealtimeModalitiesAudio
@@ -134,6 +135,7 @@ type AWSRealtimeModel struct {
 	recycleQuietPeriod   time.Duration
 	toolRecycleDelay     time.Duration
 	generateReplyTimeout time.Duration
+	interactiveTextDelay time.Duration
 	credentialExpiry     func() (time.Time, bool)
 	maxTokensSet         bool
 	topPSet              bool
@@ -157,6 +159,7 @@ func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeMo
 		recycleQuietPeriod:   defaultAWSRealtimeRecycleQuiet,
 		toolRecycleDelay:     defaultAWSRealtimeToolRecycle,
 		generateReplyTimeout: defaultAWSRealtimeGenerateReply,
+		interactiveTextDelay: defaultAWSRealtimeTextStartDelay,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -448,6 +451,13 @@ type awsRealtimeSession struct {
 	currentUserContentID     string
 	audioBStream             *coreaudio.AudioByteStream
 	audioNorm                awsRealtimeInputAudioNormalizer
+	audioMu                  sync.Mutex
+	audioCond                *sync.Cond
+	audioQueue               []string
+	audioClosed              bool
+	audioCtx                 context.Context
+	audioCancel              context.CancelFunc
+	audioSenderDone          chan struct{}
 	mu                       sync.Mutex
 	closed                   bool
 }
@@ -469,6 +479,7 @@ type awsRealtimeStartOptions struct {
 }
 
 func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *awsRealtimeSession {
+	audioCtx, audioCancel := context.WithCancel(context.Background())
 	session := &awsRealtimeSession{
 		model:                    model,
 		client:                   client,
@@ -483,8 +494,13 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 			defaultAWSRealtimeChannels,
 			defaultAWSRealtimeInputChunkSize,
 		),
+		audioCtx:        audioCtx,
+		audioCancel:     audioCancel,
+		audioSenderDone: make(chan struct{}),
 	}
+	session.audioCond = sync.NewCond(&session.audioMu)
 	session.turns = newAWSRealtimeTurnTracker(session.emit, session.emitGenerationCreated)
+	go session.runAudioInputSender()
 	return session
 }
 
@@ -547,15 +563,19 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 		}
 	}
 	s.markChatContextUserMessagesSent(chatCtx)
+	responseStarted := make(chan struct{})
+	go s.readResponses(responseStarted)
+	<-responseStarted
 	audioStart, err := s.builder.createAudioContentStartEvent(defaultAWSRealtimeInputSampleRate)
 	if err != nil {
 		return err
 	}
-	if err := s.sendRawEvent(ctx, audioStart); err != nil {
-		s.closeStartupStream()
-		return awsRealtimeStartupSendError(err)
-	}
+	s.enqueueAudioInputEvent(audioStart)
 	if interactiveUserText != "" {
+		if err := s.waitInteractiveTextDelay(ctx); err != nil {
+			s.closeStartupStream()
+			return awsRealtimeStartupSendError(err)
+		}
 		if err := s.sendInteractiveUserText(ctx, &llm.ChatMessage{
 			ID:      uuid.NewString(),
 			Role:    llm.ChatRoleUser,
@@ -566,8 +586,25 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 		}
 	}
 	s.startSessionRecycleTimer()
-	go s.readResponses()
 	return nil
+}
+
+func (s *awsRealtimeSession) waitInteractiveTextDelay(ctx context.Context) error {
+	delay := time.Duration(0)
+	if s.model != nil {
+		delay = s.model.interactiveTextDelay
+	}
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *awsRealtimeSession) startSessionRecycleTimer() {
@@ -738,12 +775,19 @@ func sendAWSRealtimeRawEvent(ctx context.Context, stream awsRealtimeStream, even
 	return nil
 }
 
-func (s *awsRealtimeSession) readResponses() {
+func (s *awsRealtimeSession) readResponses(started chan<- struct{}) {
 	stream := s.stream
 	if stream == nil {
+		if started != nil {
+			close(started)
+		}
 		return
 	}
-	for event := range stream.Events() {
+	events := stream.Events()
+	if started != nil {
+		close(started)
+	}
+	for event := range events {
 		chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamOutputMemberChunk)
 		if !ok || len(chunk.Value.Bytes) == 0 {
 			continue
@@ -899,10 +943,10 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
 		s.emitGenerationCreated()
 	}
+	s.trackGenerationContentStart(payload)
 	if s.turns != nil {
 		s.turns.feed(payload)
 	}
-	s.trackGenerationContentStart(payload)
 	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
@@ -979,7 +1023,7 @@ func (s *awsRealtimeSession) emitGenerationCreated() {
 }
 
 func (s *awsRealtimeSession) emitGenerationCreatedWithResponseID(responseID string) {
-	generation := s.ensureGeneration(responseID)
+	generation, _ := s.ensureGenerationWithCreated(responseID)
 	s.emit(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
@@ -990,11 +1034,11 @@ func (s *awsRealtimeSession) emitGenerationCreatedWithResponseID(responseID stri
 	})
 }
 
-func (s *awsRealtimeSession) ensureGeneration(responseID string) *awsRealtimeGeneration {
+func (s *awsRealtimeSession) ensureGenerationWithCreated(responseID string) (*awsRealtimeGeneration, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != nil {
-		return s.generation
+		return s.generation, false
 	}
 	if responseID == "" {
 		responseID = uuid.NewString()
@@ -1016,7 +1060,7 @@ func (s *awsRealtimeSession) ensureGeneration(responseID string) *awsRealtimeGen
 		ModalitiesCh: generation.modalitiesCh,
 	}
 	s.generation = generation
-	return generation
+	return generation, true
 }
 
 func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any) {
@@ -1031,6 +1075,8 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	switch {
 	case contentType == "AUDIO":
 		streamType = "ASSISTANT_AUDIO"
+	case contentType == "TOOL":
+		streamType = "TOOL"
 	case role == "USER" && contentType == "TEXT":
 		streamType = "USER_ASR"
 	case role == "ASSISTANT" &&
@@ -1043,8 +1089,19 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 		return
 	}
 	var generation *awsRealtimeGeneration
-	if streamType == "ASSISTANT_TEXT" {
-		generation = s.ensureGeneration("")
+	if streamType == "ASSISTANT_TEXT" || streamType == "TOOL" {
+		created := false
+		generation, created = s.ensureGenerationWithCreated("")
+		if created {
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeGenerationCreated,
+				Generation: &llm.GenerationCreatedEvent{
+					MessageCh:  generation.messageCh,
+					FunctionCh: generation.functionCh,
+					ResponseID: generation.responseID,
+				},
+			})
+		}
 	} else {
 		s.mu.Lock()
 		generation = s.generation
@@ -1345,6 +1402,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 	for _, item := range chatCtx.Items {
 		if msg, ok := item.(*llm.ChatMessage); ok && msg.Role == llm.ChatRoleUser {
 			if s.isAudioTranscriptMessage(msg.ID) {
+				continue
+			}
+			if strings.TrimSpace(msg.TextContent()) == "" {
 				continue
 			}
 			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
@@ -1651,6 +1711,7 @@ func (s *awsRealtimeSession) Close() error {
 	}
 	s.mu.Unlock()
 
+	s.closeAudioInputSender()
 	s.closeGeneration()
 	if stream != nil {
 		closeEvents, err := s.builder.createPromptEndBlock()
@@ -1691,11 +1752,61 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 		if err != nil {
 			return err
 		}
-		if err := s.sendRawEvent(context.Background(), event); err != nil {
-			return err
-		}
+		s.enqueueAudioInputEvent(event)
 	}
 	return nil
+}
+
+func (s *awsRealtimeSession) enqueueAudioInputEvent(event string) {
+	s.audioMu.Lock()
+	defer s.audioMu.Unlock()
+	if s.audioClosed {
+		return
+	}
+	s.audioQueue = append(s.audioQueue, event)
+	s.audioCond.Signal()
+}
+
+func (s *awsRealtimeSession) runAudioInputSender() {
+	defer close(s.audioSenderDone)
+	for {
+		s.audioMu.Lock()
+		for len(s.audioQueue) == 0 && !s.audioClosed {
+			s.audioCond.Wait()
+		}
+		if len(s.audioQueue) == 0 && s.audioClosed {
+			s.audioMu.Unlock()
+			return
+		}
+		event := s.audioQueue[0]
+		s.audioQueue[0] = ""
+		s.audioQueue = s.audioQueue[1:]
+		ctx := s.audioCtx
+		s.audioMu.Unlock()
+
+		if ctx.Err() != nil {
+			return
+		}
+		_ = s.sendRawEvent(ctx, event)
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+func (s *awsRealtimeSession) closeAudioInputSender() {
+	s.audioMu.Lock()
+	if !s.audioClosed {
+		s.audioClosed = true
+		s.audioQueue = nil
+		s.audioCond.Broadcast()
+	}
+	cancel := s.audioCancel
+	s.audioMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	<-s.audioSenderDone
 }
 
 type awsRealtimeInputAudioNormalizer struct {

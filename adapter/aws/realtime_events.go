@@ -341,17 +341,20 @@ func (b *awsRealtimeEventBuilder) createInteractiveTextContentBlock(contentName 
 }
 
 func (b *awsRealtimeEventBuilder) createTextContentStartEvent(contentName string, role string, interactive bool) (string, error) {
-	return marshalAWSRealtimeEvent(map[string]any{
-		"contentStart": map[string]any{
-			"promptName":  b.promptName,
-			"contentName": contentName,
-			"type":        "TEXT",
-			"interactive": interactive,
-			"role":        role,
-			"textInputConfiguration": map[string]any{
-				"mediaType": "text/plain",
-			},
+	contentStart := map[string]any{
+		"promptName":  b.promptName,
+		"contentName": contentName,
+		"type":        "TEXT",
+		"role":        role,
+		"textInputConfiguration": map[string]any{
+			"mediaType": "text/plain",
 		},
+	}
+	if interactive {
+		contentStart["interactive"] = true
+	}
+	return marshalAWSRealtimeEvent(map[string]any{
+		"contentStart": contentStart,
 	})
 }
 

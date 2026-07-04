@@ -239,6 +239,9 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		if cancel != nil {
 			cancel()
 		}
+		if errors.Is(err, context.Canceled) {
+			return nil, err
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError("")
 		}
@@ -446,7 +449,10 @@ func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
 			case *llm.ChatMessage:
 				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
 					if text := msg.TextContent(); text != "" {
-						systemText += text + "\n"
+						if systemText != "" {
+							systemText += "\n"
+						}
+						systemText += text
 					}
 					continue
 				}
