@@ -980,7 +980,7 @@ func (s *awsRealtimeSession) clearPendingTools() {
 
 func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
-		s.emitGenerationCreated()
+		s.emitGenerationCreatedIfNew()
 	}
 	if contentStart := awsRealtimeNestedMap(payload, "event", "contentStart"); contentStart != nil {
 		if _, ok := awsRealtimeRequiredMapString(contentStart, "contentId"); !ok {
@@ -1094,7 +1094,7 @@ func (s *awsRealtimeSession) handleMalformedContentStart(contentStart map[string
 	additionalFields := awsRealtimeMapString(contentStart, "additionalModelFields")
 	if contentType == "TOOL" ||
 		(role == "ASSISTANT" && contentType == "TEXT" && strings.Contains(additionalFields, "SPECULATIVE")) {
-		s.emitGenerationCreated()
+		s.emitGenerationCreatedIfNew()
 	}
 }
 
@@ -1116,6 +1116,22 @@ func (s *awsRealtimeSession) emitGenerationCreated() {
 
 func (s *awsRealtimeSession) emitGenerationCreatedWithResponseID(responseID string) {
 	generation, _ := s.ensureGenerationWithCreated(responseID)
+	s.emit(llm.RealtimeEvent{
+		Type: llm.RealtimeEventTypeGenerationCreated,
+		Generation: &llm.GenerationCreatedEvent{
+			MessageCh:  generation.messageCh,
+			FunctionCh: generation.functionCh,
+			ResponseID: generation.responseID,
+		},
+	})
+	s.resolvePendingGenerationStart()
+}
+
+func (s *awsRealtimeSession) emitGenerationCreatedIfNew() {
+	generation, created := s.ensureGenerationWithCreated("")
+	if !created {
+		return
+	}
 	s.emit(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{

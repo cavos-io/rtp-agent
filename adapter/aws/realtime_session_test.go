@@ -1935,6 +1935,25 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testin
 	}
 }
 
+func TestAWSRealtimeSessionReusesReferenceGenerationOnRepeatedCompletionStart(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil || created.Generation.ResponseID == "" {
+		t.Fatalf("first generation = %#v, want response id", created.Generation)
+	}
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+}
+
 func TestAWSRealtimeSessionClosesReferenceGenerationOnCompletionEnd(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
