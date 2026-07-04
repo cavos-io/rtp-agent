@@ -157,6 +157,35 @@ func TestAWSTTSUpdateOptionsKeepsReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestAWSTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "Joanna")
+
+	provider.UpdateOptions(WithAWSTTSVoice(""))
+
+	if provider.voice != "" {
+		t.Fatalf("voice = %q, want explicit empty reference voice update", provider.voice)
+	}
+}
+
+func TestAWSTTSUpdateOptionsAllowsReferenceEmptySynthesisFields(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "",
+		WithAWSTTSEngine(types.EngineStandard),
+		WithAWSTTSTextType(types.TextTypeSsml),
+	)
+
+	provider.UpdateOptions(
+		WithAWSTTSEngine(""),
+		WithAWSTTSTextType(""),
+	)
+
+	if provider.engine != "" {
+		t.Fatalf("engine = %q, want explicit empty reference engine update", provider.engine)
+	}
+	if provider.textType != "" {
+		t.Fatalf("text type = %q, want explicit empty reference text type update", provider.textType)
+	}
+}
+
 func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	var requests int
 	client := polly.New(polly.Options{
@@ -711,6 +740,41 @@ func TestAWSTTSChunkedStreamNextReturnsAPIConnectionError(t *testing.T) {
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestAWSTTSChunkedStreamTreatsReferenceClientClosedAsEOF(t *testing.T) {
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 499,
+				Status:     "499 Client Closed Request",
+				Body:       io.NopCloser(strings.NewReader(`{"message":"client closed"}`)),
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+			}, nil
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want lazy stream", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on client-closed provider response", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %T %v, want EOF for reference client-closed provider response", err, err)
 	}
 }
 

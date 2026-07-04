@@ -202,17 +202,13 @@ func WithAWSRealtimeRegion(region string) AWSRealtimeOption {
 
 func WithAWSRealtimeVoice(voice string) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
-		if voice != "" {
-			provider.voice = voice
-		}
+		provider.voice = voice
 	}
 }
 
 func WithAWSRealtimeTurnDetection(turnDetection string) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
-		if turnDetection != "" {
-			provider.turnDetection = turnDetection
-		}
+		provider.turnDetection = turnDetection
 	}
 }
 
@@ -469,6 +465,8 @@ type awsRealtimeSession struct {
 
 type awsRealtimeGeneration struct {
 	responseID     string
+	createdAt      time.Time
+	firstTokenAt   time.Time
 	messageCh      chan llm.MessageGeneration
 	functionCh     <-chan *llm.FunctionCall
 	functionStream *awsRealtimeQueuedStream[*llm.FunctionCall]
@@ -945,10 +943,13 @@ func (s *awsRealtimeSession) closeStartupStream() {
 }
 
 func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) error {
-	if s.stream == nil {
+	s.mu.Lock()
+	stream := s.stream
+	s.mu.Unlock()
+	if stream == nil {
 		return errors.New("AWS Nova Sonic realtime stream is not initialized")
 	}
-	return sendAWSRealtimeRawEvent(ctx, s.stream, event)
+	return sendAWSRealtimeRawEvent(ctx, stream, event)
 }
 
 func sendAWSRealtimeRawEvent(ctx context.Context, stream awsRealtimeStream, event string) error {
@@ -1230,7 +1231,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	}
 	if contentEnd := awsRealtimeNestedMap(payload, "event", "contentEnd"); contentEnd != nil &&
 		awsRealtimeMapString(contentEnd, "stopReason") == "END_TURN" &&
-		(awsRealtimeMapString(contentEnd, "type") == "AUDIO" || awsRealtimeMapString(contentEnd, "type") == "") {
+		awsRealtimeMapString(contentEnd, "type") == "AUDIO" {
 		s.markAudioEndTurnReceived()
 		s.closeGeneration()
 	}
@@ -1334,6 +1335,7 @@ func (s *awsRealtimeSession) ensureGenerationWithCreated(responseID string) (*aw
 	audioStream := newAWSRealtimeQueuedStream[*model.AudioFrame]()
 	generation := &awsRealtimeGeneration{
 		responseID:     responseID,
+		createdAt:      time.Now(),
 		messageCh:      make(chan llm.MessageGeneration, 1),
 		functionCh:     functionStream.Chan(),
 		functionStream: functionStream,
@@ -1531,6 +1533,9 @@ func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
 	streamType := ""
 	if generation != nil {
 		streamType = generation.contentTypes[contentID]
+		if streamType == "ASSISTANT_TEXT" && generation.firstTokenAt.IsZero() {
+			generation.firstTokenAt = time.Now()
+		}
 	}
 	s.mu.Unlock()
 	if generation == nil || streamType != "ASSISTANT_TEXT" {
@@ -1601,12 +1606,20 @@ func (s *awsRealtimeSession) emitUsageMetrics(usage map[string]any) {
 	outputText := awsRealtimeNumberAsInt(output["textTokens"])
 	inputTokens := inputSpeech + inputText
 	outputTokens := outputSpeech + outputText
+	ttft := 0.0
+	s.mu.Lock()
+	generation := s.generation
+	if generation != nil && !generation.createdAt.IsZero() && !generation.firstTokenAt.IsZero() {
+		ttft = generation.firstTokenAt.Sub(generation.createdAt).Seconds()
+	}
+	s.mu.Unlock()
 	s.emit(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeMetricsCollected,
 		Metrics: &telemetry.RealtimeModelMetrics{
 			Label:        s.model.Label(),
 			RequestID:    awsRealtimeMapString(usage, "completionId"),
 			Timestamp:    time.Now(),
+			TTFT:         ttft,
 			InputTokens:  inputTokens,
 			OutputTokens: outputTokens,
 			TotalTokens:  inputTokens + outputTokens,

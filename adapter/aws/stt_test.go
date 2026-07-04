@@ -282,6 +282,95 @@ func TestAWSSTTStreamInputOmitsReferenceDetectionOptionsWithoutDetection(t *test
 	}
 }
 
+func TestAWSSTTStreamInputPreservesReferenceZeroChannelCount(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTEnableChannelIdentification(true),
+		WithAWSSTTNumberOfChannels(0),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.NumberOfChannels == nil || *input.NumberOfChannels != 0 {
+		t.Fatalf("number of channels = %v, want explicit reference zero", input.NumberOfChannels)
+	}
+}
+
+func TestAWSSTTStreamInputPreservesReferenceEmptyVocabularyName(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTVocabularyName(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.VocabularyName == nil || *input.VocabularyName != "" {
+		t.Fatalf("vocabulary name = %v, want explicit empty reference value", input.VocabularyName)
+	}
+}
+
+func TestAWSSTTStreamInputPreservesReferenceEmptyLanguageModelName(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTLanguageModelName(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.LanguageModelName == nil || *input.LanguageModelName != "" {
+		t.Fatalf("language model = %v, want explicit empty reference value", input.LanguageModelName)
+	}
+}
+
+func TestAWSSTTModelPreservesReferenceEmptyLanguageModelName(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTLanguageModelName(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	if got := provider.Model(); got != "" {
+		t.Fatalf("Model = %q, want explicit empty reference language model", got)
+	}
+}
+
+func TestAWSSTTStreamInputPreservesReferenceEmptyVocabularyFilterName(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTVocabularyFilterName(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.VocabularyFilterName == nil || *input.VocabularyFilterName != "" {
+		t.Fatalf("vocabulary filter name = %v, want explicit empty reference value", input.VocabularyFilterName)
+	}
+}
+
+func TestAWSSTTStreamInputPreservesReferenceEmptySessionID(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTSessionID(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.SessionId == nil || *input.SessionId != "" {
+		t.Fatalf("session ID = %v, want explicit empty reference value", input.SessionId)
+	}
+}
+
 func TestAWSSTTStreamInputOmitsLanguageWhenIdentifyingLanguage(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTIdentifyLanguage(true),
@@ -305,6 +394,54 @@ func TestAWSSTTStreamInputOmitsLanguageWhenIdentifyingLanguage(t *testing.T) {
 	}
 	if input.PreferredLanguage != types.LanguageCodeIdId {
 		t.Fatalf("preferred language = %q, want id-ID", input.PreferredLanguage)
+	}
+}
+
+func TestAWSSTTStreamInputPreservesReferenceEmptyLanguageOptions(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTIdentifyLanguage(true),
+		WithAWSSTTLanguageOptions(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.LanguageOptions == nil || *input.LanguageOptions != "" {
+		t.Fatalf("language options = %v, want explicit empty reference value", input.LanguageOptions)
+	}
+}
+
+func TestAWSSTTStreamInputPreservesReferenceEmptyVocabularyNames(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTIdentifyLanguage(true),
+		WithAWSSTTVocabularyNames(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.VocabularyNames == nil || *input.VocabularyNames != "" {
+		t.Fatalf("vocabulary names = %v, want explicit empty reference value", input.VocabularyNames)
+	}
+}
+
+func TestAWSSTTStreamInputPreservesReferenceEmptyVocabularyFilterNames(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTIdentifyLanguage(true),
+		WithAWSSTTVocabularyFilterNames(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.VocabularyFilterNames == nil || *input.VocabularyFilterNames != "" {
+		t.Fatalf("vocabulary filter names = %v, want explicit empty reference value", input.VocabularyFilterNames)
 	}
 }
 
@@ -1605,16 +1742,17 @@ func TestAWSSTTRestartAfterInputEndedClosesReferenceInput(t *testing.T) {
 	defer close(secondReader.events)
 
 	deadline := time.After(time.Second)
-	for !secondWriter.closed {
+	for !secondWriter.isClosed() {
 		select {
 		case <-deadline:
-			t.Fatalf("second stream writer closed = false, chunks = %#v; want reference restart to send empty close sentinel for already-ended input", secondWriter.chunks)
+			t.Fatalf("second stream writer closed = false, chunks = %#v; want reference restart to send empty close sentinel for already-ended input", secondWriter.snapshotChunks())
 		default:
 			time.Sleep(time.Millisecond)
 		}
 	}
-	if len(secondWriter.chunks) != 1 || len(secondWriter.chunks[0]) != 0 || secondWriter.chunkWasNil[0] {
-		t.Fatalf("second stream chunks = %#v nil=%#v, want one non-nil empty close sentinel", secondWriter.chunks, secondWriter.chunkWasNil)
+	chunks, chunkWasNil := secondWriter.snapshotChunksAndNilFlags()
+	if len(chunks) != 1 || len(chunks[0]) != 0 || chunkWasNil[0] {
+		t.Fatalf("second stream chunks = %#v nil=%#v, want one non-nil empty close sentinel", chunks, chunkWasNil)
 	}
 }
 
@@ -1731,6 +1869,7 @@ func TestAWSSTTReadLoopUnblocksWhenClosedWithFullEventQueue(t *testing.T) {
 }
 
 type fakeAWSSTTWriter struct {
+	mu          sync.Mutex
 	lastChunk   []byte
 	chunks      [][]byte
 	chunkWasNil []bool
@@ -1787,6 +1926,8 @@ func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) erro
 	if !ok {
 		return nil
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.chunkWasNil = append(w.chunkWasNil, audioEvent.Value.AudioChunk == nil)
 	w.lastChunk = append([]byte(nil), audioEvent.Value.AudioChunk...)
 	w.chunks = append(w.chunks, append([]byte(nil), audioEvent.Value.AudioChunk...))
@@ -1794,8 +1935,36 @@ func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) erro
 }
 
 func (w *fakeAWSSTTWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.closed = true
 	return w.closeErr
+}
+
+func (w *fakeAWSSTTWriter) isClosed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closed
+}
+
+func (w *fakeAWSSTTWriter) snapshotChunks() [][]byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return cloneByteSlices(w.chunks)
+}
+
+func (w *fakeAWSSTTWriter) snapshotChunksAndNilFlags() ([][]byte, []bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return cloneByteSlices(w.chunks), append([]bool(nil), w.chunkWasNil...)
+}
+
+func cloneByteSlices(values [][]byte) [][]byte {
+	cloned := make([][]byte, len(values))
+	for i, value := range values {
+		cloned[i] = append([]byte(nil), value...)
+	}
+	return cloned
 }
 
 func (w *fakeAWSSTTWriter) Err() error {

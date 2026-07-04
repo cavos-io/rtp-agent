@@ -27,21 +27,29 @@ type AWSSTT struct {
 	encoding                          types.MediaEncoding
 	language                          types.LanguageCode
 	vocabularyName                    string
+	vocabularyNameSet                 bool
 	sessionID                         string
+	sessionIDSet                      bool
 	vocabularyFilterMethod            types.VocabularyFilterMethod
 	vocabularyFilterName              string
+	vocabularyFilterNameSet           bool
 	showSpeakerLabel                  bool
 	enableChannelIdentification       bool
 	numberOfChannels                  int32
+	numberOfChannelsSet               bool
 	enablePartialResultsStabilization bool
 	partialResultsStability           types.PartialResultsStability
 	languageModelName                 string
+	languageModelNameSet              bool
 	identifyLanguage                  bool
 	identifyMultipleLanguages         bool
 	languageOptions                   string
+	languageOptionsSet                bool
 	preferredLanguage                 types.LanguageCode
 	vocabularyNames                   string
+	vocabularyNamesSet                bool
 	vocabularyFilterNames             string
+	vocabularyFilterNamesSet          bool
 	streams                           map[*awsSTTStream]struct{}
 	closed                            bool
 }
@@ -99,12 +107,14 @@ func WithAWSSTTLanguage(language types.LanguageCode) AWSSTTOption {
 func WithAWSSTTVocabularyName(name string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.vocabularyName = name
+		s.vocabularyNameSet = true
 	}
 }
 
 func WithAWSSTTSessionID(sessionID string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.sessionID = sessionID
+		s.sessionIDSet = true
 	}
 }
 
@@ -117,6 +127,7 @@ func WithAWSSTTVocabularyFilterMethod(method types.VocabularyFilterMethod) AWSST
 func WithAWSSTTVocabularyFilterName(name string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.vocabularyFilterName = name
+		s.vocabularyFilterNameSet = true
 	}
 }
 
@@ -134,9 +145,8 @@ func WithAWSSTTEnableChannelIdentification(enable bool) AWSSTTOption {
 
 func WithAWSSTTNumberOfChannels(channels int32) AWSSTTOption {
 	return func(s *AWSSTT) {
-		if channels > 0 {
-			s.numberOfChannels = channels
-		}
+		s.numberOfChannels = channels
+		s.numberOfChannelsSet = true
 	}
 }
 
@@ -155,6 +165,7 @@ func WithAWSSTTPartialResultsStability(stability types.PartialResultsStability) 
 func WithAWSSTTLanguageModelName(name string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.languageModelName = name
+		s.languageModelNameSet = true
 	}
 }
 
@@ -173,6 +184,7 @@ func WithAWSSTTIdentifyMultipleLanguages(identify bool) AWSSTTOption {
 func WithAWSSTTLanguageOptions(options string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.languageOptions = options
+		s.languageOptionsSet = true
 	}
 }
 
@@ -185,12 +197,14 @@ func WithAWSSTTPreferredLanguage(language types.LanguageCode) AWSSTTOption {
 func WithAWSSTTVocabularyNames(names string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.vocabularyNames = names
+		s.vocabularyNamesSet = true
 	}
 }
 
 func WithAWSSTTVocabularyFilterNames(names string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.vocabularyFilterNames = names
+		s.vocabularyFilterNamesSet = true
 	}
 }
 
@@ -241,7 +255,7 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
 func (s *AWSSTT) Model() string {
-	if s == nil || s.languageModelName == "" {
+	if s == nil || !s.languageModelNameSet {
 		return "unknown"
 	}
 	return s.languageModelName
@@ -373,44 +387,44 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	} else {
 		input.LanguageCode = languageCode
 	}
-	if s.vocabularyName != "" {
+	if s.vocabularyNameSet {
 		input.VocabularyName = aws.String(s.vocabularyName)
 	}
-	if s.sessionID != "" {
+	if s.sessionIDSet {
 		input.SessionId = aws.String(s.sessionID)
 	}
 	if s.vocabularyFilterMethod != "" {
 		input.VocabularyFilterMethod = s.vocabularyFilterMethod
 	}
-	if s.vocabularyFilterName != "" {
+	if s.vocabularyFilterNameSet {
 		input.VocabularyFilterName = aws.String(s.vocabularyFilterName)
 	}
 	input.ShowSpeakerLabel = s.showSpeakerLabel
 	input.EnableChannelIdentification = s.enableChannelIdentification
-	if s.numberOfChannels > 0 {
+	if s.numberOfChannelsSet {
 		input.NumberOfChannels = aws.Int32(s.numberOfChannels)
 	}
 	input.EnablePartialResultsStabilization = s.enablePartialResultsStabilization
 	if s.partialResultsStability != "" {
 		input.PartialResultsStability = s.partialResultsStability
 	}
-	if s.languageModelName != "" {
+	if s.languageModelNameSet {
 		input.LanguageModelName = aws.String(s.languageModelName)
 	}
 	return input
 }
 
 func applyAWSSTTLanguageDetectionOptions(input *transcribestreaming.StartStreamTranscriptionInput, s *AWSSTT) {
-	if s.languageOptions != "" {
+	if s.languageOptionsSet {
 		input.LanguageOptions = aws.String(s.languageOptions)
 	}
 	if s.preferredLanguage != "" {
 		input.PreferredLanguage = s.preferredLanguage
 	}
-	if s.vocabularyNames != "" {
+	if s.vocabularyNamesSet {
 		input.VocabularyNames = aws.String(s.vocabularyNames)
 	}
-	if s.vocabularyFilterNames != "" {
+	if s.vocabularyFilterNamesSet {
 		input.VocabularyFilterNames = aws.String(s.vocabularyFilterNames)
 	}
 }

@@ -80,6 +80,45 @@ func TestAWSRealtimeTurnTrackerEmitsReferenceTurnEvents(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeTurnTrackerAppendsReferenceUserPartials(t *testing.T) {
+	var events []llm.RealtimeEvent
+	tracker := newAWSRealtimeTurnTracker(
+		func(event llm.RealtimeEvent) { events = append(events, event) },
+		func() {
+			events = append(events, llm.RealtimeEvent{
+				Type:       llm.RealtimeEventTypeGenerationCreated,
+				Generation: &llm.GenerationCreatedEvent{},
+			})
+		},
+	)
+
+	tracker.feed(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{"role": "USER", "content": "hello"},
+		},
+	})
+	tracker.feed(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{"role": "USER", "content": "hello there"},
+		},
+	})
+	tracker.feed(map[string]any{
+		"event": map[string]any{
+			"contentStart": map[string]any{
+				"role":                  "ASSISTANT",
+				"additionalModelFields": "SPECULATIVE",
+			},
+		},
+	})
+
+	if len(events) != 6 {
+		t.Fatalf("event count = %d, want 6: %#v", len(events), events)
+	}
+	assertAWSRealtimeTurnTranscript(t, events[1], "hello", false)
+	assertAWSRealtimeTurnTranscript(t, events[2], "hello hello there", false)
+	assertAWSRealtimeTurnTranscript(t, events[4], "hello hello there", true)
+}
+
 func TestAWSRealtimeTurnTrackerToolOutputStartsReferenceGeneration(t *testing.T) {
 	var events []llm.RealtimeEvent
 	tracker := newAWSRealtimeTurnTracker(

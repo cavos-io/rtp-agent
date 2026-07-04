@@ -76,9 +76,6 @@ func (b *awsRealtimeEventBuilder) createPromptStartBlock(options awsRealtimeProm
 }
 
 func normalizeAWSRealtimePromptStartOptions(options awsRealtimePromptStartOptions) awsRealtimePromptStartOptions {
-	if options.voiceID == "" {
-		options.voiceID = defaultAWSRealtimeVoice
-	}
 	if options.outputSampleRate == 0 {
 		options.outputSampleRate = defaultAWSRealtimeOutputSampleRate
 	}
@@ -96,9 +93,6 @@ func normalizeAWSRealtimePromptStartOptions(options awsRealtimePromptStartOption
 	}
 	if len(options.tools) > 0 && !options.temperatureSet {
 		options.temperature = 1.0
-	}
-	if options.endpointingSensitivity == "" {
-		options.endpointingSensitivity = defaultAWSRealtimeTurnDetection
 	}
 	return options
 }
