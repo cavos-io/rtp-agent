@@ -255,7 +255,7 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
 func (s *AWSSTT) Model() string {
-	if s == nil || s.languageModelName == "" {
+	if s == nil || !s.languageModelNameSet {
 		return "unknown"
 	}
 	return s.languageModelName

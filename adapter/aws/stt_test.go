@@ -328,6 +328,19 @@ func TestAWSSTTStreamInputPreservesReferenceEmptyLanguageModelName(t *testing.T)
 	}
 }
 
+func TestAWSSTTModelPreservesReferenceEmptyLanguageModelName(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTLanguageModelName(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	if got := provider.Model(); got != "" {
+		t.Fatalf("Model = %q, want explicit empty reference language model", got)
+	}
+}
+
 func TestAWSSTTStreamInputPreservesReferenceEmptyVocabularyFilterName(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTVocabularyFilterName(""),
