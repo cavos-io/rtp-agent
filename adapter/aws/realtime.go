@@ -1223,17 +1223,21 @@ func decodeAWSRealtimeAudioContent(content string) ([]byte, error) {
 		return []byte{}, nil
 	}
 	filtered := make([]byte, 0, len(content))
+	dataChars := 0
 	for i := 0; i < len(content); i++ {
 		c := content[i]
 		switch {
 		case c >= 'A' && c <= 'Z',
 			c >= 'a' && c <= 'z',
 			c >= '0' && c <= '9',
-			c == '+', c == '/', c == '=':
+			c == '+', c == '/':
+			filtered = append(filtered, c)
+			dataChars++
+		case c == '=':
 			filtered = append(filtered, c)
 		}
 	}
-	if len(filtered) == 0 {
+	if len(filtered) == 0 || dataChars == 0 {
 		return []byte{}, nil
 	}
 	return base64.StdEncoding.DecodeString(string(filtered))
