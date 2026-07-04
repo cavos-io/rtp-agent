@@ -441,6 +441,30 @@ func TestAWSLLMChatAppliesReferencePerCallTemperature(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatKeepsReferenceEmptyInferenceConfig(t *testing.T) {
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+
+	input := stream.(*awsLLMStream).request
+	if input == nil || input.InferenceConfig == nil {
+		t.Fatalf("InferenceConfig = %#v, want reference empty Bedrock inference config", input)
+	}
+	if input.InferenceConfig.MaxTokens != nil || input.InferenceConfig.Temperature != nil || input.InferenceConfig.TopP != nil {
+		t.Fatalf("InferenceConfig = %#v, want empty reference inference config", input.InferenceConfig)
+	}
+}
+
 func TestAWSLLMChatAppliesReferenceProviderInferenceDefaults(t *testing.T) {
 	provider := &AWSLLM{
 		client: fakeAWSLLMClient{err: errors.New("stop after capture")},

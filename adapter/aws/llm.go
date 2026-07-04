@@ -261,15 +261,12 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 }
 
 func buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
-	if len(params) == 0 {
-		return nil
-	}
 	config := &types.InferenceConfiguration{}
+	if len(params) == 0 {
+		return config
+	}
 	if temperature, ok := awsFloat32Param(params, "temperature"); ok {
 		config.Temperature = aws.Float32(temperature)
-	}
-	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
-		return nil
 	}
 	return config
 }
@@ -315,9 +312,6 @@ func validateAWSFunctionCallArguments(chatCtx *llm.ChatContext) error {
 
 func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
 	config := buildAWSInferenceConfig(params)
-	if config == nil {
-		config = &types.InferenceConfiguration{}
-	}
 	if config.MaxTokens == nil && l.maxOutputTokensSet {
 		config.MaxTokens = aws.Int32(l.maxOutputTokens)
 	}
@@ -326,9 +320,6 @@ func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.Inference
 	}
 	if config.TopP == nil && l.topPSet {
 		config.TopP = aws.Float32(l.topP)
-	}
-	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
-		return nil
 	}
 	return config
 }
