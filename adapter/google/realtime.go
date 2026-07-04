@@ -1575,7 +1575,7 @@ func (s *googleRealtimeSession) reconnectActiveSession(liveSession googleRealtim
 	if err != nil {
 		s.emitEvent(llm.RealtimeEvent{
 			Type:  llm.RealtimeEventTypeError,
-			Error: llm.NewAPIConnectionError(fmt.Sprintf(reconnectMessage, err)),
+			Error: llm.NewAPIConnectionError(fmt.Sprintf(reconnectMessage, err) + googleRealtime1008ErrorHint(err)),
 		})
 		return
 	}
@@ -1623,7 +1623,7 @@ func googleRealtimeReconnectError(err error) error {
 	if errors.As(err, &connectionErr) {
 		return err
 	}
-	return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect Google realtime: %v", err))
+	return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect Google realtime: %v%s", err, googleRealtime1008ErrorHint(err)))
 }
 
 func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {

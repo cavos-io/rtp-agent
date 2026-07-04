@@ -706,6 +706,36 @@ func TestGoogleRealtimeSessionUpdateReconnectFailureReturnsAPIConnectionError(t 
 	}
 }
 
+func TestGoogleRealtimeSessionUpdateReconnectFailureIncludesReference1008Hint(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	connector.connectErrs = []error{
+		errors.New("websocket close 1008: policy violation"),
+	}
+	err = session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true})
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("UpdateOptions error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "Hint: A 1008 policy violation error often indicates") {
+		t.Fatalf("UpdateOptions error = %v, want reference 1008 policy violation hint", connectionErr)
+	}
+}
+
 func TestGoogleRealtimeModelVoiceUpdatePropagatesReferenceActiveSession(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
