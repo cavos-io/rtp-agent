@@ -88,6 +88,7 @@ type RealtimeModel struct {
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
 	apiVersion                string
+	apiVersionSet             bool
 	connector                 googleRealtimeConnector
 	sessions                  map[*googleRealtimeSession]struct{}
 }
@@ -96,6 +97,7 @@ type GoogleRealtimeOption func(*googleRealtimeOptions)
 
 type googleRealtimeOptions struct {
 	model                     string
+	modelSet                  bool
 	instructions              string
 	voice                     string
 	voiceSet                  bool
@@ -135,6 +137,7 @@ type googleRealtimeOptions struct {
 	mediaResolution           genai.MediaResolution
 	httpOptions               *genai.HTTPOptions
 	apiVersion                string
+	apiVersionSet             bool
 	connectOptions            *llm.APIConnectOptions
 	realtimeInputConfig       *genai.RealtimeInputConfig
 	sessionResumptionHandle   string
@@ -155,9 +158,8 @@ type googleRealtimeLiveSession interface {
 
 func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
-		if model != "" {
-			options.model = model
-		}
+		options.model = model
+		options.modelSet = true
 	}
 }
 
@@ -327,6 +329,7 @@ func WithGoogleRealtimeHTTPOptions(httpOptions *genai.HTTPOptions) GoogleRealtim
 func WithGoogleRealtimeAPIVersion(apiVersion string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.apiVersion = apiVersion
+		options.apiVersionSet = true
 	}
 }
 
@@ -364,7 +367,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		vertexAI = *options.vertexAI
 	}
 	modelName := options.model
-	if modelName == "" {
+	if !options.modelSet {
 		if vertexAI {
 			modelName = defaultGoogleRealtimeVertexModel
 		} else {
@@ -437,7 +440,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		return nil, err
 	}
 	apiVersion := "v1beta"
-	if options.apiVersion != "" {
+	if options.apiVersionSet {
 		apiVersion = options.apiVersion
 	} else if !vertexAI && ((options.proactivitySet && options.proactivity) || (options.affectiveDialogSet && options.affectiveDialog)) {
 		apiVersion = "v1alpha"
@@ -484,6 +487,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		realtimeInputConfig:       options.realtimeInputConfig,
 		sessionResumptionHandle:   options.sessionResumptionHandle,
 		apiVersion:                apiVersion,
+		apiVersionSet:             options.apiVersionSet,
 		connector:                 options.connector,
 	}, nil
 }
@@ -571,7 +575,7 @@ func validateGoogleRealtimeModelAPI(model string, vertexAI bool) error {
 }
 
 func (m *RealtimeModel) Model() string {
-	if m == nil || m.model == "" {
+	if m == nil {
 		return defaultGoogleRealtimeGeminiModel
 	}
 	return m.model
@@ -710,7 +714,7 @@ func (m *RealtimeModel) Close() error { return nil }
 
 func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	config := &genai.LiveConnectConfig{
-		HTTPOptions:        googleRealtimeHTTPOptions(m.httpOptions, m.apiVersion, m.connectOptions),
+		HTTPOptions:        googleRealtimeHTTPOptions(m.httpOptions, m.apiVersion, !m.apiVersionSet, m.connectOptions),
 		ResponseModalities: googleRealtimeModalities(m.modalities),
 		SpeechConfig: &genai.SpeechConfig{
 			VoiceConfig: &genai.VoiceConfig{
@@ -771,7 +775,7 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 	return config
 }
 
-func googleRealtimeHTTPOptions(options *genai.HTTPOptions, apiVersion string, connectOptions llm.APIConnectOptions) *genai.HTTPOptions {
+func googleRealtimeHTTPOptions(options *genai.HTTPOptions, apiVersion string, defaultAPIVersion bool, connectOptions llm.APIConnectOptions) *genai.HTTPOptions {
 	var clone genai.HTTPOptions
 	if options != nil {
 		clone = *options
@@ -797,7 +801,7 @@ func googleRealtimeHTTPOptions(options *genai.HTTPOptions, apiVersion string, co
 	if clone.APIVersion == "" {
 		clone.APIVersion = apiVersion
 	}
-	if clone.APIVersion == "" {
+	if clone.APIVersion == "" && defaultAPIVersion {
 		clone.APIVersion = "v1beta"
 	}
 	if clone.Timeout == nil {
@@ -887,10 +891,14 @@ type googleRealtimeDefaultConnector struct {
 
 func (c googleRealtimeDefaultConnector) Connect(ctx context.Context, modelName string, config *genai.LiveConnectConfig) (googleRealtimeLiveSession, error) {
 	apiVersion := "v1beta"
-	if c.model != nil && c.model.apiVersion != "" {
+	defaultAPIVersion := true
+	if c.model != nil && c.model.apiVersionSet {
+		apiVersion = c.model.apiVersion
+		defaultAPIVersion = false
+	} else if c.model != nil && c.model.apiVersion != "" {
 		apiVersion = c.model.apiVersion
 	}
-	httpOptions := googleRealtimeHTTPOptions(c.model.httpOptions, apiVersion, c.model.connectOptions)
+	httpOptions := googleRealtimeHTTPOptions(c.model.httpOptions, apiVersion, defaultAPIVersion, c.model.connectOptions)
 	clientConfig := &genai.ClientConfig{
 		APIKey:      c.model.apiKey,
 		HTTPOptions: *httpOptions,
@@ -1355,10 +1363,6 @@ func googleRealtimeSetConfigTemperature(config *genai.LiveConnectConfig, tempera
 
 func googleRealtimeSetConfigInstructions(config *genai.LiveConnectConfig, instructions string) {
 	if config == nil {
-		return
-	}
-	if instructions == "" {
-		config.SystemInstruction = nil
 		return
 	}
 	config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: instructions}}}

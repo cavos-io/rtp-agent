@@ -527,40 +527,232 @@ func googleResponseFormatSchema(format map[string]any) (*genai.Schema, bool) {
 }
 
 func googleSpeechConfigParam(value any) (*genai.SpeechConfig, bool) {
-	config, ok := value.(*genai.SpeechConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.SpeechConfig:
+		return config, config != nil
+	case genai.SpeechConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.SpeechConfig{}
+		if languageCode := googleStringParam(config["language_code"]); languageCode != "" {
+			result.LanguageCode = languageCode
+		} else if languageCode := googleStringParam(config["languageCode"]); languageCode != "" {
+			result.LanguageCode = languageCode
+		}
+		if voiceConfig, ok := googleVoiceConfigParam(config["voice_config"]); ok {
+			result.VoiceConfig = voiceConfig
+		} else if voiceConfig, ok := googleVoiceConfigParam(config["voiceConfig"]); ok {
+			result.VoiceConfig = voiceConfig
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleVoiceConfigParam(value any) (*genai.VoiceConfig, bool) {
+	switch config := value.(type) {
+	case *genai.VoiceConfig:
+		return config, config != nil
+	case genai.VoiceConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.VoiceConfig{}
+		if prebuilt, ok := googlePrebuiltVoiceConfigParam(config["prebuilt_voice_config"]); ok {
+			result.PrebuiltVoiceConfig = prebuilt
+		} else if prebuilt, ok := googlePrebuiltVoiceConfigParam(config["prebuiltVoiceConfig"]); ok {
+			result.PrebuiltVoiceConfig = prebuilt
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googlePrebuiltVoiceConfigParam(value any) (*genai.PrebuiltVoiceConfig, bool) {
+	switch config := value.(type) {
+	case *genai.PrebuiltVoiceConfig:
+		return config, config != nil
+	case genai.PrebuiltVoiceConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.PrebuiltVoiceConfig{}
+		if voiceName := googleStringParam(config["voice_name"]); voiceName != "" {
+			result.VoiceName = voiceName
+		} else if voiceName := googleStringParam(config["voiceName"]); voiceName != "" {
+			result.VoiceName = voiceName
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleRoutingConfigParam(value any) (*genai.GenerationConfigRoutingConfig, bool) {
-	config, ok := value.(*genai.GenerationConfigRoutingConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.GenerationConfigRoutingConfig:
+		return config, config != nil
+	case genai.GenerationConfigRoutingConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.GenerationConfigRoutingConfig{}
+		if manualMode, ok := googleRoutingManualModeParam(config["manual_mode"]); ok {
+			result.ManualMode = manualMode
+		} else if manualMode, ok := googleRoutingManualModeParam(config["manualMode"]); ok {
+			result.ManualMode = manualMode
+		}
+		if autoMode, ok := googleRoutingAutoModeParam(config["auto_mode"]); ok {
+			result.AutoMode = autoMode
+		} else if autoMode, ok := googleRoutingAutoModeParam(config["autoMode"]); ok {
+			result.AutoMode = autoMode
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleRoutingManualModeParam(value any) (*genai.GenerationConfigRoutingConfigManualRoutingMode, bool) {
+	switch config := value.(type) {
+	case *genai.GenerationConfigRoutingConfigManualRoutingMode:
+		return config, config != nil
+	case genai.GenerationConfigRoutingConfigManualRoutingMode:
+		return &config, true
+	case map[string]any:
+		result := &genai.GenerationConfigRoutingConfigManualRoutingMode{}
+		if modelName := googleStringParam(config["model_name"]); modelName != "" {
+			result.ModelName = modelName
+		} else if modelName := googleStringParam(config["modelName"]); modelName != "" {
+			result.ModelName = modelName
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleRoutingAutoModeParam(value any) (*genai.GenerationConfigRoutingConfigAutoRoutingMode, bool) {
+	switch config := value.(type) {
+	case *genai.GenerationConfigRoutingConfigAutoRoutingMode:
+		return config, config != nil
+	case genai.GenerationConfigRoutingConfigAutoRoutingMode:
+		return &config, true
+	case map[string]any:
+		result := &genai.GenerationConfigRoutingConfigAutoRoutingMode{}
+		if preference := googleStringParam(config["model_routing_preference"]); preference != "" {
+			result.ModelRoutingPreference = preference
+		} else if preference := googleStringParam(config["modelRoutingPreference"]); preference != "" {
+			result.ModelRoutingPreference = preference
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleModelSelectionConfigParam(value any) (*genai.ModelSelectionConfig, bool) {
-	config, ok := value.(*genai.ModelSelectionConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.ModelSelectionConfig:
+		return config, config != nil
+	case genai.ModelSelectionConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.ModelSelectionConfig{}
+		if preference := googleStringParam(config["feature_selection_preference"]); preference != "" {
+			result.FeatureSelectionPreference = genai.FeatureSelectionPreference(preference)
+		} else if preference := googleStringParam(config["featureSelectionPreference"]); preference != "" {
+			result.FeatureSelectionPreference = genai.FeatureSelectionPreference(preference)
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleLabelsParam(value any) (map[string]string, bool) {
-	labels, ok := value.(map[string]string)
-	if !ok {
+	switch labels := value.(type) {
+	case map[string]string:
+		result := make(map[string]string, len(labels))
+		for key, value := range labels {
+			result[key] = value
+		}
+		return result, true
+	case map[string]any:
+		result := make(map[string]string, len(labels))
+		for key, value := range labels {
+			label, ok := value.(string)
+			if !ok {
+				continue
+			}
+			result[key] = label
+		}
+		return result, true
+	default:
 		return nil, false
 	}
-	result := make(map[string]string, len(labels))
-	for key, value := range labels {
-		result[key] = value
-	}
-	return result, true
 }
 
 func googleModelArmorConfigParam(value any) (*genai.ModelArmorConfig, bool) {
-	config, ok := value.(*genai.ModelArmorConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.ModelArmorConfig:
+		return config, config != nil
+	case genai.ModelArmorConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.ModelArmorConfig{}
+		if name := googleStringParam(config["prompt_template_name"]); name != "" {
+			result.PromptTemplateName = name
+		} else if name := googleStringParam(config["promptTemplateName"]); name != "" {
+			result.PromptTemplateName = name
+		}
+		if name := googleStringParam(config["response_template_name"]); name != "" {
+			result.ResponseTemplateName = name
+		} else if name := googleStringParam(config["responseTemplateName"]); name != "" {
+			result.ResponseTemplateName = name
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleImageConfigParam(value any) (*genai.ImageConfig, bool) {
-	config, ok := value.(*genai.ImageConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.ImageConfig:
+		return config, config != nil
+	case genai.ImageConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.ImageConfig{}
+		if value := googleStringParam(config["aspect_ratio"]); value != "" {
+			result.AspectRatio = value
+		} else if value := googleStringParam(config["aspectRatio"]); value != "" {
+			result.AspectRatio = value
+		}
+		if value := googleStringParam(config["image_size"]); value != "" {
+			result.ImageSize = value
+		} else if value := googleStringParam(config["imageSize"]); value != "" {
+			result.ImageSize = value
+		}
+		if value := googleStringParam(config["person_generation"]); value != "" {
+			result.PersonGeneration = value
+		} else if value := googleStringParam(config["personGeneration"]); value != "" {
+			result.PersonGeneration = value
+		}
+		if value := googleStringParam(config["output_mime_type"]); value != "" {
+			result.OutputMIMEType = value
+		} else if value := googleStringParam(config["outputMimeType"]); value != "" {
+			result.OutputMIMEType = value
+		}
+		if value, ok := googleInt32Param(config["output_compression_quality"]); ok {
+			result.OutputCompressionQuality = &value
+		} else if value, ok := googleInt32Param(config["outputCompressionQuality"]); ok {
+			result.OutputCompressionQuality = &value
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleServiceTierParam(value any) (genai.ServiceTier, bool) {
@@ -719,6 +911,51 @@ func googleToolConfigParam(value any) (*genai.ToolConfig, bool) {
 		return config, config != nil
 	case genai.ToolConfig:
 		return &config, true
+	case map[string]any:
+		result := &genai.ToolConfig{}
+		if retrieval, ok := googleRetrievalConfigParam(config["retrieval_config"]); ok {
+			result.RetrievalConfig = retrieval
+		} else if retrieval, ok := googleRetrievalConfigParam(config["retrievalConfig"]); ok {
+			result.RetrievalConfig = retrieval
+		}
+		if include, ok := googleBoolParam(config["include_server_side_tool_invocations"]); ok {
+			result.IncludeServerSideToolInvocations = &include
+		} else if include, ok := googleBoolParam(config["includeServerSideToolInvocations"]); ok {
+			result.IncludeServerSideToolInvocations = &include
+		}
+		if functionConfig, ok := googleFunctionCallingConfigParam(config["function_calling_config"]); ok {
+			result.FunctionCallingConfig = functionConfig
+		} else if functionConfig, ok := googleFunctionCallingConfigParam(config["functionCallingConfig"]); ok {
+			result.FunctionCallingConfig = functionConfig
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleFunctionCallingConfigParam(value any) (*genai.FunctionCallingConfig, bool) {
+	switch config := value.(type) {
+	case *genai.FunctionCallingConfig:
+		return config, config != nil
+	case genai.FunctionCallingConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.FunctionCallingConfig{}
+		if mode := googleStringParam(config["mode"]); mode != "" {
+			result.Mode = genai.FunctionCallingConfigMode(mode)
+		}
+		if names := googleStringList(config["allowed_function_names"]); len(names) > 0 {
+			result.AllowedFunctionNames = names
+		} else if names := googleStringList(config["allowedFunctionNames"]); len(names) > 0 {
+			result.AllowedFunctionNames = names
+		}
+		if stream, ok := googleBoolParam(config["stream_function_call_arguments"]); ok {
+			result.StreamFunctionCallArguments = &stream
+		} else if stream, ok := googleBoolParam(config["streamFunctionCallArguments"]); ok {
+			result.StreamFunctionCallArguments = &stream
+		}
+		return result, true
 	default:
 		return nil, false
 	}

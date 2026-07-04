@@ -521,6 +521,49 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceToolConfigExtra(t *test
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceToolConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"tool_config": map[string]any{
+				"function_calling_config": map[string]any{
+					"mode":                           "ANY",
+					"allowed_function_names":         []any{"lookup"},
+					"stream_function_call_arguments": true,
+				},
+				"include_server_side_tool_invocations": true,
+				"retrieval_config": map[string]any{
+					"language_code": "en-US",
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ToolConfig == nil {
+		t.Fatal("ToolConfig = nil, want dict-derived tool config")
+	}
+	functionConfig := config.ToolConfig.FunctionCallingConfig
+	if functionConfig == nil {
+		t.Fatal("FunctionCallingConfig = nil, want dict-derived function config")
+	}
+	if functionConfig.Mode != genai.FunctionCallingConfigModeAny {
+		t.Fatalf("FunctionCallingConfig.Mode = %q, want ANY", functionConfig.Mode)
+	}
+	if len(functionConfig.AllowedFunctionNames) != 1 || functionConfig.AllowedFunctionNames[0] != "lookup" {
+		t.Fatalf("AllowedFunctionNames = %#v, want lookup", functionConfig.AllowedFunctionNames)
+	}
+	if functionConfig.StreamFunctionCallArguments == nil || !*functionConfig.StreamFunctionCallArguments {
+		t.Fatalf("StreamFunctionCallArguments = %#v, want true", functionConfig.StreamFunctionCallArguments)
+	}
+	if config.ToolConfig.IncludeServerSideToolInvocations == nil || !*config.ToolConfig.IncludeServerSideToolInvocations {
+		t.Fatalf("IncludeServerSideToolInvocations = %#v, want true", config.ToolConfig.IncludeServerSideToolInvocations)
+	}
+	if config.ToolConfig.RetrievalConfig == nil || config.ToolConfig.RetrievalConfig.LanguageCode != "en-US" {
+		t.Fatalf("RetrievalConfig = %#v, want en-US", config.ToolConfig.RetrievalConfig)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceHTTPOptionsExtra(t *testing.T) {
 	timeout := 2 * time.Second
 	httpOptions := &genai.HTTPOptions{
@@ -1015,6 +1058,33 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceRoutingConfigExtra(t *t
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceRoutingConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"routing_config": map[string]any{
+				"manual_mode": map[string]any{
+					"model_name": "gemini-2.5-flash",
+				},
+				"auto_mode": map[string]any{
+					"model_routing_preference": "BALANCED",
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.RoutingConfig == nil {
+		t.Fatal("RoutingConfig = nil, want dict-derived routing config")
+	}
+	if config.RoutingConfig.ManualMode == nil || config.RoutingConfig.ManualMode.ModelName != "gemini-2.5-flash" {
+		t.Fatalf("ManualMode = %#v, want model name", config.RoutingConfig.ManualMode)
+	}
+	if config.RoutingConfig.AutoMode == nil || config.RoutingConfig.AutoMode.ModelRoutingPreference != "BALANCED" {
+		t.Fatalf("AutoMode = %#v, want routing preference", config.RoutingConfig.AutoMode)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceModelSelectionConfigExtra(t *testing.T) {
 	selection := &genai.ModelSelectionConfig{
 		FeatureSelectionPreference: genai.FeatureSelectionPreferencePrioritizeQuality,
@@ -1029,6 +1099,25 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceModelSelectionConfigExt
 
 	if config.ModelSelectionConfig != selection {
 		t.Fatalf("ModelSelectionConfig = %#v, want %#v", config.ModelSelectionConfig, selection)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceModelSelectionConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"model_selection_config": map[string]any{
+				"feature_selection_preference": "PRIORITIZE_QUALITY",
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ModelSelectionConfig == nil {
+		t.Fatal("ModelSelectionConfig = nil, want dict-derived model selection config")
+	}
+	if config.ModelSelectionConfig.FeatureSelectionPreference != genai.FeatureSelectionPreferencePrioritizeQuality {
+		t.Fatalf("FeatureSelectionPreference = %q, want prioritize quality", config.ModelSelectionConfig.FeatureSelectionPreference)
 	}
 }
 
@@ -1047,6 +1136,24 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceLabelsExtra(t *testing.
 
 	if !reflect.DeepEqual(config.Labels, labels) {
 		t.Fatalf("Labels = %#v, want %#v", config.Labels, labels)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceLabelsDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"labels": map[string]any{
+				"agent": "voice",
+				"turn":  "live",
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	want := map[string]string{"agent": "voice", "turn": "live"}
+	if !reflect.DeepEqual(config.Labels, want) {
+		t.Fatalf("Labels = %#v, want %#v", config.Labels, want)
 	}
 }
 
@@ -1085,6 +1192,30 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceModelArmorConfigExtra(t
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceModelArmorConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"model_armor_config": map[string]any{
+				"prompt_template_name":    "projects/p/locations/us/templates/prompt",
+				"responseTemplateName":    "projects/p/locations/us/templates/response",
+				"ignored_reference_field": "ignored",
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ModelArmorConfig == nil {
+		t.Fatal("ModelArmorConfig = nil, want dict-derived model armor config")
+	}
+	if config.ModelArmorConfig.PromptTemplateName != "projects/p/locations/us/templates/prompt" {
+		t.Fatalf("PromptTemplateName = %q, want prompt template", config.ModelArmorConfig.PromptTemplateName)
+	}
+	if config.ModelArmorConfig.ResponseTemplateName != "projects/p/locations/us/templates/response" {
+		t.Fatalf("ResponseTemplateName = %q, want response template", config.ModelArmorConfig.ResponseTemplateName)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceEnhancedCivicAnswersExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
@@ -1114,6 +1245,42 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceImageConfigExtra(t *tes
 
 	if config.ImageConfig != imageConfig {
 		t.Fatalf("ImageConfig = %#v, want %#v", config.ImageConfig, imageConfig)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceImageConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"image_config": map[string]any{
+				"aspect_ratio":               "16:9",
+				"imageSize":                  "2K",
+				"person_generation":          "ALLOW_ADULT",
+				"output_mime_type":           "image/jpeg",
+				"outputCompressionQuality":   82,
+				"ignored_reference_property": "ignored",
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ImageConfig == nil {
+		t.Fatal("ImageConfig = nil, want dict-derived image config")
+	}
+	if config.ImageConfig.AspectRatio != "16:9" {
+		t.Fatalf("AspectRatio = %q, want 16:9", config.ImageConfig.AspectRatio)
+	}
+	if config.ImageConfig.ImageSize != "2K" {
+		t.Fatalf("ImageSize = %q, want 2K", config.ImageConfig.ImageSize)
+	}
+	if config.ImageConfig.PersonGeneration != "ALLOW_ADULT" {
+		t.Fatalf("PersonGeneration = %q, want ALLOW_ADULT", config.ImageConfig.PersonGeneration)
+	}
+	if config.ImageConfig.OutputMIMEType != "image/jpeg" {
+		t.Fatalf("OutputMIMEType = %q, want image/jpeg", config.ImageConfig.OutputMIMEType)
+	}
+	if config.ImageConfig.OutputCompressionQuality == nil || *config.ImageConfig.OutputCompressionQuality != 82 {
+		t.Fatalf("OutputCompressionQuality = %#v, want 82", config.ImageConfig.OutputCompressionQuality)
 	}
 }
 
@@ -1181,6 +1348,37 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceSpeechConfigExtra(t *te
 
 	if config.SpeechConfig != speech {
 		t.Fatalf("SpeechConfig = %#v, want %#v", config.SpeechConfig, speech)
+	}
+}
+
+func TestBuildGoogleGenerateContentConfigMapsReferenceSpeechConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"speech_config": map[string]any{
+				"language_code": "en-US",
+				"voice_config": map[string]any{
+					"prebuilt_voice_config": map[string]any{
+						"voice_name": "Puck",
+					},
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	speech := config.SpeechConfig
+	if speech == nil {
+		t.Fatal("SpeechConfig = nil, want dict-derived speech config")
+	}
+	if speech.LanguageCode != "en-US" {
+		t.Fatalf("SpeechConfig.LanguageCode = %q, want en-US", speech.LanguageCode)
+	}
+	if speech.VoiceConfig == nil || speech.VoiceConfig.PrebuiltVoiceConfig == nil {
+		t.Fatalf("SpeechConfig.VoiceConfig = %#v, want prebuilt voice config", speech.VoiceConfig)
+	}
+	if speech.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Puck" {
+		t.Fatalf("VoiceName = %q, want Puck", speech.VoiceConfig.PrebuiltVoiceConfig.VoiceName)
 	}
 }
 
