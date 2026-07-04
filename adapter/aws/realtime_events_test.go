@@ -158,6 +158,24 @@ func TestAWSRealtimeToolChoiceMatchesReferenceAdapter(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeEventBuilderOmitsReferenceToolChoiceWithoutTools(t *testing.T) {
+	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
+
+	raw, err := builder.createPromptStartEvent("tiffany", 24000, nil, "required")
+	if err != nil {
+		t.Fatalf("createPromptStartEvent error = %v", err)
+	}
+
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, raw), "event", "promptStart", "toolConfiguration")
+	if _, ok := toolConfig["toolChoice"]; ok {
+		t.Fatalf("toolChoice = %#v, want omitted without tools like reference", toolConfig["toolChoice"])
+	}
+	tools, ok := toolConfig["tools"].([]any)
+	if !ok || len(tools) != 0 {
+		t.Fatalf("tools = %#v, want empty reference tool list", toolConfig["tools"])
+	}
+}
+
 func TestAWSRealtimeEventBuilderCreatesReferenceAudioAndCloseEvents(t *testing.T) {
 	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
 

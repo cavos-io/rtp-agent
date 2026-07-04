@@ -165,7 +165,11 @@ func buildAWSRealtimeToolConfiguration(tools []llm.Tool, toolChoice llm.ToolChoi
 		})
 	}
 	config := map[string]any{"tools": toolSpecs}
-	if choice := awsRealtimeToolChoice(toolChoice); choice != nil {
+	if len(toolSpecs) > 0 {
+		choice := awsRealtimeToolChoice(toolChoice)
+		if choice == nil {
+			return config
+		}
 		config["toolChoice"] = choice
 	}
 	return config
