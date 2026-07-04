@@ -1938,6 +1938,11 @@ func TestGoogleRealtimeSessionGenerateReplyActivityEndFailureKeepsReferencePendi
 		t.Fatalf("GenerateReply error = %v, want activity end failure", err)
 	}
 
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("first event = %#v, want session_reconnected after activity end send failure", reconnected)
+	}
+
 	liveSession.serverMessages <- &genai.LiveServerMessage{
 		ServerContent: &genai.LiveServerContent{
 			ModelTurn: &genai.Content{Parts: []*genai.Part{{Text: "late reply"}}},
@@ -3026,6 +3031,44 @@ func TestGoogleRealtimeSessionInterruptSendsManualActivityStart(t *testing.T) {
 	}
 	if liveSession.inputs[0].ActivityStart == nil {
 		t.Fatalf("activity start = nil, input %#v", liveSession.inputs[0])
+	}
+}
+
+func TestGoogleRealtimeSessionReconnectsAfterReferenceActivityStartSendError(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{
+		serverMessages:   make(chan *genai.LiveServerMessage, 1),
+		sendRealtimeErrs: []error{errors.New("activity start failed")},
+	}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeTurnDetection(false),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	err = session.Interrupt()
+	if err == nil || !strings.Contains(err.Error(), "activity start failed") {
+		t.Fatalf("Interrupt error = %v, want activity start failed", err)
+	}
+
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want session_reconnected after activity start send error", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after activity start send error reconnect")
+	}
+	googleSession := session.(*googleRealtimeSession)
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", googleSession.liveSession)
 	}
 }
 

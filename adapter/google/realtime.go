@@ -1436,14 +1436,18 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 	return nil
 }
 func (s *googleRealtimeSession) Say(text string) error {
-	if s == nil || s.liveSession == nil || text == "" || s.isClosed() {
+	if s == nil || text == "" || s.isClosed() {
 		return nil
 	}
-	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{Text: text})
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
+		return nil
+	}
+	return s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{Text: text}, "text")
 }
 func (s *googleRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error { return nil }
 func (s *googleRealtimeSession) Interrupt() error {
-	if s == nil || s.liveSession == nil || s.isClosed() {
+	if s == nil || s.isClosed() {
 		return nil
 	}
 	s.mu.Lock()
@@ -1452,10 +1456,14 @@ func (s *googleRealtimeSession) Interrupt() error {
 		return nil
 	}
 	s.inUserActivity = true
+	liveSession := s.liveSession
 	s.mu.Unlock()
-	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+	if liveSession == nil {
+		return nil
+	}
+	return s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{
 		ActivityStart: &genai.ActivityStart{},
-	})
+	}, "activity start")
 }
 
 func googleRealtimeManualActivityDetection(config *genai.RealtimeInputConfig) bool {
@@ -1473,10 +1481,14 @@ func (s *googleRealtimeSession) endManualActivity() error {
 		return nil
 	}
 	s.inUserActivity = false
+	liveSession := s.liveSession
 	s.mu.Unlock()
-	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+	if liveSession == nil {
+		return nil
+	}
+	return s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{
 		ActivityEnd: &genai.ActivityEnd{},
-	})
+	}, "activity end")
 }
 func (s *googleRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
 
@@ -2134,16 +2146,12 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	chunks := s.audioStream.Write(resampled.Data)
 	s.mu.Unlock()
 	for _, chunk := range chunks {
-		if err := liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+		if err := s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{
 			Audio: &genai.Blob{
 				Data:     chunk.Data,
 				MIMEType: "audio/pcm;rate=16000",
 			},
-		}); err != nil {
-			s.reconnectActiveSession(liveSession,
-				fmt.Sprintf("google realtime audio send failed: %v", err),
-				"failed to reconnect Google realtime after audio send error: %v",
-			)
+		}, "audio"); err != nil {
 			return err
 		}
 	}
@@ -2263,19 +2271,37 @@ func (n *googleRealtimeInputAudioNormalizer) reset() {
 }
 
 func (s *googleRealtimeSession) PushVideo(frame *images.VideoFrame) error {
-	if s == nil || s.liveSession == nil || frame == nil || s.isClosed() {
+	if s == nil || frame == nil || s.isClosed() {
 		return nil
 	}
 	data, err := images.Encode(frame, images.NewEncodeOptions())
 	if err != nil {
 		return err
 	}
-	return s.liveSession.SendRealtimeInput(genai.LiveRealtimeInput{
+	liveSession := s.activeLiveSession()
+	if liveSession == nil {
+		return nil
+	}
+	return s.sendRealtimeInputWithReconnect(liveSession, genai.LiveRealtimeInput{
 		Video: &genai.Blob{
 			Data:     data,
 			MIMEType: "image/jpeg",
 		},
-	})
+	}, "video")
+}
+
+func (s *googleRealtimeSession) sendRealtimeInputWithReconnect(liveSession googleRealtimeLiveSession, input genai.LiveRealtimeInput, label string) error {
+	if liveSession == nil {
+		return nil
+	}
+	if err := liveSession.SendRealtimeInput(input); err != nil {
+		s.reconnectActiveSession(liveSession,
+			fmt.Sprintf("google realtime %s send failed: %v", label, err),
+			fmt.Sprintf("failed to reconnect Google realtime after %s send error: %%v", label),
+		)
+		return err
+	}
+	return nil
 }
 func (s *googleRealtimeSession) CommitAudio() error { return nil }
 func (s *googleRealtimeSession) ClearAudio() error  { return nil }
