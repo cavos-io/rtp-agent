@@ -561,11 +561,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	if frameData := googleTTSPopPCMFrame(&s.pcmFrames); frameData != nil {
 		s.emittedAudio = true
-		sampleRate := s.sampleRate
-		if sampleRate == 0 {
-			sampleRate = 24000
-		}
-		return &tts.SynthesizedAudio{Frame: googleTTSRawPCMFrame(frameData, sampleRate)}, nil
+		return &tts.SynthesizedAudio{Frame: googleTTSRawPCMFrame(frameData, s.sampleRate)}, nil
 	}
 
 	if !s.pcmFlushed {
@@ -575,11 +571,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			frameData := bytes.Clone(s.pcmBuffer[:completeLen])
 			s.pcmBuffer = nil
 			s.emittedAudio = true
-			sampleRate := s.sampleRate
-			if sampleRate == 0 {
-				sampleRate = 24000
-			}
-			return &tts.SynthesizedAudio{Frame: googleTTSRawPCMFrame(frameData, sampleRate)}, nil
+			return &tts.SynthesizedAudio{Frame: googleTTSRawPCMFrame(frameData, s.sampleRate)}, nil
 		}
 		s.pcmBuffer = nil
 	}

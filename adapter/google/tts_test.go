@@ -743,6 +743,30 @@ func TestGoogleTTSPreservesReferenceExplicitZeroSampleRate(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSChunkedFramePreservesReferenceExplicitZeroSampleRate(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSampleRate(0))
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+
+	audio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next audio = %+v, want PCM frame", audio)
+	}
+	if got := audio.Frame.SampleRate; got != 0 {
+		t.Fatalf("chunked frame sample rate = %d, want explicit zero", got)
+	}
+}
+
 func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
