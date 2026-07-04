@@ -822,6 +822,10 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 
 		switch v := event.(type) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
+			if v.Value.Delta == nil {
+				s.closeContext()
+				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: contentBlockDelta missing delta", !s.emittedChunk)
+			}
 			if textDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
 				s.emittedChunk = true
 				return &llm.ChatChunk{
