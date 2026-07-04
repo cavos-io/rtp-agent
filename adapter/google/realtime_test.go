@@ -3626,6 +3626,54 @@ func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionMalformedToolArgsReconnectsLikeReference(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstSession.serverMessages <- &genai.LiveServerMessage{
+		ToolCall: &genai.LiveServerToolCall{
+			FunctionCalls: []*genai.FunctionCall{{
+				ID:   "call_bad",
+				Name: "lookup",
+				Args: map[string]any{"bad": make(chan int)},
+			}},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	select {
+	case call, ok := <-generation.FunctionCh:
+		if ok {
+			t.Fatalf("function call = %#v, want none after malformed tool args", call)
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("event = %#v, want speech_stopped while malformed tool generation closes", stopped)
+	}
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want reference reconnect after malformed tool args", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after malformed tool args")
+	}
+	if session.(*googleRealtimeSession).liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", session.(*googleRealtimeSession).liveSession)
+	}
+}
+
 func TestGoogleRealtimeSessionSuppressesLateToolCallsAfterGenerationClose(t *testing.T) {
 	functionCh := make(chan *llm.FunctionCall)
 	close(functionCh)

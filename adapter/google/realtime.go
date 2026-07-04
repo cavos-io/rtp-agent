@@ -1494,7 +1494,13 @@ func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSessio
 			}
 			return
 		}
-		s.handleServerMessage(message)
+		if err := s.handleServerMessage(message); err != nil {
+			s.reconnectActiveSession(liveSession,
+				fmt.Sprintf("google realtime receive failed: %v", err),
+				"failed to reconnect Google realtime after receive error: %v",
+			)
+			return
+		}
 	}
 }
 
@@ -1600,9 +1606,9 @@ func (s *googleRealtimeSession) activeLiveSession() googleRealtimeLiveSession {
 	return s.liveSession
 }
 
-func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) {
+func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) error {
 	if message == nil {
-		return
+		return nil
 	}
 	if update := message.SessionResumptionUpdate; update != nil && update.Resumable && update.NewHandle != "" {
 		s.sessionResumptionHandle = update.NewHandle
@@ -1668,7 +1674,9 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	}
 	if message.ToolCall != nil {
 		s.ensureGeneration()
-		s.handleToolCalls(message.ToolCall)
+		if err := s.handleToolCalls(message.ToolCall); err != nil {
+			return err
+		}
 		s.finishCurrentGeneration()
 	}
 	if message.UsageMetadata != nil {
@@ -1680,6 +1688,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 			"failed to reconnect Google realtime after go_away: %v",
 		)
 	}
+	return nil
 }
 
 func (s *googleRealtimeSession) markGenerationCompleted() {
@@ -1689,9 +1698,9 @@ func (s *googleRealtimeSession) markGenerationCompleted() {
 	s.generation.completedAt = time.Now()
 }
 
-func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCall) {
+func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCall) error {
 	if s.generation == nil || s.generation.closed || toolCall == nil {
-		return
+		return nil
 	}
 	defer func() {
 		_ = recover()
@@ -1702,7 +1711,7 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 		}
 		arguments, err := json.Marshal(functionCall.Args)
 		if err != nil {
-			arguments = []byte("{}")
+			return fmt.Errorf("google realtime tool call args: %w", err)
 		}
 		callID := functionCall.ID
 		if callID == "" {
@@ -1716,9 +1725,10 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 			Arguments: string(arguments),
 		}:
 		case <-s.doneCh():
-			return
+			return nil
 		}
 	}
+	return nil
 }
 
 func (s *googleRealtimeSession) isNewGenerationMessage(message *genai.LiveServerMessage) bool {
