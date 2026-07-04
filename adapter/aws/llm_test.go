@@ -146,7 +146,7 @@ func TestAWSLLMChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 	}
 }
 
-func TestAWSLLMChatReturnsReferenceAPIStatusErrorOnProviderStatus(t *testing.T) {
+func TestAWSLLMChatWrapsReferenceProviderStatusAsConnectionError(t *testing.T) {
 	header := http.Header{}
 	header.Set("x-amzn-requestid", "aws-request-429")
 	providerErr := &smithyhttp.ResponseError{
@@ -174,18 +174,22 @@ func TestAWSLLMChatReturnsReferenceAPIStatusErrorOnProviderStatus(t *testing.T) 
 	if chunk != nil {
 		t.Fatalf("Next chunk = %#v, want nil on startup status error", chunk)
 	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any chunk")
+	}
+	if !strings.Contains(connectionErr.Error(), "aws bedrock llm: error generating content") {
+		t.Fatalf("Next error = %q, want reference Bedrock content context", connectionErr.Error())
+	}
+	if !strings.Contains(connectionErr.Error(), "throttled") {
+		t.Fatalf("Next error = %q, want provider failure detail", connectionErr.Error())
+	}
 	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
-	}
-	if statusErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
-	}
-	if statusErr.RequestID != "aws-request-429" {
-		t.Fatalf("request id = %q, want aws-request-429", statusErr.RequestID)
-	}
-	if statusErr.Retryable {
-		t.Fatal("Retryable = true, want reference nonretryable startup status error")
+	if errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T, want provider status wrapped as APIConnectionError", err)
 	}
 }
 
