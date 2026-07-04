@@ -1163,6 +1163,27 @@ func TestAWSRealtimeSessionReadDeadlineEmitsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeRecoverableValidationErrorMatchesReferenceMessages(t *testing.T) {
+	tests := []string{
+		"ValidationException: InternalErrorCode=531::RST_STREAM closed stream. HTTP/2 error code: NO_ERROR",
+		"ValidationException: System instability detected. Please retry your request.",
+	}
+
+	for _, message := range tests {
+		if !isAWSRealtimeRecoverableReadError(errors.New(message)) {
+			t.Fatalf("isAWSRealtimeRecoverableReadError(%q) = false, want reference recoverable validation error", message)
+		}
+	}
+}
+
+func TestAWSRealtimeUnknownValidationErrorIsReferenceNonRecoverable(t *testing.T) {
+	err := errors.New("ValidationException: The provided request is invalid.")
+
+	if isAWSRealtimeRecoverableReadError(err) {
+		t.Fatal("isAWSRealtimeRecoverableReadError = true, want reference nonrecoverable validation error")
+	}
+}
+
 func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testing.T) {
 	first := newFakeAWSRealtimeStream()
 	second := newFakeAWSRealtimeStream()
