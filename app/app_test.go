@@ -13969,6 +13969,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceSampleRateOption(t *testing.T)
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceDetectLanguageOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"detect_language": false},
+	})
+
+	if googleCfg.detectLanguage == nil || *googleCfg.detectLanguage {
+		t.Fatalf("detectLanguage = %#v, want model option detect_language false", googleCfg.detectLanguage)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"use_streaming": false},

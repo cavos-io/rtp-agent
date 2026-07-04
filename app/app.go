@@ -4252,6 +4252,9 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	if googleCfg.spokenPunctuation == nil {
 		googleCfg.spokenPunctuation = modelOptionBool(cfg.STTModelOptions, "spoken_punctuation")
 	}
+	if googleCfg.detectLanguage == nil {
+		googleCfg.detectLanguage = modelOptionBool(cfg.STTModelOptions, "detect_language")
+	}
 	if googleCfg.interimResults == nil {
 		googleCfg.interimResults = modelOptionBool(cfg.STTModelOptions, "interim_results")
 	}
