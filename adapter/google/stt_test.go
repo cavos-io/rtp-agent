@@ -667,6 +667,32 @@ func TestGoogleSTTRecognizeSendsAudioAndMapsFinalEvent(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRecognizeMalformedAlternativesReturnsAPIConnectionError(t *testing.T) {
+	client := &fakeGoogleSpeechClient{
+		recognizeResponse: &speechpb.RecognizeResponse{
+			Results: []*speechpb.SpeechRecognitionResult{
+				{
+					Alternatives: []*speechpb.SpeechRecognitionAlternative{{
+						Transcript: "valid",
+					}},
+				},
+				{},
+			},
+		},
+	}
+	provider := newGoogleSTTWithClient(client)
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("one")}}, "")
+
+	if event != nil {
+		t.Fatalf("Recognize event = %#v, want nil for malformed provider response", event)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError like reference parser wrapper", err, err)
+	}
+}
+
 func TestGoogleSTTRecognizeUsesReferenceV2RequestForV2Model(t *testing.T) {
 	v1Client := &fakeGoogleSpeechClient{}
 	v2Client := &fakeGoogleV2SpeechClient{
@@ -721,6 +747,37 @@ func TestGoogleSTTRecognizeUsesReferenceV2RequestForV2Model(t *testing.T) {
 	}
 	if alt := event.Alternatives[0]; alt.Text != "hello from chirp" || alt.Language != "id-ID" || alt.Confidence != 0.75 {
 		t.Fatalf("alternative = %+v, want v2 transcript/language/confidence", alt)
+	}
+}
+
+func TestGoogleSTTRecognizeMalformedV2AlternativesReturnsAPIConnectionError(t *testing.T) {
+	v1Client := &fakeGoogleSpeechClient{}
+	v2Client := &fakeGoogleV2SpeechClient{
+		recognizeResponse: &speechv2pb.RecognizeResponse{
+			Results: []*speechv2pb.SpeechRecognitionResult{
+				{
+					Alternatives: []*speechv2pb.SpeechRecognitionAlternative{{
+						Transcript: "valid",
+					}},
+				},
+				{},
+			},
+		},
+	}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+	)
+	provider.clientV2 = v2Client
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("one")}}, "")
+
+	if event != nil {
+		t.Fatalf("Recognize event = %#v, want nil for malformed provider response", event)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError like reference parser wrapper", err, err)
 	}
 }
 

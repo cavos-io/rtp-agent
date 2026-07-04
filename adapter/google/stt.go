@@ -711,9 +711,13 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		if err != nil {
 			return nil, googleSTTStreamError(err)
 		}
+		alternatives, err := googleSpeechDataFromRecognizeResultsV2Strict(resp.GetResults())
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(err.Error())
+		}
 		return &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
-			Alternatives: googleSpeechDataFromRecognizeResultsV2(resp.GetResults()),
+			Alternatives: alternatives,
 		}, nil
 	}
 
@@ -734,9 +738,13 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 		return nil, googleSTTStreamError(err)
 	}
 
+	alternatives, err := googleSpeechDataFromRecognizeResultsStrict(resp.Results)
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
 	return &stt.SpeechEvent{
 		Type:         stt.SpeechEventFinalTranscript,
-		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results),
+		Alternatives: alternatives,
 	}, nil
 }
 
@@ -1059,6 +1067,15 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	return []stt.SpeechData{data}
 }
 
+func googleSpeechDataFromRecognizeResultsStrict(results []*speechpb.SpeechRecognitionResult) ([]stt.SpeechData, error) {
+	for _, result := range results {
+		if len(result.GetAlternatives()) == 0 {
+			return nil, errors.New("google STT recognize result missing alternatives")
+		}
+	}
+	return googleSpeechDataFromRecognizeResults(results), nil
+}
+
 func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognitionResult) []stt.SpeechData {
 	if len(results) == 0 {
 		return []stt.SpeechData{}
@@ -1092,6 +1109,15 @@ func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognit
 	}
 	googleApplyRecognizeSpeechDataTimingV2(&data, firstWords, lastWords)
 	return []stt.SpeechData{data}
+}
+
+func googleSpeechDataFromRecognizeResultsV2Strict(results []*speechv2pb.SpeechRecognitionResult) ([]stt.SpeechData, error) {
+	for _, result := range results {
+		if len(result.GetAlternatives()) == 0 {
+			return nil, errors.New("google STT recognize result missing alternatives")
+		}
+	}
+	return googleSpeechDataFromRecognizeResultsV2(results), nil
 }
 
 func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult) string {
