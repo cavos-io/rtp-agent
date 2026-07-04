@@ -2288,6 +2288,59 @@ func TestGoogleLLMStreamReturnsConnectionErrorForMalformedFunctionArgs(t *testin
 	}
 }
 
+func TestGoogleLLMStreamEmitsUsageBeforeMalformedFunctionArgsError(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:     4,
+					CandidatesTokenCount: 2,
+					TotalTokenCount:      6,
+				},
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "call_bad",
+								Name: "lookup",
+								Args: map[string]any{"bad": make(chan int)},
+							},
+						}},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next error = %v", err)
+	}
+	if usage == nil || usage.Usage == nil {
+		t.Fatalf("usage chunk = %#v, want usage before malformed args error", usage)
+	}
+	if usage.Usage.PromptTokens != 4 || usage.Usage.CompletionTokens != 2 || usage.Usage.TotalTokens != 6 {
+		t.Fatalf("usage = %+v, want reference token counts before malformed args error", usage.Usage)
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil malformed tool-call args", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("malformed args error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "gemini llm: error generating content") {
+		t.Fatalf("APIConnectionError message = %q, want reference wrapper", connectionErr.Message)
+	}
+}
+
 func TestGoogleLLMStreamReportsCachedPromptTokens(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{

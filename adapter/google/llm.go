@@ -1356,7 +1356,14 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 					s.responseGenerated = true
 					chunk, parseErr := googleChatChunkFromPart(part)
 					if parseErr != nil {
-						return nil, googleLLMStreamError(parseErr, !s.chunkEmitted, requestID)
+						err := googleLLMStreamError(parseErr, !s.chunkEmitted, requestID)
+						if len(s.pending) > 0 {
+							s.pendingErr = err
+							chunk := s.pending[0]
+							s.pending = s.pending[1:]
+							return chunk, nil
+						}
+						return nil, err
 					}
 					if chunk != nil {
 						chunk.ID = requestID
