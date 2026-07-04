@@ -1007,7 +1007,8 @@ func TestAWSRealtimeSessionCloseKeepsCompletedInputChunks(t *testing.T) {
 		t.Fatalf("Session error = %v", err)
 	}
 
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512))); err != nil {
 		t.Fatalf("PushAudio complete chunk error = %v", err)
 	}
@@ -1029,7 +1030,8 @@ func TestAWSRealtimeSessionCloseKeepsCompletedInputChunks(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	audioInputs = collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	sent = stream.snapshotSent()
+	audioInputs = collectAWSRealtimeAudioInputPayloads(t, sent[sentCount:])
 	if len(audioInputs) != 1 {
 		t.Fatalf("audioInput events after Close = %d, want no extra tail chunk", len(audioInputs))
 	}
