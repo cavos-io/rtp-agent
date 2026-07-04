@@ -1330,6 +1330,33 @@ func TestGoogleRealtimeSessionConnectFailureReturnsAPIConnectionError(t *testing
 	}
 }
 
+func TestGoogleRealtimeSessionConnectFailureIncludesReference1008Hint(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{
+		connectErrs: []error{
+			errors.New("websocket close 1008: policy violation"),
+		},
+	}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "Hint: A 1008 policy violation error often indicates") {
+		t.Fatalf("Session error = %v, want reference 1008 policy violation hint", connectionErr)
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",

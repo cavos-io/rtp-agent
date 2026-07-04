@@ -581,6 +581,20 @@ func validateGoogleRealtimeModelAPI(model string, vertexAI bool) error {
 	return nil
 }
 
+func googleRealtime1008ErrorHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "1008") && !strings.Contains(message, "policy violation") {
+		return ""
+	}
+	return "\n\nHint: A 1008 policy violation error often indicates that the model name " +
+		"doesn't match the API being used. VertexAI models typically start with " +
+		"'gemini-live-', while Gemini API models start with 'gemini-2.' or similar. " +
+		"Please verify your model name matches your API configuration."
+}
+
 func (m *RealtimeModel) Model() string {
 	if m == nil {
 		return defaultGoogleRealtimeGeminiModel
@@ -636,7 +650,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	liveSession, err := googleRealtimeConnectWithRetry(ctx, connector, m.Model(), config, m.connectOptions)
 	if err != nil {
 		cancel()
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Failed to connect to Gemini Live: %v", err))
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Failed to connect to Gemini Live: %v%s", err, googleRealtime1008ErrorHint(err)))
 	}
 	capabilities := m.Capabilities()
 	session := &googleRealtimeSession{
