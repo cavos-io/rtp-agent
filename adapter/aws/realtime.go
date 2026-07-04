@@ -1184,7 +1184,6 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		if !ok {
 			return true
 		}
-		role := awsRealtimeMapString(textOutput, "role")
 		if textContent == awsRealtimeBargeInContent {
 			if s.hasGeneration() {
 				s.markLastAssistantMessageInterrupted()
@@ -1193,7 +1192,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 				}
 			}
 		} else {
-			if s.shouldStoreProviderUserText(contentID, role) {
+			if s.shouldStoreProviderUserText(contentID) {
 				s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
 			}
 			if s.isProviderAssistantText(contentID) {
@@ -1428,10 +1427,7 @@ func (s *awsRealtimeSession) markAudioEndTurnReceived() {
 	s.mu.Unlock()
 }
 
-func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string, role string) bool {
-	if role != "" && role != "USER" {
-		return false
-	}
+func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != nil {

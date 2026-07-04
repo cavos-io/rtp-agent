@@ -3041,6 +3041,46 @@ func TestAWSRealtimeSessionPreservesReferenceBareUserTextHistory(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionDefaultsReferenceUntrackedTextOutputToUser(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"textOutput":{"role":"ASSISTANT","content":"untracked transcript","contentId":"untracked-text"}}}`)
+
+	var chatCtx *llm.ChatContext
+	deadline := time.After(time.Second)
+	for {
+		awsSession.mu.Lock()
+		chatCtx = awsSession.chatCtx
+		awsSession.mu.Unlock()
+		if chatCtx != nil && len(chatCtx.Items) > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("chatCtx items = %#v, want untracked text treated as provider USER ASR", chatCtx)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if chatCtx == nil || len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx items = %#v, want untracked text treated as provider USER ASR", chatCtx)
+	}
+	userMsg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || userMsg.Role != llm.ChatRoleUser || userMsg.TextContent() != "untracked transcript" {
+		t.Fatalf("user history = %#v, want reference default USER text", chatCtx.Items[0])
+	}
+	if !awsSession.isAudioTranscriptMessage(userMsg.ID) {
+		t.Fatalf("untracked text message id %q not marked as provider audio transcript", userMsg.ID)
+	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+}
+
 func TestAWSRealtimeSessionIgnoresReferenceTextOutputMissingContentID(t *testing.T) {
 	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
 	defer session.Close()
