@@ -4298,7 +4298,72 @@ func googleSTTAdaptationV2FromOptions(options map[string]any) *speechv2pb.Speech
 	if adaptation, ok := options["speech_adaptation"].(*speechv2pb.SpeechAdaptation); ok {
 		return adaptation
 	}
+	if adaptation := googleSTTAdaptationV2FromModelOption(options["adaptation"]); adaptation != nil {
+		return adaptation
+	}
+	if adaptation := googleSTTAdaptationV2FromModelOption(options["speech_adaptation"]); adaptation != nil {
+		return adaptation
+	}
 	return nil
+}
+
+func googleSTTAdaptationV2FromModelOption(value any) *speechv2pb.SpeechAdaptation {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	phraseSetValues, ok := anySlice(options["phrase_sets"])
+	if !ok {
+		return nil
+	}
+	adaptation := &speechv2pb.SpeechAdaptation{}
+	for _, phraseSetValue := range phraseSetValues {
+		phraseSetOptions, ok := phraseSetValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		inlineOptions, ok := phraseSetOptions["inline_phrase_set"].(map[string]any)
+		if !ok {
+			continue
+		}
+		phrases := googleSTTV2PhraseSetPhrasesFromModelOption(inlineOptions["phrases"])
+		if len(phrases) == 0 {
+			continue
+		}
+		adaptation.PhraseSets = append(adaptation.PhraseSets, &speechv2pb.SpeechAdaptation_AdaptationPhraseSet{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{Phrases: phrases},
+			},
+		})
+	}
+	if len(adaptation.PhraseSets) == 0 {
+		return nil
+	}
+	return adaptation
+}
+
+func googleSTTV2PhraseSetPhrasesFromModelOption(value any) []*speechv2pb.PhraseSet_Phrase {
+	phraseValues, ok := anySlice(value)
+	if !ok {
+		return nil
+	}
+	phrases := make([]*speechv2pb.PhraseSet_Phrase, 0, len(phraseValues))
+	for _, phraseValue := range phraseValues {
+		phraseOptions, ok := phraseValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := modelOptionString(phraseOptions, "value")
+		if text == "" {
+			continue
+		}
+		phrase := &speechv2pb.PhraseSet_Phrase{Value: text}
+		if boost := modelOptionFloat(phraseOptions, "boost"); boost != nil {
+			phrase.Boost = float32(*boost)
+		}
+		phrases = append(phrases, phrase)
+	}
+	return phrases
 }
 
 func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adaptergoogle.GoogleSTTKeyword {

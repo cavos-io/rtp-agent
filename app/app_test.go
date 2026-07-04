@@ -13838,6 +13838,39 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceV2Adaptation(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceV2AdaptationJSON(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"adaptation": map[string]any{
+				"phrase_sets": []any{map[string]any{
+					"inline_phrase_set": map[string]any{
+						"phrases": []any{map[string]any{
+							"value": "Acrux",
+							"boost": 20.0,
+						}},
+					},
+				}},
+			},
+		},
+	})
+
+	adaptation := googleCfg.adaptationV2
+	if adaptation == nil || len(adaptation.GetPhraseSets()) != 1 {
+		t.Fatalf("adaptationV2 = %#v, want one parsed phrase set", adaptation)
+	}
+	phraseSet := adaptation.GetPhraseSets()[0].GetInlinePhraseSet()
+	if phraseSet == nil || len(phraseSet.GetPhrases()) != 1 {
+		t.Fatalf("inline phrase set = %#v, want one parsed phrase", phraseSet)
+	}
+	phrase := phraseSet.GetPhrases()[0]
+	if phrase.GetValue() != "Acrux" {
+		t.Fatalf("phrase value = %q, want Acrux", phrase.GetValue())
+	}
+	if phrase.GetBoost() != 20 {
+		t.Fatalf("phrase boost = %v, want 20", phrase.GetBoost())
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceV1Adaptation(t *testing.T) {
 	adaptation := &speechpb.SpeechAdaptation{
 		PhraseSets: []*speechpb.PhraseSet{{
