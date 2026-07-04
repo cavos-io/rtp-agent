@@ -446,7 +446,10 @@ func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
 			case *llm.ChatMessage:
 				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
 					if text := msg.TextContent(); text != "" {
-						systemText += text + "\n"
+						if systemText != "" {
+							systemText += "\n"
+						}
+						systemText += text
 					}
 					continue
 				}

@@ -933,8 +933,11 @@ func TestBuildAWSMessagesCollectsSystemText(t *testing.T) {
 
 	messages, systemText := buildAWSMessages(ctx)
 
-	if systemText != "base\n" {
+	if systemText != "base" {
 		t.Fatalf("systemText = %q, want base", systemText)
+	}
+	if strings.HasSuffix(systemText, "\n") {
+		t.Fatalf("systemText = %q, want no reference trailing newline", systemText)
 	}
 	if len(messages) != 1 {
 		t.Fatalf("len(messages) = %d, want 1", len(messages))
@@ -955,7 +958,7 @@ func TestBuildAWSMessagesConvertsReferenceMidConversationInstructions(t *testing
 
 	messages, systemText := buildAWSMessages(ctx)
 
-	if systemText != "base\n" {
+	if systemText != "base" {
 		t.Fatalf("systemText = %q, want only first system message", systemText)
 	}
 	if len(messages) != 3 {
