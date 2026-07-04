@@ -157,6 +157,16 @@ func TestAWSTTSUpdateOptionsKeepsReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestAWSTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "Joanna")
+
+	provider.UpdateOptions(WithAWSTTSVoice(""))
+
+	if provider.voice != "" {
+		t.Fatalf("voice = %q, want explicit empty reference voice update", provider.voice)
+	}
+}
+
 func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	var requests int
 	client := polly.New(polly.Options{

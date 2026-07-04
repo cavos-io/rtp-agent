@@ -40,9 +40,7 @@ type AWSTTSOption func(*AWSTTS)
 
 func WithAWSTTSVoice(voice types.VoiceId) AWSTTSOption {
 	return func(t *AWSTTS) {
-		if voice != "" {
-			t.voice = voice
-		}
+		t.voice = voice
 	}
 }
 
