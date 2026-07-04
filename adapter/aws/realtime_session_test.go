@@ -1912,6 +1912,34 @@ func TestAWSRealtimeSessionPreservesReferenceQueuedGenerationAudio(t *testing.T)
 	}
 }
 
+func TestAWSRealtimeSessionPreservesReferenceQueuedEvents(t *testing.T) {
+	provider := NewAWSRealtimeModel("")
+	session := newAWSRealtimeSession(provider, nil)
+
+	const total = 20
+	for i := range total {
+		session.emit(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:     fmt.Sprintf("user-%d", i),
+				Transcript: fmt.Sprintf("transcript-%d", i),
+				IsFinal:    true,
+			},
+		})
+	}
+
+	for i := range total {
+		select {
+		case event := <-session.EventCh():
+			if event.InputTranscription == nil || event.InputTranscription.Transcript != fmt.Sprintf("transcript-%d", i) {
+				t.Fatalf("queued event %d = %#v, want transcript-%d", i, event, i)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for queued event %d of %d", i+1, total)
+		}
+	}
+}
+
 func TestAWSRealtimeSessionIgnoresReferenceAudioOutputMissingContent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

@@ -433,7 +433,8 @@ type awsRealtimeSession struct {
 	client                   awsRealtimeClient
 	builder                  *awsRealtimeEventBuilder
 	stream                   awsRealtimeStream
-	eventCh                  chan llm.RealtimeEvent
+	eventCh                  <-chan llm.RealtimeEvent
+	eventStream              *awsRealtimeQueuedStream[llm.RealtimeEvent]
 	turns                    *awsRealtimeTurnTracker
 	generation               *awsRealtimeGeneration
 	chatCtx                  *llm.ChatContext
@@ -626,7 +627,7 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 		model:                    model,
 		client:                   client,
 		builder:                  newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString()),
-		eventCh:                  make(chan llm.RealtimeEvent, 16),
+		eventStream:              newAWSRealtimeQueuedStream[llm.RealtimeEvent](),
 		pending:                  make(map[string]struct{}),
 		sent:                     make(map[string]struct{}),
 		audioMessages:            make(map[string]struct{}),
@@ -640,6 +641,7 @@ func newAWSRealtimeSession(model *AWSRealtimeModel, client awsRealtimeClient) *a
 		audioCancel:     audioCancel,
 		audioSenderDone: make(chan struct{}),
 	}
+	session.eventCh = session.eventStream.Chan()
 	session.audioCond = sync.NewCond(&session.audioMu)
 	session.turns = newAWSRealtimeTurnTracker(session.emit, session.emitGenerationCreated)
 	go session.runAudioInputSender()
@@ -1603,10 +1605,7 @@ func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
 	if closed {
 		return
 	}
-	select {
-	case s.eventCh <- event:
-	default:
-	}
+	s.eventStream.Send(event)
 }
 
 func (s *awsRealtimeSession) UpdateInstructions(instructions string) error {
@@ -2073,7 +2072,7 @@ func (s *awsRealtimeSession) Close() error {
 			return err
 		}
 	}
-	close(s.eventCh)
+	s.eventStream.Close()
 	return nil
 }
 
