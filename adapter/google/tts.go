@@ -27,6 +27,10 @@ import (
 
 const googleTTSRequestTimeout = 10 * time.Second
 
+var newGoogleTTSClient = func(ctx context.Context, opts ...option.ClientOption) (googleTTSClient, error) {
+	return texttospeech.NewClient(ctx, opts...)
+}
+
 type GoogleTTS struct {
 	mu      sync.Mutex
 	streams map[*googleTTSSynthesizeStream]struct{}
@@ -209,7 +213,6 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 		return nil, err
 	}
 
-	ctx := context.Background()
 	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
 	if err != nil {
 		return nil, err
@@ -218,7 +221,9 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
 	}
 
-	client, err := texttospeech.NewClient(ctx, clientOpts...)
+	ctx, cancel := context.WithTimeout(context.Background(), googleTTSRequestTimeout)
+	defer cancel()
+	client, err := newGoogleTTSClient(ctx, clientOpts...)
 	if err != nil {
 		return nil, err
 	}

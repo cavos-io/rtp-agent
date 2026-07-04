@@ -20,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -1078,6 +1079,29 @@ func TestGoogleTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
 
 	if got := googleTTSCallOptionTimeout(client.synthesizeOpts); got != googleTTSRequestTimeout {
 		t.Fatalf("synthesize timeout = %v, want reference %v", got, googleTTSRequestTimeout)
+	}
+}
+
+func TestNewGoogleTTSAppliesReferenceClientTimeout(t *testing.T) {
+	original := newGoogleTTSClient
+	defer func() { newGoogleTTSClient = original }()
+
+	client := &fakeGoogleTTSClient{response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}}}
+	var clientCtx context.Context
+	newGoogleTTSClient = func(ctx context.Context, opts ...option.ClientOption) (googleTTSClient, error) {
+		clientCtx = ctx
+		return client, nil
+	}
+
+	provider, err := NewGoogleTTS("")
+	if err != nil {
+		t.Fatalf("NewGoogleTTS returned error: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("NewGoogleTTS provider = nil")
+	}
+	if !googleTTSContextHasReferenceTimeout(clientCtx) {
+		t.Fatalf("client context deadline = %v, want reference timeout", googleTTSContextDeadline(clientCtx))
 	}
 }
 
@@ -2960,6 +2984,22 @@ func googleTTSCallOptionTimeout(opts []gax.CallOption) time.Duration {
 		return 0
 	}
 	return time.Duration(value.Int())
+}
+
+func googleTTSContextHasReferenceTimeout(ctx context.Context) bool {
+	remaining := googleTTSContextDeadline(ctx)
+	return remaining > 0 && remaining <= googleTTSRequestTimeout
+}
+
+func googleTTSContextDeadline(ctx context.Context) time.Duration {
+	if ctx == nil {
+		return 0
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return time.Until(deadline)
 }
 
 type fakeGoogleTTSStream struct {
