@@ -2125,6 +2125,10 @@ func TestAWSRealtimeSessionEmitsReferenceSpeculativeGenerationBeforeTurnFinality
 	if final.InputTranscription == nil || !final.InputTranscription.IsFinal || final.InputTranscription.Transcript != "hello" {
 		t.Fatalf("final transcription = %#v, want final hello after generation", final.InputTranscription)
 	}
+	reemit := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if reemit.Generation == nil || reemit.Generation.ResponseID != created.Generation.ResponseID {
+		t.Fatalf("re-emitted generation = %#v, want same response id %q", reemit.Generation, created.Generation.ResponseID)
+	}
 }
 
 func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
