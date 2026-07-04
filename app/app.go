@@ -4260,6 +4260,8 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
 	} else if cfg.STTEndpointingSeconds != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingSeconds * float64(time.Second))
+	} else if speechEndTimeout := modelOptionFloat(cfg.STTModelOptions, "speech_end_timeout"); speechEndTimeout != nil {
+		googleCfg.speechEndTimeout = time.Duration(*speechEndTimeout * float64(time.Second))
 	}
 	if cfg.STTSpeechStartTimeoutMS != nil {
 		googleCfg.speechStartTimeout = time.Duration(*cfg.STTSpeechStartTimeoutMS) * time.Millisecond

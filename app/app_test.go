@@ -13919,6 +13919,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndSeconds(t *testing.T)
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechEndTimeoutOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"speech_end_timeout": 0.4},
+	})
+
+	if googleCfg.speechEndTimeout != 400*time.Millisecond {
+		t.Fatalf("speechEndTimeout = %v, want model option speech_end_timeout 400ms", googleCfg.speechEndTimeout)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"use_streaming": false},
