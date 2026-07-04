@@ -453,7 +453,7 @@ type awsRealtimeSession struct {
 	audioNorm                awsRealtimeInputAudioNormalizer
 	audioMu                  sync.Mutex
 	audioCond                *sync.Cond
-	audioQueue               []string
+	audioQueue               []awsRealtimeAudioInputEvent
 	audioClosed              bool
 	audioCtx                 context.Context
 	audioCancel              context.CancelFunc
@@ -570,7 +570,11 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 	if err != nil {
 		return err
 	}
-	s.enqueueAudioInputEvent(audioStart)
+	audioStartSent := s.enqueueAudioInputEvent(audioStart)
+	if err := waitAWSRealtimeAudioInputEventStarted(ctx, audioStartSent); err != nil {
+		s.closeStartupStream()
+		return awsRealtimeStartupSendError(err)
+	}
 	if interactiveUserText != "" {
 		if err := s.waitInteractiveTextDelay(ctx); err != nil {
 			s.closeStartupStream()
@@ -1757,14 +1761,22 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return nil
 }
 
-func (s *awsRealtimeSession) enqueueAudioInputEvent(event string) {
+type awsRealtimeAudioInputEvent struct {
+	event   string
+	started chan struct{}
+}
+
+func (s *awsRealtimeSession) enqueueAudioInputEvent(event string) <-chan struct{} {
+	started := make(chan struct{})
 	s.audioMu.Lock()
 	defer s.audioMu.Unlock()
 	if s.audioClosed {
-		return
+		close(started)
+		return started
 	}
-	s.audioQueue = append(s.audioQueue, event)
+	s.audioQueue = append(s.audioQueue, awsRealtimeAudioInputEvent{event: event, started: started})
 	s.audioCond.Signal()
+	return started
 }
 
 func (s *awsRealtimeSession) runAudioInputSender() {
@@ -1778,19 +1790,33 @@ func (s *awsRealtimeSession) runAudioInputSender() {
 			s.audioMu.Unlock()
 			return
 		}
-		event := s.audioQueue[0]
-		s.audioQueue[0] = ""
+		item := s.audioQueue[0]
+		s.audioQueue[0] = awsRealtimeAudioInputEvent{}
 		s.audioQueue = s.audioQueue[1:]
 		ctx := s.audioCtx
 		s.audioMu.Unlock()
 
 		if ctx.Err() != nil {
+			close(item.started)
 			return
 		}
-		_ = s.sendRawEvent(ctx, event)
+		close(item.started)
+		_ = s.sendRawEvent(ctx, item.event)
 		if ctx.Err() != nil {
 			return
 		}
+	}
+}
+
+func waitAWSRealtimeAudioInputEventStarted(ctx context.Context, started <-chan struct{}) error {
+	if started == nil {
+		return nil
+	}
+	select {
+	case <-started:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -1798,6 +1824,9 @@ func (s *awsRealtimeSession) closeAudioInputSender() {
 	s.audioMu.Lock()
 	if !s.audioClosed {
 		s.audioClosed = true
+		for _, item := range s.audioQueue {
+			close(item.started)
+		}
 		s.audioQueue = nil
 		s.audioCond.Broadcast()
 	}
