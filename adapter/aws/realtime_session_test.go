@@ -2501,6 +2501,30 @@ func TestAWSRealtimeSessionPreservesReferenceBareUserTextHistory(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionIgnoresReferenceTextOutputMissingContentID(t *testing.T) {
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
+	defer session.Close()
+
+	if !session.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{
+				"role":    "USER",
+				"content": "missing id",
+			},
+		},
+	}) {
+		t.Fatal("handleResponseEvent = false, want malformed textOutput ignored without ending reader")
+	}
+
+	assertNoAWSRealtimeEvent(t, session.EventCh())
+	session.mu.Lock()
+	chatCtx := session.chatCtx
+	session.mu.Unlock()
+	if chatCtx != nil && len(chatCtx.Items) != 0 {
+		t.Fatalf("chatCtx items = %#v, want no history for missing contentId", chatCtx.Items)
+	}
+}
+
 func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

@@ -1006,8 +1006,14 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		}
 	}
 	if textOutput := awsRealtimeNestedMap(payload, "event", "textOutput"); textOutput != nil {
-		textContent := awsRealtimeMapString(textOutput, "content")
-		contentID := awsRealtimeMapString(textOutput, "contentId")
+		contentID, ok := awsRealtimeRequiredMapString(textOutput, "contentId")
+		if !ok {
+			return true
+		}
+		textContent, ok := awsRealtimeRequiredMapString(textOutput, "content")
+		if !ok {
+			return true
+		}
 		role := awsRealtimeMapString(textOutput, "role")
 		if textContent == awsRealtimeBargeInContent {
 			s.markLastAssistantMessageInterrupted()
@@ -1378,6 +1384,11 @@ func awsRealtimeNestedMap(root map[string]any, path ...string) map[string]any {
 func awsRealtimeMapString(root map[string]any, key string) string {
 	value, _ := root[key].(string)
 	return value
+}
+
+func awsRealtimeRequiredMapString(root map[string]any, key string) (string, bool) {
+	value, ok := root[key].(string)
+	return value, ok
 }
 
 func awsRealtimeNumberAsInt(value any) int {
