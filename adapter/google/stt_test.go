@@ -236,19 +236,25 @@ func TestGoogleSTTStreamingCapabilityMatchesReferenceOption(t *testing.T) {
 	if capabilities.Streaming {
 		t.Fatal("Streaming capability = true, want false from reference use_streaming option")
 	}
-	if capabilities.InterimResults {
-		t.Fatal("InterimResults capability = true, want false when streaming disabled")
+	if !capabilities.InterimResults {
+		t.Fatal("InterimResults capability = false, want true like reference even when streaming disabled")
 	}
 	if capabilities.AlignedTranscript != "" {
 		t.Fatalf("AlignedTranscript = %q, want empty when streaming disabled", capabilities.AlignedTranscript)
+	}
+	if !capabilities.OfflineRecognize {
+		t.Fatal("OfflineRecognize capability = false, want true like reference")
 	}
 }
 
 func TestGoogleSTTInterimCapabilityMatchesReferenceOption(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTInterimResults(false))
 
-	if provider.Capabilities().InterimResults {
-		t.Fatal("InterimResults capability = true, want false from reference interim_results option")
+	if provider.interimResults {
+		t.Fatal("interimResults option = true, want request option still disabled")
+	}
+	if !provider.Capabilities().InterimResults {
+		t.Fatal("InterimResults capability = false, want true like reference despite interim_results option")
 	}
 }
 
