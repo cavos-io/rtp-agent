@@ -4244,6 +4244,9 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	if googleCfg.interimResults == nil {
 		googleCfg.interimResults = modelOptionBool(cfg.STTModelOptions, "interim_results")
 	}
+	if googleCfg.voiceActivityEvents == nil {
+		googleCfg.voiceActivityEvents = modelOptionBool(cfg.STTModelOptions, "enable_voice_activity_events")
+	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
 	} else if cfg.STTEndpointingSeconds != nil {

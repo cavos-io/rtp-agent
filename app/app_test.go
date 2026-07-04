@@ -13939,6 +13939,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceInterimResultsOption(t *testin
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceVoiceActivityEventsOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"enable_voice_activity_events": true},
+	})
+
+	if googleCfg.voiceActivityEvents == nil || !*googleCfg.voiceActivityEvents {
+		t.Fatalf("voiceActivityEvents = %#v, want model option enable_voice_activity_events true", googleCfg.voiceActivityEvents)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{
