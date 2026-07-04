@@ -930,6 +930,54 @@ func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T)
 	}
 }
 
+func TestAWSRealtimeSessionPushAudioDropsInvalidReferenceFrames(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
+	invalidFrames := []*model.AudioFrame{
+		{Data: []byte{1, 2}, SampleRate: 0, NumChannels: 1, SamplesPerChannel: 1},
+		{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 0, SamplesPerChannel: 1},
+		{Data: []byte{1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1},
+		{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2},
+	}
+	for i, frame := range invalidFrames {
+		if err := session.PushAudio(frame); err != nil {
+			t.Fatalf("PushAudio invalid frame %d error = %v, want nil dropped frame", i, err)
+		}
+	}
+	sent = stream.snapshotSent()
+	if got := countAWSRealtimeAudioInputs(t, sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after invalid frames = %d, want none", got)
+	}
+
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512))); err != nil {
+		t.Fatalf("PushAudio valid frame error = %v", err)
+	}
+	audioInputs := waitAWSRealtimeAudioInputPayloads(t, stream, sentCount, 1)
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events after valid frame = %d, want one", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 512*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want valid chunk %d", got, want)
+	}
+	for i, b := range decoded {
+		if b != 0 {
+			t.Fatalf("audioInput byte %d = %d, want invalid frames dropped before zero valid audio", i, b)
+		}
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioChunksReferenceInput(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

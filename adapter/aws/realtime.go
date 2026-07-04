@@ -2162,7 +2162,7 @@ func (s *awsRealtimeSession) Close() error {
 func (s *awsRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
 
 func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
-	if frame == nil || len(frame.Data) == 0 {
+	if !awsRealtimeInputFrameOK(frame) {
 		return nil
 	}
 	s.mu.Lock()
@@ -2183,6 +2183,23 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 		s.enqueueAudioInputEvent(event)
 	}
 	return nil
+}
+
+func awsRealtimeInputFrameOK(frame *model.AudioFrame) bool {
+	if frame == nil || len(frame.Data) == 0 {
+		return false
+	}
+	if frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return false
+	}
+	if len(frame.Data)%2 != 0 {
+		return false
+	}
+	if frame.SamplesPerChannel == 0 {
+		return true
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	return len(frame.Data) >= expectedBytes
 }
 
 type awsRealtimeAudioInputEvent struct {
