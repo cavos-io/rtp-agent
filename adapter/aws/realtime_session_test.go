@@ -3292,18 +3292,21 @@ func TestAWSRealtimeSessionDefersToolUpdateRecycleUntilPendingToolResult(t *test
 		t.Fatal("timed out waiting for function stream call")
 	}
 
-	sentBeforeUpdate := len(first.sent)
+	firstSent := first.snapshotSent()
+	sentBeforeUpdate := len(firstSent)
 	if err := session.UpdateTools([]llm.Tool{awsSecondRequestTestTool{}}); err != nil {
 		t.Fatalf("UpdateTools active error = %v", err)
 	}
-	if first.closed {
+	if first.isClosed() {
 		t.Fatal("first stream closed = true, want deferred recycle while tool result pending")
 	}
-	if len(second.sent) != 0 {
-		t.Fatalf("second stream sent %d events, want no restart before pending tool result", len(second.sent))
+	secondSent := second.snapshotSent()
+	if len(secondSent) != 0 {
+		t.Fatalf("second stream sent %d events, want no restart before pending tool result", len(secondSent))
 	}
-	if len(first.sent) != sentBeforeUpdate {
-		t.Fatalf("UpdateTools sent %d events before tool result, want none", len(first.sent)-sentBeforeUpdate)
+	firstSent = first.snapshotSent()
+	if len(firstSent) != sentBeforeUpdate {
+		t.Fatalf("UpdateTools sent %d events before tool result, want none", len(firstSent)-sentBeforeUpdate)
 	}
 
 	ctx := llm.NewChatContext()
@@ -3316,17 +3319,19 @@ func TestAWSRealtimeSessionDefersToolUpdateRecycleUntilPendingToolResult(t *test
 		t.Fatalf("UpdateChatContext error = %v", err)
 	}
 
-	toolResult := mustAWSRealtimeJSONEvent(t, first.sent[sentBeforeUpdate+1])
+	firstSent = first.snapshotSent()
+	toolResult := mustAWSRealtimeJSONEvent(t, firstSent[sentBeforeUpdate+1])
 	if got := awsRealtimeNestedString(toolResult, "event", "toolResult", "content"); got != `{"forecast":"sunny"}` {
 		t.Fatalf("tool result content = %q, want output before recycle", got)
 	}
-	if !first.closed {
+	if !first.isClosed() {
 		t.Fatal("first stream closed = false, want recycle after pending tool result")
 	}
-	if len(second.sent) == 0 {
+	secondSent = second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no events, want restarted prompt after tool result")
 	}
-	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, second.sent[1]), "event", "promptStart", "toolConfiguration")
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, secondSent[1]), "event", "promptStart", "toolConfiguration")
 	tools, ok := toolConfig["tools"].([]any)
 	if !ok || len(tools) != 1 {
 		t.Fatalf("recycled tools = %#v, want one tool", toolConfig["tools"])
