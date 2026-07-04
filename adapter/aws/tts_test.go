@@ -743,6 +743,41 @@ func TestAWSTTSChunkedStreamNextReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamTreatsReferenceClientClosedAsEOF(t *testing.T) {
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: 499,
+				Status:     "499 Client Closed Request",
+				Body:       io.NopCloser(strings.NewReader(`{"message":"client closed"}`)),
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+			}, nil
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want lazy stream", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on client-closed provider response", audio)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %T %v, want EOF for reference client-closed provider response", err, err)
+	}
+}
+
 func TestAWSTTSProviderCloseCancelsPendingSynthesize(t *testing.T) {
 	requestStarted := make(chan struct{})
 	requestCanceled := make(chan struct{})

@@ -390,6 +390,9 @@ func (s *awsTTSChunkedStream) open() error {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
+		if isAWSTTSClientClosedError(err) {
+			return io.EOF
+		}
 		return llm.NewAPIConnectionError(err.Error())
 	}
 	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
@@ -417,6 +420,10 @@ func (s *awsTTSChunkedStream) effectiveSampleRate() int {
 	s.provider.mu.Lock()
 	defer s.provider.mu.Unlock()
 	return s.provider.sampleRate
+}
+
+func isAWSTTSClientClosedError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "StatusCode: 499")
 }
 
 func readAWSTTSChunk(stream io.Reader) ([]byte, error) {
