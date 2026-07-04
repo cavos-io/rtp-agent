@@ -593,6 +593,61 @@ func TestAWSTTSChunkedStreamNextReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestAWSTTSProviderCloseCancelsPendingSynthesize(t *testing.T) {
+	requestStarted := make(chan struct{})
+	requestCanceled := make(chan struct{})
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			close(requestStarted)
+			<-req.Context().Done()
+			close(requestCanceled)
+			return nil, req.Context().Err()
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("provider Close did not cancel pending AWS TTS request")
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after provider Close error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("Next remained blocked after provider Close")
+	}
+}
+
 func TestAWSTTSStreamReportsUnsupported(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 

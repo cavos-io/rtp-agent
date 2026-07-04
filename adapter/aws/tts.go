@@ -143,8 +143,13 @@ func (t *AWSTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	requestCtx, cancel := context.WithCancel(ctx)
 	stream := &awsTTSChunkedStream{
-		ctx:      ctx,
+		ctx:      requestCtx,
+		cancel:   cancel,
 		text:     text,
 		options:  t.snapshotOptions(),
 		lazy:     true,
@@ -271,6 +276,7 @@ func (t *AWSTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 type awsTTSChunkedStream struct {
 	ctx          context.Context
+	cancel       context.CancelFunc
 	text         string
 	options      awsTTSRequestOptions
 	stream       io.ReadCloser
@@ -292,6 +298,9 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.lazy {
 		if err := s.open(); err != nil {
+			if s.closed {
+				return nil, io.EOF
+			}
 			_ = s.Close()
 			return nil, err
 		}
@@ -485,6 +494,9 @@ func downmixAWSTTSFrameToMono(frame *model.AudioFrame) *model.AudioFrame {
 func (s *awsTTSChunkedStream) Close() error {
 	s.closed = true
 	s.lazy = false
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.decoder != nil {
 		_ = s.decoder.Close()
 	}
