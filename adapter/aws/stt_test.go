@@ -1018,6 +1018,43 @@ func TestAWSSTTStreamCloseSuppressesReferenceWriterCloseError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTProviderCloseClosesActiveStreams(t *testing.T) {
+	writer := &fakeAWSSTTWriter{}
+	client := &fakeAWSSTTClient{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = newFakeAWSSTTReader()
+			es.Writer = writer
+		}),
+	}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+	providerStream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !writer.closed {
+		t.Fatal("writer closed = false after provider Close")
+	}
+	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
+		t.Fatalf("close chunks = %#v, want one empty sentinel before close", writer.chunks)
+	}
+	if err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("after-close")}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after provider Close error = %v, want ErrClosedPipe", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if len(writer.chunks) != 1 {
+		t.Fatalf("close chunks after second Close = %#v, want unchanged", writer.chunks)
+	}
+}
+
 func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	writer := &fakeAWSSTTWriter{err: errors.New("transcribe write failed")}
 	providerStream := &awsSTTStream{
