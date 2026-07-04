@@ -1605,16 +1605,17 @@ func TestAWSSTTRestartAfterInputEndedClosesReferenceInput(t *testing.T) {
 	defer close(secondReader.events)
 
 	deadline := time.After(time.Second)
-	for !secondWriter.closed {
+	for !secondWriter.isClosed() {
 		select {
 		case <-deadline:
-			t.Fatalf("second stream writer closed = false, chunks = %#v; want reference restart to send empty close sentinel for already-ended input", secondWriter.chunks)
+			t.Fatalf("second stream writer closed = false, chunks = %#v; want reference restart to send empty close sentinel for already-ended input", secondWriter.snapshotChunks())
 		default:
 			time.Sleep(time.Millisecond)
 		}
 	}
-	if len(secondWriter.chunks) != 1 || len(secondWriter.chunks[0]) != 0 || secondWriter.chunkWasNil[0] {
-		t.Fatalf("second stream chunks = %#v nil=%#v, want one non-nil empty close sentinel", secondWriter.chunks, secondWriter.chunkWasNil)
+	chunks, chunkWasNil := secondWriter.snapshotChunksAndNilFlags()
+	if len(chunks) != 1 || len(chunks[0]) != 0 || chunkWasNil[0] {
+		t.Fatalf("second stream chunks = %#v nil=%#v, want one non-nil empty close sentinel", chunks, chunkWasNil)
 	}
 }
 
@@ -1731,6 +1732,7 @@ func TestAWSSTTReadLoopUnblocksWhenClosedWithFullEventQueue(t *testing.T) {
 }
 
 type fakeAWSSTTWriter struct {
+	mu          sync.Mutex
 	lastChunk   []byte
 	chunks      [][]byte
 	chunkWasNil []bool
@@ -1787,6 +1789,8 @@ func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) erro
 	if !ok {
 		return nil
 	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.chunkWasNil = append(w.chunkWasNil, audioEvent.Value.AudioChunk == nil)
 	w.lastChunk = append([]byte(nil), audioEvent.Value.AudioChunk...)
 	w.chunks = append(w.chunks, append([]byte(nil), audioEvent.Value.AudioChunk...))
@@ -1794,8 +1798,36 @@ func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) erro
 }
 
 func (w *fakeAWSSTTWriter) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.closed = true
 	return w.closeErr
+}
+
+func (w *fakeAWSSTTWriter) isClosed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.closed
+}
+
+func (w *fakeAWSSTTWriter) snapshotChunks() [][]byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return cloneByteSlices(w.chunks)
+}
+
+func (w *fakeAWSSTTWriter) snapshotChunksAndNilFlags() ([][]byte, []bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return cloneByteSlices(w.chunks), append([]bool(nil), w.chunkWasNil...)
+}
+
+func cloneByteSlices(values [][]byte) [][]byte {
+	cloned := make([][]byte, len(values))
+	for i, value := range values {
+		cloned[i] = append([]byte(nil), value...)
+	}
+	return cloned
 }
 
 func (w *fakeAWSSTTWriter) Err() error {
