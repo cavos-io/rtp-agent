@@ -289,6 +289,7 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 type appGoogleSTTConfig struct {
 	model                  string
 	location               string
+	locationSet            bool
 	language               string
 	streaming              *bool
 	sampleRate             *int
@@ -324,7 +325,7 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 	if cfg.model != "" {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTModel(cfg.model))
 	}
-	if cfg.location != "" {
+	if cfg.locationSet {
 		sttOpts = append(sttOpts, adaptergoogle.WithGoogleSTTLocation(cfg.location))
 	}
 	if cfg.language != "" {
@@ -4219,6 +4220,7 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	googleCfg := appGoogleSTTConfig{
 		model:                  cfg.STTModel,
 		location:               cfg.STTRegion,
+		locationSet:            cfg.STTRegion != "",
 		language:               cfg.STTLanguage,
 		streaming:              cfg.STTStreaming,
 		sampleRate:             cfg.STTSampleRate,
@@ -4241,8 +4243,11 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	if googleCfg.model == "" {
 		googleCfg.model = modelOptionString(cfg.STTModelOptions, "model")
 	}
-	if googleCfg.location == "" {
-		googleCfg.location = modelOptionString(cfg.STTModelOptions, "location")
+	if !googleCfg.locationSet {
+		if location, ok := modelOptionStringValue(cfg.STTModelOptions, "location"); ok {
+			googleCfg.location = location
+			googleCfg.locationSet = true
+		}
 	}
 	if googleCfg.language == "" && len(googleCfg.alternativeLanguages) == 0 {
 		if languages := modelOptionStringList(cfg.STTModelOptions, "languages"); len(languages) > 0 {
@@ -7995,15 +8000,20 @@ func boolValue(value *bool) bool {
 }
 
 func modelOptionString(options map[string]any, key string) string {
+	text, _ := modelOptionStringValue(options, key)
+	return text
+}
+
+func modelOptionStringValue(options map[string]any, key string) (string, bool) {
 	value, ok := options[key]
 	if !ok {
-		return ""
+		return "", false
 	}
 	text, ok := value.(string)
 	if !ok {
-		return ""
+		return "", false
 	}
-	return strings.TrimSpace(text)
+	return strings.TrimSpace(text), true
 }
 
 func modelOptionStringMap(options map[string]any, key string) map[string]string {

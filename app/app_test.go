@@ -14012,6 +14012,19 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceLocationOption(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigPreservesReferenceEmptyLocationOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"location": ""},
+	})
+
+	if !googleCfg.locationSet {
+		t.Fatal("locationSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.location != "" {
+		t.Fatalf("location = %q, want explicit empty model option", googleCfg.location)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceProfanityFilterOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"profanity_filter": true},
