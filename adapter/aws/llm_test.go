@@ -155,6 +155,26 @@ func TestAWSLLMChatReturnsAPITimeoutErrorOnDeadline(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatCallerCancelReturnsContextCanceled(t *testing.T) {
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: context.Canceled},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil", stream)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Chat error = %T %v, want context.Canceled", err, err)
+	}
+}
+
 func TestAWSLLMChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	var captured context.Context
 	provider := &AWSLLM{
