@@ -2078,6 +2078,19 @@ func TestAWSRealtimeSessionInterruptIsReferenceNoop(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionSayReportsReferenceUnsupported(t *testing.T) {
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
+
+	err := session.Say("hello")
+
+	if err == nil {
+		t.Fatal("Say error = nil, want reference unsupported error")
+	}
+	if !strings.Contains(err.Error(), "does not implement say(). use a TTS model instead") {
+		t.Fatalf("Say error = %q, want reference unsupported say message", err.Error())
+	}
+}
+
 func TestAWSRealtimeSessionTruncateIsReferenceNoop(t *testing.T) {
 	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
 	transcript := "played words"

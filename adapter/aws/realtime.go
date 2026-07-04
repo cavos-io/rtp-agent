@@ -1824,7 +1824,9 @@ func (s *awsRealtimeSession) emitEmptyGenerationCreated(userInitiated bool) {
 	})
 }
 
-func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("say") }
+func (s *awsRealtimeSession) Say(string) error {
+	return fmt.Errorf("awsRealtimeSession does not implement say(). use a TTS model instead")
+}
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return nil
 }
@@ -2103,8 +2105,4 @@ func (s *awsRealtimeSession) CommitAudio() error {
 }
 func (s *awsRealtimeSession) ClearAudio() error {
 	return nil
-}
-
-func awsRealtimeUnsupported(operation string) error {
-	return fmt.Errorf("%s is not supported by the AWS Nova Sonic realtime model", operation)
 }
