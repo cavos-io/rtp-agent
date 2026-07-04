@@ -13969,6 +13969,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceWordConfidenceOption(t *testin
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceMinConfidenceOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"min_confidence_threshold": 0.72},
+	})
+
+	if googleCfg.minConfidence == nil || *googleCfg.minConfidence != 0.72 {
+		t.Fatalf("minConfidence = %#v, want model option min_confidence_threshold 0.72", googleCfg.minConfidence)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{

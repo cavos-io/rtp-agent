@@ -4253,6 +4253,9 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	if googleCfg.wordConfidence == nil {
 		googleCfg.wordConfidence = modelOptionBool(cfg.STTModelOptions, "enable_word_confidence")
 	}
+	if googleCfg.minConfidence == nil {
+		googleCfg.minConfidence = modelOptionFloat(cfg.STTModelOptions, "min_confidence_threshold")
+	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
 	} else if cfg.STTEndpointingSeconds != nil {
