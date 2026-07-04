@@ -1474,10 +1474,6 @@ func (s *awsRealtimeSession) updateProviderTextHistory(role llm.ChatRole, text s
 	if len(s.chatCtx.Items) > 0 && !forceNew {
 		if msg, ok := s.chatCtx.Items[len(s.chatCtx.Items)-1].(*llm.ChatMessage); ok && msg.Role == role {
 			current := msg.TextContent()
-			if role == llm.ChatRoleUser && contentID != "" && s.currentUserContentID == contentID && strings.HasPrefix(text, current) {
-				msg.Content = []llm.ChatContent{{Text: text}}
-				return
-			}
 			if len(current)+len(text) < defaultAWSRealtimeMaxMessageSize {
 				msg.Content = []llm.ChatContent{{Text: current + "\n" + text}}
 				return

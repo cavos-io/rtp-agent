@@ -2946,7 +2946,7 @@ func TestAWSRealtimeSessionPreservesReferenceProviderTextHistory(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeSessionReplacesCumulativeProviderUserTextHistory(t *testing.T) {
+func TestAWSRealtimeSessionAppendsReferenceProviderUserTextHistory(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -2970,8 +2970,8 @@ func TestAWSRealtimeSessionReplacesCumulativeProviderUserTextHistory(t *testing.
 		t.Fatalf("chatCtx items = %#v, want one user provider text history item", chatCtx)
 	}
 	userMsg, ok := chatCtx.Items[0].(*llm.ChatMessage)
-	if !ok || userMsg.Role != llm.ChatRoleUser || userMsg.TextContent() != "hello there" {
-		t.Fatalf("user history = %#v, want cumulative provider ASR text replaced", chatCtx.Items[0])
+	if !ok || userMsg.Role != llm.ChatRoleUser || userMsg.TextContent() != "hello\nhello there" {
+		t.Fatalf("user history = %#v, want reference provider ASR text appended", chatCtx.Items[0])
 	}
 	if !awsSession.isAudioTranscriptMessage(userMsg.ID) {
 		t.Fatalf("user message id %q not marked as provider audio transcript", userMsg.ID)
