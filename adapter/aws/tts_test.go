@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -649,6 +650,69 @@ func TestAWSTTSProviderCloseCancelsPendingSynthesize(t *testing.T) {
 	case <-time.After(time.Second):
 		cancel()
 		t.Fatal("Next remained blocked after provider Close")
+	}
+}
+
+func TestAWSTTSChunkedStreamCloseDropsLateResponse(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseResponse := make(chan struct{})
+	body := &countingAWSReadCloser{}
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+			close(requestStarted)
+			<-releaseResponse
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type":     []string{"audio/mpeg"},
+					"X-Amzn-Requestid": []string{"late-polly-request"},
+					"Content-Length":   []string{"0"},
+				},
+				Body: body,
+			}, nil
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			errCh <- fmt.Errorf("Next audio = %+v, want nil after Close", audio)
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(releaseResponse)
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after late response error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next remained blocked after Close and late response")
+	}
+	if body.closed != 1 {
+		t.Fatalf("late response body Close calls = %d, want one", body.closed)
 	}
 }
 
