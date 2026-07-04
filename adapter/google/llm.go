@@ -589,8 +589,65 @@ func googlePrebuiltVoiceConfigParam(value any) (*genai.PrebuiltVoiceConfig, bool
 }
 
 func googleRoutingConfigParam(value any) (*genai.GenerationConfigRoutingConfig, bool) {
-	config, ok := value.(*genai.GenerationConfigRoutingConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.GenerationConfigRoutingConfig:
+		return config, config != nil
+	case genai.GenerationConfigRoutingConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.GenerationConfigRoutingConfig{}
+		if manualMode, ok := googleRoutingManualModeParam(config["manual_mode"]); ok {
+			result.ManualMode = manualMode
+		} else if manualMode, ok := googleRoutingManualModeParam(config["manualMode"]); ok {
+			result.ManualMode = manualMode
+		}
+		if autoMode, ok := googleRoutingAutoModeParam(config["auto_mode"]); ok {
+			result.AutoMode = autoMode
+		} else if autoMode, ok := googleRoutingAutoModeParam(config["autoMode"]); ok {
+			result.AutoMode = autoMode
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleRoutingManualModeParam(value any) (*genai.GenerationConfigRoutingConfigManualRoutingMode, bool) {
+	switch config := value.(type) {
+	case *genai.GenerationConfigRoutingConfigManualRoutingMode:
+		return config, config != nil
+	case genai.GenerationConfigRoutingConfigManualRoutingMode:
+		return &config, true
+	case map[string]any:
+		result := &genai.GenerationConfigRoutingConfigManualRoutingMode{}
+		if modelName := googleStringParam(config["model_name"]); modelName != "" {
+			result.ModelName = modelName
+		} else if modelName := googleStringParam(config["modelName"]); modelName != "" {
+			result.ModelName = modelName
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleRoutingAutoModeParam(value any) (*genai.GenerationConfigRoutingConfigAutoRoutingMode, bool) {
+	switch config := value.(type) {
+	case *genai.GenerationConfigRoutingConfigAutoRoutingMode:
+		return config, config != nil
+	case genai.GenerationConfigRoutingConfigAutoRoutingMode:
+		return &config, true
+	case map[string]any:
+		result := &genai.GenerationConfigRoutingConfigAutoRoutingMode{}
+		if preference := googleStringParam(config["model_routing_preference"]); preference != "" {
+			result.ModelRoutingPreference = preference
+		} else if preference := googleStringParam(config["modelRoutingPreference"]); preference != "" {
+			result.ModelRoutingPreference = preference
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleModelSelectionConfigParam(value any) (*genai.ModelSelectionConfig, bool) {

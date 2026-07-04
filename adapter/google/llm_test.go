@@ -1058,6 +1058,33 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceRoutingConfigExtra(t *t
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceRoutingConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"routing_config": map[string]any{
+				"manual_mode": map[string]any{
+					"model_name": "gemini-2.5-flash",
+				},
+				"auto_mode": map[string]any{
+					"model_routing_preference": "BALANCED",
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.RoutingConfig == nil {
+		t.Fatal("RoutingConfig = nil, want dict-derived routing config")
+	}
+	if config.RoutingConfig.ManualMode == nil || config.RoutingConfig.ManualMode.ModelName != "gemini-2.5-flash" {
+		t.Fatalf("ManualMode = %#v, want model name", config.RoutingConfig.ManualMode)
+	}
+	if config.RoutingConfig.AutoMode == nil || config.RoutingConfig.AutoMode.ModelRoutingPreference != "BALANCED" {
+		t.Fatalf("AutoMode = %#v, want routing preference", config.RoutingConfig.AutoMode)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceModelSelectionConfigExtra(t *testing.T) {
 	selection := &genai.ModelSelectionConfig{
 		FeatureSelectionPreference: genai.FeatureSelectionPreferencePrioritizeQuality,
