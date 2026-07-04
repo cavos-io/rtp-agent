@@ -1032,9 +1032,11 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		}
 		role := awsRealtimeMapString(textOutput, "role")
 		if textContent == awsRealtimeBargeInContent {
-			s.markLastAssistantMessageInterrupted()
-			if !s.hasPendingTools() {
-				s.closeGeneration()
+			if s.hasGeneration() {
+				s.markLastAssistantMessageInterrupted()
+				if !s.hasPendingTools() {
+					s.closeGeneration()
+				}
 			}
 		} else {
 			if s.shouldStoreProviderUserText(contentID, role) {
@@ -1098,6 +1100,12 @@ func (s *awsRealtimeSession) hasPendingTools() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.pending) > 0
+}
+
+func (s *awsRealtimeSession) hasGeneration() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.generation != nil
 }
 
 func (s *awsRealtimeSession) emitGenerationCreated() {

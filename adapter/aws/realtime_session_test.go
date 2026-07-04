@@ -2066,6 +2066,36 @@ func TestAWSRealtimeSessionClosesReferenceGenerationOnBargeIn(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionIgnoresReferenceBargeInWithoutGeneration(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession, ok := session.(*awsRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *awsRealtimeSession", session)
+	}
+
+	awsSession.updateProviderTextHistory(llm.ChatRoleAssistant, "still speaking", "")
+
+	stream.emitJSON(`{"event":{"textOutput":{"role":"ASSISTANT","content":` + strconv.Quote(awsRealtimeBargeInContent) + `,"contentId":"barge-late"}}}`)
+
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+	if awsSession.chatCtx == nil || len(awsSession.chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx items = %#v, want one assistant message", awsSession.chatCtx)
+	}
+	msg, ok := awsSession.chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chat item = %#v, want assistant message", awsSession.chatCtx.Items[0])
+	}
+	if msg.Interrupted {
+		t.Fatal("assistant message interrupted = true, want unchanged without active generation")
+	}
+}
+
 func TestAWSRealtimeSessionClosesReferenceGenerationBeforeBargeInSpeechStart(t *testing.T) {
 	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
 	generation, _ := session.ensureGenerationWithCreated("response-1")
