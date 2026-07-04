@@ -1143,6 +1143,28 @@ func TestBuildAWSMessagesCollectsSystemText(t *testing.T) {
 	assertTextBlock(t, messages[0].Content, 1, "hello")
 }
 
+func TestBuildAWSMessagesKeepsReferenceDeveloperPreambleAsUserTurn(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "developer", Role: llm.ChatRoleDeveloper, Content: []llm.ChatContent{{Text: "dev preamble"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	messages, systemText := buildAWSMessages(ctx)
+
+	if systemText != "" {
+		t.Fatalf("systemText = %q, want empty because reference AWS formatter only extracts system role", systemText)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want one merged user turn", len(messages))
+	}
+	if messages[0].Role != awstypes.ConversationRoleUser {
+		t.Fatalf("role = %q, want user", messages[0].Role)
+	}
+	assertTextBlock(t, messages[0].Content, 0, "dev preamble")
+	assertTextBlock(t, messages[0].Content, 1, "hello")
+}
+
 func TestBuildAWSMessagesConvertsReferenceMidConversationInstructions(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

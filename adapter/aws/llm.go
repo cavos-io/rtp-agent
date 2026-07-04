@@ -495,7 +495,7 @@ func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
 		for _, item := range group.flatten() {
 			switch msg := item.(type) {
 			case *llm.ChatMessage:
-				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
+				if msg.Role == llm.ChatRoleSystem {
 					if text := msg.TextContent(); text != "" {
 						if systemText != "" {
 							systemText += "\n"
