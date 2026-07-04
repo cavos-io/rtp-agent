@@ -265,13 +265,40 @@ func TestBuildGoogleContentsCollectsSystemText(t *testing.T) {
 		t.Fatalf("buildGoogleContents error = %v", err)
 	}
 
-	if systemText != "base\ndev\n" {
-		t.Fatalf("systemText = %q, want base/dev", systemText)
+	if systemText != "base\n" {
+		t.Fatalf("systemText = %q, want first instruction message only", systemText)
 	}
 	if len(contents) != 1 {
 		t.Fatalf("len(contents) = %d, want 1", len(contents))
 	}
-	assertGoogleTextPart(t, contents[0].Parts, 0, "hello")
+	assertGoogleTextPart(t, contents[0].Parts, 0, "<instructions>\ndev\n</instructions>")
+	assertGoogleTextPart(t, contents[0].Parts, 1, "hello")
+}
+
+func TestBuildGoogleContentsInlinesReferenceMidConversationInstructions(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "base instructions"}}},
+		&llm.ChatMessage{ID: "turn-instructions", Role: llm.ChatRoleDeveloper, Content: []llm.ChatContent{{Instructions: llm.NewInstructions("speak briefly", "write briefly").AsModality("text")}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	contents, systemText, err := buildGoogleContents(ctx)
+	if err != nil {
+		t.Fatalf("buildGoogleContents error = %v", err)
+	}
+
+	if systemText != "base instructions\n" {
+		t.Fatalf("systemText = %q, want only first instruction message", systemText)
+	}
+	if len(contents) != 1 {
+		t.Fatalf("len(contents) = %d, want 1: %#v", len(contents), contents)
+	}
+	if contents[0].Role != genai.RoleUser {
+		t.Fatalf("role = %q, want user", contents[0].Role)
+	}
+	assertGoogleTextPart(t, contents[0].Parts, 0, "<instructions>\nwrite briefly\n</instructions>")
+	assertGoogleTextPart(t, contents[0].Parts, 1, "hello")
 }
 
 func TestBuildGoogleContentsInjectsDummyUserAfterModelTurn(t *testing.T) {

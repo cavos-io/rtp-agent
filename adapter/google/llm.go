@@ -1066,7 +1066,7 @@ func buildGoogleContentsWithThoughtSignatures(chatCtx *llm.ChatContext, thoughtS
 		parts = append(parts, newParts...)
 	}
 
-	for _, group := range groupGoogleChatItems(chatCtx.Items) {
+	for _, group := range groupGoogleChatItems(googleInlineMidConversationInstructions(chatCtx.Items)) {
 		for _, item := range group.flatten() {
 			switch msg := item.(type) {
 			case *llm.ChatMessage:
@@ -1107,8 +1107,8 @@ func buildGoogleContentsWithThoughtSignatures(chatCtx *llm.ChatContext, thoughtS
 func googleMessageParts(msg *llm.ChatMessage) []*genai.Part {
 	parts := make([]*genai.Part, 0, len(msg.Content))
 	for _, content := range msg.Content {
-		if content.Text != "" {
-			parts = append(parts, genai.NewPartFromText(content.Text))
+		if text := googleChatContentText(content); text != "" {
+			parts = append(parts, genai.NewPartFromText(text))
 		}
 		if content.Image != nil {
 			if part := googleImagePart(content.Image); part != nil {
@@ -1117,6 +1117,42 @@ func googleMessageParts(msg *llm.ChatMessage) []*genai.Part {
 		}
 	}
 	return parts
+}
+
+func googleInlineMidConversationInstructions(items []llm.ChatItem) []llm.ChatItem {
+	converted := make([]llm.ChatItem, 0, len(items))
+	firstInstructionSeen := false
+	for _, item := range items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok || (msg.Role != llm.ChatRoleSystem && msg.Role != llm.ChatRoleDeveloper) {
+			converted = append(converted, item)
+			continue
+		}
+
+		if firstInstructionSeen && msg.TextContent() != "" {
+			converted = append(converted, &llm.ChatMessage{
+				ID:        msg.ID,
+				Role:      llm.ChatRoleUser,
+				Content:   []llm.ChatContent{{Text: fmt.Sprintf("<instructions>\n%s\n</instructions>", msg.TextContent())}},
+				CreatedAt: msg.CreatedAt,
+			})
+			continue
+		}
+
+		firstInstructionSeen = true
+		converted = append(converted, item)
+	}
+	return converted
+}
+
+func googleChatContentText(content llm.ChatContent) string {
+	if content.Text != "" {
+		return content.Text
+	}
+	if content.Instructions != nil {
+		return content.Instructions.String()
+	}
+	return ""
 }
 
 func googleImagePart(image *llm.ImageContent) *genai.Part {
