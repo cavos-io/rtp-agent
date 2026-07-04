@@ -236,6 +236,13 @@ func newAWSSTTWithClient(client awsSTTClient, opts ...AWSSTTOption) (*AWSSTT, er
 }
 
 func (s *AWSSTT) Label() string { return "aws.STT" }
+func (s *AWSSTT) Model() string {
+	if s == nil || s.languageModelName == "" {
+		return "unknown"
+	}
+	return s.languageModelName
+}
+func (s *AWSSTT) Provider() string { return "Amazon Transcribe" }
 func (s *AWSSTT) Language() string {
 	if s == nil {
 		return ""

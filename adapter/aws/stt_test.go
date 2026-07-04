@@ -141,6 +141,27 @@ func TestAWSSTTCapabilitiesAdvertiseWordAlignment(t *testing.T) {
 	}
 }
 
+func TestAWSSTTModelAndProviderMatchReference(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+	if got := stt.Model(provider); got != "unknown" {
+		t.Fatalf("Model = %q, want unknown", got)
+	}
+	if got := stt.Provider(provider); got != "Amazon Transcribe" {
+		t.Fatalf("Provider = %q, want Amazon Transcribe", got)
+	}
+
+	custom, err := newAWSSTTWithClient(nil, WithAWSSTTLanguageModelName("support-model"))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient custom error = %v", err)
+	}
+	if got := stt.Model(custom); got != "support-model" {
+		t.Fatalf("custom Model = %q, want support-model", got)
+	}
+}
+
 func TestAWSSTTStreamInputDefaultsMatchReference(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil)
 	if err != nil {
