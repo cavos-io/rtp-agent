@@ -3865,6 +3865,26 @@ func TestAWSRealtimeSessionCloseCleansReferenceStreamAfterSendFailure(t *testing
 	}
 }
 
+func TestAWSRealtimeSessionRecycleClosesReferenceStreamAfterSendFailure(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.sendErr = errors.New("prompt end send failed")
+	err = awsSession.recycleForUpdatedTools(context.Background())
+	if err == nil {
+		t.Fatal("recycleForUpdatedTools error = nil, want prompt-end send failure")
+	}
+	if !stream.closed {
+		t.Fatal("provider stream closed = false, want recycle to release old stream after prompt-end send failure")
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyAudioOnlyEmitsReferenceEmptyGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic1(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

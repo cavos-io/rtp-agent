@@ -1886,13 +1886,18 @@ func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
 	s.awaitingAudioEndTurn = false
 	s.mu.Unlock()
 	if stream != nil {
+		var closeErr error
 		for _, event := range closeEvents {
 			if err := sendAWSRealtimeRawEvent(ctx, stream, event); err != nil {
-				return err
+				closeErr = err
+				break
 			}
 		}
-		if err := stream.Close(); err != nil {
-			return err
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
 	return s.start(ctx)
