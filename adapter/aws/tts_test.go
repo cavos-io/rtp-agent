@@ -556,8 +556,12 @@ func TestAWSTTSSynthesizeRequiresConfiguredClient(t *testing.T) {
 	if audio != nil {
 		t.Fatalf("Next audio = %+v, want nil without client", audio)
 	}
-	if err == nil || !strings.Contains(err.Error(), "client is not configured") {
-		t.Fatalf("Next error = %v, want configured-client error", err)
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "client is not configured") {
+		t.Fatalf("Next error = %v, want configured-client context", err)
 	}
 }
 
