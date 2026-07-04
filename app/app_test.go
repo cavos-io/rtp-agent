@@ -25,6 +25,8 @@ import (
 	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
 	speechv2pb "cloud.google.com/go/speech/apiv2/speechpb"
 	texttospeechpb "cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
+	"google.golang.org/genai"
+
 	"github.com/cavos-io/rtp-agent/adapter/anam"
 	"github.com/cavos-io/rtp-agent/adapter/anthropic"
 	"github.com/cavos-io/rtp-agent/adapter/assemblyai"
@@ -13378,11 +13380,53 @@ func TestDefaultConfigFromEnvSelectsGoogleLLM(t *testing.T) {
 	if app.Session == nil || app.Session.LLM == nil {
 		t.Fatal("Session LLM is nil")
 	}
-	if got := llm.Provider(app.Session.LLM); got != "google" {
-		t.Fatalf("LLM provider = %q, want google", got)
+	if got := llm.Provider(app.Session.LLM); got != "Gemini" {
+		t.Fatalf("LLM provider = %q, want Gemini", got)
 	}
 	if got := llm.Model(app.Session.LLM); got != "gemini-test" {
 		t.Fatalf("LLM model = %q, want gemini-test", got)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleLLMVertexModelOptions(t *testing.T) {
+	original := appNewGoogleLLM
+	defer func() { appNewGoogleLLM = original }()
+
+	var capturedAPIKey string
+	var capturedModel string
+	var capturedCfg appGoogleLLMConfig
+	appNewGoogleLLM = func(apiKey string, model string, cfg appGoogleLLMConfig) (llm.LLM, error) {
+		capturedAPIKey = apiKey
+		capturedModel = model
+		capturedCfg = cfg
+		return &fakeAppLLM{}, nil
+	}
+
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "gemini-live-2.5-flash-native-audio")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "vertexai=true,project=voice-project,location=asia-southeast1")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.Session == nil || app.Session.LLM == nil {
+		t.Fatal("Session LLM is nil")
+	}
+	if capturedAPIKey != "" {
+		t.Fatalf("api key = %q, want empty explicit Vertex API key", capturedAPIKey)
+	}
+	if capturedModel != "gemini-live-2.5-flash-native-audio" {
+		t.Fatalf("model = %q, want Vertex model", capturedModel)
+	}
+	if capturedCfg.vertexAI == nil || !*capturedCfg.vertexAI {
+		t.Fatalf("vertexAI = %#v, want true", capturedCfg.vertexAI)
+	}
+	if capturedCfg.project != "voice-project" {
+		t.Fatalf("project = %q, want voice-project", capturedCfg.project)
+	}
+	if capturedCfg.location != "asia-southeast1" {
+		t.Fatalf("location = %q, want asia-southeast1", capturedCfg.location)
 	}
 }
 
@@ -14784,6 +14828,396 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeModel(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeReferenceModelOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedAPIKey string
+	var capturedModel string
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(apiKey string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedAPIKey = apiKey
+		capturedModel = model
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Vertex AI", model: model}, nil
+	}
+
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL", "gemini-live-2.5-flash-native-audio")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "vertexai=true,project=voice-project,location=asia-southeast1,voice=Kore,language=id-ID,modalities=TEXT|AUDIO,turn_detection=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedAPIKey != "" {
+		t.Fatalf("api key = %q, want empty explicit Vertex API key", capturedAPIKey)
+	}
+	if capturedModel != "gemini-live-2.5-flash-native-audio" {
+		t.Fatalf("model = %q, want Vertex realtime model", capturedModel)
+	}
+	if capturedCfg.vertexAI == nil || !*capturedCfg.vertexAI {
+		t.Fatalf("vertexAI = %#v, want true", capturedCfg.vertexAI)
+	}
+	if capturedCfg.project != "voice-project" {
+		t.Fatalf("project = %q, want voice-project", capturedCfg.project)
+	}
+	if capturedCfg.location != "asia-southeast1" {
+		t.Fatalf("location = %q, want asia-southeast1", capturedCfg.location)
+	}
+	if capturedCfg.voice != "Kore" {
+		t.Fatalf("voice = %q, want Kore", capturedCfg.voice)
+	}
+	if capturedCfg.language != "id-ID" {
+		t.Fatalf("language = %q, want id-ID", capturedCfg.language)
+	}
+	if !reflect.DeepEqual(capturedCfg.modalities, []string{"TEXT", "AUDIO"}) {
+		t.Fatalf("modalities = %#v, want TEXT,AUDIO", capturedCfg.modalities)
+	}
+	if capturedCfg.turnDetection == nil || *capturedCfg.turnDetection {
+		t.Fatalf("turnDetection = %#v, want false", capturedCfg.turnDetection)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeTranscriptionOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "input_audio_transcription=false,output_audio_transcription=false")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.inputAudioTranscription == nil || *capturedCfg.inputAudioTranscription {
+		t.Fatalf("inputAudioTranscription = %#v, want false", capturedCfg.inputAudioTranscription)
+	}
+	if capturedCfg.outputAudioTranscription == nil || *capturedCfg.outputAudioTranscription {
+		t.Fatalf("outputAudioTranscription = %#v, want false", capturedCfg.outputAudioTranscription)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeGenerationOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "temperature=0.2,max_output_tokens=96,top_p=0.7,top_k=32")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.temperature == nil || *capturedCfg.temperature != 0.2 {
+		t.Fatalf("temperature = %#v, want 0.2", capturedCfg.temperature)
+	}
+	if capturedCfg.maxOutputTokens != 96 {
+		t.Fatalf("maxOutputTokens = %d, want 96", capturedCfg.maxOutputTokens)
+	}
+	if capturedCfg.topP == nil || *capturedCfg.topP != 0.7 {
+		t.Fatalf("topP = %#v, want 0.7", capturedCfg.topP)
+	}
+	if capturedCfg.topK != 32 {
+		t.Fatalf("topK = %d, want 32", capturedCfg.topK)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeProactivityOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "proactivity=true,enable_affective_dialog=true,api_version=v1alpha")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.proactivity == nil || !*capturedCfg.proactivity {
+		t.Fatalf("proactivity = %#v, want true", capturedCfg.proactivity)
+	}
+	if capturedCfg.affectiveDialog == nil || !*capturedCfg.affectiveDialog {
+		t.Fatalf("affectiveDialog = %#v, want true", capturedCfg.affectiveDialog)
+	}
+	if capturedCfg.apiVersion != "v1alpha" {
+		t.Fatalf("apiVersion = %q, want v1alpha", capturedCfg.apiVersion)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeInputConfigOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "automatic_activity_detection_disabled=true,activity_handling=NO_INTERRUPTION")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.realtimeInputConfig == nil || capturedCfg.realtimeInputConfig.AutomaticActivityDetection == nil {
+		t.Fatalf("realtimeInputConfig = %#v, want automatic activity detection config", capturedCfg.realtimeInputConfig)
+	}
+	if !capturedCfg.realtimeInputConfig.AutomaticActivityDetection.Disabled {
+		t.Fatalf("automatic activity disabled = false, want true")
+	}
+	if string(capturedCfg.realtimeInputConfig.ActivityHandling) != "NO_INTERRUPTION" {
+		t.Fatalf("activityHandling = %q, want NO_INTERRUPTION", capturedCfg.realtimeInputConfig.ActivityHandling)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeThinkingConfigOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "thinking_budget=64,include_thoughts=true,thinking_level=LOW")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.thinkingConfig == nil {
+		t.Fatal("thinkingConfig = nil, want reference config")
+	}
+	if capturedCfg.thinkingConfig.ThinkingBudget == nil || *capturedCfg.thinkingConfig.ThinkingBudget != 64 {
+		t.Fatalf("thinkingBudget = %#v, want 64", capturedCfg.thinkingConfig.ThinkingBudget)
+	}
+	if !capturedCfg.thinkingConfig.IncludeThoughts {
+		t.Fatal("includeThoughts = false, want true")
+	}
+	if capturedCfg.thinkingConfig.ThinkingLevel != "LOW" {
+		t.Fatalf("thinkingLevel = %q, want LOW", capturedCfg.thinkingConfig.ThinkingLevel)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeContextWindowOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "context_window_trigger_tokens=4096,context_window_target_tokens=2048")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.contextWindowCompression == nil {
+		t.Fatal("contextWindowCompression = nil, want reference config")
+	}
+	if capturedCfg.contextWindowCompression.TriggerTokens == nil || *capturedCfg.contextWindowCompression.TriggerTokens != 4096 {
+		t.Fatalf("triggerTokens = %#v, want 4096", capturedCfg.contextWindowCompression.TriggerTokens)
+	}
+	if capturedCfg.contextWindowCompression.SlidingWindow == nil ||
+		capturedCfg.contextWindowCompression.SlidingWindow.TargetTokens == nil ||
+		*capturedCfg.contextWindowCompression.SlidingWindow.TargetTokens != 2048 {
+		t.Fatalf("slidingWindow = %#v, want target tokens 2048", capturedCfg.contextWindowCompression.SlidingWindow)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeMediaResolutionOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "media_resolution=MEDIA_RESOLUTION_HIGH")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.mediaResolution != genai.MediaResolutionHigh {
+		t.Fatalf("mediaResolution = %q, want %q", capturedCfg.mediaResolution, genai.MediaResolutionHigh)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeSessionResumptionOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "session_resumption_handle=resume-old")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.sessionResumptionHandle != "resume-old" {
+		t.Fatalf("sessionResumptionHandle = %q, want resume-old", capturedCfg.sessionResumptionHandle)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeConnectOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "connect_max_retry=1,connect_timeout_ms=1500,connect_retry_interval_ms=250")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.connectOptions == nil {
+		t.Fatal("connectOptions = nil, want reference connect options")
+	}
+	if capturedCfg.connectOptions.MaxRetry != 1 {
+		t.Fatalf("MaxRetry = %d, want 1", capturedCfg.connectOptions.MaxRetry)
+	}
+	if capturedCfg.connectOptions.Timeout != 1500*time.Millisecond {
+		t.Fatalf("Timeout = %v, want 1500ms", capturedCfg.connectOptions.Timeout)
+	}
+	if capturedCfg.connectOptions.RetryInterval != 250*time.Millisecond {
+		t.Fatalf("RetryInterval = %v, want 250ms", capturedCfg.connectOptions.RetryInterval)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeToolResponseSchedulingOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "tool_response_scheduling=INTERRUPT")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.toolResponseScheduling != genai.FunctionResponseSchedulingInterrupt {
+		t.Fatalf("toolResponseScheduling = %q, want %q", capturedCfg.toolResponseScheduling, genai.FunctionResponseSchedulingInterrupt)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeToolBehaviorOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "tool_behavior=NON_BLOCKING")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.toolBehavior != genai.BehaviorNonBlocking {
+		t.Fatalf("toolBehavior = %q, want %q", capturedCfg.toolBehavior, genai.BehaviorNonBlocking)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
@@ -14878,6 +15312,19 @@ type fakeAppLLMStream struct{}
 
 func (f *fakeAppLLMStream) Next() (*llm.ChatChunk, error) { return nil, io.EOF }
 func (f *fakeAppLLMStream) Close() error                  { return nil }
+
+type fakeAppRealtimeModel struct {
+	provider string
+	model    string
+}
+
+func (f fakeAppRealtimeModel) Capabilities() llm.RealtimeCapabilities {
+	return llm.RealtimeCapabilities{}
+}
+func (f fakeAppRealtimeModel) Session() (llm.RealtimeSession, error) { return nil, nil }
+func (f fakeAppRealtimeModel) Close() error                          { return nil }
+func (f fakeAppRealtimeModel) Provider() string                      { return f.provider }
+func (f fakeAppRealtimeModel) Model() string                         { return f.model }
 
 type fakeEvalLLM struct {
 	stream llm.LLMStream

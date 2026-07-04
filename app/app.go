@@ -110,6 +110,7 @@ import (
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
+	"google.golang.org/genai"
 )
 
 var appNewAgoraChannelClient = workeragora.NewSDKChannelClient
@@ -135,6 +136,130 @@ type appGoogleTTSConfig struct {
 	customPronunciations *texttospeechpb.CustomPronunciations
 }
 
+type appGoogleLLMConfig struct {
+	vertexAI *bool
+	project  string
+	location string
+}
+
+func (c appGoogleLLMConfig) options() []adaptergoogle.GoogleLLMOption {
+	opts := []adaptergoogle.GoogleLLMOption{}
+	if c.vertexAI != nil {
+		opts = append(opts, adaptergoogle.WithGoogleLLMVertexAI(*c.vertexAI))
+	}
+	if c.project != "" {
+		opts = append(opts, adaptergoogle.WithGoogleLLMProject(c.project))
+	}
+	if c.location != "" {
+		opts = append(opts, adaptergoogle.WithGoogleLLMLocation(c.location))
+	}
+	return opts
+}
+
+type appGoogleRealtimeConfig struct {
+	vertexAI                 *bool
+	project                  string
+	location                 string
+	voice                    string
+	language                 string
+	modalities               []string
+	turnDetection            *bool
+	inputAudioTranscription  *bool
+	outputAudioTranscription *bool
+	temperature              *float64
+	maxOutputTokens          int
+	topP                     *float64
+	topK                     int
+	proactivity              *bool
+	affectiveDialog          *bool
+	apiVersion               string
+	realtimeInputConfig      *genai.RealtimeInputConfig
+	contextWindowCompression *genai.ContextWindowCompressionConfig
+	thinkingConfig           *genai.ThinkingConfig
+	mediaResolution          genai.MediaResolution
+	sessionResumptionHandle  string
+	connectOptions           *llm.APIConnectOptions
+	toolResponseScheduling   genai.FunctionResponseScheduling
+	toolBehavior             genai.Behavior
+}
+
+func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
+	opts := []adaptergoogle.GoogleRealtimeOption{adaptergoogle.WithGoogleRealtimeModel(model)}
+	if c.vertexAI != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeVertexAI(*c.vertexAI))
+	}
+	if c.project != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeProject(c.project))
+	}
+	if c.location != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeLocation(c.location))
+	}
+	if c.voice != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeVoice(c.voice))
+	}
+	if c.language != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeLanguage(c.language))
+	}
+	if len(c.modalities) > 0 {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeModalities(c.modalities))
+	}
+	if c.turnDetection != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeTurnDetection(*c.turnDetection))
+	}
+	if c.inputAudioTranscription != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeInputAudioTranscription(*c.inputAudioTranscription))
+	}
+	if c.outputAudioTranscription != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeOutputAudioTranscription(*c.outputAudioTranscription))
+	}
+	if c.temperature != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeTemperature(*c.temperature))
+	}
+	if c.maxOutputTokens > 0 {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeMaxOutputTokens(c.maxOutputTokens))
+	}
+	if c.topP != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeTopP(*c.topP))
+	}
+	if c.topK > 0 {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeTopK(c.topK))
+	}
+	if c.proactivity != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeProactivity(*c.proactivity))
+	}
+	if c.affectiveDialog != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeAffectiveDialog(*c.affectiveDialog))
+	}
+	if c.apiVersion != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeAPIVersion(c.apiVersion))
+	}
+	if c.realtimeInputConfig != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeInputConfig(c.realtimeInputConfig))
+	}
+	if c.contextWindowCompression != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeContextWindowCompression(c.contextWindowCompression))
+	}
+	if c.thinkingConfig != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeThinkingConfig(c.thinkingConfig))
+	}
+	if c.mediaResolution != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeMediaResolution(c.mediaResolution))
+	}
+	if c.sessionResumptionHandle != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeSessionResumptionHandle(c.sessionResumptionHandle))
+	}
+	if c.connectOptions != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeConnectOptions(*c.connectOptions))
+	}
+	if c.toolResponseScheduling != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeToolResponseScheduling(c.toolResponseScheduling))
+	}
+	if c.toolBehavior != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeToolBehavior(c.toolBehavior))
+	}
+	return opts
+}
+
 type appGoogleSTTConfig struct {
 	model                  string
 	location               string
@@ -158,6 +283,14 @@ type appGoogleSTTConfig struct {
 	adaptation             *speechpb.SpeechAdaptation
 	adaptationV2           *speechv2pb.SpeechAdaptation
 	endpointingSensitivity string
+}
+
+var appNewGoogleLLM = func(apiKey string, model string, cfg appGoogleLLMConfig) (llm.LLM, error) {
+	return adaptergoogle.NewGoogleLLM(apiKey, model, cfg.options()...)
+}
+
+var appNewGoogleRealtime = func(apiKey string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+	return adaptergoogle.NewRealtimeModel(apiKey, cfg.options(model)...)
 }
 
 var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (corestt.STT, error) {
@@ -2556,7 +2689,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		}
 		return anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, llmOpts...)
 	case providerGoogle:
-		return adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
+		return appNewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel, googleLLMConfigFromAppConfig(cfg))
 	case providerBaseten:
 		return baseten.NewBasetenLLM("", cfg.LLMModel)
 	case providerLangChain:
@@ -5069,7 +5202,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerGoogle:
-		provider, err := adaptergoogle.NewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel)
+		provider, err := appNewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel, googleLLMConfigFromAppConfig(cfg))
 		if err != nil {
 			return nil, err
 		}
@@ -6845,7 +6978,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerOpenAI:
 		return openai.NewRealtimeModel(cfg.OpenAIAPIKey, cfg.RealtimeModel), nil
 	case providerGoogle:
-		return adaptergoogle.NewRealtimeModel(cfg.GoogleAPIKey, adaptergoogle.WithGoogleRealtimeModel(cfg.RealtimeModel))
+		return appNewGoogleRealtime(cfg.GoogleAPIKey, cfg.RealtimeModel, googleRealtimeConfigFromAppConfig(cfg))
 	case providerXAI:
 		opts := []xai.XaiRealtimeOption{}
 		if cfg.RealtimeModel != "" {
@@ -6983,6 +7116,126 @@ func llmExtraParamsFromConfig(cfg AppConfig) map[string]any {
 		return nil
 	}
 	return params
+}
+
+func googleLLMConfigFromAppConfig(cfg AppConfig) appGoogleLLMConfig {
+	googleCfg := appGoogleLLMConfig{}
+	if vertexAI := modelOptionBool(cfg.LLMModelOptions, "vertexai"); vertexAI != nil {
+		googleCfg.vertexAI = vertexAI
+	}
+	googleCfg.project = modelOptionString(cfg.LLMModelOptions, "project")
+	googleCfg.location = modelOptionString(cfg.LLMModelOptions, "location")
+	return googleCfg
+}
+
+func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
+	googleCfg := appGoogleRealtimeConfig{}
+	if vertexAI := modelOptionBool(cfg.RealtimeModelOptions, "vertexai"); vertexAI != nil {
+		googleCfg.vertexAI = vertexAI
+	}
+	googleCfg.project = modelOptionString(cfg.RealtimeModelOptions, "project")
+	googleCfg.location = modelOptionString(cfg.RealtimeModelOptions, "location")
+	googleCfg.voice = modelOptionString(cfg.RealtimeModelOptions, "voice")
+	googleCfg.language = modelOptionString(cfg.RealtimeModelOptions, "language")
+	googleCfg.modalities = modelOptionStringList(cfg.RealtimeModelOptions, "modalities")
+	if turnDetection := modelOptionBool(cfg.RealtimeModelOptions, "turn_detection"); turnDetection != nil {
+		googleCfg.turnDetection = turnDetection
+	}
+	if inputAudioTranscription := modelOptionBool(cfg.RealtimeModelOptions, "input_audio_transcription"); inputAudioTranscription != nil {
+		googleCfg.inputAudioTranscription = inputAudioTranscription
+	}
+	if outputAudioTranscription := modelOptionBool(cfg.RealtimeModelOptions, "output_audio_transcription"); outputAudioTranscription != nil {
+		googleCfg.outputAudioTranscription = outputAudioTranscription
+	}
+	googleCfg.temperature = modelOptionFloat(cfg.RealtimeModelOptions, "temperature")
+	googleCfg.maxOutputTokens = modelOptionInt(cfg.RealtimeModelOptions, "max_output_tokens")
+	googleCfg.topP = modelOptionFloat(cfg.RealtimeModelOptions, "top_p")
+	googleCfg.topK = modelOptionInt(cfg.RealtimeModelOptions, "top_k")
+	if proactivity := modelOptionBool(cfg.RealtimeModelOptions, "proactivity"); proactivity != nil {
+		googleCfg.proactivity = proactivity
+	}
+	if affectiveDialog := modelOptionBool(cfg.RealtimeModelOptions, "enable_affective_dialog"); affectiveDialog != nil {
+		googleCfg.affectiveDialog = affectiveDialog
+	}
+	googleCfg.apiVersion = modelOptionString(cfg.RealtimeModelOptions, "api_version")
+	googleCfg.realtimeInputConfig = googleRealtimeInputConfigFromOptions(cfg.RealtimeModelOptions)
+	googleCfg.contextWindowCompression = googleRealtimeContextWindowCompressionFromOptions(cfg.RealtimeModelOptions)
+	googleCfg.thinkingConfig = googleRealtimeThinkingConfigFromOptions(cfg.RealtimeModelOptions)
+	googleCfg.mediaResolution = genai.MediaResolution(modelOptionString(cfg.RealtimeModelOptions, "media_resolution"))
+	googleCfg.sessionResumptionHandle = modelOptionString(cfg.RealtimeModelOptions, "session_resumption_handle")
+	googleCfg.connectOptions = googleRealtimeConnectOptionsFromOptions(cfg.RealtimeModelOptions)
+	googleCfg.toolResponseScheduling = genai.FunctionResponseScheduling(modelOptionString(cfg.RealtimeModelOptions, "tool_response_scheduling"))
+	googleCfg.toolBehavior = genai.Behavior(modelOptionString(cfg.RealtimeModelOptions, "tool_behavior"))
+	return googleCfg
+}
+
+func googleRealtimeConnectOptionsFromOptions(options map[string]any) *llm.APIConnectOptions {
+	connectOptions := llm.DefaultAPIConnectOptions()
+	configured := false
+	if maxRetry, ok := modelOptionIntValue(options, "connect_max_retry"); ok {
+		connectOptions.MaxRetry = maxRetry
+		configured = true
+	}
+	if timeoutMS, ok := modelOptionIntValue(options, "connect_timeout_ms"); ok {
+		connectOptions.Timeout = time.Duration(timeoutMS) * time.Millisecond
+		configured = true
+	}
+	if retryIntervalMS, ok := modelOptionIntValue(options, "connect_retry_interval_ms"); ok {
+		connectOptions.RetryInterval = time.Duration(retryIntervalMS) * time.Millisecond
+		configured = true
+	}
+	if !configured {
+		return nil
+	}
+	return &connectOptions
+}
+
+func googleRealtimeContextWindowCompressionFromOptions(options map[string]any) *genai.ContextWindowCompressionConfig {
+	var config genai.ContextWindowCompressionConfig
+	if trigger, ok := modelOptionIntValue(options, "context_window_trigger_tokens"); ok {
+		value := int64(trigger)
+		config.TriggerTokens = &value
+	}
+	if target, ok := modelOptionIntValue(options, "context_window_target_tokens"); ok {
+		value := int64(target)
+		config.SlidingWindow = &genai.SlidingWindow{TargetTokens: &value}
+	}
+	if config.TriggerTokens == nil && config.SlidingWindow == nil {
+		return nil
+	}
+	return &config
+}
+
+func googleRealtimeThinkingConfigFromOptions(options map[string]any) *genai.ThinkingConfig {
+	var config genai.ThinkingConfig
+	if budget, ok := modelOptionIntValue(options, "thinking_budget"); ok {
+		value := int32(budget)
+		config.ThinkingBudget = &value
+	}
+	if includeThoughts := modelOptionBool(options, "include_thoughts"); includeThoughts != nil {
+		config.IncludeThoughts = *includeThoughts
+	}
+	if level := modelOptionString(options, "thinking_level"); level != "" {
+		config.ThinkingLevel = genai.ThinkingLevel(level)
+	}
+	if config.ThinkingBudget == nil && !config.IncludeThoughts && config.ThinkingLevel == "" {
+		return nil
+	}
+	return &config
+}
+
+func googleRealtimeInputConfigFromOptions(options map[string]any) *genai.RealtimeInputConfig {
+	var config genai.RealtimeInputConfig
+	if disabled := modelOptionBool(options, "automatic_activity_detection_disabled"); disabled != nil {
+		config.AutomaticActivityDetection = &genai.AutomaticActivityDetection{Disabled: *disabled}
+	}
+	if activityHandling := modelOptionString(options, "activity_handling"); activityHandling != "" {
+		config.ActivityHandling = genai.ActivityHandling(activityHandling)
+	}
+	if config.AutomaticActivityDetection == nil && config.ActivityHandling == "" {
+		return nil
+	}
+	return &config
 }
 
 var googleLLMExtraParamKeys = []string{
