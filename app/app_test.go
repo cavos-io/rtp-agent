@@ -14844,7 +14844,7 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeReferenceModelOptions(t *testi
 
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
 	t.Setenv("RTP_AGENT_REALTIME_MODEL", "gemini-live-2.5-flash-native-audio")
-	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "vertexai=true,project=voice-project,location=asia-southeast1,voice=Kore,language=id-ID,modalities=TEXT|AUDIO,turn_detection=false")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "vertexai=true,project=voice-project,location=asia-southeast1,voice=Kore,language=id-ID,modalities=TEXT|AUDIO,turn_detection=false,instructions=stay concise")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -14870,6 +14870,9 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeReferenceModelOptions(t *testi
 	}
 	if capturedCfg.voice != "Kore" {
 		t.Fatalf("voice = %q, want Kore", capturedCfg.voice)
+	}
+	if capturedCfg.instructions != "stay concise" {
+		t.Fatalf("instructions = %q, want stay concise", capturedCfg.instructions)
 	}
 	if capturedCfg.language != "id-ID" {
 		t.Fatalf("language = %q, want id-ID", capturedCfg.language)

@@ -161,6 +161,7 @@ type appGoogleRealtimeConfig struct {
 	project                  string
 	location                 string
 	voice                    string
+	instructions             string
 	language                 string
 	modalities               []string
 	turnDetection            *bool
@@ -199,6 +200,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.voice != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeVoice(c.voice))
+	}
+	if c.instructions != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeInstructions(c.instructions))
 	}
 	if c.language != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeLanguage(c.language))
@@ -7148,6 +7152,7 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.project = modelOptionString(cfg.RealtimeModelOptions, "project")
 	googleCfg.location = modelOptionString(cfg.RealtimeModelOptions, "location")
 	googleCfg.voice = modelOptionString(cfg.RealtimeModelOptions, "voice")
+	googleCfg.instructions = modelOptionString(cfg.RealtimeModelOptions, "instructions")
 	googleCfg.language = modelOptionString(cfg.RealtimeModelOptions, "language")
 	googleCfg.modalities = modelOptionStringList(cfg.RealtimeModelOptions, "modalities")
 	if turnDetection := modelOptionBool(cfg.RealtimeModelOptions, "turn_detection"); turnDetection != nil {
