@@ -1172,7 +1172,11 @@ func googleImagePart(image *llm.ImageContent) *genai.Part {
 
 func googleFunctionCallPart(fc *llm.FunctionCall, thoughtSignatures map[string][]byte) (*genai.Part, error) {
 	args := make(map[string]any)
-	if err := json.Unmarshal([]byte(fc.Arguments), &args); err != nil {
+	arguments := fc.Arguments
+	if arguments == "" {
+		arguments = "{}"
+	}
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
 		return nil, fmt.Errorf("google function call arguments: %w", err)
 	}
 	part := genai.NewPartFromFunctionCall(fc.Name, args)
