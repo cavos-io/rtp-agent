@@ -2124,7 +2124,10 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 type googleRealtimeInputAudioNormalizer struct {
 	inputRate     uint32
 	inputChannels uint32
-	pending       []int16
+	inputSamples  uint64
+	outputSamples uint64
+	lastSample    int16
+	hasTail       bool
 }
 
 func (n *googleRealtimeInputAudioNormalizer) Normalize(frame *model.AudioFrame) (*model.AudioFrame, error) {
@@ -2149,43 +2152,37 @@ func (n *googleRealtimeInputAudioNormalizer) Normalize(frame *model.AudioFrame) 
 		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
 	}
 	if n.inputRate != frame.SampleRate || n.inputChannels != frame.NumChannels {
-		n.pending = nil
 		n.inputRate = frame.SampleRate
 		n.inputChannels = frame.NumChannels
+		n.inputSamples = 0
+		n.outputSamples = 0
+		n.lastSample = 0
+		n.hasTail = false
 	}
 	if frame.SamplesPerChannel == 0 {
 		return nil, nil
 	}
 
-	mono := make([]int16, int(frame.SamplesPerChannel))
+	prevInputSamples := n.inputSamples
+	nextInputSamples := prevInputSamples + uint64(frame.SamplesPerChannel)
+	prevOutputSamples := n.outputSamples
+	nextOutputSamples := nextInputSamples * uint64(googleRealtimeInputSampleRate) / uint64(frame.SampleRate)
+	outSamples := uint32(nextOutputSamples - prevOutputSamples)
+	out := make([]byte, int(outSamples*googleRealtimeInputChannels*2))
 	channels := int(frame.NumChannels)
-	for sample := 0; sample < int(frame.SamplesPerChannel); sample++ {
-		sum := 0
-		for ch := 0; ch < channels; ch++ {
-			offset := (sample*channels + ch) * 2
-			sum += int(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
-		}
-		mono[sample] = int16(sum / channels)
+	previousSample := n.lastSample
+	hasPrevious := n.hasTail
+	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
+		srcPos := (prevOutputSamples + uint64(outIdx)) * uint64(frame.SampleRate)
+		srcGlobalIdx := srcPos / uint64(googleRealtimeInputSampleRate)
+		frac := srcPos % uint64(googleRealtimeInputSampleRate)
+		sample := googleRealtimeInterpolatedInputSample(frame, srcGlobalIdx, frac, uint64(googleRealtimeInputSampleRate), prevInputSamples, frame.SamplesPerChannel, channels, previousSample, hasPrevious)
+		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(sample))
 	}
-	n.pending = append(n.pending, mono...)
-
-	outSamples := int(uint64(len(n.pending)) * uint64(googleRealtimeInputSampleRate) / uint64(frame.SampleRate))
-	if outSamples == 0 {
-		return nil, nil
-	}
-	out := make([]byte, outSamples*2)
-	for outIdx := 0; outIdx < outSamples; outIdx++ {
-		srcIdx := int(uint64(outIdx) * uint64(frame.SampleRate) / uint64(googleRealtimeInputSampleRate))
-		if srcIdx >= len(n.pending) {
-			srcIdx = len(n.pending) - 1
-		}
-		binary.LittleEndian.PutUint16(out[outIdx*2:], uint16(n.pending[srcIdx]))
-	}
-	consumed := int(uint64(outSamples) * uint64(frame.SampleRate) / uint64(googleRealtimeInputSampleRate))
-	if consumed > len(n.pending) {
-		consumed = len(n.pending)
-	}
-	n.pending = append(n.pending[:0], n.pending[consumed:]...)
+	n.inputSamples = nextInputSamples
+	n.outputSamples = nextOutputSamples
+	n.lastSample = googleRealtimeInputSample(frame, uint64(frame.SamplesPerChannel-1), frame.SamplesPerChannel, channels)
+	n.hasTail = nextInputSamples*uint64(googleRealtimeInputSampleRate)%uint64(frame.SampleRate) > 0
 
 	return &model.AudioFrame{
 		Data:              out,
@@ -2196,10 +2193,44 @@ func (n *googleRealtimeInputAudioNormalizer) Normalize(frame *model.AudioFrame) 
 	}, nil
 }
 
+func googleRealtimeInputSample(frame *model.AudioFrame, sampleIndex uint64, samplesPerChannel uint32, channelCount int) int16 {
+	if sampleIndex >= uint64(samplesPerChannel) {
+		sampleIndex = uint64(samplesPerChannel - 1)
+	}
+	var sum int32
+	for ch := 0; ch < channelCount; ch++ {
+		offset := (int(sampleIndex)*channelCount + ch) * 2
+		sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+	}
+	return int16(sum / int32(channelCount))
+}
+
+func googleRealtimeInterpolatedInputSample(frame *model.AudioFrame, sampleIndex uint64, frac uint64, denom uint64, frameStart uint64, samplesPerChannel uint32, channelCount int, previousSample int16, hasPrevious bool) int16 {
+	current := googleRealtimeInputSampleAt(frame, sampleIndex, frameStart, samplesPerChannel, channelCount, previousSample, hasPrevious)
+	if frac == 0 || denom == 0 {
+		return current
+	}
+	next := googleRealtimeInputSampleAt(frame, sampleIndex+1, frameStart, samplesPerChannel, channelCount, current, true)
+	return int16(int64(current) + (int64(next)-int64(current))*int64(frac)/int64(denom))
+}
+
+func googleRealtimeInputSampleAt(frame *model.AudioFrame, sampleIndex uint64, frameStart uint64, samplesPerChannel uint32, channelCount int, previousSample int16, hasPrevious bool) int16 {
+	if sampleIndex < frameStart {
+		if hasPrevious {
+			return previousSample
+		}
+		return googleRealtimeInputSample(frame, 0, samplesPerChannel, channelCount)
+	}
+	return googleRealtimeInputSample(frame, sampleIndex-frameStart, samplesPerChannel, channelCount)
+}
+
 func (n *googleRealtimeInputAudioNormalizer) reset() {
 	n.inputRate = 0
 	n.inputChannels = 0
-	n.pending = nil
+	n.inputSamples = 0
+	n.outputSamples = 0
+	n.lastSample = 0
+	n.hasTail = false
 }
 
 func (s *googleRealtimeSession) PushVideo(frame *images.VideoFrame) error {

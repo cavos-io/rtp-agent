@@ -1609,6 +1609,39 @@ func TestGoogleRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t *t
 	}
 }
 
+func TestGoogleRealtimeInputAudioNormalizerInterpolatesReferenceFractionalSamples(t *testing.T) {
+	var normalizer googleRealtimeInputAudioNormalizer
+	data := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(int16(i*100)))
+	}
+
+	frame, err := normalizer.Normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("Normalize error = %v", err)
+	}
+	if frame.SampleRate != 16000 {
+		t.Fatalf("SampleRate = %d, want 16000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want 1", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 36 {
+		t.Fatalf("SamplesPerChannel = %d, want 36", frame.SamplesPerChannel)
+	}
+	if got := int16(binary.LittleEndian.Uint16(frame.Data[0:2])); got != 0 {
+		t.Fatalf("first sample = %d, want 0", got)
+	}
+	if got := int16(binary.LittleEndian.Uint16(frame.Data[2:4])); got != 275 {
+		t.Fatalf("second sample = %d, want fractional interpolation sample 275", got)
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
