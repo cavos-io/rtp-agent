@@ -1112,6 +1112,32 @@ func TestAWSRealtimeSessionRestartsAfterReferenceRecoverableReadFailure(t *testi
 	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
 }
 
+func TestAWSRealtimeSessionDelaysRestartInteractiveTextAfterAudioStart(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	first.err = errors.New("ValidationException: System instability detected. Please retry your request.")
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+	awsSession := newAWSRealtimeSession(provider, client)
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "continue now"})
+	if err := awsSession.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	close(first.events)
+	assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+
+	audioAt, textAt := awsRealtimeAudioAndInteractiveTextStartTimes(t, second)
+	if gap := textAt.Sub(audioAt); gap < 40*time.Millisecond {
+		t.Fatalf("restart interactive text gap = %v, want reference delay after audio start", gap)
+	}
+}
+
 func TestAWSRealtimeSessionRestartsAfterReferenceModelTimeoutReadFailure(t *testing.T) {
 	first := newFakeAWSRealtimeStream()
 	second := newFakeAWSRealtimeStream()
@@ -2764,6 +2790,7 @@ func (c *fakeAWSRealtimeClient) InvokeModelWithBidirectionalStream(ctx context.C
 
 type fakeAWSRealtimeStream struct {
 	sent                  []string
+	sentAt                []time.Time
 	closed                bool
 	sendErr               error
 	err                   error
@@ -2830,6 +2857,31 @@ func awsRealtimeSentTextInputContents(t *testing.T, events []string) []string {
 	return contents
 }
 
+func awsRealtimeAudioAndInteractiveTextStartTimes(t *testing.T, stream *fakeAWSRealtimeStream) (time.Time, time.Time) {
+	t.Helper()
+	var audioAt, textAt time.Time
+	for i, raw := range stream.sent {
+		if i >= len(stream.sentAt) {
+			t.Fatalf("sent timestamp missing for event %d", i)
+		}
+		event := mustAWSRealtimeJSONEvent(t, raw)
+		if awsRealtimeNestedString(event, "event", "contentStart", "type") == "AUDIO" {
+			audioAt = stream.sentAt[i]
+			continue
+		}
+		body, _ := event["event"].(map[string]any)
+		start, _ := body["contentStart"].(map[string]any)
+		if start["type"] == "TEXT" && start["interactive"] == true {
+			textAt = stream.sentAt[i]
+			break
+		}
+	}
+	if audioAt.IsZero() || textAt.IsZero() {
+		t.Fatalf("audio/text start times missing, sent = %v", stream.sent)
+	}
+	return audioAt, textAt
+}
+
 func newFakeAWSRealtimeStream() *fakeAWSRealtimeStream {
 	return &fakeAWSRealtimeStream{events: make(chan awstypes.InvokeModelWithBidirectionalStreamOutput, 8)}
 }
@@ -2852,12 +2904,14 @@ func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeMod
 	if err := json.Unmarshal(chunk.Value.Bytes, &decoded); err == nil {
 		encoded, _ := json.Marshal(decoded)
 		s.sent = append(s.sent, string(encoded))
+		s.sentAt = append(s.sentAt, time.Now())
 		if awsRealtimeNestedString(decoded, "event", "contentStart", "type") == "AUDIO" && !s.eventsStarted.Load() {
 			s.audioSentBeforeEvents.Store(true)
 		}
 		return nil
 	}
 	s.sent = append(s.sent, string(chunk.Value.Bytes))
+	s.sentAt = append(s.sentAt, time.Now())
 	return nil
 }
 

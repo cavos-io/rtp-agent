@@ -46,6 +46,7 @@ const (
 	defaultAWSRealtimeRecycleQuiet   = time.Second
 	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
 	defaultAWSRealtimeGenerateReply  = 10 * time.Second
+	defaultAWSRealtimeTextStartDelay = 50 * time.Millisecond
 	awsRealtimeCredentialExpirySlack = 3 * time.Minute
 	awsRealtimeMinRecycleDuration    = 10 * time.Second
 	awsRealtimeAudioModalities       = AWSRealtimeModalitiesAudio
@@ -134,6 +135,7 @@ type AWSRealtimeModel struct {
 	recycleQuietPeriod   time.Duration
 	toolRecycleDelay     time.Duration
 	generateReplyTimeout time.Duration
+	interactiveTextDelay time.Duration
 	credentialExpiry     func() (time.Time, bool)
 	maxTokensSet         bool
 	topPSet              bool
@@ -157,6 +159,7 @@ func NewAWSRealtimeModel(model string, opts ...AWSRealtimeOption) *AWSRealtimeMo
 		recycleQuietPeriod:   defaultAWSRealtimeRecycleQuiet,
 		toolRecycleDelay:     defaultAWSRealtimeToolRecycle,
 		generateReplyTimeout: defaultAWSRealtimeGenerateReply,
+		interactiveTextDelay: defaultAWSRealtimeTextStartDelay,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -559,6 +562,10 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 		return awsRealtimeStartupSendError(err)
 	}
 	if interactiveUserText != "" {
+		if err := s.waitInteractiveTextDelay(ctx); err != nil {
+			s.closeStartupStream()
+			return awsRealtimeStartupSendError(err)
+		}
 		if err := s.sendInteractiveUserText(ctx, &llm.ChatMessage{
 			ID:      uuid.NewString(),
 			Role:    llm.ChatRoleUser,
@@ -570,6 +577,24 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 	}
 	s.startSessionRecycleTimer()
 	return nil
+}
+
+func (s *awsRealtimeSession) waitInteractiveTextDelay(ctx context.Context) error {
+	delay := time.Duration(0)
+	if s.model != nil {
+		delay = s.model.interactiveTextDelay
+	}
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *awsRealtimeSession) startSessionRecycleTimer() {
