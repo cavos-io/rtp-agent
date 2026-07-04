@@ -1076,6 +1076,14 @@ func TestGoogleTTSLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSEmptyLocationOptionMatchesReferenceEndpoint(t *testing.T) {
+	cfg := googleTTSConfigFromOptions(WithGoogleTTSLocation(""))
+
+	if got := googleTTSEndpoint(cfg); got != "-texttospeech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
+	}
+}
+
 func TestGoogleTTSVoiceCloneKeyMatchesReference(t *testing.T) {
 	client := &fakeGoogleTTSClient{
 		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},

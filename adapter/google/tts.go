@@ -89,10 +89,8 @@ func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 
 func WithGoogleTTSLocation(location string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if location != "" {
-			cfg.location = location
-			cfg.locationSet = true
-		}
+		cfg.location = location
+		cfg.locationSet = true
 	}
 }
 
@@ -268,7 +266,7 @@ func validateGoogleTTSConfig(cfg googleTTSConfig) error {
 }
 
 func googleTTSEndpoint(cfg googleTTSConfig) string {
-	if cfg.location == "" || cfg.location == "global" {
+	if cfg.location == "global" || (cfg.location == "" && !cfg.locationSet) {
 		return ""
 	}
 	return cfg.location + "-texttospeech.googleapis.com"
