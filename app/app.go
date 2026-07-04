@@ -174,6 +174,7 @@ type appGoogleRealtimeConfig struct {
 	affectiveDialog          *bool
 	apiVersion               string
 	realtimeInputConfig      *genai.RealtimeInputConfig
+	thinkingConfig           *genai.ThinkingConfig
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -228,6 +229,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.realtimeInputConfig != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeInputConfig(c.realtimeInputConfig))
+	}
+	if c.thinkingConfig != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeThinkingConfig(c.thinkingConfig))
 	}
 	return opts
 }
@@ -7131,7 +7135,26 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	}
 	googleCfg.apiVersion = modelOptionString(cfg.RealtimeModelOptions, "api_version")
 	googleCfg.realtimeInputConfig = googleRealtimeInputConfigFromOptions(cfg.RealtimeModelOptions)
+	googleCfg.thinkingConfig = googleRealtimeThinkingConfigFromOptions(cfg.RealtimeModelOptions)
 	return googleCfg
+}
+
+func googleRealtimeThinkingConfigFromOptions(options map[string]any) *genai.ThinkingConfig {
+	var config genai.ThinkingConfig
+	if budget, ok := modelOptionIntValue(options, "thinking_budget"); ok {
+		value := int32(budget)
+		config.ThinkingBudget = &value
+	}
+	if includeThoughts := modelOptionBool(options, "include_thoughts"); includeThoughts != nil {
+		config.IncludeThoughts = *includeThoughts
+	}
+	if level := modelOptionString(options, "thinking_level"); level != "" {
+		config.ThinkingLevel = genai.ThinkingLevel(level)
+	}
+	if config.ThinkingBudget == nil && !config.IncludeThoughts && config.ThinkingLevel == "" {
+		return nil
+	}
+	return &config
 }
 
 func googleRealtimeInputConfigFromOptions(options map[string]any) *genai.RealtimeInputConfig {
