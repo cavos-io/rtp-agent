@@ -2680,6 +2680,44 @@ func TestGoogleRealtimeSessionReconnectsAfterReferenceGoAway(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionIgnoresStaleReferenceGoAway(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	thirdSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, thirdSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	googleSession := session.(*googleRealtimeSession)
+	googleSession.mu.Lock()
+	googleSession.liveSession = secondSession
+	googleSession.mu.Unlock()
+
+	if err := googleSession.handleServerMessage(firstSession, &genai.LiveServerMessage{GoAway: &genai.LiveServerGoAway{TimeLeft: time.Second}}); err != nil {
+		t.Fatalf("handleServerMessage error = %v", err)
+	}
+
+	if secondSession.closed {
+		t.Fatal("fresh active session closed by stale go_away")
+	}
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want unchanged second session", googleSession.liveSession)
+	}
+	if len(connector.configs) != 1 {
+		t.Fatalf("connect calls = %d, want no reconnect for stale go_away", len(connector.configs))
+	}
+	if thirdSession.closed {
+		t.Fatal("unused reconnect session closed = true, want never connected")
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

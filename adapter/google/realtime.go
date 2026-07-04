@@ -1494,7 +1494,7 @@ func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSessio
 			}
 			return
 		}
-		if err := s.handleServerMessage(message); err != nil {
+		if err := s.handleServerMessage(liveSession, message); err != nil {
 			s.reconnectActiveSession(liveSession,
 				fmt.Sprintf("google realtime receive failed: %v", err),
 				"failed to reconnect Google realtime after receive error: %v",
@@ -1606,7 +1606,7 @@ func (s *googleRealtimeSession) activeLiveSession() googleRealtimeLiveSession {
 	return s.liveSession
 }
 
-func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) error {
+func (s *googleRealtimeSession) handleServerMessage(liveSession googleRealtimeLiveSession, message *genai.LiveServerMessage) error {
 	if message == nil {
 		return nil
 	}
@@ -1683,7 +1683,7 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 		s.emitUsageMetrics(message.UsageMetadata)
 	}
 	if message.GoAway != nil {
-		s.reconnectActiveSession(s.activeLiveSession(),
+		s.reconnectActiveSession(liveSession,
 			"google realtime received go_away",
 			"failed to reconnect Google realtime after go_away: %v",
 		)
