@@ -45,6 +45,7 @@ type AWSSTT struct {
 	languageOptionsSet                bool
 	preferredLanguage                 types.LanguageCode
 	vocabularyNames                   string
+	vocabularyNamesSet                bool
 	vocabularyFilterNames             string
 	streams                           map[*awsSTTStream]struct{}
 	closed                            bool
@@ -191,6 +192,7 @@ func WithAWSSTTPreferredLanguage(language types.LanguageCode) AWSSTTOption {
 func WithAWSSTTVocabularyNames(names string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.vocabularyNames = names
+		s.vocabularyNamesSet = true
 	}
 }
 
@@ -413,7 +415,7 @@ func applyAWSSTTLanguageDetectionOptions(input *transcribestreaming.StartStreamT
 	if s.preferredLanguage != "" {
 		input.PreferredLanguage = s.preferredLanguage
 	}
-	if s.vocabularyNames != "" {
+	if s.vocabularyNamesSet {
 		input.VocabularyNames = aws.String(s.vocabularyNames)
 	}
 	if s.vocabularyFilterNames != "" {
