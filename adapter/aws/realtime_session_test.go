@@ -2088,6 +2088,7 @@ func TestAWSRealtimeSessionClosesReferenceGenerationBeforeBargeInSpeechStart(t *
 	session.handleResponseEvent(map[string]any{
 		"event": map[string]any{
 			"textOutput": map[string]any{
+				"role":      "ASSISTANT",
 				"content":   awsRealtimeBargeInContent,
 				"contentId": "barge-in-1",
 			},
@@ -2096,6 +2097,31 @@ func TestAWSRealtimeSessionClosesReferenceGenerationBeforeBargeInSpeechStart(t *
 	if !checked {
 		t.Fatal("barge-in did not emit speech_started")
 	}
+}
+
+func TestAWSRealtimeSessionMissingRoleBargeInClosesGenerationWithoutSpeechStart(t *testing.T) {
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
+	defer session.Close()
+	generation, _ := session.ensureGenerationWithCreated("response-1")
+
+	session.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{
+				"content":   awsRealtimeBargeInContent,
+				"contentId": "barge-in-1",
+			},
+		},
+	})
+
+	select {
+	case _, ok := <-generation.textCh:
+		if ok {
+			t.Fatal("generation TextCh still open, want handler to close on barge-in sentinel")
+		}
+	default:
+		t.Fatal("generation TextCh still open, want handler to close on barge-in sentinel")
+	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
 }
 
 func TestAWSRealtimeSessionMarksReferenceAssistantMessageInterruptedOnBargeIn(t *testing.T) {
