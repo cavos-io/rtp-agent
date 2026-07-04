@@ -20,31 +20,100 @@ import (
 type GoogleLLM struct {
 	client            *genai.Client
 	model             string
+	vertexAI          bool
 	thoughtMu         sync.RWMutex
 	thoughtSignatures map[string][]byte
 }
 
-func NewGoogleLLM(apiKey string, model string) (*GoogleLLM, error) {
-	if model == "" {
-		model = "gemini-2.5-flash"
+type GoogleLLMOption func(*googleLLMOptions)
+
+type googleLLMOptions struct {
+	vertexAI    bool
+	vertexAISet bool
+	project     string
+	location    string
+}
+
+func WithGoogleLLMVertexAI(enabled bool) GoogleLLMOption {
+	return func(options *googleLLMOptions) {
+		options.vertexAI = enabled
+		options.vertexAISet = true
 	}
-	resolvedAPIKey := resolveGoogleAPIKey(apiKey)
-	if resolvedAPIKey == "" {
-		return nil, errors.New("google API key is required either via api_key or GOOGLE_API_KEY environment variable")
+}
+
+func WithGoogleLLMProject(project string) GoogleLLMOption {
+	return func(options *googleLLMOptions) {
+		options.project = project
+	}
+}
+
+func WithGoogleLLMLocation(location string) GoogleLLMOption {
+	return func(options *googleLLMOptions) {
+		options.location = location
+	}
+}
+
+func NewGoogleLLM(apiKey string, model string, opts ...GoogleLLMOption) (*GoogleLLM, error) {
+	clientConfig, model, vertexAI, err := googleLLMClientConfig(apiKey, model, opts...)
+	if err != nil {
+		return nil, err
 	}
 	ctx := context.Background()
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  resolvedAPIKey,
-		Backend: genai.BackendGeminiAPI,
-	})
+	client, err := genai.NewClient(ctx, clientConfig)
 	if err != nil {
 		return nil, err
 	}
 	return &GoogleLLM{
 		client:            client,
 		model:             model,
+		vertexAI:          vertexAI,
 		thoughtSignatures: make(map[string][]byte),
 	}, nil
+}
+
+func googleLLMClientConfig(apiKey string, model string, opts ...GoogleLLMOption) (*genai.ClientConfig, string, bool, error) {
+	if model == "" {
+		model = "gemini-2.5-flash"
+	}
+	options := &googleLLMOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(options)
+		}
+	}
+	vertexAI := googleLLMDefaultVertexAI()
+	if options.vertexAISet {
+		vertexAI = options.vertexAI
+	}
+	if vertexAI {
+		project := options.project
+		if project == "" {
+			project = os.Getenv("GOOGLE_CLOUD_PROJECT")
+		}
+		location := options.location
+		if location == "" {
+			location = os.Getenv("GOOGLE_CLOUD_LOCATION")
+		}
+		if location == "" {
+			location = "us-central1"
+		}
+		if project == "" || location == "" {
+			return nil, "", false, errors.New("Project is required for VertexAI via project option or GOOGLE_CLOUD_PROJECT environment variable")
+		}
+		return &genai.ClientConfig{
+			Backend:  genai.BackendVertexAI,
+			Project:  project,
+			Location: location,
+		}, model, true, nil
+	}
+	resolvedAPIKey := resolveGoogleAPIKey(apiKey)
+	if resolvedAPIKey == "" {
+		return nil, "", false, errors.New("google API key is required either via api_key or GOOGLE_API_KEY environment variable")
+	}
+	return &genai.ClientConfig{
+		APIKey:  resolvedAPIKey,
+		Backend: genai.BackendGeminiAPI,
+	}, model, false, nil
 }
 
 func resolveGoogleAPIKey(apiKey string) string {
@@ -54,6 +123,15 @@ func resolveGoogleAPIKey(apiKey string) string {
 	return os.Getenv("GOOGLE_API_KEY")
 }
 
+func googleLLMDefaultVertexAI() bool {
+	switch strings.ToLower(os.Getenv("GOOGLE_GENAI_USE_VERTEXAI")) {
+	case "true", "1":
+		return true
+	default:
+		return false
+	}
+}
+
 func googleModelRequiresThoughtSignatures(model string) bool {
 	model = strings.ToLower(model)
 	return strings.Contains(model, "gemini-3") || strings.Contains(model, "gemini-2.5")
@@ -61,6 +139,9 @@ func googleModelRequiresThoughtSignatures(model string) bool {
 
 func (l *GoogleLLM) Model() string { return l.model }
 func (l *GoogleLLM) Provider() string {
+	if l != nil && l.vertexAI {
+		return "Vertex AI"
+	}
 	return "Gemini"
 }
 
