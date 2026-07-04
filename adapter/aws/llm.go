@@ -752,6 +752,12 @@ func (s *awsLLMStream) readLoop() {
 		}
 		return
 	}
+	if s.closed {
+		if s.stream != nil {
+			_ = s.stream.Close()
+		}
+		return
+	}
 	for {
 		chunk, err := s.nextFromProvider()
 		if err != nil {

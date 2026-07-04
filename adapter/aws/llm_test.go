@@ -361,6 +361,47 @@ func TestAWSLLMStreamCloseUnblocksPendingReferenceStartupNext(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamCloseClosesLateReferenceProviderStartup(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	client := &lateAWSLLMClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		out:     newFakeAWSLLMOutput(reader),
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider stream did not start")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(client.release)
+
+	deadline := time.After(time.Second)
+	for !reader.closed {
+		select {
+		case <-deadline:
+			t.Fatal("late provider stream closed = false, want Close to release Bedrock stream returned after cancellation")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
 func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
 	provider := &AWSLLM{
 		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
@@ -1461,6 +1502,12 @@ type blockingAWSLLMClient struct {
 	release chan struct{}
 }
 
+type lateAWSLLMClient struct {
+	started chan struct{}
+	release chan struct{}
+	out     *bedrockruntime.ConverseStreamOutput
+}
+
 func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, input *bedrockruntime.ConverseStreamInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
 	if c.ctxCapture != nil {
 		*c.ctxCapture = ctx
@@ -1471,6 +1518,12 @@ func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, input *bedrockrunt
 	if c.err != nil {
 		return nil, c.err
 	}
+	return c.out, nil
+}
+
+func (c *lateAWSLLMClient) ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+	close(c.started)
+	<-c.release
 	return c.out, nil
 }
 
