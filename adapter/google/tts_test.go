@@ -704,6 +704,45 @@ func TestGoogleTTSUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSPreservesReferenceExplicitZeroSampleRate(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6, 7, 8}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSampleRate(0))
+
+	if got := provider.SampleRate(); got != 0 {
+		t.Fatalf("SampleRate = %d, want explicit zero", got)
+	}
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetSampleRateHertz(); got != 0 {
+		t.Fatalf("synthesize sample rate = %d, want explicit zero", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetSampleRateHertz(); got != 0 {
+		t.Fatalf("stream config sample rate = %d, want explicit zero", got)
+	}
+}
+
 func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {

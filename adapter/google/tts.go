@@ -163,10 +163,8 @@ func WithGoogleTTSVolumeGainDB(volumeGainDB float64) GoogleTTSOption {
 
 func WithGoogleTTSSampleRate(sampleRate int32) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if sampleRate > 0 {
-			cfg.sampleRate = sampleRate
-			cfg.sampleSet = true
-		}
+		cfg.sampleRate = sampleRate
+		cfg.sampleSet = true
 	}
 }
 
