@@ -1933,7 +1933,6 @@ func (s *googleRealtimeSession) closeGeneration() {
 	defer func() {
 		_ = recover()
 	}()
-	s.markGenerationCompleted()
 	s.generation.closed = true
 	if !s.outputAudioTranscription {
 		select {

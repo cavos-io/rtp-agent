@@ -3765,6 +3765,29 @@ func TestGoogleRealtimeSessionToolCallsEmitReferenceSpeechStopped(t *testing.T) 
 	}
 }
 
+func TestGoogleRealtimeSessionToolCallsDoNotMarkMetricsEnd(t *testing.T) {
+	session := &googleRealtimeSession{
+		ctx:     context.Background(),
+		eventCh: make(chan llm.RealtimeEvent, 8),
+		chatCtx: llm.EmptyChatContext(),
+		generation: &googleRealtimeGeneration{
+			responseID:   "GR_tool",
+			messageCh:    make(chan llm.MessageGeneration, 1),
+			functionCh:   make(chan *llm.FunctionCall, 1),
+			textCh:       make(chan string, 1),
+			audioCh:      make(chan *audiomodel.AudioFrame, 1),
+			modalitiesCh: make(chan []string, 1),
+			createdAt:    time.Now().Add(-2 * time.Second),
+		},
+	}
+
+	session.finishCurrentGeneration()
+
+	if !session.generation.completedAt.IsZero() {
+		t.Fatalf("completedAt = %v, want unset without provider generation_complete or turn_complete", session.generation.completedAt)
+	}
+}
+
 func TestGoogleRealtimeSessionToolCallsCommitReferenceTranscripts(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 2)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
