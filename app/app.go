@@ -4477,6 +4477,8 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	}
 	if cfg.TTSPitch != nil {
 		googleCfg.pitch = float64(*cfg.TTSPitch)
+	} else if pitch := modelOptionFloat(cfg.TTSModelOptions, "pitch"); pitch != nil {
+		googleCfg.pitch = *pitch
 	}
 	googleCfg.effectsProfileID = modelOptionString(cfg.TTSModelOptions, "effects_profile_id")
 	if volumeGainDB := modelOptionFloat(cfg.TTSModelOptions, "volume_gain_db"); volumeGainDB != nil {

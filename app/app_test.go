@@ -13599,6 +13599,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferencePitchOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"pitch": -1.5},
+	})
+
+	if googleCfg.pitch != -1.5 {
+		t.Fatalf("pitch = %v, want model option pitch", googleCfg.pitch)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"
