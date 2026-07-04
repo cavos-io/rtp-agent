@@ -17,6 +17,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
+	cavosmath "github.com/cavos-io/rtp-agent/library/math"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"google.golang.org/genai"
@@ -674,7 +675,13 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 func googleRealtimeConnectWithRetry(ctx context.Context, connector googleRealtimeConnector, modelName string, config *genai.LiveConnectConfig, options llm.APIConnectOptions) (googleRealtimeLiveSession, error) {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
-		liveSession, err := connector.Connect(ctx, modelName, config)
+		connectCtx := ctx
+		cancel := func() {}
+		if options.Timeout > 0 {
+			connectCtx, cancel = context.WithTimeout(ctx, options.Timeout)
+		}
+		liveSession, err := connector.Connect(connectCtx, modelName, config)
+		cancel()
 		if err == nil {
 			return liveSession, nil
 		}
@@ -955,7 +962,6 @@ type googleRealtimeSession struct {
 	inputAudio               *googleRealtimeInputAudioNormalizer
 	generation               *googleRealtimeGeneration
 	responseSeq              int
-	functionSeq              int
 	pendingReply             bool
 	pendingReplyAt           time.Time
 	sessionResumptionHandle  string
@@ -1145,7 +1151,7 @@ func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, vo
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
-	s.closeGeneration()
+	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
@@ -1221,7 +1227,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
-	s.closeGeneration()
+	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
@@ -1288,7 +1294,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	if oldSession != nil {
 		_ = oldSession.Close()
 	}
-	s.closeGeneration()
+	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
 		return err
@@ -1715,8 +1721,7 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 		}
 		callID := functionCall.ID
 		if callID == "" {
-			s.functionSeq++
-			callID = fmt.Sprintf("fnc-call-%d", s.functionSeq)
+			callID = cavosmath.ShortUUID("fnc-call-")
 		}
 		select {
 		case s.generation.functionCh <- &llm.FunctionCall{
@@ -1933,7 +1938,6 @@ func (s *googleRealtimeSession) closeGeneration() {
 	defer func() {
 		_ = recover()
 	}()
-	s.markGenerationCompleted()
 	s.generation.closed = true
 	if !s.outputAudioTranscription {
 		select {

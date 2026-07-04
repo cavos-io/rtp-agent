@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	texttospeech "cloud.google.com/go/texttospeech/apiv1"
 	"cloud.google.com/go/texttospeech/apiv1/texttospeechpb"
@@ -23,6 +24,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+const googleTTSRequestTimeout = 10 * time.Second
+
+var newGoogleTTSClient = func(ctx context.Context, opts ...option.ClientOption) (googleTTSClient, error) {
+	return texttospeech.NewClient(ctx, opts...)
+}
 
 type GoogleTTS struct {
 	mu      sync.Mutex
@@ -206,7 +213,6 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 		return nil, err
 	}
 
-	ctx := context.Background()
 	clientOpts, err := googleClientOptionsFromCredentialsFile(credentialsFile)
 	if err != nil {
 		return nil, err
@@ -215,7 +221,9 @@ func NewGoogleTTS(credentialsFile string, ttsOpts ...GoogleTTSOption) (*GoogleTT
 		clientOpts = append(clientOpts, option.WithEndpoint(endpoint))
 	}
 
-	client, err := texttospeech.NewClient(ctx, clientOpts...)
+	ctx, cancel := context.WithTimeout(context.Background(), googleTTSRequestTimeout)
+	defer cancel()
+	client, err := newGoogleTTSClient(ctx, clientOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +599,7 @@ func (s *googleTTSChunkedStream) ensureResponse() error {
 		return nil
 	}
 	s.requested = true
-	resp, err := s.client.SynthesizeSpeech(s.ctx, s.request)
+	resp, err := s.client.SynthesizeSpeech(s.ctx, s.request, gax.WithTimeout(googleTTSRequestTimeout))
 	if err != nil {
 		s.finalSent = true
 		if s.closed.Load() {
@@ -932,7 +940,7 @@ func (s *googleTTSSynthesizeStream) ensureActiveStreamLocked() (texttospeechpb.T
 	if s.active != nil {
 		return s.active, nil
 	}
-	stream, err := s.client.StreamingSynthesize(s.ctx)
+	stream, err := s.client.StreamingSynthesize(s.ctx, gax.WithTimeout(googleTTSRequestTimeout))
 	if err != nil {
 		return nil, err
 	}

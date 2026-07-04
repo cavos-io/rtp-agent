@@ -25,7 +25,10 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-const googleSTTMaxSessionDuration = 240 * time.Second
+const (
+	googleSTTMaxSessionDuration = 240 * time.Second
+	googleSTTRequestTimeout     = 10 * time.Second
+)
 
 type GoogleSTT struct {
 	mu                     sync.Mutex
@@ -582,11 +585,11 @@ func (s *GoogleSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language string, includeAlternativeLanguages bool) (speechpb.Speech_StreamingRecognizeClient, error) {
 	client, err := s.ensureClient(ctx)
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
-	stream, err := client.StreamingRecognize(ctx)
+	stream, err := client.StreamingRecognize(ctx, gax.WithTimeout(googleSTTRequestTimeout))
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	err = stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
@@ -599,7 +602,7 @@ func (s *GoogleSTT) newStreamingRecognizeStream(ctx context.Context, language st
 	})
 	if err != nil {
 		_ = stream.CloseSend()
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	return stream, nil
 }
@@ -615,7 +618,9 @@ func (s *GoogleSTT) ensureClient(ctx context.Context) (googleSpeechClient, error
 	if newClient == nil {
 		return nil, errors.New("google STT v1 client is not configured")
 	}
-	client, err := newClient(ctx)
+	clientCtx, cancel := context.WithTimeout(ctx, googleSTTRequestTimeout)
+	defer cancel()
+	client, err := newClient(clientCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -631,15 +636,15 @@ func (s *GoogleSTT) ensureClient(ctx context.Context) (googleSpeechClient, error
 func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language string, includeAlternativeLanguages bool) (speechv2pb.Speech_StreamingRecognizeClient, error) {
 	clientV2, err := s.ensureClientV2(ctx)
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	recognizer := googleSTTRecognizer(s)
 	if recognizer == "" {
-		return nil, googleSTTStreamError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
+		return nil, googleSTTStartupError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
 	}
-	stream, err := clientV2.StreamingRecognize(ctx)
+	stream, err := clientV2.StreamingRecognize(ctx, gax.WithTimeout(googleSTTRequestTimeout))
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	err = stream.Send(&speechv2pb.StreamingRecognizeRequest{
 		Recognizer: recognizer,
@@ -649,7 +654,7 @@ func (s *GoogleSTT) newStreamingRecognizeStreamV2(ctx context.Context, language 
 	})
 	if err != nil {
 		_ = stream.CloseSend()
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTStartupError(err)
 	}
 	return stream, nil
 }
@@ -665,7 +670,9 @@ func (s *GoogleSTT) ensureClientV2(ctx context.Context) (googleSpeechV2Client, e
 	if newClientV2 == nil {
 		return nil, errors.New("google STT v2 client is not configured")
 	}
-	clientV2, err := newClientV2(ctx)
+	clientCtx, cancel := context.WithTimeout(ctx, googleSTTRequestTimeout)
+	defer cancel()
+	clientV2, err := newClientV2(clientCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -695,11 +702,11 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if googleSTTUsesV2(s.model) {
 		clientV2, err := s.ensureClientV2(ctx)
 		if err != nil {
-			return nil, googleSTTStreamError(err)
+			return nil, googleSTTRecognizeError(err)
 		}
 		recognizer := googleSTTRecognizer(s)
 		if recognizer == "" {
-			return nil, googleSTTStreamError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
+			return nil, googleSTTRecognizeError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
 		}
 		resp, err := clientV2.Recognize(ctx, &speechv2pb.RecognizeRequest{
 			Recognizer: recognizer,
@@ -707,19 +714,23 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 			AudioSource: &speechv2pb.RecognizeRequest_Content{
 				Content: buf.Bytes(),
 			},
-		})
+		}, gax.WithTimeout(googleSTTRequestTimeout))
 		if err != nil {
-			return nil, googleSTTStreamError(err)
+			return nil, googleSTTRecognizeError(err)
+		}
+		alternatives, err := googleSpeechDataFromRecognizeResultsV2Strict(resp.GetResults())
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(err.Error())
 		}
 		return &stt.SpeechEvent{
 			Type:         stt.SpeechEventFinalTranscript,
-			Alternatives: googleSpeechDataFromRecognizeResultsV2(resp.GetResults()),
+			Alternatives: alternatives,
 		}, nil
 	}
 
 	client, err := s.ensureClient(ctx)
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTRecognizeError(err)
 	}
 	resp, err := client.Recognize(ctx, &speechpb.RecognizeRequest{
 		Config: googleRecognitionConfigForFrames(s, language, !explicitLanguage, frames),
@@ -728,15 +739,19 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 				Content: buf.Bytes(),
 			},
 		},
-	})
+	}, gax.WithTimeout(googleSTTRequestTimeout))
 
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTRecognizeError(err)
 	}
 
+	alternatives, err := googleSpeechDataFromRecognizeResultsStrict(resp.Results)
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(err.Error())
+	}
 	return &stt.SpeechEvent{
 		Type:         stt.SpeechEventFinalTranscript,
-		Alternatives: googleSpeechDataFromRecognizeResults(resp.Results),
+		Alternatives: alternatives,
 	}, nil
 }
 
@@ -894,14 +909,21 @@ func googleEndpointingSensitivityV2(model string, value string) speechv2pb.Strea
 }
 
 func googleSTTRecognizer(s *GoogleSTT) string {
-	if s == nil || s.project == "" {
+	if s == nil {
+		return ""
+	}
+	project := s.project
+	if project == "" {
+		project = googleProjectFromADCEnv()
+	}
+	if project == "" {
 		return ""
 	}
 	location := s.location
 	if location == "" {
 		location = "global"
 	}
-	return "projects/" + s.project + "/locations/" + location + "/recognizers/_"
+	return "projects/" + project + "/locations/" + location + "/recognizers/_"
 }
 
 func googleAlternativeLanguageCodes(s *GoogleSTT, include bool) []string {
@@ -1059,6 +1081,15 @@ func googleSpeechDataFromRecognizeResults(results []*speechpb.SpeechRecognitionR
 	return []stt.SpeechData{data}
 }
 
+func googleSpeechDataFromRecognizeResultsStrict(results []*speechpb.SpeechRecognitionResult) ([]stt.SpeechData, error) {
+	for _, result := range results {
+		if len(result.GetAlternatives()) == 0 {
+			return nil, errors.New("google STT recognize result missing alternatives")
+		}
+	}
+	return googleSpeechDataFromRecognizeResults(results), nil
+}
+
 func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognitionResult) []stt.SpeechData {
 	if len(results) == 0 {
 		return []stt.SpeechData{}
@@ -1092,6 +1123,15 @@ func googleSpeechDataFromRecognizeResultsV2(results []*speechv2pb.SpeechRecognit
 	}
 	googleApplyRecognizeSpeechDataTimingV2(&data, firstWords, lastWords)
 	return []stt.SpeechData{data}
+}
+
+func googleSpeechDataFromRecognizeResultsV2Strict(results []*speechv2pb.SpeechRecognitionResult) ([]stt.SpeechData, error) {
+	for _, result := range results {
+		if len(result.GetAlternatives()) == 0 {
+			return nil, errors.New("google STT recognize result missing alternatives")
+		}
+	}
+	return googleSpeechDataFromRecognizeResultsV2(results), nil
 }
 
 func googleRecognizeResultLanguage(results []*speechpb.SpeechRecognitionResult) string {
@@ -1742,6 +1782,36 @@ func googleSTTStreamError(err error) error {
 		return llm.NewAPIStatusErrorWithRetryable(st.Message(), int(st.Code()), "", st.Message(), googleSTTStatusRetryable(st.Code()))
 	}
 	return err
+}
+
+func googleSTTStartupError(err error) error {
+	return googleSTTWrapGenericConnectionError(googleSTTStreamError(err))
+}
+
+func googleSTTRecognizeError(err error) error {
+	return googleSTTWrapGenericConnectionError(googleSTTStreamError(err))
+}
+
+func googleSTTWrapGenericConnectionError(mapped error) error {
+	if mapped == nil {
+		return nil
+	}
+	if errors.Is(mapped, context.Canceled) {
+		return mapped
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(mapped, &timeoutErr) {
+		return mapped
+	}
+	var statusErr *llm.APIStatusError
+	if errors.As(mapped, &statusErr) {
+		return mapped
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(mapped, &connectionErr) {
+		return mapped
+	}
+	return llm.NewAPIConnectionError(mapped.Error())
 }
 
 func googleSTTStatusRetryable(code codes.Code) bool {

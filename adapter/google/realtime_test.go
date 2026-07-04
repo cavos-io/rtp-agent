@@ -404,6 +404,67 @@ func TestGoogleRealtimeSessionVoiceUpdateReconnectsReferenceSession(t *testing.T
 	}
 }
 
+func TestGoogleRealtimeSessionOptionReconnectFinalizesReferenceGeneration(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeVoice("Puck"),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	rawSession, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer rawSession.Close()
+	session := rawSession.(*googleRealtimeSession)
+
+	if err := session.handleServerMessage(firstSession, &genai.LiveServerMessage{
+		ServerContent: &genai.LiveServerContent{
+			ModelTurn:          &genai.Content{Parts: []*genai.Part{{Text: "checking"}}},
+			InputTranscription: &genai.Transcription{Text: " question"},
+		},
+	}); err != nil {
+		t.Fatalf("handleServerMessage error = %v", err)
+	}
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	message := nextGoogleRealtimeTestMessage(t, generation.MessageCh)
+	if text := nextGoogleRealtimeTestText(t, message.TextCh); text != "checking" {
+		t.Fatalf("text delta = %q, want checking", text)
+	}
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // text delta event
+	_ = nextGoogleRealtimeTestEvent(t, session.EventCh()) // interim input transcript
+
+	if err := session.UpdateOptions(llm.RealtimeSessionOptions{Voice: "Kore", VoiceSet: true}); err != nil {
+		t.Fatalf("UpdateOptions voice error = %v, want reference reconnect", err)
+	}
+
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped || stopped.SpeechStopped == nil || stopped.SpeechStopped.UserTranscriptionEnabled {
+		t.Fatalf("reconnect event = %#v, want reference speech_stopped before final transcript", stopped)
+	}
+	final := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if final.InputTranscription == nil || final.InputTranscription.Transcript != "question" || !final.InputTranscription.IsFinal {
+		t.Fatalf("final transcript = %#v, want final question transcript on reconnect", final.InputTranscription)
+	}
+	expectGoogleRealtimeTestTextClosed(t, message.TextCh)
+	expectGoogleRealtimeTestFunctionClosed(t, generation.FunctionCh)
+
+	messages := session.chatCtx.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("chat context messages = %d, want committed user and assistant transcripts before reconnect replay", len(messages))
+	}
+	if messages[0].Role != llm.ChatRoleUser || messages[0].TextContent() != "question" {
+		t.Fatalf("user transcript message = %#v, want question", messages[0])
+	}
+	if messages[1].Role != llm.ChatRoleAssistant || messages[1].TextContent() != "checking" {
+		t.Fatalf("assistant transcript message = %#v, want checking", messages[1])
+	}
+}
+
 func TestGoogleRealtimeSessionOptionReconnectReplaysReferenceChatContext(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)}
@@ -2368,6 +2429,28 @@ func TestGoogleRealtimeSessionRetriesReferenceActiveReconnectFailure(t *testing.
 	}
 }
 
+func TestGoogleRealtimeConnectWithRetryAppliesReferenceAttemptTimeout(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{
+		session: &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage)},
+	}
+	options := llm.DefaultAPIConnectOptions()
+	options.Timeout = 150 * time.Millisecond
+
+	session, err := googleRealtimeConnectWithRetry(context.Background(), connector, "gemini-live", &genai.LiveConnectConfig{}, options)
+	if err != nil {
+		t.Fatalf("googleRealtimeConnectWithRetry error = %v", err)
+	}
+	if session == nil {
+		t.Fatal("googleRealtimeConnectWithRetry session = nil")
+	}
+	if len(connector.contexts) != 1 {
+		t.Fatalf("connect contexts = %d, want 1", len(connector.contexts))
+	}
+	if !googleRealtimeContextHasTimeout(connector.contexts[0], options.Timeout) {
+		t.Fatalf("connect context deadline = %v, want reference timeout %v", googleRealtimeContextDeadline(connector.contexts[0]), options.Timeout)
+	}
+}
+
 func TestGoogleRealtimeSessionReconnectReplaysReferenceChatContext(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages: make(chan *genai.LiveServerMessage),
@@ -3664,6 +3747,43 @@ func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionGeneratesReferenceToolCallIDs(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	liveSession.serverMessages <- &genai.LiveServerMessage{
+		ToolCall: &genai.LiveServerToolCall{
+			FunctionCalls: []*genai.FunctionCall{
+				{Name: "lookup", Args: map[string]any{"query": "weather"}},
+				{Name: "search", Args: map[string]any{"query": "news"}},
+			},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	first := nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
+	second := nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
+	for _, call := range []*llm.FunctionCall{first, second} {
+		if !strings.HasPrefix(call.CallID, "fnc-call-") {
+			t.Fatalf("generated call id = %q, want reference fnc-call- prefix", call.CallID)
+		}
+		if call.CallID == "fnc-call-1" || call.CallID == "fnc-call-2" {
+			t.Fatalf("generated call id = %q, want reference shortuuid, not sequence", call.CallID)
+		}
+	}
+	if first.CallID == second.CallID {
+		t.Fatalf("generated call ids both %q, want distinct ids", first.CallID)
+	}
+}
+
 func TestGoogleRealtimeSessionMalformedToolArgsReconnectsLikeReference(t *testing.T) {
 	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
@@ -3762,6 +3882,29 @@ func TestGoogleRealtimeSessionToolCallsEmitReferenceSpeechStopped(t *testing.T) 
 	event := nextGoogleRealtimeTestEvent(t, session.EventCh())
 	if event.Type != llm.RealtimeEventTypeSpeechStopped || event.SpeechStopped == nil || event.SpeechStopped.UserTranscriptionEnabled {
 		t.Fatalf("tool call completion event = %#v, want speech_stopped with transcription disabled", event)
+	}
+}
+
+func TestGoogleRealtimeSessionToolCallsDoNotMarkMetricsEnd(t *testing.T) {
+	session := &googleRealtimeSession{
+		ctx:     context.Background(),
+		eventCh: make(chan llm.RealtimeEvent, 8),
+		chatCtx: llm.EmptyChatContext(),
+		generation: &googleRealtimeGeneration{
+			responseID:   "GR_tool",
+			messageCh:    make(chan llm.MessageGeneration, 1),
+			functionCh:   make(chan *llm.FunctionCall, 1),
+			textCh:       make(chan string, 1),
+			audioCh:      make(chan *audiomodel.AudioFrame, 1),
+			modalitiesCh: make(chan []string, 1),
+			createdAt:    time.Now().Add(-2 * time.Second),
+		},
+	}
+
+	session.finishCurrentGeneration()
+
+	if !session.generation.completedAt.IsZero() {
+		t.Fatalf("completedAt = %v, want unset without provider generation_complete or turn_complete", session.generation.completedAt)
 	}
 }
 
@@ -4447,11 +4590,28 @@ func waitGoogleRealtimeGenerationCompleted(session *googleRealtimeSession) bool 
 	return false
 }
 
+func googleRealtimeContextHasTimeout(ctx context.Context, want time.Duration) bool {
+	remaining := googleRealtimeContextDeadline(ctx)
+	return remaining > 0 && remaining <= want
+}
+
+func googleRealtimeContextDeadline(ctx context.Context) time.Duration {
+	if ctx == nil {
+		return 0
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return time.Until(deadline)
+}
+
 type fakeGoogleRealtimeConnector struct {
 	model       string
 	models      []string
 	config      *genai.LiveConnectConfig
 	configs     []*genai.LiveConnectConfig
+	contexts    []context.Context
 	session     *fakeGoogleRealtimeLiveSession
 	sessions    []googleRealtimeLiveSession
 	connectErrs []error
@@ -4462,6 +4622,7 @@ func (c *fakeGoogleRealtimeConnector) Connect(ctx context.Context, model string,
 	c.models = append(c.models, model)
 	c.config = config
 	c.configs = append(c.configs, config)
+	c.contexts = append(c.contexts, ctx)
 	if len(c.connectErrs) > 0 {
 		err := c.connectErrs[0]
 		c.connectErrs = c.connectErrs[1:]

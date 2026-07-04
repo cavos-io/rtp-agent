@@ -1595,6 +1595,37 @@ func TestBuildGoogleContentsRejectsMalformedFunctionCallArgsLikeReference(t *tes
 	}
 }
 
+func TestBuildGoogleContentsReplaysEmptyFunctionCallArgsLikeReference(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.FunctionCall{
+			ID:        "assistant/tool",
+			CallID:    "call_empty",
+			Name:      "lookup",
+			Arguments: "",
+		},
+		&llm.FunctionCallOutput{
+			ID:     "tool-output",
+			CallID: "call_empty",
+			Name:   "lookup",
+			Output: "ok",
+		},
+	}
+
+	contents, _, err := buildGoogleContents(chatCtx)
+	if err != nil {
+		t.Fatalf("buildGoogleContents error = %v, want empty args replayed as empty object", err)
+	}
+
+	call := contents[0].Parts[0].FunctionCall
+	if call == nil {
+		t.Fatalf("first part = %#v, want function call", contents[0].Parts[0])
+	}
+	if len(call.Args) != 0 {
+		t.Fatalf("function args = %#v, want empty object", call.Args)
+	}
+}
+
 func TestGoogleLLMStreamCallerCancelReturnsContextCanceled(t *testing.T) {
 	stream := &googleLLMStream{
 		next: func() (*genai.GenerateContentResponse, error, bool) {

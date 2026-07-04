@@ -30,3 +30,10 @@ func googleProjectFromCredentialsFile(credentialsFile string) (string, error) {
 	}
 	return credentials.ProjectID, nil
 }
+
+func googleProjectFromADCEnv() string {
+	if project := os.Getenv("GOOGLE_CLOUD_PROJECT"); project != "" {
+		return project
+	}
+	return os.Getenv("GCLOUD_PROJECT")
+}

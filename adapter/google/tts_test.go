@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/googleapis/gax-go/v2"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -1058,6 +1060,70 @@ func TestGoogleTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 	if statusErr.Retryable {
 		t.Fatal("status retryable = true, want false for permission denied")
+	}
+}
+
+func TestGoogleTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
+	client := &fakeGoogleTTSClient{response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}}}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+
+	if got := googleTTSCallOptionTimeout(client.synthesizeOpts); got != googleTTSRequestTimeout {
+		t.Fatalf("synthesize timeout = %v, want reference %v", got, googleTTSRequestTimeout)
+	}
+}
+
+func TestNewGoogleTTSAppliesReferenceClientTimeout(t *testing.T) {
+	original := newGoogleTTSClient
+	defer func() { newGoogleTTSClient = original }()
+
+	client := &fakeGoogleTTSClient{response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}}}
+	var clientCtx context.Context
+	newGoogleTTSClient = func(ctx context.Context, opts ...option.ClientOption) (googleTTSClient, error) {
+		clientCtx = ctx
+		return client, nil
+	}
+
+	provider, err := NewGoogleTTS("")
+	if err != nil {
+		t.Fatalf("NewGoogleTTS returned error: %v", err)
+	}
+	if provider == nil {
+		t.Fatal("NewGoogleTTS provider = nil")
+	}
+	if !googleTTSContextHasReferenceTimeout(clientCtx) {
+		t.Fatalf("client context deadline = %v, want reference timeout", googleTTSContextDeadline(clientCtx))
+	}
+}
+
+func TestGoogleTTSStreamAppliesReferenceStartupTimeout(t *testing.T) {
+	streamClient := &fakeGoogleTTSStream{responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{1, 2, 3, 4}}}}
+	client := &fakeGoogleTTSClient{stream: streamClient}
+	provider := newGoogleTTSWithClient(client)
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+
+	if got := googleTTSCallOptionTimeout(client.streamingOpts); got != googleTTSRequestTimeout {
+		t.Fatalf("streaming synthesize timeout = %v, want reference %v", got, googleTTSRequestTimeout)
 	}
 }
 
@@ -2848,6 +2914,8 @@ type fakeGoogleTTSClient struct {
 	stream                     *fakeGoogleTTSStream
 	streams                    []*fakeGoogleTTSStream
 	streamCalls                int
+	synthesizeOpts             []gax.CallOption
+	streamingOpts              []gax.CallOption
 	blockStreamingSynthesize   chan struct{}
 	unblockStreamingSynthesize chan struct{}
 	streamingErrCh             chan error
@@ -2857,6 +2925,7 @@ type fakeGoogleTTSClient struct {
 func (c *fakeGoogleTTSClient) SynthesizeSpeech(ctx context.Context, req *texttospeech.SynthesizeSpeechRequest, opts ...gax.CallOption) (*texttospeech.SynthesizeSpeechResponse, error) {
 	c.synthesizeCalls++
 	c.request = req
+	c.synthesizeOpts = append([]gax.CallOption(nil), opts...)
 	if c.blockSynthesize != nil {
 		close(c.blockSynthesize)
 		err := ctx.Err()
@@ -2877,6 +2946,7 @@ func (c *fakeGoogleTTSClient) SynthesizeSpeech(ctx context.Context, req *texttos
 
 func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...gax.CallOption) (texttospeech.TextToSpeech_StreamingSynthesizeClient, error) {
 	c.streamCalls++
+	c.streamingOpts = append([]gax.CallOption(nil), opts...)
 	if c.blockStreamingSynthesize != nil {
 		close(c.blockStreamingSynthesize)
 		select {
@@ -2902,6 +2972,34 @@ func (c *fakeGoogleTTSClient) StreamingSynthesize(ctx context.Context, opts ...g
 		c.stream.ctx = ctx
 	}
 	return c.stream, nil
+}
+
+func googleTTSCallOptionTimeout(opts []gax.CallOption) time.Duration {
+	settings := &gax.CallSettings{}
+	for _, opt := range opts {
+		opt.Resolve(settings)
+	}
+	value := reflect.ValueOf(settings).Elem().FieldByName("timeout")
+	if !value.IsValid() {
+		return 0
+	}
+	return time.Duration(value.Int())
+}
+
+func googleTTSContextHasReferenceTimeout(ctx context.Context) bool {
+	remaining := googleTTSContextDeadline(ctx)
+	return remaining > 0 && remaining <= googleTTSRequestTimeout
+}
+
+func googleTTSContextDeadline(ctx context.Context) time.Duration {
+	if ctx == nil {
+		return 0
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0
+	}
+	return time.Until(deadline)
 }
 
 type fakeGoogleTTSStream struct {
