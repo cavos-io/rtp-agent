@@ -1079,12 +1079,13 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 			appendCtx.Items = append(appendCtx.Items, item)
 		}
 	}
-	s.chatCtx = nextCtx
 	if len(appendCtx.Items) == 0 || s.isClosed() {
+		s.chatCtx = nextCtx
 		return nil
 	}
 	liveSession := s.activeLiveSession()
 	if liveSession == nil {
+		s.chatCtx = nextCtx
 		return nil
 	}
 	if s.mutableChatContext {
@@ -1104,9 +1105,14 @@ func (s *googleRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) erro
 	}
 	responses := googleRealtimeToolResponses(appendCtx, s.vertexAI, s.currentToolResponseScheduling())
 	if len(responses) == 0 {
+		s.chatCtx = nextCtx
 		return nil
 	}
-	return s.sendToolResponseWithReconnect(liveSession, genai.LiveToolResponseInput{FunctionResponses: responses})
+	if err := s.sendToolResponseWithReconnect(liveSession, genai.LiveToolResponseInput{FunctionResponses: responses}); err != nil {
+		return err
+	}
+	s.chatCtx = nextCtx
+	return nil
 }
 func (s *googleRealtimeSession) UpdateTools(tools []llm.Tool) error {
 	return s.reconnectWithTools(tools)
