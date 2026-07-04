@@ -1271,6 +1271,34 @@ func TestGoogleRealtimeSessionRetriesReferenceConnectFailure(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionConnectFailureReturnsAPIConnectionError(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{
+		connectErrs: []error{
+			errors.New("temporary dial failure"),
+			errors.New("still down"),
+		},
+	}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Error(), "Failed to connect to Gemini Live") {
+		t.Fatalf("Session error = %v, want reference connect failure message", connectionErr)
+	}
+}
+
 func TestGoogleRealtimeSessionDisablesAutomaticActivityDetection(t *testing.T) {
 	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
 	model, err := NewRealtimeModel("test-key",

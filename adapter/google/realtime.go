@@ -636,7 +636,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 	liveSession, err := googleRealtimeConnectWithRetry(ctx, connector, m.Model(), config, m.connectOptions)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Failed to connect to Gemini Live: %v", err))
 	}
 	capabilities := m.Capabilities()
 	session := &googleRealtimeSession{
