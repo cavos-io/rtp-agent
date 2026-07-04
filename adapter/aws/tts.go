@@ -306,21 +306,28 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 	}
+	s.mu.Lock()
 	if s.finalSent {
+		s.mu.Unlock()
 		return nil, io.EOF
 	}
-	if s.stream == nil && !s.started {
+	stream := s.stream
+	started := s.started
+	s.mu.Unlock()
+	if stream == nil && !started {
 		if strings.TrimSpace(s.text) != "" {
 			_ = s.Close()
 			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 		}
 		return nil, io.EOF
 	}
-	if !s.started {
+	if !started {
+		s.mu.Lock()
 		s.started = true
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
 		s.readErr = make(chan error, 1)
-		first, firstErr := readAWSTTSChunk(s.stream)
+		s.mu.Unlock()
+		first, firstErr := readAWSTTSChunk(stream)
 		if s.isClosed() {
 			_ = s.decoder.Close()
 			return nil, io.EOF
@@ -332,7 +339,9 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				_ = s.Close()
 				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 			}
+			s.mu.Lock()
 			s.finalSent = true
+			s.mu.Unlock()
 			return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 		}
 		if len(first) == 0 && firstErr != nil {
@@ -342,8 +351,8 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS response read failed: %v", firstErr))
 		}
-		s.hasAudio = true
-		go s.feedDecoder(s.stream, first, firstErr)
+		s.markHasAudio()
+		go s.feedDecoder(stream, first, firstErr)
 	}
 
 	frame, err := s.decoder.Next()
@@ -352,8 +361,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if readErr := s.popReadErr(); readErr != nil {
 				return nil, readErr
 			}
-			if s.hasAudio && !s.finalSent {
-				s.finalSent = true
+			if s.takeFinalMarker() {
 				return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 			}
 			return nil, io.EOF
@@ -367,7 +375,7 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("AWS Polly TTS audio decode failed: %v", err))
 	}
 
-	s.emittedAudio = true
+	s.markEmittedAudio()
 	return &tts.SynthesizedAudio{
 		RequestID: s.requestID,
 		Frame:     frame,
@@ -441,7 +449,7 @@ func (s *awsTTSChunkedStream) feedDecoder(stream io.Reader, first []byte, firstE
 	for {
 		chunk, err := readAWSTTSChunk(stream)
 		if len(chunk) > 0 {
-			s.hasAudio = true
+			s.markHasAudio()
 			s.decoder.Push(chunk)
 		}
 		if err != nil {
@@ -449,6 +457,28 @@ func (s *awsTTSChunkedStream) feedDecoder(stream io.Reader, first []byte, firstE
 			return
 		}
 	}
+}
+
+func (s *awsTTSChunkedStream) markHasAudio() {
+	s.mu.Lock()
+	s.hasAudio = true
+	s.mu.Unlock()
+}
+
+func (s *awsTTSChunkedStream) markEmittedAudio() {
+	s.mu.Lock()
+	s.emittedAudio = true
+	s.mu.Unlock()
+}
+
+func (s *awsTTSChunkedStream) takeFinalMarker() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.hasAudio || s.finalSent {
+		return false
+	}
+	s.finalSent = true
+	return true
 }
 
 func (s *awsTTSChunkedStream) recordReadErr(err error) {
@@ -470,10 +500,16 @@ func (s *awsTTSChunkedStream) popReadErr() error {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
-		return llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("AWS Polly TTS response read failed: %v", err), !s.emittedAudio)
+		return llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("AWS Polly TTS response read failed: %v", err), !s.hasEmittedAudio())
 	default:
 		return nil
 	}
+}
+
+func (s *awsTTSChunkedStream) hasEmittedAudio() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.emittedAudio
 }
 
 func (s *awsTTSChunkedStream) closeProviderStream() {
