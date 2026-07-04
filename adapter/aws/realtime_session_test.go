@@ -933,11 +933,13 @@ func TestAWSRealtimeSessionPushAudioChunksReferenceInput(t *testing.T) {
 	}
 	defer session.Close()
 
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
 		t.Fatalf("PushAudio first error = %v", err)
 	}
-	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+	sent = stream.snapshotSent()
+	if got := countAWSRealtimeAudioInputs(t, sent[sentCount:]); got != 0 {
 		t.Fatalf("audioInput events after partial frame = %d, want 0", got)
 	}
 
