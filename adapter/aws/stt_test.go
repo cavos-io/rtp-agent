@@ -1055,6 +1055,28 @@ func TestAWSSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamAfterCloseIsRejected(t *testing.T) {
+	client := &fakeAWSSTTClient{}
+	provider, err := newAWSSTTWithClient(client)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream after Close = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Stream after Close error = %v, want ErrClosedPipe", err)
+	}
+	if calls := atomic.LoadInt32(&client.calls); calls != 0 {
+		t.Fatalf("client calls after Stream on closed provider = %d, want 0", calls)
+	}
+}
+
 func TestAWSSTTStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	writer := &fakeAWSSTTWriter{err: errors.New("transcribe write failed")}
 	providerStream := &awsSTTStream{
