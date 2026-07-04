@@ -823,6 +823,28 @@ func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeExplicitEmptyInstructionsMatchReference(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeInstructions(""),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	instruction := connector.config.SystemInstruction
+	if instruction == nil || len(instruction.Parts) != 1 || instruction.Parts[0].Text != "" {
+		t.Fatalf("system instruction = %#v, want explicit empty instruction part", instruction)
+	}
+}
+
 func TestGoogleRealtimeGenerationOptionsMatchReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key",
 		WithGoogleRealtimeCandidateCount(2),
