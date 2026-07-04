@@ -326,6 +326,9 @@ func (s *AWSSTT) Stream(ctx context.Context, language string) (stt.RecognizeStre
 	if s.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
+	if s.client == nil {
+		return nil, llm.NewAPIConnectionError("aws transcribe client is not configured")
+	}
 	input := buildAWSStartStreamTranscriptionInput(s, language)
 	stream, err := s.client.StartStreamTranscription(ctx, input)
 	if err != nil {
