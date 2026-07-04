@@ -470,6 +470,50 @@ func TestAWSTTSSynthesizeErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
 	}
 }
 
+func TestAWSTTSSynthesizeAllowsReferenceBlankTextWithoutAudio(t *testing.T) {
+	body := &countingAWSReadCloser{}
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type":     []string{"audio/mpeg"},
+					"X-Amzn-Requestid": []string{"blank-polly-request"},
+					"Content-Length":   []string{"0"},
+				},
+				Body: body,
+			}, nil
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+	stream, err := provider.Synthesize(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if err != nil {
+		t.Fatalf("Next error = %v, want reference blank-input final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next audio = %+v, want boundary-only final marker", audio)
+	}
+	if audio.RequestID != "blank-polly-request" {
+		t.Fatalf("final RequestID = %q, want Polly request id", audio.RequestID)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("Next after final marker = %v, want EOF", err)
+	}
+}
+
 func TestAWSTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
 	stream := &awsTTSChunkedStream{
 		stream: erroringAWSReadCloser{err: errors.New("polly read failed")},
