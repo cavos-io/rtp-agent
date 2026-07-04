@@ -80,6 +80,57 @@ func TestAWSRealtimeTurnTrackerEmitsReferenceTurnEvents(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeTurnTrackerToolOutputStartsReferenceGeneration(t *testing.T) {
+	var events []llm.RealtimeEvent
+	tracker := newAWSRealtimeTurnTracker(
+		func(event llm.RealtimeEvent) { events = append(events, event) },
+		func() {
+			events = append(events, llm.RealtimeEvent{
+				Type:       llm.RealtimeEventTypeGenerationCreated,
+				Generation: &llm.GenerationCreatedEvent{},
+			})
+		},
+	)
+
+	tracker.feed(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{"role": "USER", "content": "book a flight"},
+		},
+	})
+	tracker.feed(map[string]any{
+		"event": map[string]any{
+			"contentStart": map[string]any{"type": "TOOL"},
+		},
+	})
+
+	if len(events) != 5 {
+		t.Fatalf("event count = %d, want 5: %#v", len(events), events)
+	}
+	if events[0].Type != llm.RealtimeEventTypeSpeechStarted {
+		t.Fatalf("event[0] = %s, want speech_started", events[0].Type)
+	}
+	assertAWSRealtimeTurnTranscript(t, events[1], "book a flight", false)
+	if events[2].Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("event[2] = %s, want speech_stopped", events[2].Type)
+	}
+	assertAWSRealtimeTurnTranscript(t, events[3], "book a flight", true)
+	if events[4].Type != llm.RealtimeEventTypeGenerationCreated {
+		t.Fatalf("event[4] = %s, want generation_created", events[4].Type)
+	}
+
+	tracker.feed(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{"role": "USER", "content": "next turn"},
+		},
+	})
+	if len(events) != 7 {
+		t.Fatalf("event count after next turn = %d, want 7: %#v", len(events), events)
+	}
+	if events[6].InputTranscription.ItemID == events[1].InputTranscription.ItemID {
+		t.Fatalf("next turn item id reused %q", events[1].InputTranscription.ItemID)
+	}
+}
+
 func TestAWSRealtimeTurnTrackerBargeInStartsFreshSpeech(t *testing.T) {
 	var events []llm.RealtimeEvent
 	tracker := newAWSRealtimeTurnTracker(
