@@ -879,18 +879,20 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 				return chunk, nil
 			}
 		case *types.ConverseStreamOutputMemberMetadata:
-			if v.Value.Usage != nil {
-				s.emittedChunk = true
-				return &llm.ChatChunk{
-					ID: s.requestID,
-					Usage: &llm.CompletionUsage{
-						PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
-						CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
-						TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
-						PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
-					},
-				}, nil
+			if v.Value.Usage == nil {
+				s.closeContext()
+				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: metadata missing usage", !s.emittedChunk)
 			}
+			s.emittedChunk = true
+			return &llm.ChatChunk{
+				ID: s.requestID,
+				Usage: &llm.CompletionUsage{
+					PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
+					CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
+					TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
+					PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
+				},
+			}, nil
 		case *types.ConverseStreamOutputMemberMessageStop:
 			continue
 		}
