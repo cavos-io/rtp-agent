@@ -98,9 +98,7 @@ func WithAWSSTTCredentials(creds AWSCredentials) AWSSTTOption {
 
 func WithAWSSTTLanguage(language types.LanguageCode) AWSSTTOption {
 	return func(s *AWSSTT) {
-		if language != "" {
-			s.language = language
-		}
+		s.language = language
 	}
 }
 

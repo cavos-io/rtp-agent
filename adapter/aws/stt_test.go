@@ -195,6 +195,19 @@ func TestAWSSTTStreamInputUsesReferenceConfiguredLanguage(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamInputPreservesReferenceEmptyLanguage(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil, WithAWSSTTLanguage(""))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.LanguageCode != "" {
+		t.Fatalf("language = %q, want empty reference language", input.LanguageCode)
+	}
+}
+
 func TestAWSSTTExposesReferenceInputSampleRate(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil)
 	if err != nil {
