@@ -47,6 +47,7 @@ const (
 	defaultAWSRealtimeToolRecycle    = 150 * time.Millisecond
 	defaultAWSRealtimeGenerateReply  = 10 * time.Second
 	defaultAWSRealtimeTextStartDelay = 50 * time.Millisecond
+	defaultAWSRealtimeHistoryDelay   = 10 * time.Millisecond
 	awsRealtimeCredentialExpirySlack = 3 * time.Minute
 	awsRealtimeMinRecycleDuration    = 10 * time.Second
 	awsRealtimeAudioModalities       = AWSRealtimeModalitiesAudio
@@ -371,6 +372,7 @@ func (m *AWSRealtimeModel) Session() (llm.RealtimeSession, error) {
 	}
 	session := newAWSRealtimeSession(m, client)
 	if err := session.start(context.Background()); err != nil {
+		_ = session.Close()
 		return nil, err
 	}
 	return session, nil
@@ -518,6 +520,26 @@ func (s *awsRealtimeQueuedStream[T]) Send(value T) bool {
 	s.queue = append(s.queue, value)
 	s.notifyLocked()
 	return true
+}
+
+func (s *awsRealtimeQueuedStream[T]) TryPopQueued() (T, bool) {
+	var zero T
+	if s == nil {
+		return zero, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queue) == 0 {
+		return zero, false
+	}
+	value := s.queue[0]
+	s.queue[0] = zero
+	s.queue = s.queue[1:]
+	if len(s.queue) == 0 && s.closed && !s.sending {
+		s.closeOutLocked()
+		s.notifyLocked()
+	}
+	return value, true
 }
 
 func (s *awsRealtimeQueuedStream[T]) Close() {
@@ -700,8 +722,18 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 	if err != nil {
 		return err
 	}
-	for _, event := range append(initEvents, historyEvents...) {
+	for _, event := range initEvents {
 		if err := s.sendRawEvent(ctx, event); err != nil {
+			s.closeStartupStream()
+			return awsRealtimeStartupSendError(err)
+		}
+	}
+	for _, event := range historyEvents {
+		if err := s.sendRawEvent(ctx, event); err != nil {
+			s.closeStartupStream()
+			return awsRealtimeStartupSendError(err)
+		}
+		if err := waitAWSRealtimeHistoryDelay(ctx); err != nil {
 			s.closeStartupStream()
 			return awsRealtimeStartupSendError(err)
 		}
@@ -746,6 +778,17 @@ func (s *awsRealtimeSession) waitInteractiveTextDelay(ctx context.Context) error
 		return nil
 	}
 	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func waitAWSRealtimeHistoryDelay(ctx context.Context) error {
+	timer := time.NewTimer(defaultAWSRealtimeHistoryDelay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -1110,7 +1153,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		if !ok {
 			return true
 		}
-		data, err := base64.StdEncoding.DecodeString(audioContent)
+		data, err := decodeAWSRealtimeAudioContent(audioContent)
 		if err != nil {
 			s.closeGeneration()
 			s.emit(llm.RealtimeEvent{
@@ -1195,6 +1238,31 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		s.turns.feed(payload)
 	}
 	return true
+}
+
+func decodeAWSRealtimeAudioContent(content string) ([]byte, error) {
+	if content == "" {
+		return []byte{}, nil
+	}
+	filtered := make([]byte, 0, len(content))
+	dataChars := 0
+	for i := 0; i < len(content); i++ {
+		c := content[i]
+		switch {
+		case c >= 'A' && c <= 'Z',
+			c >= 'a' && c <= 'z',
+			c >= '0' && c <= '9',
+			c == '+', c == '/':
+			filtered = append(filtered, c)
+			dataChars++
+		case c == '=':
+			filtered = append(filtered, c)
+		}
+	}
+	if len(filtered) == 0 || dataChars == 0 {
+		return []byte{}, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
 
 func (s *awsRealtimeSession) handleMalformedContentStart(contentStart map[string]any) {
@@ -1886,13 +1954,18 @@ func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
 	s.awaitingAudioEndTurn = false
 	s.mu.Unlock()
 	if stream != nil {
+		var closeErr error
 		for _, event := range closeEvents {
 			if err := sendAWSRealtimeRawEvent(ctx, stream, event); err != nil {
-				return err
+				closeErr = err
+				break
 			}
 		}
-		if err := stream.Close(); err != nil {
-			return err
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 	}
 	return s.start(ctx)
@@ -2058,22 +2131,25 @@ func (s *awsRealtimeSession) Close() error {
 	s.rejectPendingGenerationStart(llm.NewRealtimeError("Session closed while waiting for generation", nil))
 	s.closeAudioInputSender()
 	s.closeGeneration()
+	var closeErr error
 	if stream != nil {
 		closeEvents, err := s.builder.createPromptEndBlock()
 		if err != nil {
-			return err
-		}
-		for _, event := range closeEvents {
-			if err := s.sendRawEvent(context.Background(), event); err != nil {
-				return err
+			closeErr = err
+		} else {
+			for _, event := range closeEvents {
+				if err := sendAWSRealtimeRawEvent(context.Background(), stream, event); err != nil {
+					closeErr = err
+					break
+				}
 			}
 		}
-		if err := stream.Close(); err != nil {
-			return err
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
 		}
 	}
 	s.eventStream.Close()
-	return nil
+	return closeErr
 }
 
 func (s *awsRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }

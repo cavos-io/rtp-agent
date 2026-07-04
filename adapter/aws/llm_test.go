@@ -146,7 +146,7 @@ func TestAWSLLMChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 	}
 }
 
-func TestAWSLLMChatReturnsReferenceAPIStatusErrorOnProviderStatus(t *testing.T) {
+func TestAWSLLMChatWrapsReferenceProviderStatusAsConnectionError(t *testing.T) {
 	header := http.Header{}
 	header.Set("x-amzn-requestid", "aws-request-429")
 	providerErr := &smithyhttp.ResponseError{
@@ -174,18 +174,22 @@ func TestAWSLLMChatReturnsReferenceAPIStatusErrorOnProviderStatus(t *testing.T) 
 	if chunk != nil {
 		t.Fatalf("Next chunk = %#v, want nil on startup status error", chunk)
 	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any chunk")
+	}
+	if !strings.Contains(connectionErr.Error(), "aws bedrock llm: error generating content") {
+		t.Fatalf("Next error = %q, want reference Bedrock content context", connectionErr.Error())
+	}
+	if !strings.Contains(connectionErr.Error(), "throttled") {
+		t.Fatalf("Next error = %q, want provider failure detail", connectionErr.Error())
+	}
 	var statusErr *llm.APIStatusError
-	if !errors.As(err, &statusErr) {
-		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
-	}
-	if statusErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
-	}
-	if statusErr.RequestID != "aws-request-429" {
-		t.Fatalf("request id = %q, want aws-request-429", statusErr.RequestID)
-	}
-	if statusErr.Retryable {
-		t.Fatal("Retryable = true, want reference nonretryable startup status error")
+	if errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T, want provider status wrapped as APIConnectionError", err)
 	}
 }
 
@@ -310,6 +314,96 @@ func TestAWSLLMChatReturnsBeforeReferenceProviderStreamStarts(t *testing.T) {
 	}
 
 	close(client.release)
+}
+
+func TestAWSLLMStreamCloseUnblocksPendingReferenceStartupNext(t *testing.T) {
+	client := &blockingAWSLLMClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	defer close(client.release)
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider stream did not start")
+	}
+
+	nextDone := make(chan error, 1)
+	go func() {
+		chunk, err := stream.Next()
+		if chunk != nil {
+			nextDone <- fmt.Errorf("Next chunk = %#v, want nil after Close", chunk)
+			return
+		}
+		nextDone <- err
+	}()
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next error = %v, want EOF after Close", err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("Next remained blocked behind provider startup after Close")
+	}
+}
+
+func TestAWSLLMStreamCloseClosesLateReferenceProviderStartup(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	client := &lateAWSLLMClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		out:     newFakeAWSLLMOutput(reader),
+	}
+	provider := &AWSLLM{
+		client: client,
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider stream did not start")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(client.release)
+
+	deadline := time.After(time.Second)
+	for !reader.closed {
+		select {
+		case <-deadline:
+			t.Fatal("late provider stream closed = false, want Close to release Bedrock stream returned after cancellation")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
 }
 
 func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
@@ -547,6 +641,54 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after tool call err = %v, want EOF", err)
+	}
+}
+
+func TestAWSLLMStreamRejectsReferenceContentBlockStartWithoutStart(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStart{}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil for malformed contentBlockStart", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
+	}
+}
+
+func TestAWSLLMStreamRejectsReferenceContentBlockDeltaWithoutDelta(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil for malformed contentBlockDelta", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
 	}
 }
 
@@ -808,6 +950,58 @@ func TestAWSLLMStreamUsageChunkIsReferenceUsageOnly(t *testing.T) {
 	}
 	if chunk.Delta != nil {
 		t.Fatalf("usage chunk delta = %#v, want nil like reference metadata chunk", chunk.Delta)
+	}
+}
+
+func TestAWSLLMStreamRejectsReferenceMetadataWithoutUsage(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil for malformed metadata", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
+	}
+}
+
+func TestAWSLLMStreamRejectsReferenceMetadataWithoutTokenCounts(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{
+		Value: awstypes.ConverseStreamMetadataEvent{
+			Usage: &awstypes.TokenUsage{CacheReadInputTokens: awsInt32(2)},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil for malformed usage", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
 	}
 }
 
@@ -1412,6 +1606,12 @@ type blockingAWSLLMClient struct {
 	release chan struct{}
 }
 
+type lateAWSLLMClient struct {
+	started chan struct{}
+	release chan struct{}
+	out     *bedrockruntime.ConverseStreamOutput
+}
+
 func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, input *bedrockruntime.ConverseStreamInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
 	if c.ctxCapture != nil {
 		*c.ctxCapture = ctx
@@ -1422,6 +1622,12 @@ func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, input *bedrockrunt
 	if c.err != nil {
 		return nil, c.err
 	}
+	return c.out, nil
+}
+
+func (c *lateAWSLLMClient) ConverseStream(context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseStreamOutput, error) {
+	close(c.started)
+	<-c.release
 	return c.out, nil
 }
 

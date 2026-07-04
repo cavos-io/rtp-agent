@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -149,6 +150,35 @@ func TestAWSRealtimeSessionStartErrorReturnsAPIConnectionError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AWS Nova Sonic realtime stream start failed") {
 		t.Fatalf("Session error = %q, want Nova Sonic stream context", err.Error())
+	}
+}
+
+func TestAWSRealtimeSessionStartErrorClosesReferenceAudioSender(t *testing.T) {
+	before := awsRealtimeAudioSenderGoroutines()
+	client := &fakeAWSRealtimeClient{err: errors.New("bedrock invoke failed")}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+
+	session, err := provider.Session()
+
+	if session != nil {
+		t.Fatalf("Session = %#v, want nil", session)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Session error = %T %v, want APIConnectionError", err, err)
+	}
+	deadline := time.After(100 * time.Millisecond)
+	for {
+		got := awsRealtimeAudioSenderGoroutines()
+		if got > before {
+			t.Fatalf("audio sender goroutines = %d, want %d after failed start cleanup", got, before)
+		}
+		select {
+		case <-deadline:
+			return
+		default:
+			time.Sleep(time.Millisecond)
+		}
 	}
 }
 
@@ -513,6 +543,35 @@ func TestAWSRealtimeSessionStartsWithReferenceChatContext(t *testing.T) {
 	audioStart := waitAWSRealtimeAudioContentStart(t, stream, 11)
 	if got := awsRealtimeNestedString(audioStart, "event", "contentStart", "type"); got != "AUDIO" {
 		t.Fatalf("event[11] type = %q, want AUDIO", got)
+	}
+}
+
+func TestAWSRealtimeSessionSpacesReferenceHistoryEvents(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	ctx := llm.NewChatContext()
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleUser, Text: "hello"})
+	ctx.AddMessage(llm.ChatMessageArgs{Role: llm.ChatRoleAssistant, Text: "hi"})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext before start error = %v", err)
+	}
+
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	waitAWSRealtimeAudioContentStart(t, stream, 11)
+	if len(stream.sentAt) < 12 {
+		t.Fatalf("sent timestamps = %d, want startup and audio timestamps", len(stream.sentAt))
+	}
+	for i := 5; i < 11; i++ {
+		gap := stream.sentAt[i+1].Sub(stream.sentAt[i])
+		if gap < 8*time.Millisecond {
+			t.Fatalf("history event gap %d->%d = %v, want reference 10ms pacing", i, i+1, gap)
+		}
 	}
 }
 
@@ -1871,6 +1930,82 @@ func TestAWSRealtimeSessionStreamsReferenceEmptyAudioOutput(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for empty generated audio")
+	}
+}
+
+func TestAWSRealtimeSessionStreamsReferencePunctuationAudioOutput(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEventEventually(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","contentId":"audio-punctuation"}}}`)
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-punctuation","content":"!!!"}}}`)
+
+	audio := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	if len(audio.Data) != 0 {
+		t.Fatalf("audio data = %v, want empty reference audio delta", audio.Data)
+	}
+	select {
+	case frame := <-msg.AudioCh:
+		if frame == nil {
+			t.Fatal("audio frame = nil, want empty reference frame")
+		}
+		if len(frame.Data) != 0 || frame.SamplesPerChannel != 0 || frame.SampleRate != defaultAWSRealtimeOutputSampleRate || frame.NumChannels != defaultAWSRealtimeChannels {
+			t.Fatalf("audio frame = %#v, want empty reference output frame", frame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for punctuation generated audio")
+	}
+}
+
+func TestAWSRealtimeSessionStreamsReferencePaddingAudioOutput(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEventEventually(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","contentId":"audio-padding"}}}`)
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-padding","content":"==="}}}`)
+
+	audio := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeAudio)
+	if len(audio.Data) != 0 {
+		t.Fatalf("audio data = %v, want empty reference audio delta", audio.Data)
+	}
+	select {
+	case frame := <-msg.AudioCh:
+		if frame == nil {
+			t.Fatal("audio frame = nil, want empty reference frame")
+		}
+		if len(frame.Data) != 0 || frame.SamplesPerChannel != 0 || frame.SampleRate != defaultAWSRealtimeOutputSampleRate || frame.NumChannels != defaultAWSRealtimeChannels {
+			t.Fatalf("audio frame = %#v, want empty reference output frame", frame)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for padding generated audio")
 	}
 }
 
@@ -3838,6 +3973,53 @@ func TestAWSRealtimeSessionCloseRejectsPendingReferenceGenerateReply(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionCloseCleansReferenceStreamAfterSendFailure(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+
+	stream.sendErr = errors.New("prompt end send failed")
+	err = session.Close()
+	if err == nil {
+		t.Fatal("Close error = nil, want prompt-end send failure")
+	}
+	if !stream.closed {
+		t.Fatal("provider stream closed = false, want Close to release stream after prompt-end send failure")
+	}
+	select {
+	case _, ok := <-session.EventCh():
+		if ok {
+			t.Fatal("event channel still open after failed Close cleanup")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("event channel did not close after failed Close cleanup")
+	}
+}
+
+func TestAWSRealtimeSessionRecycleClosesReferenceStreamAfterSendFailure(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.sendErr = errors.New("prompt end send failed")
+	err = awsSession.recycleForUpdatedTools(context.Background())
+	if err == nil {
+		t.Fatal("recycleForUpdatedTools error = nil, want prompt-end send failure")
+	}
+	if !stream.closed {
+		t.Fatal("provider stream closed = false, want recycle to release old stream after prompt-end send failure")
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyAudioOnlyEmitsReferenceEmptyGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic1(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -4112,6 +4294,18 @@ func awsRealtimeSentTextInputContents(t *testing.T, events []string) []string {
 		}
 	}
 	return contents
+}
+
+func awsRealtimeAudioSenderGoroutines() int {
+	size := 64 * 1024
+	for {
+		buf := make([]byte, size)
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "github.com/cavos-io/rtp-agent/adapter/aws.(*awsRealtimeSession).runAudioInputSender")
+		}
+		size *= 2
+	}
 }
 
 func awsRealtimeAudioAndInteractiveTextStartTimes(t *testing.T, stream *fakeAWSRealtimeStream) (time.Time, time.Time) {

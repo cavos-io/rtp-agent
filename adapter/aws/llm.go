@@ -729,6 +729,9 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 		if ok {
 			return chunk, nil
 		}
+		if s.closed {
+			return nil, io.EOF
+		}
 		select {
 		case err := <-s.errCh:
 			return nil, err
@@ -746,6 +749,12 @@ func (s *awsLLMStream) readLoop() {
 		select {
 		case s.errCh <- err:
 		default:
+		}
+		return
+	}
+	if s.closed {
+		if s.stream != nil {
+			_ = s.stream.Close()
 		}
 		return
 	}
@@ -787,19 +796,7 @@ func (s *awsLLMStream) open() error {
 		}
 		var responseErr *smithyhttp.ResponseError
 		if errors.As(err, &responseErr) {
-			var requestID string
-			var statusCode int
-			if responseErr.Response != nil && responseErr.Response.Response != nil {
-				statusCode = responseErr.Response.Response.StatusCode
-				requestID = responseErr.Response.Response.Header.Get("x-amzn-requestid")
-			}
-			return llm.NewAPIStatusErrorWithRetryable(
-				fmt.Sprintf("aws bedrock llm: error generating content: %v", err),
-				statusCode,
-				requestID,
-				nil,
-				false,
-			)
+			return llm.NewAPIConnectionError(fmt.Sprintf("aws bedrock llm: error generating content: %v", err))
 		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("AWS Bedrock LLM chat failed: %v", err))
 	}
@@ -825,6 +822,10 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 
 		switch v := event.(type) {
 		case *types.ConverseStreamOutputMemberContentBlockDelta:
+			if v.Value.Delta == nil {
+				s.closeContext()
+				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: contentBlockDelta missing delta", !s.emittedChunk)
+			}
 			if textDelta, ok := v.Value.Delta.(*types.ContentBlockDeltaMemberText); ok {
 				s.emittedChunk = true
 				return &llm.ChatChunk{
@@ -848,6 +849,10 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 				continue
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStart:
+			if v.Value.Start == nil {
+				s.closeContext()
+				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: contentBlockStart missing start", !s.emittedChunk)
+			}
 			if toolStart, ok := v.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
 				if toolStart.Value.ToolUseId == nil || toolStart.Value.Name == nil {
 					s.closeContext()
@@ -882,18 +887,24 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 				return chunk, nil
 			}
 		case *types.ConverseStreamOutputMemberMetadata:
-			if v.Value.Usage != nil {
-				s.emittedChunk = true
-				return &llm.ChatChunk{
-					ID: s.requestID,
-					Usage: &llm.CompletionUsage{
-						PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
-						CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
-						TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
-						PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
-					},
-				}, nil
+			if v.Value.Usage == nil {
+				s.closeContext()
+				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: metadata missing usage", !s.emittedChunk)
 			}
+			if v.Value.Usage.InputTokens == nil || v.Value.Usage.OutputTokens == nil || v.Value.Usage.TotalTokens == nil {
+				s.closeContext()
+				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: metadata usage missing token counts", !s.emittedChunk)
+			}
+			s.emittedChunk = true
+			return &llm.ChatChunk{
+				ID: s.requestID,
+				Usage: &llm.CompletionUsage{
+					PromptTokens:       int(aws.ToInt32(v.Value.Usage.InputTokens)),
+					CompletionTokens:   int(aws.ToInt32(v.Value.Usage.OutputTokens)),
+					TotalTokens:        int(aws.ToInt32(v.Value.Usage.TotalTokens)),
+					PromptCachedTokens: int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
+				},
+			}, nil
 		case *types.ConverseStreamOutputMemberMessageStop:
 			continue
 		}
@@ -902,15 +913,14 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 
 func (s *awsLLMStream) Close() error {
 	s.closeContext()
-	if s.stream == nil {
-		s.closed = true
-		return nil
-	}
-	s.stream.Close()
+	s.closed = true
 	if s.chunkStream != nil {
 		s.chunkStream.Close()
 	}
-	s.closed = true
+	if s.stream == nil {
+		return nil
+	}
+	s.stream.Close()
 	return nil
 }
 

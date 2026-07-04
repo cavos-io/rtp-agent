@@ -572,8 +572,17 @@ func (s *awsSTTStream) restartAfterTimeout() bool {
 		_ = stream.Close()
 		return false
 	}
+	inputEnded := s.inputEnded
 	s.stream = stream
 	s.streamMu.Unlock()
+	if inputEnded {
+		_ = stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+			Value: types.AudioEvent{
+				AudioChunk: []byte{},
+			},
+		})
+		_ = closeAWSSTTEventStreamInput(stream)
+	}
 	return true
 }
 
@@ -913,13 +922,25 @@ func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+		if event, ok := s.nextQueuedSpeechEvent(); ok {
+			return event, nil
 		}
 		return nil, err
 	}
+}
+
+func (s *awsSTTStream) nextQueuedSpeechEvent() (*stt.SpeechEvent, bool) {
+	if s.eventStream != nil {
+		if event, ok := s.eventStream.TryPopQueued(); ok {
+			return event, true
+		}
+	}
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, true
+		}
+	default:
+	}
+	return nil, false
 }
