@@ -13648,6 +13648,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceGenderOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyGenderOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"gender": ""},
+	})
+
+	if !googleCfg.genderSet {
+		t.Fatal("genderSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.gender != "" {
+		t.Fatalf("gender = %q, want explicit empty model option", googleCfg.gender)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceLocationOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"location": "europe-west1"},
