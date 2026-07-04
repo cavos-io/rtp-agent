@@ -1095,13 +1095,17 @@ func TestRealtimeSessionOptionsExposeInputAudioNoiseReduction(t *testing.T) {
 
 func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 	options := RealtimeGenerateReplyOptions{
-		Instructions: "answer briefly",
-		ToolChoice:   "none",
-		Tools:        []Tool{},
+		Instructions:    "answer briefly",
+		InstructionsSet: true,
+		ToolChoice:      "none",
+		Tools:           []Tool{},
 	}
 
 	if options.Instructions != "answer briefly" {
 		t.Fatalf("Instructions = %q, want answer briefly", options.Instructions)
+	}
+	if !options.InstructionsSet {
+		t.Fatal("InstructionsSet = false, want explicit instructions marker")
 	}
 	if options.ToolChoice == nil {
 		t.Fatal("ToolChoice = nil, want per-response override")

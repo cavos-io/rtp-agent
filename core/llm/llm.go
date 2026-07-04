@@ -1525,9 +1525,10 @@ type RealtimeSessionOptions struct {
 }
 
 type RealtimeGenerateReplyOptions struct {
-	Instructions string
-	ToolChoice   ToolChoice
-	Tools        []Tool
+	Instructions    string
+	InstructionsSet bool
+	ToolChoice      ToolChoice
+	Tools           []Tool
 }
 
 type RealtimeTruncateOptions struct {

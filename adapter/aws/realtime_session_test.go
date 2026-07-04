@@ -3898,6 +3898,56 @@ func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T)
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplySendsReferenceEmptyInstructions(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+	sentCount := len(stream.snapshotSent())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{InstructionsSet: true})
+	}()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for len(stream.snapshotSent()) < sentCount+3 {
+		select {
+		case <-deadline:
+			t.Fatalf("sent events = %d, want reference empty instruction text triplet", len(stream.snapshotSent())-sentCount)
+		case <-ticker.C:
+		}
+	}
+
+	textEvents := stream.snapshotSent()[sentCount:]
+	if got := len(textEvents); got != 3 {
+		t.Fatalf("GenerateReply sent %d events, want reference empty instruction text triplet", got)
+	}
+	start := mustAWSRealtimeJSONEvent(t, textEvents[0])
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "TEXT" {
+		t.Fatalf("text contentStart type = %q, want TEXT", got)
+	}
+	if got := nestedMap(t, start, "event", "contentStart")["interactive"]; got != true {
+		t.Fatalf("interactive = %v, want true", got)
+	}
+	textInput := nestedMap(t, mustAWSRealtimeJSONEvent(t, textEvents[1]), "event", "textInput")
+	if got, ok := textInput["content"]; !ok || got != "" {
+		t.Fatalf("textInput content = %#v present=%v, want explicit empty string", got, ok)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, textEvents[2]), "event", "contentEnd", "contentName"); got == "" {
+		t.Fatal("contentEnd contentName empty")
+	}
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	if err := <-done; err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyIgnoresReferencePerResponseTools(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

@@ -1996,7 +1996,7 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		s.emitEmptyGenerationCreated(true)
 		return nil
 	}
-	if options.Instructions == "" {
+	if !options.InstructionsSet && options.Instructions == "" {
 		s.mu.Lock()
 		pending := s.pendingGenerationStart
 		s.mu.Unlock()
@@ -2006,11 +2006,6 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		return s.waitForGenerationStart(pending)
 	}
 	pending := s.createPendingGenerationStart()
-	msg := &llm.ChatMessage{
-		ID:      uuid.NewString(),
-		Role:    llm.ChatRoleUser,
-		Content: []llm.ChatContent{{Text: options.Instructions}},
-	}
 	timeout := s.model.generateReplyTimeout
 	ctx := context.Background()
 	var cancel context.CancelFunc
@@ -2018,7 +2013,7 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	if err := s.sendInteractiveUserText(ctx, msg); err != nil {
+	if err := s.sendInteractiveUserTextEvents(ctx, options.Instructions); err != nil {
 		s.clearPendingGenerationStart(pending)
 		return err
 	}

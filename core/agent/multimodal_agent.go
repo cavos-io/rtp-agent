@@ -499,6 +499,7 @@ func (ma *MultimodalAgent) OnSpeechScheduled(ctx context.Context, speech *Speech
 	}
 	if speech.Generation.Instructions != nil {
 		options.Instructions = speech.Generation.Instructions.AsModality(speech.InputDetails.Modality).String()
+		options.InstructionsSet = true
 	}
 	if err := rtSession.GenerateReply(options); err != nil {
 		if errors.Is(err, context.Canceled) {
