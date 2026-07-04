@@ -179,7 +179,7 @@ func (l *AWSLLM) CacheTools() bool {
 
 func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm.ChatOption) (llm.LLMStream, error) {
 	if l.client == nil {
-		return nil, fmt.Errorf("aws bedrock client is not configured")
+		return nil, llm.NewAPIConnectionError("aws bedrock client is not configured")
 	}
 
 	options := &llm.ChatOptions{}
