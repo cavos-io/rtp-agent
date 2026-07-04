@@ -224,10 +224,14 @@ func TestAWSRealtimeEventBuilderCreatesReferenceToolContentStart(t *testing.T) {
 	if got := start["contentName"]; got != "tool-content-1" {
 		t.Fatalf("contentName = %v, want tool-content-1", got)
 	}
-	for _, field := range []string{"type", "role", "interactive"} {
-		if _, ok := start[field]; ok {
-			t.Fatalf("tool contentStart field %q = %#v, want omitted like reference", field, start[field])
-		}
+	if got := start["type"]; got != "TOOL" {
+		t.Fatalf("tool contentStart type = %#v, want TOOL", got)
+	}
+	if got := start["role"]; got != "TOOL" {
+		t.Fatalf("tool contentStart role = %#v, want TOOL", got)
+	}
+	if got := start["interactive"]; got != false {
+		t.Fatalf("tool contentStart interactive = %#v, want false", got)
 	}
 	toolConfig := nestedMap(t, map[string]any{"root": start}, "root", "toolResultInputConfiguration")
 	if got := toolConfig["toolUseId"]; got != "tool-use-1" {
