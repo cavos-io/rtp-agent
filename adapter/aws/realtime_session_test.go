@@ -967,11 +967,13 @@ func TestAWSRealtimeSessionCloseDropsReferenceInputAudioTail(t *testing.T) {
 		t.Fatalf("Session error = %v", err)
 	}
 
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
-	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+	sent = stream.snapshotSent()
+	if got := countAWSRealtimeAudioInputs(t, sent[sentCount:]); got != 0 {
 		t.Fatalf("audioInput events before Close = %d, want none until chunk flush", got)
 	}
 
@@ -979,12 +981,13 @@ func TestAWSRealtimeSessionCloseDropsReferenceInputAudioTail(t *testing.T) {
 		t.Fatalf("Close error = %v", err)
 	}
 
-	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+	sent = stream.snapshotSent()
+	if got := countAWSRealtimeAudioInputs(t, sent[sentCount:]); got != 0 {
 		t.Fatalf("audioInput events after Close = %d, want buffered tail dropped", got)
 	}
 	audioIndex := -1
 	contentEndIndex := -1
-	for i, raw := range stream.sent[sentCount:] {
+	for i, raw := range sent[sentCount:] {
 		event := mustAWSRealtimeJSONEvent(t, raw)
 		if awsRealtimeNestedString(event, "event", "audioInput", "content") != "" {
 			audioIndex = i
