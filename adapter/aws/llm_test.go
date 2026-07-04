@@ -502,6 +502,36 @@ func TestAWSLLMStreamDropsReferenceToolUseWithoutName(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamRejectsReferenceToolDeltaWithoutStart(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberToolUse{
+				Value: awstypes.ToolUseBlockDelta{Input: awsString(`{"query":"weather"}`)},
+			},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil for malformed tool delta", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
+	}
+}
+
 func TestAWSLLMStreamChunksCarryReferenceRequestID(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
