@@ -618,7 +618,9 @@ func (s *GoogleSTT) ensureClient(ctx context.Context) (googleSpeechClient, error
 	if newClient == nil {
 		return nil, errors.New("google STT v1 client is not configured")
 	}
-	client, err := newClient(ctx)
+	clientCtx, cancel := context.WithTimeout(ctx, googleSTTRequestTimeout)
+	defer cancel()
+	client, err := newClient(clientCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -668,7 +670,9 @@ func (s *GoogleSTT) ensureClientV2(ctx context.Context) (googleSpeechV2Client, e
 	if newClientV2 == nil {
 		return nil, errors.New("google STT v2 client is not configured")
 	}
-	clientV2, err := newClientV2(ctx)
+	clientCtx, cancel := context.WithTimeout(ctx, googleSTTRequestTimeout)
+	defer cancel()
+	clientV2, err := newClientV2(clientCtx)
 	if err != nil {
 		return nil, err
 	}
