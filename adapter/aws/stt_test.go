@@ -328,6 +328,21 @@ func TestAWSSTTStreamInputPreservesReferenceEmptyLanguageModelName(t *testing.T)
 	}
 }
 
+func TestAWSSTTStreamInputPreservesReferenceEmptyVocabularyFilterName(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTVocabularyFilterName(""),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.VocabularyFilterName == nil || *input.VocabularyFilterName != "" {
+		t.Fatalf("vocabulary filter name = %v, want explicit empty reference value", input.VocabularyFilterName)
+	}
+}
+
 func TestAWSSTTStreamInputOmitsLanguageWhenIdentifyingLanguage(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTIdentifyLanguage(true),

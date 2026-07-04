@@ -31,6 +31,7 @@ type AWSSTT struct {
 	sessionID                         string
 	vocabularyFilterMethod            types.VocabularyFilterMethod
 	vocabularyFilterName              string
+	vocabularyFilterNameSet           bool
 	showSpeakerLabel                  bool
 	enableChannelIdentification       bool
 	numberOfChannels                  int32
@@ -124,6 +125,7 @@ func WithAWSSTTVocabularyFilterMethod(method types.VocabularyFilterMethod) AWSST
 func WithAWSSTTVocabularyFilterName(name string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.vocabularyFilterName = name
+		s.vocabularyFilterNameSet = true
 	}
 }
 
@@ -392,7 +394,7 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	if s.vocabularyFilterMethod != "" {
 		input.VocabularyFilterMethod = s.vocabularyFilterMethod
 	}
-	if s.vocabularyFilterName != "" {
+	if s.vocabularyFilterNameSet {
 		input.VocabularyFilterName = aws.String(s.vocabularyFilterName)
 	}
 	input.ShowSpeakerLabel = s.showSpeakerLabel
