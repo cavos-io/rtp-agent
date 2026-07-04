@@ -127,7 +127,8 @@ func TestAWSRealtimeSessionUsesReferenceDefaultSystemPrompt(t *testing.T) {
 	}
 	defer session.Close()
 
-	prompt := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[3]), "event", "textInput", "content")
+	sent := stream.snapshotSent()
+	prompt := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, sent[3]), "event", "textInput", "content")
 	if !strings.Contains(prompt, "CRITICAL LANGUAGE MIRRORING RULES") {
 		t.Fatalf("default system prompt missing reference language mirroring rules: %q", prompt)
 	}
@@ -252,7 +253,8 @@ func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) 
 	}
 	defer session.Close()
 
-	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[3]), "event", "textInput", "content"); got != "speak like a billing agent" {
+	sent := stream.snapshotSent()
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, sent[3]), "event", "textInput", "content"); got != "speak like a billing agent" {
 		t.Fatalf("system prompt = %q, want updated instructions", got)
 	}
 }
@@ -280,7 +282,7 @@ func TestAWSRealtimeSessionRestartUsesReferenceUpdatedInstructions(t *testing.T)
 		t.Fatal("Reconnect = nil, want reference restart notification")
 	}
 	waitAWSRealtimeAudioContentStart(t, second, 0)
-	texts := awsRealtimeSentTextInputContents(t, second.sent)
+	texts := awsRealtimeSentTextInputContents(t, second.snapshotSent())
 	if len(texts) == 0 || texts[0] != "speak like an escalation agent" {
 		t.Fatalf("restart text inputs = %v, want updated system instructions first", texts)
 	}
@@ -299,7 +301,8 @@ func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
 	}
 	defer session.Close()
 
-	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, stream.sent[1]), "event", "promptStart", "toolConfiguration")
+	sent := stream.snapshotSent()
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, sent[1]), "event", "promptStart", "toolConfiguration")
 	tools, ok := toolConfig["tools"].([]any)
 	if !ok || len(tools) != 1 {
 		t.Fatalf("tools = %#v, want one tool", toolConfig["tools"])
@@ -312,7 +315,7 @@ func TestAWSRealtimeSessionStartsWithReferenceTools(t *testing.T) {
 	if !strings.Contains(schema, `"query"`) {
 		t.Fatalf("tool schema = %q, want query property", schema)
 	}
-	sessionStart := mustAWSRealtimeJSONEvent(t, stream.sent[0])
+	sessionStart := mustAWSRealtimeJSONEvent(t, sent[0])
 	inference := nestedMap(t, sessionStart, "event", "sessionStart", "inferenceConfiguration")
 	assertAWSRealtimeJSONNumber(t, inference["topP"], 1.0)
 	assertAWSRealtimeJSONNumber(t, inference["temperature"], 1.0)
@@ -334,7 +337,8 @@ func TestAWSRealtimeSessionStartsWithReferenceToolChoice(t *testing.T) {
 	}
 	defer session.Close()
 
-	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, stream.sent[1]), "event", "promptStart", "toolConfiguration")
+	sent := stream.snapshotSent()
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, sent[1]), "event", "promptStart", "toolConfiguration")
 	toolChoice := nestedMap(t, map[string]any{"choice": toolConfig["toolChoice"]}, "choice")
 	if _, ok := toolChoice["any"].(map[string]any); !ok {
 		t.Fatalf("toolChoice = %#v, want reference required/any choice", toolConfig["toolChoice"])
@@ -359,7 +363,8 @@ func TestAWSRealtimeSessionAppliesReferenceInferenceOptions(t *testing.T) {
 	}
 	defer session.Close()
 
-	sessionStart := mustAWSRealtimeJSONEvent(t, stream.sent[0])
+	sent := stream.snapshotSent()
+	sessionStart := mustAWSRealtimeJSONEvent(t, sent[0])
 	inference := nestedMap(t, sessionStart, "event", "sessionStart", "inferenceConfiguration")
 	assertAWSRealtimeJSONNumber(t, inference["maxTokens"], 4096)
 	assertAWSRealtimeJSONNumber(t, inference["topP"], 0.25)
