@@ -458,7 +458,7 @@ type awsRealtimeSession struct {
 	audioCtx                 context.Context
 	audioCancel              context.CancelFunc
 	audioSenderDone          chan struct{}
-	pendingGenerationStart   chan struct{}
+	pendingGenerationStart   *awsRealtimePendingGenerationStart
 	mu                       sync.Mutex
 	closed                   bool
 }
@@ -473,6 +473,39 @@ type awsRealtimeGeneration struct {
 	contentTypes map[string]string
 	restarts     int
 	closeOnce    sync.Once
+}
+
+type awsRealtimePendingGenerationStart struct {
+	done chan struct{}
+	err  error
+	once sync.Once
+	mu   sync.Mutex
+}
+
+func newAWSRealtimePendingGenerationStart() *awsRealtimePendingGenerationStart {
+	return &awsRealtimePendingGenerationStart{done: make(chan struct{})}
+}
+
+func (p *awsRealtimePendingGenerationStart) resolve(err error) {
+	if p == nil {
+		return
+	}
+	p.once.Do(func() {
+		p.mu.Lock()
+		p.err = err
+		p.mu.Unlock()
+		close(p.done)
+	})
+}
+
+func (p *awsRealtimePendingGenerationStart) wait() error {
+	if p == nil {
+		return nil
+	}
+	<-p.done
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.err
 }
 
 type awsRealtimeStartOptions struct {
@@ -1417,7 +1450,7 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			s.mu.Lock()
 			_, alreadySent := s.sent[msg.ID]
 			s.mu.Unlock()
-			var pending chan struct{}
+			var pending *awsRealtimePendingGenerationStart
 			if !alreadySent {
 				pending = s.createPendingGenerationStart()
 			}
@@ -1702,50 +1735,61 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 	return s.waitForGenerationStart(pending)
 }
 
-func (s *awsRealtimeSession) createPendingGenerationStart() chan struct{} {
-	ch := make(chan struct{})
+func (s *awsRealtimeSession) createPendingGenerationStart() *awsRealtimePendingGenerationStart {
+	pending := newAWSRealtimePendingGenerationStart()
 	s.mu.Lock()
-	s.pendingGenerationStart = ch
+	s.pendingGenerationStart = pending
 	s.mu.Unlock()
-	return ch
+	return pending
 }
 
 func (s *awsRealtimeSession) resolvePendingGenerationStart() {
 	s.mu.Lock()
-	ch := s.pendingGenerationStart
-	if ch != nil {
+	pending := s.pendingGenerationStart
+	if pending != nil {
 		s.pendingGenerationStart = nil
 	}
 	s.mu.Unlock()
-	if ch != nil {
-		close(ch)
+	if pending != nil {
+		pending.resolve(nil)
 	}
 }
 
-func (s *awsRealtimeSession) clearPendingGenerationStart(ch chan struct{}) {
+func (s *awsRealtimeSession) rejectPendingGenerationStart(err error) {
 	s.mu.Lock()
-	if s.pendingGenerationStart == ch {
+	pending := s.pendingGenerationStart
+	if pending != nil {
+		s.pendingGenerationStart = nil
+	}
+	s.mu.Unlock()
+	if pending != nil {
+		pending.resolve(err)
+	}
+}
+
+func (s *awsRealtimeSession) clearPendingGenerationStart(pending *awsRealtimePendingGenerationStart) {
+	s.mu.Lock()
+	if s.pendingGenerationStart == pending {
 		s.pendingGenerationStart = nil
 	}
 	s.mu.Unlock()
 }
 
-func (s *awsRealtimeSession) waitForGenerationStart(ch chan struct{}) error {
+func (s *awsRealtimeSession) waitForGenerationStart(pending *awsRealtimePendingGenerationStart) error {
 	timeout := time.Duration(0)
 	if s.model != nil {
 		timeout = s.model.generateReplyTimeout
 	}
 	if timeout < 0 {
-		<-ch
-		return nil
+		return pending.wait()
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case <-ch:
-		return nil
+	case <-pending.done:
+		return pending.wait()
 	case <-timer.C:
-		s.clearPendingGenerationStart(ch)
+		s.clearPendingGenerationStart(pending)
 		return llm.NewRealtimeError("generate_reply timed out waiting for generation", nil)
 	}
 }
@@ -1787,6 +1831,7 @@ func (s *awsRealtimeSession) Close() error {
 	}
 	s.mu.Unlock()
 
+	s.rejectPendingGenerationStart(llm.NewRealtimeError("Session closed while waiting for generation", nil))
 	s.closeAudioInputSender()
 	s.closeGeneration()
 	if stream != nil {

@@ -726,6 +726,7 @@ func TestAWSRealtimeSessionUpdateChatContextIgnoresReferenceBlankUserText(t *tes
 		t.Fatalf("Session error = %v", err)
 	}
 	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
 	sentCount := len(stream.sent)
 
 	ctx := llm.NewChatContext()
@@ -2853,6 +2854,41 @@ func TestAWSRealtimeSessionGenerateReplyWaitsForReferenceChatContextGeneration(t
 	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
 	if created.Generation == nil {
 		t.Fatal("Generation = nil, want reference generation event")
+	}
+}
+
+func TestAWSRealtimeSessionCloseRejectsPendingReferenceGenerateReply(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(
+		WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}),
+		WithAWSRealtimeGenerateReplyTimeout(time.Second),
+	)
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask for the card number"})
+	}()
+	waitAWSRealtimeTextInput(t, stream, "ask for the card number")
+
+	if err := session.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-done:
+		var realtimeErr llm.RealtimeError
+		if !errors.As(err, &realtimeErr) {
+			t.Fatalf("GenerateReply error = %T %v, want RealtimeError", err, err)
+		}
+		if !strings.Contains(err.Error(), "Session closed while waiting for generation") {
+			t.Fatalf("GenerateReply error = %v, want session-closed context", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("GenerateReply did not unblock after Close")
 	}
 }
 
