@@ -136,6 +136,7 @@ type appGoogleTTSConfig struct {
 	speakingRate         float64
 	speakingRateSet      bool
 	pitch                float64
+	pitchSet             bool
 	sampleRate           *int
 	audioEncoding        *texttospeechpb.AudioEncoding
 	effectsProfileID     string
@@ -427,7 +428,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.speakingRateSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSSpeakingRate(cfg.speakingRate))
 	}
-	if cfg.pitch != 0 {
+	if cfg.pitchSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSPitch(cfg.pitch))
 	}
 	if cfg.sampleRate != nil {
@@ -4606,8 +4607,10 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	}
 	if cfg.TTSPitch != nil {
 		googleCfg.pitch = float64(*cfg.TTSPitch)
+		googleCfg.pitchSet = true
 	} else if pitch := modelOptionFloat(cfg.TTSModelOptions, "pitch"); pitch != nil {
 		googleCfg.pitch = *pitch
+		googleCfg.pitchSet = true
 	}
 	googleCfg.effectsProfileID = modelOptionString(cfg.TTSModelOptions, "effects_profile_id")
 	if volumeGainDB := modelOptionFloat(cfg.TTSModelOptions, "volume_gain_db"); volumeGainDB != nil {

@@ -13717,6 +13717,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferencePitchOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceZeroPitchOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"pitch": 0.0},
+	})
+
+	if !googleCfg.pitchSet {
+		t.Fatal("pitchSet = false, want true for explicit zero model option")
+	}
+	if googleCfg.pitch != 0 {
+		t.Fatalf("pitch = %v, want explicit zero model option", googleCfg.pitch)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceModelNameOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"model_name": "chirp_3"},
