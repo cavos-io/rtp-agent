@@ -1593,6 +1593,37 @@ func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionGenerateReplyPreservesReferenceEmptyInstructions(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{InstructionsSet: true})
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client content count = %d, want one turn-complete request", len(liveSession.clientContents))
+	}
+	turns := liveSession.clientContents[0].Turns
+	if len(turns) != 2 {
+		t.Fatalf("turn count = %d, want empty instructions plus placeholder user turn", len(turns))
+	}
+	if turns[0].Role != "model" || len(turns[0].Parts) != 1 || turns[0].Parts[0].Text != "" {
+		t.Fatalf("instruction turn = %#v, want explicit empty model instruction", turns[0])
+	}
+	if turns[1].Role != "user" || len(turns[1].Parts) != 1 || turns[1].Parts[0].Text != "." {
+		t.Fatalf("placeholder turn = %#v, want user dot", turns[1])
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplySendFailureKeepsReferencePending(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{
 		serverMessages:       make(chan *genai.LiveServerMessage, 1),

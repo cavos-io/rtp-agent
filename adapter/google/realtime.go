@@ -1408,7 +1408,7 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		return err
 	}
 	turns := make([]*genai.Content, 0, 2)
-	if options.Instructions != "" {
+	if options.InstructionsSet || options.Instructions != "" {
 		turns = append(turns, &genai.Content{
 			Role:  "model",
 			Parts: []*genai.Part{{Text: options.Instructions}},
