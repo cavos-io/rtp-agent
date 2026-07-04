@@ -13609,6 +13609,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferencePitchOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceModelNameOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"model_name": "chirp_3"},
+	})
+
+	if googleCfg.model != "chirp_3" {
+		t.Fatalf("model = %q, want model option model_name", googleCfg.model)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"
