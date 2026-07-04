@@ -989,6 +989,13 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	}
 	s.trackGenerationContentStart(payload)
 	if audioOutput := awsRealtimeNestedMap(payload, "event", "audioOutput"); audioOutput != nil {
+		contentID, ok := awsRealtimeRequiredMapString(audioOutput, "contentId")
+		if !ok {
+			return true
+		}
+		if !s.isProviderAssistantAudio(contentID) {
+			return true
+		}
 		audioContent, ok := awsRealtimeRequiredMapString(audioOutput, "content")
 		if !ok {
 			return true
@@ -1006,7 +1013,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			})
 			return false
 		}
-		if s.sendGenerationAudio(awsRealtimeMapString(audioOutput, "contentId"), data) {
+		if s.sendGenerationAudio(contentID, data) {
 			s.markLastAudioOutput()
 			s.emit(llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeAudio,
@@ -1215,6 +1222,12 @@ func (s *awsRealtimeSession) isProviderAssistantText(contentID string) bool {
 		return true
 	}
 	return s.noGenerationContentRoles[contentID] == "ASSISTANT"
+}
+
+func (s *awsRealtimeSession) isProviderAssistantAudio(contentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.generation != nil && s.generation.contentTypes[contentID] == "ASSISTANT_AUDIO"
 }
 
 func (s *awsRealtimeSession) updateProviderTextHistory(role llm.ChatRole, text string, contentID string) {

@@ -2353,6 +2353,41 @@ func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionIgnoresReferenceInvalidUntrackedAudioOutput(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"stray-audio","content":"not-base64"}}}`)
+
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeError)
+	select {
+	case frame := <-msg.AudioCh:
+		t.Fatalf("generation audio frame = %#v, want no frame for invalid untracked audio", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+	awsSession.mu.Lock()
+	activeGeneration := awsSession.generation != nil
+	awsSession.mu.Unlock()
+	if !activeGeneration {
+		t.Fatal("generation closed, want invalid untracked audio ignored before decode")
+	}
+}
+
 func TestAWSRealtimeSessionStreamsReferenceAssistantTextWithoutOutputRole(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
