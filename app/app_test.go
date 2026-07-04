@@ -13589,6 +13589,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferencePromptOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"speaking_rate": 0.92},
+	})
+
+	if googleCfg.speakingRate != 0.92 {
+		t.Fatalf("speakingRate = %v, want model option speaking_rate", googleCfg.speakingRate)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"

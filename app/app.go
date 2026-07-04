@@ -4472,6 +4472,8 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate
 	} else if appTTSSpeedConfigured(cfg) {
 		googleCfg.speakingRate = cfg.TTSSpeed
+	} else if speakingRate := modelOptionFloat(cfg.TTSModelOptions, "speaking_rate"); speakingRate != nil {
+		googleCfg.speakingRate = *speakingRate
 	}
 	if cfg.TTSPitch != nil {
 		googleCfg.pitch = float64(*cfg.TTSPitch)
