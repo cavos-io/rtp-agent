@@ -3651,12 +3651,14 @@ func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
 		Role:    llm.ChatRoleUser,
 		Content: []llm.ChatContent{{Text: "hello sonic"}},
 	})
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.UpdateChatContext(ctx); err != nil {
 		t.Fatalf("UpdateChatContext error = %v", err)
 	}
-	if len(stream.sent) != sentCount {
-		t.Fatalf("audio transcript user text sent %d events, want none", len(stream.sent)-sentCount)
+	sent = stream.snapshotSent()
+	if len(sent) != sentCount {
+		t.Fatalf("audio transcript user text sent %d events, want none", len(sent)-sentCount)
 	}
 }
 
