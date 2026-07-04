@@ -929,6 +929,34 @@ func TestAWSLLMStreamRejectsReferenceMetadataWithoutUsage(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamRejectsReferenceMetadataWithoutTokenCounts(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberMetadata{
+		Value: awstypes.ConverseStreamMetadataEvent{
+			Usage: &awstypes.TokenUsage{CacheReadInputTokens: awsInt32(2)},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil for malformed usage", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
+	}
+}
+
 func TestAWSLLMStreamKeepsUsageAfterMessageStop(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberMessageStop{}

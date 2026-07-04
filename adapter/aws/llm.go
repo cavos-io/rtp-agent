@@ -883,6 +883,10 @@ func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 				s.closeContext()
 				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: metadata missing usage", !s.emittedChunk)
 			}
+			if v.Value.Usage.InputTokens == nil || v.Value.Usage.OutputTokens == nil || v.Value.Usage.TotalTokens == nil {
+				s.closeContext()
+				return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: metadata usage missing token counts", !s.emittedChunk)
+			}
 			s.emittedChunk = true
 			return &llm.ChatChunk{
 				ID: s.requestID,
