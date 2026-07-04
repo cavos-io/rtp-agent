@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -106,6 +107,7 @@ import (
 	"github.com/cavos-io/rtp-agent/library/plugin"
 	"github.com/cavos-io/rtp-agent/library/telemetry"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/cavos-io/rtp-agent/library/utils/images"
 	"github.com/livekit/protocol/livekit"
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
@@ -161,6 +163,7 @@ type appGoogleRealtimeConfig struct {
 	project                  string
 	location                 string
 	voice                    string
+	instructions             string
 	language                 string
 	modalities               []string
 	turnDetection            *bool
@@ -170,13 +173,18 @@ type appGoogleRealtimeConfig struct {
 	maxOutputTokens          int
 	topP                     *float64
 	topK                     int
+	candidateCount           int
+	presencePenalty          *float64
+	frequencyPenalty         *float64
 	proactivity              *bool
 	affectiveDialog          *bool
 	apiVersion               string
+	httpOptions              *genai.HTTPOptions
 	realtimeInputConfig      *genai.RealtimeInputConfig
 	contextWindowCompression *genai.ContextWindowCompressionConfig
 	thinkingConfig           *genai.ThinkingConfig
 	mediaResolution          genai.MediaResolution
+	imageEncodeOptions       *images.EncodeOptions
 	sessionResumptionHandle  string
 	connectOptions           *llm.APIConnectOptions
 	toolResponseScheduling   genai.FunctionResponseScheduling
@@ -196,6 +204,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.voice != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeVoice(c.voice))
+	}
+	if c.instructions != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeInstructions(c.instructions))
 	}
 	if c.language != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeLanguage(c.language))
@@ -224,6 +235,15 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	if c.topK > 0 {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeTopK(c.topK))
 	}
+	if c.candidateCount > 0 {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeCandidateCount(c.candidateCount))
+	}
+	if c.presencePenalty != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimePresencePenalty(*c.presencePenalty))
+	}
+	if c.frequencyPenalty != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeFrequencyPenalty(*c.frequencyPenalty))
+	}
 	if c.proactivity != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeProactivity(*c.proactivity))
 	}
@@ -232,6 +252,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.apiVersion != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeAPIVersion(c.apiVersion))
+	}
+	if c.httpOptions != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeHTTPOptions(c.httpOptions))
 	}
 	if c.realtimeInputConfig != nil {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeInputConfig(c.realtimeInputConfig))
@@ -244,6 +267,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.mediaResolution != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeMediaResolution(c.mediaResolution))
+	}
+	if c.imageEncodeOptions != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeImageEncodeOptions(*c.imageEncodeOptions))
 	}
 	if c.sessionResumptionHandle != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeSessionResumptionHandle(c.sessionResumptionHandle))
@@ -4259,7 +4285,67 @@ func googleSTTAdaptationFromOptions(options map[string]any) *speechpb.SpeechAdap
 	if adaptation, ok := options["speech_adaptation"].(*speechpb.SpeechAdaptation); ok {
 		return adaptation
 	}
+	if adaptation := googleSTTAdaptationFromModelOption(options["adaptation"]); adaptation != nil {
+		return adaptation
+	}
+	if adaptation := googleSTTAdaptationFromModelOption(options["speech_adaptation"]); adaptation != nil {
+		return adaptation
+	}
 	return nil
+}
+
+func googleSTTAdaptationFromModelOption(value any) *speechpb.SpeechAdaptation {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	phraseSetValues, ok := anySlice(options["phrase_sets"])
+	if !ok {
+		return nil
+	}
+	adaptation := &speechpb.SpeechAdaptation{}
+	for _, phraseSetValue := range phraseSetValues {
+		phraseSetOptions, ok := phraseSetValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		phrases := googleSTTPhraseSetPhrasesFromModelOption(phraseSetOptions["phrases"])
+		if len(phrases) == 0 {
+			continue
+		}
+		adaptation.PhraseSets = append(adaptation.PhraseSets, &speechpb.PhraseSet{
+			Name:    modelOptionString(phraseSetOptions, "name"),
+			Phrases: phrases,
+		})
+	}
+	if len(adaptation.PhraseSets) == 0 {
+		return nil
+	}
+	return adaptation
+}
+
+func googleSTTPhraseSetPhrasesFromModelOption(value any) []*speechpb.PhraseSet_Phrase {
+	phraseValues, ok := anySlice(value)
+	if !ok {
+		return nil
+	}
+	phrases := make([]*speechpb.PhraseSet_Phrase, 0, len(phraseValues))
+	for _, phraseValue := range phraseValues {
+		phraseOptions, ok := phraseValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := modelOptionString(phraseOptions, "value")
+		if text == "" {
+			continue
+		}
+		phrase := &speechpb.PhraseSet_Phrase{Value: text}
+		if boost := modelOptionFloat(phraseOptions, "boost"); boost != nil {
+			phrase.Boost = float32(*boost)
+		}
+		phrases = append(phrases, phrase)
+	}
+	return phrases
 }
 
 func googleSTTAdaptationV2FromOptions(options map[string]any) *speechv2pb.SpeechAdaptation {
@@ -4272,7 +4358,72 @@ func googleSTTAdaptationV2FromOptions(options map[string]any) *speechv2pb.Speech
 	if adaptation, ok := options["speech_adaptation"].(*speechv2pb.SpeechAdaptation); ok {
 		return adaptation
 	}
+	if adaptation := googleSTTAdaptationV2FromModelOption(options["adaptation"]); adaptation != nil {
+		return adaptation
+	}
+	if adaptation := googleSTTAdaptationV2FromModelOption(options["speech_adaptation"]); adaptation != nil {
+		return adaptation
+	}
 	return nil
+}
+
+func googleSTTAdaptationV2FromModelOption(value any) *speechv2pb.SpeechAdaptation {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	phraseSetValues, ok := anySlice(options["phrase_sets"])
+	if !ok {
+		return nil
+	}
+	adaptation := &speechv2pb.SpeechAdaptation{}
+	for _, phraseSetValue := range phraseSetValues {
+		phraseSetOptions, ok := phraseSetValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		inlineOptions, ok := phraseSetOptions["inline_phrase_set"].(map[string]any)
+		if !ok {
+			continue
+		}
+		phrases := googleSTTV2PhraseSetPhrasesFromModelOption(inlineOptions["phrases"])
+		if len(phrases) == 0 {
+			continue
+		}
+		adaptation.PhraseSets = append(adaptation.PhraseSets, &speechv2pb.SpeechAdaptation_AdaptationPhraseSet{
+			Value: &speechv2pb.SpeechAdaptation_AdaptationPhraseSet_InlinePhraseSet{
+				InlinePhraseSet: &speechv2pb.PhraseSet{Phrases: phrases},
+			},
+		})
+	}
+	if len(adaptation.PhraseSets) == 0 {
+		return nil
+	}
+	return adaptation
+}
+
+func googleSTTV2PhraseSetPhrasesFromModelOption(value any) []*speechv2pb.PhraseSet_Phrase {
+	phraseValues, ok := anySlice(value)
+	if !ok {
+		return nil
+	}
+	phrases := make([]*speechv2pb.PhraseSet_Phrase, 0, len(phraseValues))
+	for _, phraseValue := range phraseValues {
+		phraseOptions, ok := phraseValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		text := modelOptionString(phraseOptions, "value")
+		if text == "" {
+			continue
+		}
+		phrase := &speechv2pb.PhraseSet_Phrase{Value: text}
+		if boost := modelOptionFloat(phraseOptions, "boost"); boost != nil {
+			phrase.Boost = float32(*boost)
+		}
+		phrases = append(phrases, phrase)
+	}
+	return phrases
 }
 
 func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adaptergoogle.GoogleSTTKeyword {
@@ -4305,6 +4456,26 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		streaming:  cfg.TTSStreaming,
 		ssml:       cfg.TTSEnableSSMLParsing,
 	}
+	if googleCfg.voice == "" {
+		googleCfg.voice = modelOptionString(cfg.TTSModelOptions, "voice_name")
+	}
+	if googleCfg.cloneKey == "" {
+		googleCfg.cloneKey = modelOptionString(cfg.TTSModelOptions, "voice_cloning_key")
+	}
+	if googleCfg.model == "" {
+		googleCfg.model = modelOptionString(cfg.TTSModelOptions, "model_name")
+	}
+	if googleCfg.prompt == "" {
+		googleCfg.prompt = modelOptionString(cfg.TTSModelOptions, "prompt")
+	}
+	if googleCfg.sampleRate == nil {
+		if sampleRate, ok := modelOptionIntValue(cfg.TTSModelOptions, "sample_rate"); ok {
+			googleCfg.sampleRate = &sampleRate
+		}
+	}
+	if googleCfg.streaming == nil {
+		googleCfg.streaming = modelOptionBool(cfg.TTSModelOptions, "use_streaming")
+	}
 	googleCfg.audioEncoding = googleTTSAudioEncodingFromConfig(cfg)
 	switch {
 	case strings.EqualFold(cfg.TTSTextType, "markup"):
@@ -4314,13 +4485,20 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		ssml := true
 		googleCfg.ssml = &ssml
 	}
+	if googleCfg.markup == nil && googleCfg.ssml == nil {
+		googleCfg.markup = modelOptionBool(cfg.TTSModelOptions, "use_markup")
+	}
 	if cfg.TTSSpeakingRate != nil {
 		googleCfg.speakingRate = *cfg.TTSSpeakingRate
 	} else if appTTSSpeedConfigured(cfg) {
 		googleCfg.speakingRate = cfg.TTSSpeed
+	} else if speakingRate := modelOptionFloat(cfg.TTSModelOptions, "speaking_rate"); speakingRate != nil {
+		googleCfg.speakingRate = *speakingRate
 	}
 	if cfg.TTSPitch != nil {
 		googleCfg.pitch = float64(*cfg.TTSPitch)
+	} else if pitch := modelOptionFloat(cfg.TTSModelOptions, "pitch"); pitch != nil {
+		googleCfg.pitch = *pitch
 	}
 	googleCfg.effectsProfileID = modelOptionString(cfg.TTSModelOptions, "effects_profile_id")
 	if volumeGainDB := modelOptionFloat(cfg.TTSModelOptions, "volume_gain_db"); volumeGainDB != nil {
@@ -4353,8 +4531,73 @@ func googleTTSAudioEncodingFromConfig(cfg AppConfig) *texttospeechpb.AudioEncodi
 }
 
 func googleTTSCustomPronunciationsFromOptions(options map[string]any) *texttospeechpb.CustomPronunciations {
-	custom, _ := options["custom_pronunciations"].(*texttospeechpb.CustomPronunciations)
+	value, ok := options["custom_pronunciations"]
+	if !ok {
+		return nil
+	}
+	if custom, ok := value.(*texttospeechpb.CustomPronunciations); ok {
+		return custom
+	}
+	config, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	items, ok := anySlice(config["pronunciations"])
+	if !ok {
+		return nil
+	}
+	custom := &texttospeechpb.CustomPronunciations{}
+	for _, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		phrase := modelOptionString(itemMap, "phrase")
+		pronunciation := modelOptionString(itemMap, "pronunciation")
+		encoding, ok := googleTTSCustomPronunciationEncoding(itemMap)
+		if phrase == "" || pronunciation == "" || !ok {
+			continue
+		}
+		custom.Pronunciations = append(custom.Pronunciations, &texttospeechpb.CustomPronunciationParams{
+			Phrase:           &phrase,
+			PhoneticEncoding: &encoding,
+			Pronunciation:    &pronunciation,
+		})
+	}
+	if len(custom.Pronunciations) == 0 {
+		return nil
+	}
 	return custom
+}
+
+func googleTTSCustomPronunciationEncoding(options map[string]any) (texttospeechpb.CustomPronunciationParams_PhoneticEncoding, bool) {
+	value := modelOptionString(options, "phonetic_encoding")
+	if value == "" {
+		value = modelOptionString(options, "phoneticEncoding")
+	}
+	if value == "" {
+		return 0, false
+	}
+	normalized := strings.ToUpper(strings.ReplaceAll(value, "-", "_"))
+	if enumValue, ok := texttospeechpb.CustomPronunciationParams_PhoneticEncoding_value[normalized]; ok {
+		return texttospeechpb.CustomPronunciationParams_PhoneticEncoding(enumValue), true
+	}
+	return 0, false
+}
+
+func anySlice(value any) ([]any, bool) {
+	switch typed := value.(type) {
+	case []any:
+		return typed, true
+	case []map[string]any:
+		items := make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+		return items, true
+	default:
+		return nil, false
+	}
 }
 
 func liveKitTTSOptionsFromConfig(cfg AppConfig) ([]adapterlivekit.TTSOption, error) {
@@ -7109,6 +7352,12 @@ func llmExtraParamsFromConfig(cfg AppConfig) map[string]any {
 			if params == nil {
 				params = make(map[string]any)
 			}
+			if key == "http_options" {
+				if httpOptions := googleHTTPOptionsFromModelOption(value); httpOptions != nil {
+					params[key] = httpOptions
+				}
+				continue
+			}
 			params[key] = value
 		}
 	}
@@ -7136,6 +7385,7 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.project = modelOptionString(cfg.RealtimeModelOptions, "project")
 	googleCfg.location = modelOptionString(cfg.RealtimeModelOptions, "location")
 	googleCfg.voice = modelOptionString(cfg.RealtimeModelOptions, "voice")
+	googleCfg.instructions = modelOptionString(cfg.RealtimeModelOptions, "instructions")
 	googleCfg.language = modelOptionString(cfg.RealtimeModelOptions, "language")
 	googleCfg.modalities = modelOptionStringList(cfg.RealtimeModelOptions, "modalities")
 	if turnDetection := modelOptionBool(cfg.RealtimeModelOptions, "turn_detection"); turnDetection != nil {
@@ -7151,6 +7401,9 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.maxOutputTokens = modelOptionInt(cfg.RealtimeModelOptions, "max_output_tokens")
 	googleCfg.topP = modelOptionFloat(cfg.RealtimeModelOptions, "top_p")
 	googleCfg.topK = modelOptionInt(cfg.RealtimeModelOptions, "top_k")
+	googleCfg.candidateCount = modelOptionInt(cfg.RealtimeModelOptions, "candidate_count")
+	googleCfg.presencePenalty = modelOptionFloat(cfg.RealtimeModelOptions, "presence_penalty")
+	googleCfg.frequencyPenalty = modelOptionFloat(cfg.RealtimeModelOptions, "frequency_penalty")
 	if proactivity := modelOptionBool(cfg.RealtimeModelOptions, "proactivity"); proactivity != nil {
 		googleCfg.proactivity = proactivity
 	}
@@ -7158,10 +7411,12 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 		googleCfg.affectiveDialog = affectiveDialog
 	}
 	googleCfg.apiVersion = modelOptionString(cfg.RealtimeModelOptions, "api_version")
+	googleCfg.httpOptions = googleHTTPOptionsFromModelOption(cfg.RealtimeModelOptions["http_options"])
 	googleCfg.realtimeInputConfig = googleRealtimeInputConfigFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.contextWindowCompression = googleRealtimeContextWindowCompressionFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.thinkingConfig = googleRealtimeThinkingConfigFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.mediaResolution = genai.MediaResolution(modelOptionString(cfg.RealtimeModelOptions, "media_resolution"))
+	googleCfg.imageEncodeOptions = googleRealtimeImageEncodeOptionsFromModelOption(cfg.RealtimeModelOptions["image_encode_options"])
 	googleCfg.sessionResumptionHandle = modelOptionString(cfg.RealtimeModelOptions, "session_resumption_handle")
 	googleCfg.connectOptions = googleRealtimeConnectOptionsFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.toolResponseScheduling = genai.FunctionResponseScheduling(modelOptionString(cfg.RealtimeModelOptions, "tool_response_scheduling"))
@@ -7238,8 +7493,44 @@ func googleRealtimeInputConfigFromOptions(options map[string]any) *genai.Realtim
 	return &config
 }
 
+func googleRealtimeImageEncodeOptionsFromModelOption(value any) *images.EncodeOptions {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	result := images.NewEncodeOptions()
+	if format := modelOptionString(options, "format"); format != "" {
+		result.Format = format
+	}
+	if quality, ok := modelOptionIntValue(options, "quality"); ok {
+		result.Quality = quality
+	}
+	if width, ok := modelOptionIntValue(options, "width"); ok {
+		result.Width = width
+	}
+	if height, ok := modelOptionIntValue(options, "height"); ok {
+		result.Height = height
+	}
+	if strategy := modelOptionString(options, "strategy"); strategy != "" {
+		result.Strategy = strategy
+	}
+	if resizeOptions, ok := options["resize_options"].(map[string]any); ok {
+		if width, ok := modelOptionIntValue(resizeOptions, "width"); ok {
+			result.Width = width
+		}
+		if height, ok := modelOptionIntValue(resizeOptions, "height"); ok {
+			result.Height = height
+		}
+		if strategy := modelOptionString(resizeOptions, "strategy"); strategy != "" {
+			result.Strategy = strategy
+		}
+	}
+	return &result
+}
+
 var googleLLMExtraParamKeys = []string{
 	"cached_content",
+	"http_options",
 	"temperature",
 	"top_p",
 	"top_k",
@@ -7269,6 +7560,85 @@ var googleLLMExtraParamKeys = []string{
 	"media_resolution",
 	"tool_config",
 	"retrieval_config",
+}
+
+func googleHTTPOptionsFromModelOption(value any) *genai.HTTPOptions {
+	options, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	result := &genai.HTTPOptions{}
+	if baseURL, ok := options["base_url"].(string); ok {
+		result.BaseURL = baseURL
+	} else if baseURL, ok := options["baseUrl"].(string); ok {
+		result.BaseURL = baseURL
+	}
+	if apiVersion, ok := options["api_version"].(string); ok {
+		result.APIVersion = apiVersion
+	} else if apiVersion, ok := options["apiVersion"].(string); ok {
+		result.APIVersion = apiVersion
+	}
+	if timeout, ok := modelOptionDurationMilliseconds(options, "timeout"); ok {
+		result.Timeout = &timeout
+	} else if timeout, ok := modelOptionDurationMilliseconds(options, "timeout_ms"); ok {
+		result.Timeout = &timeout
+	}
+	result.Headers = googleLLMHTTPHeadersFromModelOption(options["headers"])
+	if extraBody, ok := options["extra_body"].(map[string]any); ok {
+		result.ExtraBody = cloneAppAnyMap(extraBody)
+	} else if extraBody, ok := options["extraBody"].(map[string]any); ok {
+		result.ExtraBody = cloneAppAnyMap(extraBody)
+	}
+	if result.BaseURL == "" && result.APIVersion == "" && result.Timeout == nil && len(result.Headers) == 0 && len(result.ExtraBody) == 0 {
+		return nil
+	}
+	return result
+}
+
+func modelOptionDurationMilliseconds(options map[string]any, key string) (time.Duration, bool) {
+	value, ok := modelOptionIntValue(options, key)
+	if !ok {
+		return 0, false
+	}
+	return time.Duration(value) * time.Millisecond, true
+}
+
+func googleLLMHTTPHeadersFromModelOption(value any) http.Header {
+	headers := http.Header{}
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return headers
+	}
+	for key, value := range raw {
+		values := googleLLMHTTPHeaderValues(value)
+		if len(values) > 0 {
+			headers[key] = values
+		}
+	}
+	return headers
+}
+
+func googleLLMHTTPHeaderValues(value any) []string {
+	switch typed := value.(type) {
+	case string:
+		if typed == "" {
+			return nil
+		}
+		return []string{typed}
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			str, ok := item.(string)
+			if ok && str != "" {
+				values = append(values, str)
+			}
+		}
+		return values
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return nil
+	}
 }
 
 func googleLLMToolChoiceFromConfig(cfg AppConfig) llm.ToolChoice {

@@ -3298,6 +3298,45 @@ func TestGoogleRealtimeSessionPushVideoSendsReferenceJPEGInput(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionPushVideoUsesReferenceEncodeOptions(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}),
+		WithGoogleRealtimeImageEncodeOptions(images.EncodeOptions{Format: "PNG"}),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.PushVideo(&images.VideoFrame{
+		Data:   []byte{255, 0, 0, 255},
+		Width:  1,
+		Height: 1,
+		Format: "rgba",
+	})
+	if err != nil {
+		t.Fatalf("PushVideo error = %v", err)
+	}
+
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs = %d, want one video input", len(liveSession.inputs))
+	}
+	video := liveSession.inputs[0].Video
+	if video == nil {
+		t.Fatal("video input = nil, want PNG blob")
+	}
+	if video.MIMEType != "image/jpeg" {
+		t.Fatalf("video MIME type = %q, want reference hardcoded image/jpeg", video.MIMEType)
+	}
+	if !bytes.HasPrefix(video.Data, []byte{0x89, 'P', 'N', 'G'}) {
+		t.Fatalf("video bytes prefix = % x, want PNG encoded data from reference encode options", video.Data[:min(len(video.Data), 4)])
+	}
+}
+
 func TestGoogleRealtimeSessionIgnoresClientEventsAfterClose(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))

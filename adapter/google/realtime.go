@@ -85,6 +85,7 @@ type RealtimeModel struct {
 	contextWindowCompression  *genai.ContextWindowCompressionConfig
 	thinkingConfig            *genai.ThinkingConfig
 	mediaResolution           genai.MediaResolution
+	imageEncodeOptions        images.EncodeOptions
 	httpOptions               *genai.HTTPOptions
 	connectOptions            llm.APIConnectOptions
 	realtimeInputConfig       *genai.RealtimeInputConfig
@@ -139,6 +140,8 @@ type googleRealtimeOptions struct {
 	contextWindowCompression  *genai.ContextWindowCompressionConfig
 	thinkingConfig            *genai.ThinkingConfig
 	mediaResolution           genai.MediaResolution
+	imageEncodeOptions        images.EncodeOptions
+	imageEncodeOptionsSet     bool
 	httpOptions               *genai.HTTPOptions
 	apiVersion                string
 	apiVersionSet             bool
@@ -326,6 +329,13 @@ func WithGoogleRealtimeMediaResolution(resolution genai.MediaResolution) GoogleR
 	}
 }
 
+func WithGoogleRealtimeImageEncodeOptions(encodeOptions images.EncodeOptions) GoogleRealtimeOption {
+	return func(options *googleRealtimeOptions) {
+		options.imageEncodeOptions = encodeOptions
+		options.imageEncodeOptionsSet = true
+	}
+}
+
 func WithGoogleRealtimeHTTPOptions(httpOptions *genai.HTTPOptions) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.httpOptions = httpOptions
@@ -489,6 +499,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		contextWindowCompression:  options.contextWindowCompression,
 		thinkingConfig:            options.thinkingConfig,
 		mediaResolution:           options.mediaResolution,
+		imageEncodeOptions:        googleRealtimeImageEncodeOptions(options),
 		httpOptions:               options.httpOptions,
 		connectOptions:            connectOptions,
 		realtimeInputConfig:       options.realtimeInputConfig,
@@ -497,6 +508,13 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		apiVersionSet:             options.apiVersionSet,
 		connector:                 options.connector,
 	}, nil
+}
+
+func googleRealtimeImageEncodeOptions(options googleRealtimeOptions) images.EncodeOptions {
+	if options.imageEncodeOptionsSet {
+		return options.imageEncodeOptions
+	}
+	return images.NewEncodeOptions()
 }
 
 func (m *RealtimeModel) UpdateOptions(opts ...GoogleRealtimeOption) {
@@ -677,6 +695,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		eventCh:                  make(chan llm.RealtimeEvent, 16),
 		audioStream:              audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
 		inputAudio:               &googleRealtimeInputAudioNormalizer{},
+		imageEncodeOptions:       m.imageEncodeOptions,
 		sessionResumptionHandle:  m.sessionResumptionHandle,
 		manualActivityDetection:  googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
 		suppressActivityStart:    googleRealtimeNoInterruption(m.realtimeInputConfig),
@@ -974,6 +993,7 @@ type googleRealtimeSession struct {
 	eventCh                  chan llm.RealtimeEvent
 	audioStream              *audio.AudioByteStream
 	inputAudio               *googleRealtimeInputAudioNormalizer
+	imageEncodeOptions       images.EncodeOptions
 	generation               *googleRealtimeGeneration
 	responseSeq              int
 	pendingReply             bool
@@ -2300,7 +2320,7 @@ func (s *googleRealtimeSession) PushVideo(frame *images.VideoFrame) error {
 	if s == nil || frame == nil || s.isClosed() {
 		return nil
 	}
-	data, err := images.Encode(frame, images.NewEncodeOptions())
+	data, err := images.Encode(frame, s.imageEncodeOptions)
 	if err != nil {
 		return err
 	}

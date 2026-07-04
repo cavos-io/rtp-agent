@@ -13469,6 +13469,27 @@ func TestDefaultConfigFromEnvMapsGoogleLLMModelOptionsToChatOptions(t *testing.T
 	}
 }
 
+func TestDefaultConfigFromEnvMapsGoogleLLMHTTPOptions(t *testing.T) {
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `http_options={"timeout":2500,"headers":{"x-test":["yes"]}}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	options, ok := app.Session.Options.LLMExtraParams["http_options"].(*genai.HTTPOptions)
+	if !ok || options == nil {
+		t.Fatalf("http_options = %#v, want *genai.HTTPOptions", app.Session.Options.LLMExtraParams["http_options"])
+	}
+	if options.Timeout == nil || *options.Timeout != 2500*time.Millisecond {
+		t.Fatalf("http_options timeout = %#v, want 2.5s", options.Timeout)
+	}
+	if got := options.Headers["x-test"]; len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("http_options headers = %#v, want x-test yes", options.Headers)
+	}
+}
+
 func numericTestValue(value any) float64 {
 	switch typed := value.(type) {
 	case int:
@@ -13558,6 +13579,96 @@ func TestDefaultConfigFromEnvSelectsGoogleTTS(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferencePromptOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"prompt": "sound calm"},
+	})
+
+	if googleCfg.prompt != "sound calm" {
+		t.Fatalf("prompt = %q, want model option prompt", googleCfg.prompt)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"speaking_rate": 0.92},
+	})
+
+	if googleCfg.speakingRate != 0.92 {
+		t.Fatalf("speakingRate = %v, want model option speaking_rate", googleCfg.speakingRate)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferencePitchOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"pitch": -1.5},
+	})
+
+	if googleCfg.pitch != -1.5 {
+		t.Fatalf("pitch = %v, want model option pitch", googleCfg.pitch)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceModelNameOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"model_name": "chirp_3"},
+	})
+
+	if googleCfg.model != "chirp_3" {
+		t.Fatalf("model = %q, want model option model_name", googleCfg.model)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceNameOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"voice_name": "en-US-Chirp3-HD-Charon"},
+	})
+
+	if googleCfg.voice != "en-US-Chirp3-HD-Charon" {
+		t.Fatalf("voice = %q, want model option voice_name", googleCfg.voice)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceCloningKeyOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"voice_cloning_key": "clone-key-test"},
+	})
+
+	if googleCfg.cloneKey != "clone-key-test" {
+		t.Fatalf("clone key = %q, want model option voice_cloning_key", googleCfg.cloneKey)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceSampleRateOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"sample_rate": "16000"},
+	})
+
+	if googleCfg.sampleRate == nil || *googleCfg.sampleRate != 16000 {
+		t.Fatalf("sample rate = %v, want model option sample_rate", googleCfg.sampleRate)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"use_streaming": "false"},
+	})
+
+	if googleCfg.streaming == nil || *googleCfg.streaming {
+		t.Fatalf("streaming = %v, want model option use_streaming false", googleCfg.streaming)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceUseMarkupOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"use_markup": true},
+	})
+
+	if googleCfg.markup == nil || !*googleCfg.markup {
+		t.Fatalf("markup = %v, want model option use_markup true", googleCfg.markup)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"
@@ -13576,6 +13687,34 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testin
 
 	if googleCfg.customPronunciations != custom {
 		t.Fatalf("custom pronunciations = %#v, want configured value", googleCfg.customPronunciations)
+	}
+}
+
+func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciationJSON(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{
+			"custom_pronunciations": map[string]any{
+				"pronunciations": []any{map[string]any{
+					"phrase":            "Cavos",
+					"phonetic_encoding": "PHONETIC_ENCODING_X_SAMPA",
+					"pronunciation":     "keIvAs",
+				}},
+			},
+		},
+	})
+
+	if googleCfg.customPronunciations == nil || len(googleCfg.customPronunciations.Pronunciations) != 1 {
+		t.Fatalf("custom pronunciations = %#v, want one parsed pronunciation", googleCfg.customPronunciations)
+	}
+	got := googleCfg.customPronunciations.Pronunciations[0]
+	if got.GetPhrase() != "Cavos" {
+		t.Fatalf("phrase = %q, want Cavos", got.GetPhrase())
+	}
+	if got.GetPronunciation() != "keIvAs" {
+		t.Fatalf("pronunciation = %q, want keIvAs", got.GetPronunciation())
+	}
+	if got.GetPhoneticEncoding() != texttospeechpb.CustomPronunciationParams_PHONETIC_ENCODING_X_SAMPA {
+		t.Fatalf("phonetic encoding = %v, want X-SAMPA", got.GetPhoneticEncoding())
 	}
 }
 
@@ -13789,6 +13928,39 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceV2Adaptation(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceV2AdaptationJSON(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"adaptation": map[string]any{
+				"phrase_sets": []any{map[string]any{
+					"inline_phrase_set": map[string]any{
+						"phrases": []any{map[string]any{
+							"value": "Acrux",
+							"boost": 20.0,
+						}},
+					},
+				}},
+			},
+		},
+	})
+
+	adaptation := googleCfg.adaptationV2
+	if adaptation == nil || len(adaptation.GetPhraseSets()) != 1 {
+		t.Fatalf("adaptationV2 = %#v, want one parsed phrase set", adaptation)
+	}
+	phraseSet := adaptation.GetPhraseSets()[0].GetInlinePhraseSet()
+	if phraseSet == nil || len(phraseSet.GetPhrases()) != 1 {
+		t.Fatalf("inline phrase set = %#v, want one parsed phrase", phraseSet)
+	}
+	phrase := phraseSet.GetPhrases()[0]
+	if phrase.GetValue() != "Acrux" {
+		t.Fatalf("phrase value = %q, want Acrux", phrase.GetValue())
+	}
+	if phrase.GetBoost() != 20 {
+		t.Fatalf("phrase boost = %v, want 20", phrase.GetBoost())
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceV1Adaptation(t *testing.T) {
 	adaptation := &speechpb.SpeechAdaptation{
 		PhraseSets: []*speechpb.PhraseSet{{
@@ -13807,6 +13979,41 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceV1Adaptation(t *testing.T) {
 
 	if googleCfg.adaptation != adaptation {
 		t.Fatalf("adaptation = %#v, want reference Google STT v1 adaptation", googleCfg.adaptation)
+	}
+}
+
+func TestGoogleSTTConfigFromAppConfigMapsReferenceV1AdaptationJSON(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{
+			"adaptation": map[string]any{
+				"phrase_sets": []any{map[string]any{
+					"name": "domain",
+					"phrases": []any{map[string]any{
+						"value": "Acrux",
+						"boost": 20.0,
+					}},
+				}},
+			},
+		},
+	})
+
+	adaptation := googleCfg.adaptation
+	if adaptation == nil || len(adaptation.PhraseSets) != 1 {
+		t.Fatalf("adaptation = %#v, want one parsed phrase set", adaptation)
+	}
+	phraseSet := adaptation.PhraseSets[0]
+	if phraseSet.Name != "domain" {
+		t.Fatalf("phrase set name = %q, want domain", phraseSet.Name)
+	}
+	if len(phraseSet.Phrases) != 1 {
+		t.Fatalf("phrases = %#v, want one parsed phrase", phraseSet.Phrases)
+	}
+	phrase := phraseSet.Phrases[0]
+	if phrase.Value != "Acrux" {
+		t.Fatalf("phrase value = %q, want Acrux", phrase.Value)
+	}
+	if phrase.Boost != 20 {
+		t.Fatalf("phrase boost = %v, want 20", phrase.Boost)
 	}
 }
 
@@ -14844,7 +15051,7 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeReferenceModelOptions(t *testi
 
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
 	t.Setenv("RTP_AGENT_REALTIME_MODEL", "gemini-live-2.5-flash-native-audio")
-	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "vertexai=true,project=voice-project,location=asia-southeast1,voice=Kore,language=id-ID,modalities=TEXT|AUDIO,turn_detection=false")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "vertexai=true,project=voice-project,location=asia-southeast1,voice=Kore,language=id-ID,modalities=TEXT|AUDIO,turn_detection=false,instructions=stay concise")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -14870,6 +15077,9 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeReferenceModelOptions(t *testi
 	}
 	if capturedCfg.voice != "Kore" {
 		t.Fatalf("voice = %q, want Kore", capturedCfg.voice)
+	}
+	if capturedCfg.instructions != "stay concise" {
+		t.Fatalf("instructions = %q, want stay concise", capturedCfg.instructions)
 	}
 	if capturedCfg.language != "id-ID" {
 		t.Fatalf("language = %q, want id-ID", capturedCfg.language)
@@ -14923,7 +15133,7 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeGenerationOptions(t *testing.T
 
 	t.Setenv("GOOGLE_API_KEY", "test-google-key")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
-	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "temperature=0.2,max_output_tokens=96,top_p=0.7,top_k=32")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "temperature=0.2,max_output_tokens=96,top_p=0.7,top_k=32,candidate_count=2,presence_penalty=0.2,frequency_penalty=0.3")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -14943,6 +15153,15 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeGenerationOptions(t *testing.T
 	}
 	if capturedCfg.topK != 32 {
 		t.Fatalf("topK = %d, want 32", capturedCfg.topK)
+	}
+	if capturedCfg.candidateCount != 2 {
+		t.Fatalf("candidateCount = %d, want 2", capturedCfg.candidateCount)
+	}
+	if capturedCfg.presencePenalty == nil || *capturedCfg.presencePenalty != 0.2 {
+		t.Fatalf("presencePenalty = %#v, want 0.2", capturedCfg.presencePenalty)
+	}
+	if capturedCfg.frequencyPenalty == nil || *capturedCfg.frequencyPenalty != 0.3 {
+		t.Fatalf("frequencyPenalty = %#v, want 0.3", capturedCfg.frequencyPenalty)
 	}
 }
 
@@ -15105,6 +15324,47 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeMediaResolutionOptions(t *test
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeImageEncodeOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", `image_encode_options={"format":"PNG","quality":88,"resize_options":{"width":320,"height":180,"strategy":"skew"}}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.imageEncodeOptions == nil {
+		t.Fatal("imageEncodeOptions = nil, want reference encode options")
+	}
+	if capturedCfg.imageEncodeOptions.Format != "PNG" {
+		t.Fatalf("Format = %q, want PNG", capturedCfg.imageEncodeOptions.Format)
+	}
+	if capturedCfg.imageEncodeOptions.Quality != 88 {
+		t.Fatalf("Quality = %d, want 88", capturedCfg.imageEncodeOptions.Quality)
+	}
+	if capturedCfg.imageEncodeOptions.Width != 320 {
+		t.Fatalf("Width = %d, want 320", capturedCfg.imageEncodeOptions.Width)
+	}
+	if capturedCfg.imageEncodeOptions.Height != 180 {
+		t.Fatalf("Height = %d, want 180", capturedCfg.imageEncodeOptions.Height)
+	}
+	if capturedCfg.imageEncodeOptions.Strategy != "skew" {
+		t.Fatalf("Strategy = %q, want skew", capturedCfg.imageEncodeOptions.Strategy)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsGoogleRealtimeSessionResumptionOptions(t *testing.T) {
 	original := appNewGoogleRealtime
 	defer func() { appNewGoogleRealtime = original }()
@@ -15215,6 +15475,41 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeToolBehaviorOptions(t *testing
 	}
 	if capturedCfg.toolBehavior != genai.BehaviorNonBlocking {
 		t.Fatalf("toolBehavior = %q, want %q", capturedCfg.toolBehavior, genai.BehaviorNonBlocking)
+	}
+}
+
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeHTTPOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", `http_options={"timeout":2500,"api_version":"v1alpha","headers":{"x-test":["yes"]}}`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.httpOptions == nil {
+		t.Fatal("httpOptions = nil, want reference HTTP options")
+	}
+	if capturedCfg.httpOptions.Timeout == nil || *capturedCfg.httpOptions.Timeout != 2500*time.Millisecond {
+		t.Fatalf("httpOptions timeout = %#v, want 2.5s", capturedCfg.httpOptions.Timeout)
+	}
+	if capturedCfg.httpOptions.APIVersion != "v1alpha" {
+		t.Fatalf("httpOptions api version = %q, want v1alpha", capturedCfg.httpOptions.APIVersion)
+	}
+	if got := capturedCfg.httpOptions.Headers["x-test"]; len(got) != 1 || got[0] != "yes" {
+		t.Fatalf("httpOptions headers = %#v, want x-test yes", capturedCfg.httpOptions.Headers)
 	}
 }
 
