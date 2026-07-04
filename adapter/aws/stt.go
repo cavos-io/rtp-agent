@@ -42,6 +42,7 @@ type AWSSTT struct {
 	identifyLanguage                  bool
 	identifyMultipleLanguages         bool
 	languageOptions                   string
+	languageOptionsSet                bool
 	preferredLanguage                 types.LanguageCode
 	vocabularyNames                   string
 	vocabularyFilterNames             string
@@ -177,6 +178,7 @@ func WithAWSSTTIdentifyMultipleLanguages(identify bool) AWSSTTOption {
 func WithAWSSTTLanguageOptions(options string) AWSSTTOption {
 	return func(s *AWSSTT) {
 		s.languageOptions = options
+		s.languageOptionsSet = true
 	}
 }
 
@@ -405,7 +407,7 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 }
 
 func applyAWSSTTLanguageDetectionOptions(input *transcribestreaming.StartStreamTranscriptionInput, s *AWSSTT) {
-	if s.languageOptions != "" {
+	if s.languageOptionsSet {
 		input.LanguageOptions = aws.String(s.languageOptions)
 	}
 	if s.preferredLanguage != "" {
