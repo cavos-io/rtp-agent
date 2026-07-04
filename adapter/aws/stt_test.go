@@ -949,6 +949,53 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := &fakeAWSSTTWriter{}
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	if err := providerStream.PushFrame(&model.AudioFrame{
+		Data:       []byte("pcm-24k"),
+		SampleRate: 24000,
+	}); err != nil {
+		t.Fatalf("first PushFrame error = %v, want nil", err)
+	}
+
+	err := providerStream.PushFrame(&model.AudioFrame{
+		Data:       []byte("pcm-16k"),
+		SampleRate: 16000,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("second PushFrame error = %v, want reference sample-rate consistency error", err)
+	}
+	if len(writer.chunks) != 1 {
+		t.Fatalf("provider chunks = %d, want only first frame written", len(writer.chunks))
+	}
+	if string(writer.chunks[0]) != "pcm-24k" {
+		t.Fatalf("provider chunk = %q, want first frame only", string(writer.chunks[0]))
+	}
+
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	err = providerStream.PushFrame(&model.AudioFrame{
+		Data:       []byte("after-close"),
+		SampleRate: 16000,
+	})
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushFrame after close error = %v, want ErrClosedPipe before sample-rate check", err)
+	}
+}
+
 func TestAWSSTTStreamCloseSuppressesReferenceWriterCloseError(t *testing.T) {
 	writer := &fakeAWSSTTWriter{closeErr: errors.New("transcribe close failed")}
 	providerStream := &awsSTTStream{

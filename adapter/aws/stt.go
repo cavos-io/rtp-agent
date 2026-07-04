@@ -356,6 +356,7 @@ type awsSTTStream struct {
 	errCh                    chan error
 	streamMu                 sync.Mutex
 	closed                   bool
+	pushedSampleRate         uint32
 	speaking                 bool
 	timingMu                 sync.Mutex
 	startTimeOffset          float64
@@ -584,10 +585,21 @@ func (s *awsSTTStream) currentStartTimeOffset() float64 {
 }
 
 func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
-	stream, closed := s.streamForSend()
+	s.streamMu.Lock()
+	stream := s.stream
+	closed := s.closed
 	if closed {
+		s.streamMu.Unlock()
 		return io.ErrClosedPipe
 	}
+	if frame != nil && frame.SampleRate != 0 {
+		if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
+			s.streamMu.Unlock()
+			return fmt.Errorf("the sample rate of the input frames must be consistent")
+		}
+		s.pushedSampleRate = frame.SampleRate
+	}
+	s.streamMu.Unlock()
 	if stream == nil {
 		return llm.NewAPIConnectionError("AWS Transcribe stream is not initialized")
 	}
