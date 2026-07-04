@@ -1209,6 +1209,37 @@ func TestBuildAWSMessagesMapsReferenceToolResultText(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatRejectsReferenceMalformedToolArguments(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{
+			err:          errors.New("bedrock should not be called"),
+			inputCapture: &captured,
+		},
+		model: defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	groupID := "assistant-turn"
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "weather?"}}},
+		&llm.ChatMessage{ID: groupID, Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: groupID + "/tool-1", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{awsRequestTestTool{}}))
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil for malformed reference tool arguments", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "invalid AWS Bedrock tool arguments") {
+		t.Fatalf("Chat error = %v, want malformed tool argument error", err)
+	}
+	if captured != nil {
+		t.Fatalf("ConverseStream input = %#v, want no provider call for malformed tool arguments", captured)
+	}
+}
+
 func TestBuildAWSMessagesPreservesReferenceMultipleToolOutputs(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"

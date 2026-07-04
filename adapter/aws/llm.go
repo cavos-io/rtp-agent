@@ -214,6 +214,12 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		}
 		return nil, err
 	}
+	if err := validateAWSFunctionCallArguments(chatCtx); err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
 	messages, systemText := buildAWSMessages(chatCtx)
 
 	req := &bedrockruntime.ConverseStreamInput{
@@ -295,6 +301,20 @@ func validateAWSMessageImages(chatCtx *llm.ChatContext) error {
 			}
 			if img.ExternalURL != "" {
 				return fmt.Errorf("external_url is not supported by AWS Bedrock")
+			}
+		}
+	}
+	return nil
+}
+
+func validateAWSFunctionCallArguments(chatCtx *llm.ChatContext) error {
+	if chatCtx == nil {
+		return nil
+	}
+	for _, group := range groupAWSChatItems(convertAWSMidConversationInstructions(chatCtx.Items)) {
+		for _, toolCall := range group.toolCalls {
+			if _, err := parseAWSFunctionArguments(toolCall.Arguments); err != nil {
+				return fmt.Errorf("invalid AWS Bedrock tool arguments for %q: %w", toolCall.Name, err)
 			}
 		}
 	}
@@ -571,10 +591,9 @@ func awsImageBlock(image *llm.ImageContent) types.ContentBlock {
 }
 
 func awsToolUseBlock(fc *llm.FunctionCall) types.ContentBlock {
-	var args map[string]interface{}
-	_ = json.Unmarshal([]byte(fc.Arguments), &args)
-	if args == nil {
-		args = map[string]interface{}{}
+	args, err := parseAWSFunctionArguments(fc.Arguments)
+	if err != nil {
+		args = map[string]any{}
 	}
 
 	return &types.ContentBlockMemberToolUse{
@@ -584,6 +603,20 @@ func awsToolUseBlock(fc *llm.FunctionCall) types.ContentBlock {
 			Input:     document.NewLazyDocument(args),
 		},
 	}
+}
+
+func parseAWSFunctionArguments(rawArgs string) (any, error) {
+	if rawArgs == "" {
+		rawArgs = "{}"
+	}
+	var args any
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return nil, err
+	}
+	if args == nil {
+		return map[string]any{}, nil
+	}
+	return args, nil
 }
 
 func awsToolResultBlock(fco *llm.FunctionCallOutput) types.ContentBlock {
