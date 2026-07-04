@@ -469,6 +469,8 @@ type awsRealtimeSession struct {
 
 type awsRealtimeGeneration struct {
 	responseID     string
+	createdAt      time.Time
+	firstTokenAt   time.Time
 	messageCh      chan llm.MessageGeneration
 	functionCh     <-chan *llm.FunctionCall
 	functionStream *awsRealtimeQueuedStream[*llm.FunctionCall]
@@ -1337,6 +1339,7 @@ func (s *awsRealtimeSession) ensureGenerationWithCreated(responseID string) (*aw
 	audioStream := newAWSRealtimeQueuedStream[*model.AudioFrame]()
 	generation := &awsRealtimeGeneration{
 		responseID:     responseID,
+		createdAt:      time.Now(),
 		messageCh:      make(chan llm.MessageGeneration, 1),
 		functionCh:     functionStream.Chan(),
 		functionStream: functionStream,
@@ -1538,6 +1541,9 @@ func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
 	streamType := ""
 	if generation != nil {
 		streamType = generation.contentTypes[contentID]
+		if streamType == "ASSISTANT_TEXT" && generation.firstTokenAt.IsZero() {
+			generation.firstTokenAt = time.Now()
+		}
 	}
 	s.mu.Unlock()
 	if generation == nil || streamType != "ASSISTANT_TEXT" {
@@ -1608,12 +1614,20 @@ func (s *awsRealtimeSession) emitUsageMetrics(usage map[string]any) {
 	outputText := awsRealtimeNumberAsInt(output["textTokens"])
 	inputTokens := inputSpeech + inputText
 	outputTokens := outputSpeech + outputText
+	ttft := 0.0
+	s.mu.Lock()
+	generation := s.generation
+	if generation != nil && !generation.createdAt.IsZero() && !generation.firstTokenAt.IsZero() {
+		ttft = generation.firstTokenAt.Sub(generation.createdAt).Seconds()
+	}
+	s.mu.Unlock()
 	s.emit(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeMetricsCollected,
 		Metrics: &telemetry.RealtimeModelMetrics{
 			Label:        s.model.Label(),
 			RequestID:    awsRealtimeMapString(usage, "completionId"),
 			Timestamp:    time.Now(),
+			TTFT:         ttft,
 			InputTokens:  inputTokens,
 			OutputTokens: outputTokens,
 			TotalTokens:  inputTokens + outputTokens,

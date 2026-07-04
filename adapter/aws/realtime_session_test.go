@@ -4179,9 +4179,19 @@ func TestAWSRealtimeSessionMapsReferenceUsageMetrics(t *testing.T) {
 	}
 	defer session.Close()
 
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	select {
+	case <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+	time.Sleep(10 * time.Millisecond)
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TEXT","role":"ASSISTANT","contentId":"text-1","additionalModelFields":"SPECULATIVE"}}}`)
+	stream.emitJSON(`{"event":{"textOutput":{"content":"hello","contentId":"text-1"}}}`)
 	stream.emitJSON(`{"event":{"usageEvent":{"completionId":"completion-1","details":{"delta":{"input":{"speechTokens":3,"textTokens":4},"output":{"speechTokens":5,"textTokens":6}}}}}}`)
 
-	event := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
+	event := assertAWSRealtimeEventEventually(t, session.EventCh(), llm.RealtimeEventTypeMetricsCollected)
 	if event.Metrics == nil {
 		t.Fatal("Metrics = nil")
 	}
@@ -4196,6 +4206,9 @@ func TestAWSRealtimeSessionMapsReferenceUsageMetrics(t *testing.T) {
 	}
 	if event.Metrics.OutputTokenDetails.AudioTokens != 5 || event.Metrics.OutputTokenDetails.TextTokens != 6 {
 		t.Fatalf("output details = %+v, want audio=5 text=6", event.Metrics.OutputTokenDetails)
+	}
+	if event.Metrics.TTFT <= 0 {
+		t.Fatalf("TTFT = %v, want positive reference first-token latency", event.Metrics.TTFT)
 	}
 	if event.Metrics.Metadata == nil || event.Metrics.Metadata.ModelName != "amazon.nova-sonic-v1:0" || event.Metrics.Metadata.ModelProvider != "Amazon" {
 		t.Fatalf("metadata = %+v, want AWS Nova Sonic", event.Metrics.Metadata)
