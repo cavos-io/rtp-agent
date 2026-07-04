@@ -950,6 +950,42 @@ func TestAWSSTTStreamIgnoresReferenceNilTranscriptEvent(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamDoesNotStartSpeechForReferenceTiminglessResult(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+
+	go providerStream.readLoop()
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{{IsPartial: false}},
+			},
+		},
+	}
+	close(reader.events)
+
+	event, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want reference end-of-speech event", err)
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %q, want end_of_speech without false start_of_speech", event.Type)
+	}
+
+	_, err = providerStream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next EOF error = %v, want io.EOF", err)
+	}
+}
+
 func TestAWSSTTStreamEmitsReferenceStartOfSpeechForEachZeroStartResult(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {

@@ -494,7 +494,7 @@ func (s *awsSTTStream) readLoop() {
 				continue
 			}
 			for _, result := range v.Value.Transcript.Results {
-				if result.StartTime == 0 {
+				if awsResultHasReferenceStartBoundary(result) {
 					s.speaking = true
 					if !s.sendSpeechEvent(&stt.SpeechEvent{Type: stt.SpeechEventStartOfSpeech}) {
 						return
@@ -535,6 +535,13 @@ func isHarmlessAWSSTTStreamCloseError(err error) bool {
 
 func isAWSSTTRequestTimeout(err error) bool {
 	return strings.HasPrefix(err.Error(), "Your request timed out")
+}
+
+func awsResultHasReferenceStartBoundary(result types.Result) bool {
+	if result.StartTime != 0 {
+		return false
+	}
+	return result.EndTime > 0 || len(result.Alternatives) > 0
 }
 
 func closeAWSSTTEventStream(stream awsSTTEventStream) {
