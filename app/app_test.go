@@ -13649,6 +13649,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceSampleRateOption(t *testing.T)
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"use_streaming": "false"},
+	})
+
+	if googleCfg.streaming == nil || *googleCfg.streaming {
+		t.Fatalf("streaming = %v, want model option use_streaming false", googleCfg.streaming)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"

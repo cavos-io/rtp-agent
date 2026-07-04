@@ -4473,6 +4473,9 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 			googleCfg.sampleRate = &sampleRate
 		}
 	}
+	if googleCfg.streaming == nil {
+		googleCfg.streaming = modelOptionBool(cfg.TTSModelOptions, "use_streaming")
+	}
 	googleCfg.audioEncoding = googleTTSAudioEncodingFromConfig(cfg)
 	switch {
 	case strings.EqualFold(cfg.TTSTextType, "markup"):
