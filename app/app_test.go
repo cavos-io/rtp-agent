@@ -13979,6 +13979,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceDetectLanguageOption(t *testin
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceProfanityFilterOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"profanity_filter": true},
+	})
+
+	if googleCfg.profanityFilter == nil || !*googleCfg.profanityFilter {
+		t.Fatalf("profanityFilter = %#v, want model option profanity_filter true", googleCfg.profanityFilter)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"use_streaming": false},
