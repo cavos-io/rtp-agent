@@ -521,6 +521,49 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceToolConfigExtra(t *test
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceToolConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"tool_config": map[string]any{
+				"function_calling_config": map[string]any{
+					"mode":                           "ANY",
+					"allowed_function_names":         []any{"lookup"},
+					"stream_function_call_arguments": true,
+				},
+				"include_server_side_tool_invocations": true,
+				"retrieval_config": map[string]any{
+					"language_code": "en-US",
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	if config.ToolConfig == nil {
+		t.Fatal("ToolConfig = nil, want dict-derived tool config")
+	}
+	functionConfig := config.ToolConfig.FunctionCallingConfig
+	if functionConfig == nil {
+		t.Fatal("FunctionCallingConfig = nil, want dict-derived function config")
+	}
+	if functionConfig.Mode != genai.FunctionCallingConfigModeAny {
+		t.Fatalf("FunctionCallingConfig.Mode = %q, want ANY", functionConfig.Mode)
+	}
+	if len(functionConfig.AllowedFunctionNames) != 1 || functionConfig.AllowedFunctionNames[0] != "lookup" {
+		t.Fatalf("AllowedFunctionNames = %#v, want lookup", functionConfig.AllowedFunctionNames)
+	}
+	if functionConfig.StreamFunctionCallArguments == nil || !*functionConfig.StreamFunctionCallArguments {
+		t.Fatalf("StreamFunctionCallArguments = %#v, want true", functionConfig.StreamFunctionCallArguments)
+	}
+	if config.ToolConfig.IncludeServerSideToolInvocations == nil || !*config.ToolConfig.IncludeServerSideToolInvocations {
+		t.Fatalf("IncludeServerSideToolInvocations = %#v, want true", config.ToolConfig.IncludeServerSideToolInvocations)
+	}
+	if config.ToolConfig.RetrievalConfig == nil || config.ToolConfig.RetrievalConfig.LanguageCode != "en-US" {
+		t.Fatalf("RetrievalConfig = %#v, want en-US", config.ToolConfig.RetrievalConfig)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceHTTPOptionsExtra(t *testing.T) {
 	timeout := 2 * time.Second
 	httpOptions := &genai.HTTPOptions{

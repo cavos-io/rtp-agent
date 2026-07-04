@@ -719,6 +719,51 @@ func googleToolConfigParam(value any) (*genai.ToolConfig, bool) {
 		return config, config != nil
 	case genai.ToolConfig:
 		return &config, true
+	case map[string]any:
+		result := &genai.ToolConfig{}
+		if retrieval, ok := googleRetrievalConfigParam(config["retrieval_config"]); ok {
+			result.RetrievalConfig = retrieval
+		} else if retrieval, ok := googleRetrievalConfigParam(config["retrievalConfig"]); ok {
+			result.RetrievalConfig = retrieval
+		}
+		if include, ok := googleBoolParam(config["include_server_side_tool_invocations"]); ok {
+			result.IncludeServerSideToolInvocations = &include
+		} else if include, ok := googleBoolParam(config["includeServerSideToolInvocations"]); ok {
+			result.IncludeServerSideToolInvocations = &include
+		}
+		if functionConfig, ok := googleFunctionCallingConfigParam(config["function_calling_config"]); ok {
+			result.FunctionCallingConfig = functionConfig
+		} else if functionConfig, ok := googleFunctionCallingConfigParam(config["functionCallingConfig"]); ok {
+			result.FunctionCallingConfig = functionConfig
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleFunctionCallingConfigParam(value any) (*genai.FunctionCallingConfig, bool) {
+	switch config := value.(type) {
+	case *genai.FunctionCallingConfig:
+		return config, config != nil
+	case genai.FunctionCallingConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.FunctionCallingConfig{}
+		if mode := googleStringParam(config["mode"]); mode != "" {
+			result.Mode = genai.FunctionCallingConfigMode(mode)
+		}
+		if names := googleStringList(config["allowed_function_names"]); len(names) > 0 {
+			result.AllowedFunctionNames = names
+		} else if names := googleStringList(config["allowedFunctionNames"]); len(names) > 0 {
+			result.AllowedFunctionNames = names
+		}
+		if stream, ok := googleBoolParam(config["stream_function_call_arguments"]); ok {
+			result.StreamFunctionCallArguments = &stream
+		} else if stream, ok := googleBoolParam(config["streamFunctionCallArguments"]); ok {
+			result.StreamFunctionCallArguments = &stream
+		}
+		return result, true
 	default:
 		return nil, false
 	}
