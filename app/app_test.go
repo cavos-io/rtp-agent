@@ -13609,6 +13609,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceGenderOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceLocationOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"location": "europe-west1"},
+	})
+
+	if googleCfg.location != "europe-west1" {
+		t.Fatalf("location = %q, want model option location", googleCfg.location)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"speaking_rate": 0.92},
