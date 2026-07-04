@@ -45,13 +45,14 @@ func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
 		t.Fatalf("model id = %q, want configured Nova Sonic model", *client.input.ModelId)
 	}
 	waitAWSRealtimeAudioContentStart(t, stream, 0)
-	if len(stream.sent) != 6 {
-		t.Fatalf("sent init event count = %d, want 6", len(stream.sent))
+	sent := stream.snapshotSent()
+	if len(sent) != 6 {
+		t.Fatalf("sent init event count = %d, want 6", len(sent))
 	}
-	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[0]), "event", "sessionStart", "endpointingSensitivity"); got != "HIGH" {
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, sent[0]), "event", "sessionStart", "endpointingSensitivity"); got != "HIGH" {
 		t.Fatalf("endpointing sensitivity = %q, want HIGH", got)
 	}
-	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[1]), "event", "promptStart", "audioOutputConfiguration", "voiceId"); got != "matthew" {
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, sent[1]), "event", "promptStart", "audioOutputConfiguration", "voiceId"); got != "matthew" {
 		t.Fatalf("voiceId = %q, want matthew", got)
 	}
 	audioStart := waitAWSRealtimeAudioContentStart(t, stream, 5)
@@ -4188,6 +4189,7 @@ func (c *fakeAWSRealtimeClient) InvokeModelWithBidirectionalStream(ctx context.C
 }
 
 type fakeAWSRealtimeStream struct {
+	mu                    sync.Mutex
 	sent                  []string
 	sentAt                []time.Time
 	closed                bool
@@ -4267,7 +4269,7 @@ func waitAWSRealtimeAudioContentStart(t *testing.T, stream *fakeAWSRealtimeStrea
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
-		for _, raw := range stream.sent[start:] {
+		for _, raw := range stream.snapshotSent()[start:] {
 			event := mustAWSRealtimeJSONEvent(t, raw)
 			if awsRealtimeNestedString(event, "event", "contentStart", "type") == "AUDIO" {
 				return event
@@ -4370,6 +4372,8 @@ func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeMod
 		return nil
 	}
 	var decoded map[string]any
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := json.Unmarshal(chunk.Value.Bytes, &decoded); err == nil {
 		encoded, _ := json.Marshal(decoded)
 		s.sent = append(s.sent, string(encoded))
@@ -4382,6 +4386,12 @@ func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeMod
 	s.sent = append(s.sent, string(chunk.Value.Bytes))
 	s.sentAt = append(s.sentAt, time.Now())
 	return nil
+}
+
+func (s *fakeAWSRealtimeStream) snapshotSent() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.sent...)
 }
 
 func (s *fakeAWSRealtimeStream) Events() <-chan awstypes.InvokeModelWithBidirectionalStreamOutput {
