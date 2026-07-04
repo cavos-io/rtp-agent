@@ -490,7 +490,7 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 }
 
-func TestAWSLLMStreamDropsReferenceToolUseWithoutName(t *testing.T) {
+func TestAWSLLMStreamRejectsReferenceToolUseWithoutName(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStart{
 		Value: awstypes.ContentBlockStartEvent{
@@ -519,10 +519,14 @@ func TestAWSLLMStreamDropsReferenceToolUseWithoutName(t *testing.T) {
 
 	chunk, err := stream.Next()
 	if chunk != nil {
-		t.Fatalf("Next chunk = %#v, want malformed tool call suppressed", chunk)
+		t.Fatalf("Next chunk = %#v, want nil for malformed tool call", chunk)
 	}
-	if err != io.EOF {
-		t.Fatalf("Next error = %v, want EOF after suppressed malformed tool call", err)
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
 	}
 }
 
@@ -532,6 +536,46 @@ func TestAWSLLMStreamRejectsReferenceToolDeltaWithoutStart(t *testing.T) {
 		Value: awstypes.ContentBlockDeltaEvent{
 			Delta: &awstypes.ContentBlockDeltaMemberToolUse{
 				Value: awstypes.ToolUseBlockDelta{Input: awsString(`{"query":"weather"}`)},
+			},
+		},
+	}
+	close(reader.events)
+
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil for malformed tool delta", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want true before any emitted chunk")
+	}
+}
+
+func TestAWSLLMStreamRejectsReferenceToolDeltaWithoutInput(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStart{
+		Value: awstypes.ContentBlockStartEvent{
+			Start: &awstypes.ContentBlockStartMemberToolUse{
+				Value: awstypes.ToolUseBlockStart{
+					ToolUseId: awsString("call_lookup"),
+					Name:      awsString("lookup"),
+				},
+			},
+		},
+	}
+	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+		Value: awstypes.ContentBlockDeltaEvent{
+			Delta: &awstypes.ContentBlockDeltaMemberToolUse{
+				Value: awstypes.ToolUseBlockDelta{},
 			},
 		},
 	}
@@ -850,6 +894,28 @@ func TestBuildAWSMessagesMapsReferenceToolResultText(t *testing.T) {
 	}
 }
 
+func TestBuildAWSMessagesPreservesReferenceMultipleToolOutputs(t *testing.T) {
+	ctx := llm.NewChatContext()
+	groupID := "assistant-turn"
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: groupID, Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: groupID + "/tool-1", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output-1", CallID: "call_lookup", Name: "lookup", Output: "first"},
+		&llm.FunctionCallOutput{ID: "lookup-output-2", CallID: "call_lookup", Name: "lookup", Output: "second"},
+	}
+
+	messages, _ := buildAWSMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want 3", len(messages))
+	}
+	if len(messages[2].Content) != 2 {
+		t.Fatalf("tool result blocks = %d, want both reference outputs", len(messages[2].Content))
+	}
+	assertToolResultTextBlock(t, messages[2].Content, 0, "call_lookup", "first")
+	assertToolResultTextBlock(t, messages[2].Content, 1, "call_lookup", "second")
+}
+
 func TestBuildAWSMessagesKeepsReferenceToolResultStatusSuccessForErrors(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"
@@ -1099,6 +1165,28 @@ func TestBuildAWSMessagesCollectsSystemText(t *testing.T) {
 	assertTextBlock(t, messages[0].Content, 1, "hello")
 }
 
+func TestBuildAWSMessagesKeepsReferenceDeveloperPreambleAsUserTurn(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "developer", Role: llm.ChatRoleDeveloper, Content: []llm.ChatContent{{Text: "dev preamble"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	messages, systemText := buildAWSMessages(ctx)
+
+	if systemText != "" {
+		t.Fatalf("systemText = %q, want empty because reference AWS formatter only extracts system role", systemText)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want one merged user turn", len(messages))
+	}
+	if messages[0].Role != awstypes.ConversationRoleUser {
+		t.Fatalf("role = %q, want user", messages[0].Role)
+	}
+	assertTextBlock(t, messages[0].Content, 0, "dev preamble")
+	assertTextBlock(t, messages[0].Content, 1, "hello")
+}
+
 func TestBuildAWSMessagesConvertsReferenceMidConversationInstructions(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
@@ -1169,6 +1257,22 @@ func assertToolResultBlock(t *testing.T, blocks []awstypes.ContentBlock, index i
 	}
 	if block.Value.Status != wantStatus {
 		t.Fatalf("tool result status = %q, want %q", block.Value.Status, wantStatus)
+	}
+}
+
+func assertToolResultTextBlock(t *testing.T, blocks []awstypes.ContentBlock, index int, wantID, wantText string) {
+	t.Helper()
+	assertToolResultBlock(t, blocks, index, wantID, awstypes.ToolResultStatusSuccess)
+	block := blocks[index].(*awstypes.ContentBlockMemberToolResult)
+	if len(block.Value.Content) != 1 {
+		t.Fatalf("tool result content len = %d, want 1", len(block.Value.Content))
+	}
+	text, ok := block.Value.Content[0].(*awstypes.ToolResultContentBlockMemberText)
+	if !ok {
+		t.Fatalf("tool result content = %T, want text", block.Value.Content[0])
+	}
+	if text.Value != wantText {
+		t.Fatalf("tool result text = %q, want %q", text.Value, wantText)
 	}
 }
 

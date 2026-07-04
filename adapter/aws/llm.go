@@ -495,7 +495,7 @@ func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
 		for _, item := range group.flatten() {
 			switch msg := item.(type) {
 			case *llm.ChatMessage:
-				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
+				if msg.Role == llm.ChatRoleSystem {
 					if text := msg.TextContent(); text != "" {
 						if systemText != "" {
 							systemText += "\n"
@@ -699,16 +699,25 @@ func (g *awsChatItemGroup) removeInvalidToolItems() {
 		return
 	}
 
-	outputsByCallID := make(map[string]*llm.FunctionCallOutput)
+	callIDs := make(map[string]struct{}, len(g.toolCalls))
+	outputIDs := make(map[string]struct{}, len(g.toolOutputs))
+	for _, toolCall := range g.toolCalls {
+		callIDs[toolCall.CallID] = struct{}{}
+	}
 	for _, toolOutput := range g.toolOutputs {
-		outputsByCallID[toolOutput.CallID] = toolOutput
+		outputIDs[toolOutput.CallID] = struct{}{}
 	}
 
 	validCalls := make([]*llm.FunctionCall, 0, len(g.toolCalls))
-	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
 	for _, toolCall := range g.toolCalls {
-		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+		if _, ok := outputIDs[toolCall.CallID]; ok {
 			validCalls = append(validCalls, toolCall)
+		}
+	}
+
+	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
+	for _, toolOutput := range g.toolOutputs {
+		if _, ok := callIDs[toolOutput.CallID]; ok {
 			validOutputs = append(validOutputs, toolOutput)
 		}
 	}
@@ -765,14 +774,22 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 					s.closeContext()
 					return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: toolUse delta received before toolUse start", !s.emittedChunk)
 				}
+				if toolDelta.Value.Input == nil {
+					s.closeContext()
+					return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: malformed toolUse delta missing input", !s.emittedChunk)
+				}
 				s.toolArgs += aws.ToString(toolDelta.Value.Input)
 				continue
 			}
 		case *types.ConverseStreamOutputMemberContentBlockStart:
 			if toolStart, ok := v.Value.Start.(*types.ContentBlockStartMemberToolUse); ok {
+				if toolStart.Value.ToolUseId == nil || toolStart.Value.Name == nil {
+					s.closeContext()
+					return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: malformed toolUse start missing required fields", !s.emittedChunk)
+				}
 				s.toolCallID = aws.ToString(toolStart.Value.ToolUseId)
 				s.toolName = aws.ToString(toolStart.Value.Name)
-				s.toolNameSet = toolStart.Value.Name != nil
+				s.toolNameSet = true
 				s.toolArgs = ""
 				continue
 			}

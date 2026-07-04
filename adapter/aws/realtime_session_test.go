@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/binary"
@@ -1873,6 +1874,72 @@ func TestAWSRealtimeSessionStreamsReferenceEmptyAudioOutput(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionPreservesReferenceQueuedGenerationAudio(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+	stream.emitJSON(`{"event":{"contentStart":{"type":"AUDIO","contentId":"audio-queued"}}}`)
+
+	const total = 20
+	for i := range total {
+		audioBytes := []byte{byte(i), byte(i + 1)}
+		stream.emitJSON(`{"event":{"audioOutput":{"contentId":"audio-queued","content":"` + base64.StdEncoding.EncodeToString(audioBytes) + `"}}}`)
+	}
+
+	for i := range total {
+		select {
+		case frame := <-msg.AudioCh:
+			want := []byte{byte(i), byte(i + 1)}
+			if !bytes.Equal(frame.Data, want) {
+				t.Fatalf("queued audio frame %d = %v, want %v", i, frame.Data, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for queued audio frame %d of %d", i+1, total)
+		}
+	}
+}
+
+func TestAWSRealtimeSessionPreservesReferenceQueuedEvents(t *testing.T) {
+	provider := NewAWSRealtimeModel("")
+	session := newAWSRealtimeSession(provider, nil)
+
+	const total = 20
+	for i := range total {
+		session.emit(llm.RealtimeEvent{
+			Type: llm.RealtimeEventTypeInputAudioTranscriptionCompleted,
+			InputTranscription: &llm.InputTranscriptionCompleted{
+				ItemID:     fmt.Sprintf("user-%d", i),
+				Transcript: fmt.Sprintf("transcript-%d", i),
+				IsFinal:    true,
+			},
+		})
+	}
+
+	for i := range total {
+		select {
+		case event := <-session.EventCh():
+			if event.InputTranscription == nil || event.InputTranscription.Transcript != fmt.Sprintf("transcript-%d", i) {
+				t.Fatalf("queued event %d = %#v, want transcript-%d", i, event, i)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for queued event %d of %d", i+1, total)
+		}
+	}
+}
+
 func TestAWSRealtimeSessionIgnoresReferenceAudioOutputMissingContent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -1933,6 +2000,25 @@ func TestAWSRealtimeSessionCreatesReferenceGenerationOnCompletionStart(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for completionStart message generation")
 	}
+}
+
+func TestAWSRealtimeSessionReusesReferenceGenerationOnRepeatedCompletionStart(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil || created.Generation.ResponseID == "" {
+		t.Fatalf("first generation = %#v, want response id", created.Generation)
+	}
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
 }
 
 func TestAWSRealtimeSessionClosesReferenceGenerationOnCompletionEnd(t *testing.T) {
@@ -2836,8 +2922,8 @@ func TestAWSRealtimeSessionMarksReferenceToolPendingDuringEmission(t *testing.T)
 	var call *llm.FunctionCall
 	select {
 	case call = <-generation.functionCh:
-	default:
-		t.Fatal("function channel empty, want emitted tool call")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for emitted tool call")
 	}
 	if call.CallID != "tool-1" || call.Name != "lookup" {
 		t.Fatalf("function call = %#v, want lookup tool-1", call)
@@ -2982,10 +3068,14 @@ func TestAWSRealtimeSessionUpdateChatContextSendsReferenceToolResult(t *testing.
 	toolEvents := stream.sent[len(stream.sent)-3:]
 	start := mustAWSRealtimeJSONEvent(t, toolEvents[0])
 	contentStart := nestedMap(t, start, "event", "contentStart")
-	for _, field := range []string{"type", "role", "interactive"} {
-		if _, ok := contentStart[field]; ok {
-			t.Fatalf("tool contentStart field %q = %#v, want omitted like reference", field, contentStart[field])
-		}
+	if got := contentStart["type"]; got != "TOOL" {
+		t.Fatalf("tool contentStart type = %#v, want TOOL", got)
+	}
+	if got := contentStart["role"]; got != "TOOL" {
+		t.Fatalf("tool contentStart role = %#v, want TOOL", got)
+	}
+	if got := contentStart["interactive"]; got != false {
+		t.Fatalf("tool contentStart interactive = %#v, want false", got)
 	}
 	if got := awsRealtimeNestedString(start, "event", "contentStart", "toolResultInputConfiguration", "toolUseId"); got != "tool-1" {
 		t.Fatalf("toolUseId = %q, want tool-1", got)
@@ -3122,7 +3212,7 @@ func TestAWSRealtimeSessionToolUpdateRecycleClearsStalePendingTool(t *testing.T)
 	}
 }
 
-func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
+func TestAWSRealtimeSessionDropsReferenceToolResultAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -3157,17 +3247,21 @@ func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
 	if len(stream.sent) != sentBeforeFailure {
 		t.Fatalf("failed UpdateChatContext sent %d events, want none accepted before send error", len(stream.sent)-sentBeforeFailure)
 	}
+	awsSession := session.(*awsRealtimeSession)
+	awsSession.mu.Lock()
+	_, stillPending := awsSession.pending["tool-retry"]
+	awsSession.mu.Unlock()
+	if stillPending {
+		t.Fatal("tool-retry still pending after failed send, want reference pending state cleared before delivery")
+	}
 	stream.sendErr = nil
 	sentCount := len(stream.sent)
 
 	if err := session.UpdateChatContext(ctx); err != nil {
-		t.Fatalf("UpdateChatContext retry error = %v", err)
+		t.Fatalf("UpdateChatContext after failed send error = %v", err)
 	}
-	if len(stream.sent) != sentCount+3 {
-		t.Fatalf("retry sent %d events, want 3 tool result events", len(stream.sent)-sentCount)
-	}
-	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[sentCount+1]), "event", "toolResult", "content"); got != `{"ok":true}` {
-		t.Fatalf("retry tool result content = %q, want output", got)
+	if len(stream.sent) != sentCount {
+		t.Fatalf("UpdateChatContext after failed send emitted %d events, want no stale reference retry", len(stream.sent)-sentCount)
 	}
 }
 

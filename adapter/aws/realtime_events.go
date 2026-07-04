@@ -165,7 +165,11 @@ func buildAWSRealtimeToolConfiguration(tools []llm.Tool, toolChoice llm.ToolChoi
 		})
 	}
 	config := map[string]any{"tools": toolSpecs}
-	if choice := awsRealtimeToolChoice(toolChoice); choice != nil {
+	if len(toolSpecs) > 0 {
+		choice := awsRealtimeToolChoice(toolChoice)
+		if choice == nil {
+			return config
+		}
 		config["toolChoice"] = choice
 	}
 	return config
@@ -254,6 +258,9 @@ func (b *awsRealtimeEventBuilder) createToolContentStartEvent(contentName string
 		"contentStart": map[string]any{
 			"promptName":  b.promptName,
 			"contentName": contentName,
+			"type":        "TOOL",
+			"interactive": false,
+			"role":        "TOOL",
 			"toolResultInputConfiguration": map[string]any{
 				"toolUseId": toolUseID,
 				"type":      "TEXT",
@@ -342,13 +349,11 @@ func (b *awsRealtimeEventBuilder) createTextContentStartEvent(contentName string
 		"promptName":  b.promptName,
 		"contentName": contentName,
 		"type":        "TEXT",
+		"interactive": interactive,
 		"role":        role,
 		"textInputConfiguration": map[string]any{
 			"mediaType": "text/plain",
 		},
-	}
-	if interactive {
-		contentStart["interactive"] = true
 	}
 	return marshalAWSRealtimeEvent(map[string]any{
 		"contentStart": contentStart,
