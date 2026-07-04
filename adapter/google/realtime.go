@@ -661,6 +661,7 @@ func (m *RealtimeModel) Session() (llm.RealtimeSession, error) {
 		toolResponseScheduling:   m.toolResponseScheduling,
 		eventCh:                  make(chan llm.RealtimeEvent, 16),
 		audioStream:              audio.NewAudioByteStream(googleRealtimeInputSampleRate, googleRealtimeInputChannels, googleRealtimeInputSampleRate/20),
+		inputAudio:               &googleRealtimeInputAudioNormalizer{},
 		sessionResumptionHandle:  m.sessionResumptionHandle,
 		manualActivityDetection:  googleRealtimeManualActivityDetection(m.realtimeInputConfig) || !m.turnDetection,
 		suppressActivityStart:    googleRealtimeNoInterruption(m.realtimeInputConfig),
@@ -951,6 +952,7 @@ type googleRealtimeSession struct {
 	toolResponseScheduling   any
 	eventCh                  chan llm.RealtimeEvent
 	audioStream              *audio.AudioByteStream
+	inputAudio               *googleRealtimeInputAudioNormalizer
 	generation               *googleRealtimeGeneration
 	responseSeq              int
 	functionSeq              int
@@ -1492,7 +1494,13 @@ func (s *googleRealtimeSession) receiveLoop(liveSession googleRealtimeLiveSessio
 			}
 			return
 		}
-		s.handleServerMessage(message)
+		if err := s.handleServerMessage(liveSession, message); err != nil {
+			s.reconnectActiveSession(liveSession,
+				fmt.Sprintf("google realtime receive failed: %v", err),
+				"failed to reconnect Google realtime after receive error: %v",
+			)
+			return
+		}
 	}
 }
 
@@ -1598,9 +1606,9 @@ func (s *googleRealtimeSession) activeLiveSession() googleRealtimeLiveSession {
 	return s.liveSession
 }
 
-func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMessage) {
+func (s *googleRealtimeSession) handleServerMessage(liveSession googleRealtimeLiveSession, message *genai.LiveServerMessage) error {
 	if message == nil {
-		return
+		return nil
 	}
 	if update := message.SessionResumptionUpdate; update != nil && update.Resumable && update.NewHandle != "" {
 		s.sessionResumptionHandle = update.NewHandle
@@ -1666,18 +1674,21 @@ func (s *googleRealtimeSession) handleServerMessage(message *genai.LiveServerMes
 	}
 	if message.ToolCall != nil {
 		s.ensureGeneration()
-		s.handleToolCalls(message.ToolCall)
+		if err := s.handleToolCalls(message.ToolCall); err != nil {
+			return err
+		}
 		s.finishCurrentGeneration()
 	}
 	if message.UsageMetadata != nil {
 		s.emitUsageMetrics(message.UsageMetadata)
 	}
 	if message.GoAway != nil {
-		s.reconnectActiveSession(s.activeLiveSession(),
+		s.reconnectActiveSession(liveSession,
 			"google realtime received go_away",
 			"failed to reconnect Google realtime after go_away: %v",
 		)
 	}
+	return nil
 }
 
 func (s *googleRealtimeSession) markGenerationCompleted() {
@@ -1687,9 +1698,9 @@ func (s *googleRealtimeSession) markGenerationCompleted() {
 	s.generation.completedAt = time.Now()
 }
 
-func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCall) {
+func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCall) error {
 	if s.generation == nil || s.generation.closed || toolCall == nil {
-		return
+		return nil
 	}
 	defer func() {
 		_ = recover()
@@ -1700,7 +1711,7 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 		}
 		arguments, err := json.Marshal(functionCall.Args)
 		if err != nil {
-			arguments = []byte("{}")
+			return fmt.Errorf("google realtime tool call args: %w", err)
 		}
 		callID := functionCall.ID
 		if callID == "" {
@@ -1714,9 +1725,10 @@ func (s *googleRealtimeSession) handleToolCalls(toolCall *genai.LiveServerToolCa
 			Arguments: string(arguments),
 		}:
 		case <-s.doneCh():
-			return
+			return nil
 		}
 	}
+	return nil
 }
 
 func (s *googleRealtimeSession) isNewGenerationMessage(message *genai.LiveServerMessage) bool {
@@ -2086,16 +2098,18 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	if s == nil || s.liveSession == nil || frame == nil || len(frame.Data) == 0 || s.isClosed() {
 		return nil
 	}
-	resampled, err := audio.ResampleAudioFrame(frame, googleRealtimeInputSampleRate)
-	if err != nil {
-		return err
-	}
-	resampled, err = googleRealtimeMonoAudioFrame(resampled)
-	if err != nil {
-		return err
-	}
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
+	if s.inputAudio == nil {
+		s.inputAudio = &googleRealtimeInputAudioNormalizer{}
+	}
+	resampled, err := s.inputAudio.Normalize(frame)
+	if err != nil {
+		return err
+	}
+	if resampled == nil || len(resampled.Data) == 0 {
+		return nil
+	}
 	s.mu.Lock()
 	if s.closed || s.liveSession == nil {
 		s.mu.Unlock()
@@ -2117,48 +2131,116 @@ func (s *googleRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 	return nil
 }
 
-func googleRealtimeMonoAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
-	if frame == nil || frame.NumChannels == googleRealtimeInputChannels {
+type googleRealtimeInputAudioNormalizer struct {
+	inputRate     uint32
+	inputChannels uint32
+	inputSamples  uint64
+	outputSamples uint64
+	lastSample    int16
+	hasTail       bool
+}
+
+func (n *googleRealtimeInputAudioNormalizer) Normalize(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil {
+		return nil, nil
+	}
+	if frame.SampleRate == googleRealtimeInputSampleRate && frame.NumChannels == googleRealtimeInputChannels {
+		n.reset()
 		return frame, nil
+	}
+	if frame.SampleRate == 0 {
+		return nil, fmt.Errorf("cannot resample audio with zero sample rate")
 	}
 	if frame.NumChannels == 0 {
 		return nil, fmt.Errorf("cannot downmix audio with zero channels")
 	}
 	if len(frame.Data)%2 != 0 {
-		return nil, fmt.Errorf("cannot downmix non-16-bit PCM audio")
+		return nil, fmt.Errorf("cannot resample non-16-bit PCM audio")
 	}
 	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
 	if len(frame.Data) < expectedBytes {
 		return nil, fmt.Errorf("audio frame data is shorter than declared sample count")
 	}
+	if n.inputRate != frame.SampleRate || n.inputChannels != frame.NumChannels {
+		n.inputRate = frame.SampleRate
+		n.inputChannels = frame.NumChannels
+		n.inputSamples = 0
+		n.outputSamples = 0
+		n.lastSample = 0
+		n.hasTail = false
+	}
 	if frame.SamplesPerChannel == 0 {
-		return &model.AudioFrame{
-			SampleRate:        frame.SampleRate,
-			NumChannels:       googleRealtimeInputChannels,
-			SamplesPerChannel: 0,
-			ParticipantID:     frame.ParticipantID,
-		}, nil
+		return nil, nil
 	}
 
-	channelCount := int(frame.NumChannels)
-	out := make([]byte, int(frame.SamplesPerChannel*2))
-	for sample := 0; sample < int(frame.SamplesPerChannel); sample++ {
-		var sum int32
-		for ch := 0; ch < channelCount; ch++ {
-			offset := (sample*channelCount + ch) * 2
-			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
-		}
-		avg := int16(sum / int32(channelCount))
-		binary.LittleEndian.PutUint16(out[sample*2:], uint16(avg))
+	prevInputSamples := n.inputSamples
+	nextInputSamples := prevInputSamples + uint64(frame.SamplesPerChannel)
+	prevOutputSamples := n.outputSamples
+	nextOutputSamples := nextInputSamples * uint64(googleRealtimeInputSampleRate) / uint64(frame.SampleRate)
+	outSamples := uint32(nextOutputSamples - prevOutputSamples)
+	out := make([]byte, int(outSamples*googleRealtimeInputChannels*2))
+	channels := int(frame.NumChannels)
+	previousSample := n.lastSample
+	hasPrevious := n.hasTail
+	for outIdx := uint32(0); outIdx < outSamples; outIdx++ {
+		srcPos := (prevOutputSamples + uint64(outIdx)) * uint64(frame.SampleRate)
+		srcGlobalIdx := srcPos / uint64(googleRealtimeInputSampleRate)
+		frac := srcPos % uint64(googleRealtimeInputSampleRate)
+		sample := googleRealtimeInterpolatedInputSample(frame, srcGlobalIdx, frac, uint64(googleRealtimeInputSampleRate), prevInputSamples, frame.SamplesPerChannel, channels, previousSample, hasPrevious)
+		binary.LittleEndian.PutUint16(out[int(outIdx)*2:int(outIdx)*2+2], uint16(sample))
 	}
+	n.inputSamples = nextInputSamples
+	n.outputSamples = nextOutputSamples
+	n.lastSample = googleRealtimeInputSample(frame, uint64(frame.SamplesPerChannel-1), frame.SamplesPerChannel, channels)
+	n.hasTail = nextInputSamples*uint64(googleRealtimeInputSampleRate)%uint64(frame.SampleRate) > 0
 
 	return &model.AudioFrame{
 		Data:              out,
-		SampleRate:        frame.SampleRate,
+		SampleRate:        googleRealtimeInputSampleRate,
 		NumChannels:       googleRealtimeInputChannels,
-		SamplesPerChannel: frame.SamplesPerChannel,
+		SamplesPerChannel: uint32(outSamples),
 		ParticipantID:     frame.ParticipantID,
 	}, nil
+}
+
+func googleRealtimeInputSample(frame *model.AudioFrame, sampleIndex uint64, samplesPerChannel uint32, channelCount int) int16 {
+	if sampleIndex >= uint64(samplesPerChannel) {
+		sampleIndex = uint64(samplesPerChannel - 1)
+	}
+	var sum int32
+	for ch := 0; ch < channelCount; ch++ {
+		offset := (int(sampleIndex)*channelCount + ch) * 2
+		sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset : offset+2])))
+	}
+	return int16(sum / int32(channelCount))
+}
+
+func googleRealtimeInterpolatedInputSample(frame *model.AudioFrame, sampleIndex uint64, frac uint64, denom uint64, frameStart uint64, samplesPerChannel uint32, channelCount int, previousSample int16, hasPrevious bool) int16 {
+	current := googleRealtimeInputSampleAt(frame, sampleIndex, frameStart, samplesPerChannel, channelCount, previousSample, hasPrevious)
+	if frac == 0 || denom == 0 {
+		return current
+	}
+	next := googleRealtimeInputSampleAt(frame, sampleIndex+1, frameStart, samplesPerChannel, channelCount, current, true)
+	return int16(int64(current) + (int64(next)-int64(current))*int64(frac)/int64(denom))
+}
+
+func googleRealtimeInputSampleAt(frame *model.AudioFrame, sampleIndex uint64, frameStart uint64, samplesPerChannel uint32, channelCount int, previousSample int16, hasPrevious bool) int16 {
+	if sampleIndex < frameStart {
+		if hasPrevious {
+			return previousSample
+		}
+		return googleRealtimeInputSample(frame, 0, samplesPerChannel, channelCount)
+	}
+	return googleRealtimeInputSample(frame, sampleIndex-frameStart, samplesPerChannel, channelCount)
+}
+
+func (n *googleRealtimeInputAudioNormalizer) reset() {
+	n.inputRate = 0
+	n.inputChannels = 0
+	n.inputSamples = 0
+	n.outputSamples = 0
+	n.lastSample = 0
+	n.hasTail = false
 }
 
 func (s *googleRealtimeSession) PushVideo(frame *images.VideoFrame) error {

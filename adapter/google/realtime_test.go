@@ -1559,6 +1559,89 @@ func TestGoogleRealtimeSessionClearAudioPreservesReferenceBufferedTail(t *testin
 	}
 }
 
+func TestGoogleRealtimeSessionInputResamplerKeepsReferencePhaseAcrossFrames(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	for i := 0; i < 800; i++ {
+		err = session.PushAudio(&audiomodel.AudioFrame{
+			Data:              []byte{1, 0},
+			SampleRate:        48000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		})
+		if err != nil {
+			t.Fatalf("PushAudio first phase frame %d error = %v", i, err)
+		}
+	}
+	if len(liveSession.inputs) != 0 {
+		t.Fatalf("live inputs after 800 source samples = %d, want no 16 kHz chunk yet", len(liveSession.inputs))
+	}
+
+	for i := 800; i < 2400; i++ {
+		err = session.PushAudio(&audiomodel.AudioFrame{
+			Data:              []byte{1, 0},
+			SampleRate:        48000,
+			NumChannels:       1,
+			SamplesPerChannel: 1,
+		})
+		if err != nil {
+			t.Fatalf("PushAudio second phase frame %d error = %v", i, err)
+		}
+	}
+	if len(liveSession.inputs) != 1 {
+		t.Fatalf("live inputs after 2400 source samples = %d, want one 800-sample 16 kHz chunk", len(liveSession.inputs))
+	}
+	audio := liveSession.inputs[0].Audio
+	if audio == nil || audio.MIMEType != "audio/pcm;rate=16000" {
+		t.Fatalf("audio input = %#v, want reference PCM 16 kHz blob", audio)
+	}
+	if len(audio.Data) != 1600 {
+		t.Fatalf("audio data bytes = %d, want 800 mono samples", len(audio.Data))
+	}
+}
+
+func TestGoogleRealtimeInputAudioNormalizerInterpolatesReferenceFractionalSamples(t *testing.T) {
+	var normalizer googleRealtimeInputAudioNormalizer
+	data := make([]byte, 100*2)
+	for i := 0; i < 100; i++ {
+		binary.LittleEndian.PutUint16(data[i*2:i*2+2], uint16(int16(i*100)))
+	}
+
+	frame, err := normalizer.Normalize(&audiomodel.AudioFrame{
+		Data:              data,
+		SampleRate:        44100,
+		NumChannels:       1,
+		SamplesPerChannel: 100,
+	})
+	if err != nil {
+		t.Fatalf("Normalize error = %v", err)
+	}
+	if frame.SampleRate != 16000 {
+		t.Fatalf("SampleRate = %d, want 16000", frame.SampleRate)
+	}
+	if frame.NumChannels != 1 {
+		t.Fatalf("NumChannels = %d, want 1", frame.NumChannels)
+	}
+	if frame.SamplesPerChannel != 36 {
+		t.Fatalf("SamplesPerChannel = %d, want 36", frame.SamplesPerChannel)
+	}
+	if got := int16(binary.LittleEndian.Uint16(frame.Data[0:2])); got != 0 {
+		t.Fatalf("first sample = %d, want 0", got)
+	}
+	if got := int16(binary.LittleEndian.Uint16(frame.Data[2:4])); got != 275 {
+		t.Fatalf("second sample = %d, want fractional interpolation sample 275", got)
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -2597,6 +2680,44 @@ func TestGoogleRealtimeSessionReconnectsAfterReferenceGoAway(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeSessionIgnoresStaleReferenceGoAway(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	thirdSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, thirdSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	googleSession := session.(*googleRealtimeSession)
+	googleSession.mu.Lock()
+	googleSession.liveSession = secondSession
+	googleSession.mu.Unlock()
+
+	if err := googleSession.handleServerMessage(firstSession, &genai.LiveServerMessage{GoAway: &genai.LiveServerGoAway{TimeLeft: time.Second}}); err != nil {
+		t.Fatalf("handleServerMessage error = %v", err)
+	}
+
+	if secondSession.closed {
+		t.Fatal("fresh active session closed by stale go_away")
+	}
+	if googleSession.liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want unchanged second session", googleSession.liveSession)
+	}
+	if len(connector.configs) != 1 {
+		t.Fatalf("connect calls = %d, want no reconnect for stale go_away", len(connector.configs))
+	}
+	if thirdSession.closed {
+		t.Fatal("unused reconnect session closed = true, want never connected")
+	}
+}
+
 func TestGoogleRealtimeSessionGenerateReplyMarksReferenceGenerationUserInitiated(t *testing.T) {
 	liveSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
 	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
@@ -3540,6 +3661,54 @@ func TestGoogleRealtimeSessionRoutesReferenceToolCalls(t *testing.T) {
 	call := nextGoogleRealtimeTestFunction(t, generation.FunctionCh)
 	if call.CallID != "call_1" || call.Name != "lookup" || call.Arguments != `{"query":"hello"}` {
 		t.Fatalf("function call = %#v, want reference Gemini tool call", call)
+	}
+}
+
+func TestGoogleRealtimeSessionMalformedToolArgsReconnectsLikeReference(t *testing.T) {
+	firstSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	secondSession := &fakeGoogleRealtimeLiveSession{serverMessages: make(chan *genai.LiveServerMessage, 1)}
+	connector := &fakeGoogleRealtimeConnector{sessions: []googleRealtimeLiveSession{firstSession, secondSession}}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(connector))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	firstSession.serverMessages <- &genai.LiveServerMessage{
+		ToolCall: &genai.LiveServerToolCall{
+			FunctionCalls: []*genai.FunctionCall{{
+				ID:   "call_bad",
+				Name: "lookup",
+				Args: map[string]any{"bad": make(chan int)},
+			}},
+		},
+	}
+
+	generation := expectGoogleRealtimeGeneration(t, session.EventCh())
+	select {
+	case call, ok := <-generation.FunctionCh:
+		if ok {
+			t.Fatalf("function call = %#v, want none after malformed tool args", call)
+		}
+	case <-time.After(100 * time.Millisecond):
+	}
+	stopped := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if stopped.Type != llm.RealtimeEventTypeSpeechStopped {
+		t.Fatalf("event = %#v, want speech_stopped while malformed tool generation closes", stopped)
+	}
+	reconnected := nextGoogleRealtimeTestEvent(t, session.EventCh())
+	if reconnected.Type != llm.RealtimeEventTypeSessionReconnected || reconnected.Reconnect == nil {
+		t.Fatalf("event = %#v, want reference reconnect after malformed tool args", reconnected)
+	}
+	if !firstSession.closed {
+		t.Fatal("first live session closed = false after malformed tool args")
+	}
+	if session.(*googleRealtimeSession).liveSession != secondSession {
+		t.Fatalf("active live session = %#v, want second reconnected session", session.(*googleRealtimeSession).liveSession)
 	}
 }
 
