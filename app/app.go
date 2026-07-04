@@ -4456,6 +4456,9 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		streaming:  cfg.TTSStreaming,
 		ssml:       cfg.TTSEnableSSMLParsing,
 	}
+	if googleCfg.voice == "" {
+		googleCfg.voice = modelOptionString(cfg.TTSModelOptions, "voice_name")
+	}
 	if googleCfg.model == "" {
 		googleCfg.model = modelOptionString(cfg.TTSModelOptions, "model_name")
 	}

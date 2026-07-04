@@ -13619,6 +13619,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceModelNameOption(t *testing.T) 
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceNameOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"voice_name": "en-US-Chirp3-HD-Charon"},
+	})
+
+	if googleCfg.voice != "en-US-Chirp3-HD-Charon" {
+		t.Fatalf("voice = %q, want model option voice_name", googleCfg.voice)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testing.T) {
 	phrase := "Cavos"
 	pronunciation := "keIvAs"
