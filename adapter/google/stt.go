@@ -3,6 +3,7 @@ package google
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"strconv"
@@ -1275,6 +1276,55 @@ func (n *googleSTTInputAudioNormalizer) reset() {
 	n.lastSample = nil
 }
 
+func googleSTTMonoAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil || frame.NumChannels <= 1 {
+		return frame, nil
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, errors.New("cannot downmix non-16-bit PCM audio")
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 && len(frame.Data) != 0 {
+		bytesPerSampleSet := int(frame.NumChannels * 2)
+		if len(frame.Data)%bytesPerSampleSet != 0 {
+			return nil, errors.New("audio frame data is not aligned to declared channels")
+		}
+		samplesPerChannel = uint32(len(frame.Data) / bytesPerSampleSet)
+	}
+	expectedBytes := int(samplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, errors.New("audio frame data is shorter than declared sample count")
+	}
+	if samplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        frame.SampleRate,
+			NumChannels:       1,
+			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+
+	channelCount := int(frame.NumChannels)
+	out := make([]byte, int(samplesPerChannel*2))
+	for sample := 0; sample < int(samplesPerChannel); sample++ {
+		var sum int32
+		for ch := 0; ch < channelCount; ch++ {
+			offset := (sample*channelCount + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
+		}
+		avg := int16(sum / int32(channelCount))
+		binary.LittleEndian.PutUint16(out[sample*2:], uint16(avg))
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: samplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
+}
+
 func (s *googleSTTStream) readLoop() {
 	defer close(s.events)
 	for {
@@ -2010,6 +2060,12 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		frame = normalized
 	}
+	mono, err := googleSTTMonoAudioFrame(frame)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	frame = mono
 	s.mu.Unlock()
 	return s.sendAudioFrame(frame)
 }
@@ -2092,8 +2148,13 @@ func (s *googleSTTStream) Flush() error {
 		return io.ErrClosedPipe
 	}
 	if tail := s.inputAudio.flush(); tail != nil {
+		mono, err := googleSTTMonoAudioFrame(tail)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
 		s.mu.Unlock()
-		return s.sendAudioFrame(tail)
+		return s.sendAudioFrame(mono)
 	}
 	s.mu.Unlock()
 	return nil

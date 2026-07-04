@@ -1106,6 +1106,34 @@ func TestGoogleSTTStreamResamplesPushedAudioLikeReference(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamDownmixesStereoInputLikeReference(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	frame := &model.AudioFrame{
+		Data:              []byte{232, 3, 184, 11, 208, 7, 160, 15},
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent requests = %d, want config plus downmixed audio", len(streamClient.sent))
+	}
+	if got, want := streamClient.sent[1].GetAudioContent(), []byte{208, 7, 184, 11}; !bytes.Equal(got, want) {
+		t.Fatalf("audio content = %#v, want mono averaged PCM %#v", got, want)
+	}
+}
+
 func TestGoogleSTTStreamFlushesReferenceResamplerTail(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
