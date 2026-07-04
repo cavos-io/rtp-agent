@@ -174,7 +174,7 @@ func TestStreamAdapterCloseUnsubscribesProviderMetrics(t *testing.T) {
 }
 
 func TestStreamAdapterEmitsStreamedMetricsForFinalSegment(t *testing.T) {
-	provider := &fakeStreamAdapterTTS{
+	provider := &fakeSilentStreamAdapterTTS{
 		events: []*SynthesizedAudio{{
 			Frame: &model.AudioFrame{
 				Data:              []byte{1, 0, 2, 0},
@@ -232,6 +232,50 @@ func TestStreamAdapterEmitsStreamedMetricsForFinalSegment(t *testing.T) {
 		}
 	default:
 		t.Fatal("stream adapter did not emit streamed metrics")
+	}
+}
+
+func TestStreamAdapterSkipsOwnMetricsWhenProviderSelfReports(t *testing.T) {
+	provider := &fakeStreamAdapterTTS{
+		events: []*SynthesizedAudio{{
+			Frame: &model.AudioFrame{
+				Data:              []byte{1, 0, 2, 0},
+				SampleRate:        24000,
+				NumChannels:       1,
+				SamplesPerChannel: 2,
+			},
+		}},
+	}
+	adapter := NewStreamAdapter(provider)
+	streamedCh := make(chan *telemetry.TTSMetrics, 1)
+	adapter.OnMetricsCollected(func(metrics *telemetry.TTSMetrics) {
+		if metrics.Streamed {
+			streamedCh <- metrics
+		}
+	})
+
+	stream, err := adapter.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello world."); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndSynthesizeStreamInput returned error: %v", err)
+	}
+
+	audio := nextStreamAdapterAudio(t, stream)
+	if !audio.IsFinal {
+		t.Fatal("audio IsFinal = false, want final segment")
+	}
+
+	select {
+	case got := <-streamedCh:
+		t.Fatalf("adapter emitted its own streamed metrics for a self-reporting provider (double-count): %#v", got)
+	default:
 	}
 }
 
@@ -1351,6 +1395,23 @@ func (f *fakeStreamAdapterChunkedStream) Next() (*SynthesizedAudio, error) {
 
 func (f *fakeStreamAdapterChunkedStream) Close() error {
 	return nil
+}
+
+type fakeSilentStreamAdapterTTS struct {
+	events []*SynthesizedAudio
+}
+
+func (f *fakeSilentStreamAdapterTTS) Label() string                 { return "fake-silent" }
+func (f *fakeSilentStreamAdapterTTS) Capabilities() TTSCapabilities { return TTSCapabilities{} }
+func (f *fakeSilentStreamAdapterTTS) SampleRate() int               { return 24000 }
+func (f *fakeSilentStreamAdapterTTS) NumChannels() int              { return 1 }
+
+func (f *fakeSilentStreamAdapterTTS) Synthesize(context.Context, string) (ChunkedStream, error) {
+	return &fakeStreamAdapterChunkedStream{events: f.events}, nil
+}
+
+func (f *fakeSilentStreamAdapterTTS) Stream(context.Context) (SynthesizeStream, error) {
+	return nil, nil
 }
 
 type blockingStreamAdapterChunkedStream struct {
