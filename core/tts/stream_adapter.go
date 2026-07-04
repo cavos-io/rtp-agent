@@ -99,6 +99,11 @@ func (a *StreamAdapter) Synthesize(ctx context.Context, text string) (ChunkedStr
 	return a.tts.Synthesize(ctx, text)
 }
 
+func (a *StreamAdapter) innerSelfReports() bool {
+	_, ok := a.tts.(metricsCollectorTTS)
+	return ok
+}
+
 type streamAdapterWrapper struct {
 	adapter   *StreamAdapter
 	ctx       context.Context
@@ -414,6 +419,10 @@ func (w *streamAdapterWrapper) emitSegmentMetrics(audio *SynthesizedAudio) {
 		return
 	}
 	delete(w.metrics, key)
+
+	if w.adapter.innerSelfReports() {
+		return
+	}
 
 	ttfb := -1.0
 	if metrics.ttfbSet {
