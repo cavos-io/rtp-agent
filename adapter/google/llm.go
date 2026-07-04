@@ -1354,7 +1354,11 @@ func (s *googleLLMStream) Next() (*llm.ChatChunk, error) {
 			if cand.Content != nil {
 				for _, part := range cand.Content.Parts {
 					s.responseGenerated = true
-					if chunk := googleChatChunkFromPart(part); chunk != nil {
+					chunk, parseErr := googleChatChunkFromPart(part)
+					if parseErr != nil {
+						return nil, googleLLMStreamError(parseErr, !s.chunkEmitted, requestID)
+					}
+					if chunk != nil {
 						chunk.ID = requestID
 						s.storeThoughtSignature(part, chunk)
 						s.chunkEmitted = true
@@ -1426,9 +1430,9 @@ func googleLLMStreamError(err error, retryable bool, requestID string) error {
 	return llm.NewAPIConnectionErrorWithRetryable(fmt.Sprintf("gemini llm: error generating content %s", err), retryable)
 }
 
-func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {
+func googleChatChunkFromPart(part *genai.Part) (*llm.ChatChunk, error) {
 	if part == nil {
-		return nil
+		return nil, nil
 	}
 	chunk := &llm.ChatChunk{
 		Delta: &llm.ChoiceDelta{
@@ -1438,18 +1442,21 @@ func googleChatChunkFromPart(part *genai.Part) *llm.ChatChunk {
 	if part.FunctionCall == nil {
 		if part.Text != "" {
 			chunk.Delta.Content = part.Text
-			return chunk
+			return chunk, nil
 		}
-		return nil
+		return nil, nil
 	}
-	args, _ := json.Marshal(part.FunctionCall.Args)
+	args, err := json.Marshal(part.FunctionCall.Args)
+	if err != nil {
+		return nil, err
+	}
 	chunk.Delta.ToolCalls = append(chunk.Delta.ToolCalls, llm.FunctionToolCall{
 		Name:      part.FunctionCall.Name,
 		Arguments: string(args),
 		Type:      "function",
 		CallID:    googleFunctionCallID(part.FunctionCall),
 	})
-	return chunk
+	return chunk, nil
 }
 
 func googleBlockedFinishReason(reason genai.FinishReason) bool {

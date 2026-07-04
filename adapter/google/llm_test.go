@@ -2247,6 +2247,47 @@ func TestGoogleLLMStreamMapsUnexpectedProviderError(t *testing.T) {
 	}
 }
 
+func TestGoogleLLMStreamReturnsConnectionErrorForMalformedFunctionArgs(t *testing.T) {
+	read := false
+	stream := &googleLLMStream{
+		next: func() (*genai.GenerateContentResponse, error, bool) {
+			if read {
+				return nil, nil, false
+			}
+			read = true
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{
+							FunctionCall: &genai.FunctionCall{
+								ID:   "call_bad",
+								Name: "lookup",
+								Args: map[string]any{"bad": make(chan int)},
+							},
+						}},
+					},
+				}},
+			}, nil, true
+		},
+	}
+
+	chunk, err := stream.Next()
+
+	if chunk != nil {
+		t.Fatalf("chunk = %#v, want nil malformed tool-call args", chunk)
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(connectionErr.Message, "gemini llm: error generating content") {
+		t.Fatalf("APIConnectionError message = %q, want reference wrapper", connectionErr.Message)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("APIConnectionError retryable = false, want true before response output")
+	}
+}
+
 func TestGoogleLLMStreamReportsCachedPromptTokens(t *testing.T) {
 	responses := []*genai.GenerateContentResponse{{
 		UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
