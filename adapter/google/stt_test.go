@@ -1602,7 +1602,7 @@ func TestGoogleSTTStreamCombinesReferenceInterimResultSegments(t *testing.T) {
 	}
 }
 
-func TestGoogleSTTStreamUsesFinalResultFinalityWhenMixedWithInterim(t *testing.T) {
+func TestGoogleSTTStreamUsesFirstReferenceResultFinality(t *testing.T) {
 	streamClient := &fakeGoogleStreamingRecognizeClient{
 		responses: []*speechpb.StreamingRecognizeResponse{{
 			Results: []*speechpb.StreamingRecognitionResult{
@@ -1640,19 +1640,22 @@ func TestGoogleSTTStreamUsesFinalResultFinalityWhenMixedWithInterim(t *testing.T
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
-		t.Fatalf("event = %#v, want final transcript from later final result", event)
+	if event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want interim transcript because first provider result is interim", event)
 	}
 	got := event.Alternatives[0]
 	if got.Text != "done" {
-		t.Fatalf("text = %q, want later final result text", got.Text)
+		t.Fatalf("text = %q, want later final result text selected by reference parser", got.Text)
+	}
+	if math.Abs(got.Confidence-0.8) > 0.000001 {
+		t.Fatalf("confidence = %v, want later final result confidence", got.Confidence)
 	}
 	if got.StartTime != 0.3 || got.EndTime != 0.6 {
 		t.Fatalf("timing = %v-%v, want later final result timing", got.StartTime, got.EndTime)
 	}
 }
 
-func TestGoogleSTTStreamV2UsesFinalResultFinalityWhenMixedWithInterim(t *testing.T) {
+func TestGoogleSTTStreamV2UsesFirstReferenceResultFinality(t *testing.T) {
 	streamClient := &fakeGoogleV2StreamingRecognizeClient{
 		responses: []*speechv2pb.StreamingRecognizeResponse{{
 			Results: []*speechv2pb.StreamingRecognitionResult{
@@ -1693,12 +1696,15 @@ func TestGoogleSTTStreamV2UsesFinalResultFinalityWhenMixedWithInterim(t *testing
 	if err != nil {
 		t.Fatalf("Next returned error: %v", err)
 	}
-	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 {
-		t.Fatalf("event = %#v, want final transcript from later final result", event)
+	if event.Type != stt.SpeechEventInterimTranscript || len(event.Alternatives) != 1 {
+		t.Fatalf("event = %#v, want interim transcript because first provider result is interim", event)
 	}
 	got := event.Alternatives[0]
 	if got.Text != "done" {
-		t.Fatalf("text = %q, want later final result text", got.Text)
+		t.Fatalf("text = %q, want later final result text selected by reference parser", got.Text)
+	}
+	if math.Abs(got.Confidence-0.8) > 0.000001 {
+		t.Fatalf("confidence = %v, want later final result confidence", got.Confidence)
 	}
 	if got.StartTime != 0.3 || got.EndTime != 0.6 {
 		t.Fatalf("timing = %v-%v, want later final result timing", got.StartTime, got.EndTime)

@@ -1875,7 +1875,11 @@ func googleSpeechDataFromStreamingResultsOffset(results []*speechpb.StreamingRec
 		if !ok {
 			return stt.SpeechData{}, "", false
 		}
-		return data, stt.SpeechEventFinalTranscript, true
+		eventType := stt.SpeechEventInterimTranscript
+		if results[0].GetIsFinal() {
+			eventType = stt.SpeechEventFinalTranscript
+		}
+		return data, eventType, true
 	}
 	var text string
 	var confidence float64
@@ -1917,7 +1921,11 @@ func googleSpeechDataFromStreamingResultsV2(results []*speechv2pb.StreamingRecog
 		if !ok {
 			return stt.SpeechData{}, "", false
 		}
-		return data, stt.SpeechEventFinalTranscript, true
+		eventType := stt.SpeechEventInterimTranscript
+		if results[0].GetIsFinal() {
+			eventType = stt.SpeechEventFinalTranscript
+		}
+		return data, eventType, true
 	}
 	var text string
 	var confidence float64
