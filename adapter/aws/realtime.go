@@ -188,9 +188,7 @@ func NewAWSRealtimeModelWithNovaSonic2(opts ...AWSRealtimeOption) *AWSRealtimeMo
 
 func WithAWSRealtimeModel(model string) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
-		if model != "" {
-			provider.model = model
-		}
+		provider.model = model
 	}
 }
 

@@ -73,6 +73,14 @@ func TestAWSRealtimeOptionsAllowReferenceEmptyVoiceAndTurnDetection(t *testing.T
 	}
 }
 
+func TestAWSRealtimeOptionsAllowReferenceEmptyModel(t *testing.T) {
+	provider := NewAWSRealtimeModel("custom-sonic", WithAWSRealtimeModel(""))
+
+	if provider.Model() != "" {
+		t.Fatalf("Model = %q, want explicit empty reference model", provider.Model())
+	}
+}
+
 func TestAWSRealtimeMaxSessionDurationUsesReferenceEnv(t *testing.T) {
 	t.Setenv("LK_SESSION_MAX_DURATION", "45")
 
