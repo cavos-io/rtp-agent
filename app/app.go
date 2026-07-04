@@ -169,6 +169,9 @@ type appGoogleRealtimeConfig struct {
 	maxOutputTokens          int
 	topP                     *float64
 	topK                     int
+	proactivity              *bool
+	affectiveDialog          *bool
+	apiVersion               string
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -211,6 +214,15 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.topK > 0 {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeTopK(c.topK))
+	}
+	if c.proactivity != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeProactivity(*c.proactivity))
+	}
+	if c.affectiveDialog != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeAffectiveDialog(*c.affectiveDialog))
+	}
+	if c.apiVersion != "" {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeAPIVersion(c.apiVersion))
 	}
 	return opts
 }
@@ -7106,6 +7118,13 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.maxOutputTokens = modelOptionInt(cfg.RealtimeModelOptions, "max_output_tokens")
 	googleCfg.topP = modelOptionFloat(cfg.RealtimeModelOptions, "top_p")
 	googleCfg.topK = modelOptionInt(cfg.RealtimeModelOptions, "top_k")
+	if proactivity := modelOptionBool(cfg.RealtimeModelOptions, "proactivity"); proactivity != nil {
+		googleCfg.proactivity = proactivity
+	}
+	if affectiveDialog := modelOptionBool(cfg.RealtimeModelOptions, "enable_affective_dialog"); affectiveDialog != nil {
+		googleCfg.affectiveDialog = affectiveDialog
+	}
+	googleCfg.apiVersion = modelOptionString(cfg.RealtimeModelOptions, "api_version")
 	return googleCfg
 }
 

@@ -14944,6 +14944,38 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeGenerationOptions(t *testing.T
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeProactivityOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "proactivity=true,enable_affective_dialog=true,api_version=v1alpha")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.proactivity == nil || !*capturedCfg.proactivity {
+		t.Fatalf("proactivity = %#v, want true", capturedCfg.proactivity)
+	}
+	if capturedCfg.affectiveDialog == nil || !*capturedCfg.affectiveDialog {
+		t.Fatalf("affectiveDialog = %#v, want true", capturedCfg.affectiveDialog)
+	}
+	if capturedCfg.apiVersion != "v1alpha" {
+		t.Fatalf("apiVersion = %q, want v1alpha", capturedCfg.apiVersion)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
