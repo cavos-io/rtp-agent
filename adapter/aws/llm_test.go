@@ -901,6 +901,40 @@ func TestBuildAWSMessagesIncludesInlineImageBlocks(t *testing.T) {
 	}
 }
 
+func TestAWSLLMChatRejectsReferenceExternalImage(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{
+			err:          errors.New("bedrock should not be called"),
+			inputCapture: &captured,
+		},
+		model: defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{
+			ID:   "user",
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Text: "describe"},
+				{Image: &llm.ImageContent{Image: "https://example.test/image.png"}},
+			},
+		},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil for external image", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "external_url is not supported by AWS Bedrock") {
+		t.Fatalf("Chat error = %v, want reference external_url unsupported error", err)
+	}
+	if captured != nil {
+		t.Fatalf("ConverseStream input = %#v, want no provider call for unsupported external image", captured)
+	}
+}
+
 func TestBuildAWSToolConfigMapsNamedToolChoice(t *testing.T) {
 	config := buildAWSToolConfig(&llm.ChatOptions{
 		Tools: []llm.Tool{awsRequestTestTool{}},

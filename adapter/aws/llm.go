@@ -207,6 +207,12 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	if toolConfig == nil {
 		chatCtx = chatCtx.Copy(llm.ChatContextCopyOptions{ExcludeFunctionCall: true})
 	}
+	if err := validateAWSMessageImages(chatCtx); err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
 	messages, systemText := buildAWSMessages(chatCtx)
 
 	req := &bedrockruntime.ConverseStreamInput{
@@ -291,6 +297,31 @@ func buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguratio
 		return nil
 	}
 	return config
+}
+
+func validateAWSMessageImages(chatCtx *llm.ChatContext) error {
+	if chatCtx == nil {
+		return nil
+	}
+	for _, item := range chatCtx.Items {
+		msg, ok := item.(*llm.ChatMessage)
+		if !ok {
+			continue
+		}
+		for _, content := range msg.Content {
+			if content.Image == nil {
+				continue
+			}
+			img, err := llm.SerializeImage(content.Image)
+			if err != nil {
+				return err
+			}
+			if img.ExternalURL != "" {
+				return fmt.Errorf("external_url is not supported by AWS Bedrock")
+			}
+		}
+	}
+	return nil
 }
 
 func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
