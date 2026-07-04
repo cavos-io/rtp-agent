@@ -1510,7 +1510,8 @@ func TestAWSRealtimeSessionRecycleWaitsForReferenceAudioEndTurnAfterCompletionEn
 		}
 	case <-time.After(50 * time.Millisecond):
 	}
-	if first.closed {
+	firstClosed := first.isClosed()
+	if firstClosed {
 		t.Fatal("first stream closed before AUDIO END_TURN after completionEnd")
 	}
 
@@ -1519,10 +1520,12 @@ func TestAWSRealtimeSessionRecycleWaitsForReferenceAudioEndTurnAfterCompletionEn
 	if event.Reconnect == nil {
 		t.Fatal("Reconnect = nil, want reference session recycle after AUDIO END_TURN")
 	}
-	if !first.closed {
+	firstClosed = first.isClosed()
+	if !firstClosed {
 		t.Fatal("first stream closed = false, want recycle after AUDIO END_TURN")
 	}
-	if len(second.sent) == 0 {
+	secondSent := second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
 	}
 }
@@ -1562,17 +1565,20 @@ func TestAWSRealtimeSessionRecycleWaitsForReferenceAudioQuiet(t *testing.T) {
 	}
 
 waited:
-	if first.closed {
+	firstClosed := first.isClosed()
+	if firstClosed {
 		t.Fatal("first stream closed before reference audio quiet period")
 	}
 	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 	if event.Reconnect == nil {
 		t.Fatal("Reconnect = nil, want reference session recycle after audio quiet")
 	}
-	if !first.closed {
+	firstClosed = first.isClosed()
+	if !firstClosed {
 		t.Fatal("first stream closed = false, want recycle after audio quiet")
 	}
-	if len(second.sent) == 0 {
+	secondSent := second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
 	}
 }
