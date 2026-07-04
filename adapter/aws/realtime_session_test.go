@@ -613,7 +613,8 @@ func TestAWSRealtimeSessionTruncatesReferenceChatContextOnStart(t *testing.T) {
 	}
 	defer session.Close()
 
-	historyTexts := awsRealtimeSentTextInputContents(t, stream.sent)
+	sent := stream.snapshotSent()
+	historyTexts := awsRealtimeSentTextInputContents(t, sent)
 	if len(historyTexts) > 0 && strings.Contains(historyTexts[0], "Your name is Sonic") {
 		historyTexts = historyTexts[1:]
 	}
