@@ -4241,6 +4241,9 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	if googleCfg.streaming == nil {
 		googleCfg.streaming = modelOptionBool(cfg.STTModelOptions, "use_streaming")
 	}
+	if googleCfg.punctuate == nil {
+		googleCfg.punctuate = modelOptionBool(cfg.STTModelOptions, "punctuate")
+	}
 	if googleCfg.interimResults == nil {
 		googleCfg.interimResults = modelOptionBool(cfg.STTModelOptions, "interim_results")
 	}

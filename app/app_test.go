@@ -13939,6 +13939,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceSpeechStartTimeoutOption(t *te
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferencePunctuateOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"punctuate": false},
+	})
+
+	if googleCfg.punctuate == nil || *googleCfg.punctuate {
+		t.Fatalf("punctuate = %#v, want model option punctuate false", googleCfg.punctuate)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{"use_streaming": false},
