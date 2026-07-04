@@ -1533,7 +1533,10 @@ func (s *awsRealtimeSession) isAudioTranscriptMessage(id string) bool {
 func normalizeAWSRealtimeToolResult(content string) string {
 	var parsed any
 	if err := json.Unmarshal([]byte(content), &parsed); err == nil {
-		if _, ok := parsed.(string); !ok {
+		if text, ok := parsed.(string); ok {
+			return text
+		}
+		if parsed != nil {
 			return content
 		}
 	}

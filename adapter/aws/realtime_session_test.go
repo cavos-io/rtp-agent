@@ -2556,6 +2556,41 @@ func TestAWSRealtimeSessionWrapsReferencePlainToolResult(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionUnwrapsReferenceJSONStringToolResult(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-json-string","toolName":"lookup","content":"{}"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	select {
+	case <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
+	ctx := llm.NewChatContext()
+	ctx.Append(&llm.FunctionCallOutput{
+		CallID: "tool-json-string",
+		Name:   "lookup",
+		Output: `"sunny"`,
+	})
+
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v", err)
+	}
+
+	result := mustAWSRealtimeJSONEvent(t, stream.sent[len(stream.sent)-2])
+	if got := awsRealtimeNestedString(result, "event", "toolResult", "content"); got != "sunny" {
+		t.Fatalf("JSON string tool result content = %q, want reference unwrapped string", got)
+	}
+}
+
 func TestAWSRealtimeSessionWrapsReferenceToolErrorResult(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
