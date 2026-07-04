@@ -194,7 +194,7 @@ func WithAWSRealtimeModel(model string) AWSRealtimeOption {
 
 func WithAWSRealtimeRegion(region string) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
-		provider.region = awsRegionOrDefault(region)
+		provider.region = region
 	}
 }
 

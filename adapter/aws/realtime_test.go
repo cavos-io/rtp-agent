@@ -81,6 +81,14 @@ func TestAWSRealtimeOptionsAllowReferenceEmptyModel(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeOptionsAllowReferenceEmptyRegion(t *testing.T) {
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeRegion(""))
+
+	if provider.Region() != "" {
+		t.Fatalf("Region = %q, want explicit empty reference region", provider.Region())
+	}
+}
+
 func TestAWSRealtimeMaxSessionDurationUsesReferenceEnv(t *testing.T) {
 	t.Setenv("LK_SESSION_MAX_DURATION", "45")
 
