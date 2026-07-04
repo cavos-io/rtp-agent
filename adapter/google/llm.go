@@ -527,8 +527,65 @@ func googleResponseFormatSchema(format map[string]any) (*genai.Schema, bool) {
 }
 
 func googleSpeechConfigParam(value any) (*genai.SpeechConfig, bool) {
-	config, ok := value.(*genai.SpeechConfig)
-	return config, ok && config != nil
+	switch config := value.(type) {
+	case *genai.SpeechConfig:
+		return config, config != nil
+	case genai.SpeechConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.SpeechConfig{}
+		if languageCode := googleStringParam(config["language_code"]); languageCode != "" {
+			result.LanguageCode = languageCode
+		} else if languageCode := googleStringParam(config["languageCode"]); languageCode != "" {
+			result.LanguageCode = languageCode
+		}
+		if voiceConfig, ok := googleVoiceConfigParam(config["voice_config"]); ok {
+			result.VoiceConfig = voiceConfig
+		} else if voiceConfig, ok := googleVoiceConfigParam(config["voiceConfig"]); ok {
+			result.VoiceConfig = voiceConfig
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googleVoiceConfigParam(value any) (*genai.VoiceConfig, bool) {
+	switch config := value.(type) {
+	case *genai.VoiceConfig:
+		return config, config != nil
+	case genai.VoiceConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.VoiceConfig{}
+		if prebuilt, ok := googlePrebuiltVoiceConfigParam(config["prebuilt_voice_config"]); ok {
+			result.PrebuiltVoiceConfig = prebuilt
+		} else if prebuilt, ok := googlePrebuiltVoiceConfigParam(config["prebuiltVoiceConfig"]); ok {
+			result.PrebuiltVoiceConfig = prebuilt
+		}
+		return result, true
+	default:
+		return nil, false
+	}
+}
+
+func googlePrebuiltVoiceConfigParam(value any) (*genai.PrebuiltVoiceConfig, bool) {
+	switch config := value.(type) {
+	case *genai.PrebuiltVoiceConfig:
+		return config, config != nil
+	case genai.PrebuiltVoiceConfig:
+		return &config, true
+	case map[string]any:
+		result := &genai.PrebuiltVoiceConfig{}
+		if voiceName := googleStringParam(config["voice_name"]); voiceName != "" {
+			result.VoiceName = voiceName
+		} else if voiceName := googleStringParam(config["voiceName"]); voiceName != "" {
+			result.VoiceName = voiceName
+		}
+		return result, true
+	default:
+		return nil, false
+	}
 }
 
 func googleRoutingConfigParam(value any) (*genai.GenerationConfigRoutingConfig, bool) {

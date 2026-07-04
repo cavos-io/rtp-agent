@@ -1227,6 +1227,37 @@ func TestBuildGoogleGenerateContentConfigAppliesReferenceSpeechConfigExtra(t *te
 	}
 }
 
+func TestBuildGoogleGenerateContentConfigMapsReferenceSpeechConfigDict(t *testing.T) {
+	options := &llm.ChatOptions{
+		ExtraParams: map[string]any{
+			"speech_config": map[string]any{
+				"language_code": "en-US",
+				"voice_config": map[string]any{
+					"prebuilt_voice_config": map[string]any{
+						"voice_name": "Puck",
+					},
+				},
+			},
+		},
+	}
+
+	config := buildGoogleGenerateContentConfig(options, "")
+
+	speech := config.SpeechConfig
+	if speech == nil {
+		t.Fatal("SpeechConfig = nil, want dict-derived speech config")
+	}
+	if speech.LanguageCode != "en-US" {
+		t.Fatalf("SpeechConfig.LanguageCode = %q, want en-US", speech.LanguageCode)
+	}
+	if speech.VoiceConfig == nil || speech.VoiceConfig.PrebuiltVoiceConfig == nil {
+		t.Fatalf("SpeechConfig.VoiceConfig = %#v, want prebuilt voice config", speech.VoiceConfig)
+	}
+	if speech.VoiceConfig.PrebuiltVoiceConfig.VoiceName != "Puck" {
+		t.Fatalf("VoiceName = %q, want Puck", speech.VoiceConfig.PrebuiltVoiceConfig.VoiceName)
+	}
+}
+
 func TestBuildGoogleGenerateContentConfigAppliesReferenceAudioTimestampExtra(t *testing.T) {
 	options := &llm.ChatOptions{
 		ExtraParams: map[string]any{
