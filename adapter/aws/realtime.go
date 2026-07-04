@@ -1551,9 +1551,6 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 		} else {
 			content = normalizeAWSRealtimeToolResult(content)
 		}
-		if err := s.sendToolResult(context.Background(), output.CallID, content); err != nil {
-			return err
-		}
 		s.mu.Lock()
 		delete(s.pending, output.CallID)
 		shouldRecycle := len(s.pending) == 0 && s.recycleToolsAfterPending
@@ -1561,6 +1558,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			s.recycleToolsAfterPending = false
 		}
 		s.mu.Unlock()
+		if err := s.sendToolResult(context.Background(), output.CallID, content); err != nil {
+			return err
+		}
 		if shouldRecycle {
 			return s.recycleForUpdatedTools(context.Background())
 		}

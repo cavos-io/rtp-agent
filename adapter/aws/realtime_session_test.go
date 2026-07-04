@@ -3126,7 +3126,7 @@ func TestAWSRealtimeSessionToolUpdateRecycleClearsStalePendingTool(t *testing.T)
 	}
 }
 
-func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
+func TestAWSRealtimeSessionDropsReferenceToolResultAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
@@ -3161,17 +3161,21 @@ func TestAWSRealtimeSessionRetriesToolResultAfterSendFailure(t *testing.T) {
 	if len(stream.sent) != sentBeforeFailure {
 		t.Fatalf("failed UpdateChatContext sent %d events, want none accepted before send error", len(stream.sent)-sentBeforeFailure)
 	}
+	awsSession := session.(*awsRealtimeSession)
+	awsSession.mu.Lock()
+	_, stillPending := awsSession.pending["tool-retry"]
+	awsSession.mu.Unlock()
+	if stillPending {
+		t.Fatal("tool-retry still pending after failed send, want reference pending state cleared before delivery")
+	}
 	stream.sendErr = nil
 	sentCount := len(stream.sent)
 
 	if err := session.UpdateChatContext(ctx); err != nil {
-		t.Fatalf("UpdateChatContext retry error = %v", err)
+		t.Fatalf("UpdateChatContext after failed send error = %v", err)
 	}
-	if len(stream.sent) != sentCount+3 {
-		t.Fatalf("retry sent %d events, want 3 tool result events", len(stream.sent)-sentCount)
-	}
-	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, stream.sent[sentCount+1]), "event", "toolResult", "content"); got != `{"ok":true}` {
-		t.Fatalf("retry tool result content = %q, want output", got)
+	if len(stream.sent) != sentCount {
+		t.Fatalf("UpdateChatContext after failed send emitted %d events, want no stale reference retry", len(stream.sent)-sentCount)
 	}
 }
 
