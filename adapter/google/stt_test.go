@@ -374,6 +374,53 @@ func TestGoogleStreamingRecognitionConfigV2UsesReferenceKeywordAdaptation(t *tes
 	}
 }
 
+func TestGoogleSTTPreservesReferenceEmptyKeywordAdaptation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTKeywords(
+			GoogleSTTKeyword{Value: "", Boost: 4.5},
+			GoogleSTTKeyword{Value: "Cavos", Boost: 12.5},
+		),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.Adaptation == nil || len(config.Adaptation.PhraseSets) != 1 {
+		t.Fatalf("adaptation = %#v, want one phrase set", config.Adaptation)
+	}
+	phrases := config.Adaptation.PhraseSets[0].Phrases
+	if len(phrases) != 2 {
+		t.Fatalf("phrases = %#v, want empty keyword phrase preserved", phrases)
+	}
+	if got := phrases[0]; got.Value != "" || got.Boost != 4.5 {
+		t.Fatalf("first phrase = %#v, want empty value boost 4.5", got)
+	}
+	if got := phrases[1]; got.Value != "Cavos" || got.Boost != 12.5 {
+		t.Fatalf("second phrase = %#v, want Cavos boost 12.5", got)
+	}
+
+	v2Provider := newGoogleSTTWithV2Client(nil,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTKeywords(
+			GoogleSTTKeyword{Value: "", Boost: 4.5},
+			GoogleSTTKeyword{Value: "Cavos", Boost: 12.5},
+		),
+	)
+
+	v2Config := googleStreamingRecognitionConfigV2(v2Provider, "en-US", true)
+	v2PhraseSet := v2Config.GetConfig().GetAdaptation().GetPhraseSets()[0].GetInlinePhraseSet()
+	v2Phrases := v2PhraseSet.GetPhrases()
+	if len(v2Phrases) != 2 {
+		t.Fatalf("v2 phrases = %#v, want empty keyword phrase preserved", v2Phrases)
+	}
+	if got := v2Phrases[0]; got.GetValue() != "" || got.GetBoost() != 4.5 {
+		t.Fatalf("first v2 phrase = %#v, want empty value boost 4.5", got)
+	}
+	if got := v2Phrases[1]; got.GetValue() != "Cavos" || got.GetBoost() != 12.5 {
+		t.Fatalf("second v2 phrase = %#v, want Cavos boost 12.5", got)
+	}
+}
+
 func TestGoogleStreamingRecognitionConfigV2UsesReferenceCustomAdaptationOverKeywords(t *testing.T) {
 	adaptation := &speechv2pb.SpeechAdaptation{
 		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{

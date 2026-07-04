@@ -184,13 +184,7 @@ func WithGoogleSTTMinConfidenceThreshold(threshold float64) GoogleSTTOption {
 
 func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		s.keywords = nil
-		for _, keyword := range keywords {
-			if keyword.Value == "" {
-				continue
-			}
-			s.keywords = append(s.keywords, keyword)
-		}
+		s.keywords = append([]GoogleSTTKeyword(nil), keywords...)
 	}
 }
 
@@ -946,9 +940,6 @@ func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
 	}
 	phrases := make([]*speechpb.PhraseSet_Phrase, 0, len(s.keywords))
 	for _, keyword := range s.keywords {
-		if keyword.Value == "" {
-			continue
-		}
 		phrases = append(phrases, &speechpb.PhraseSet_Phrase{
 			Value: keyword.Value,
 			Boost: keyword.Boost,
@@ -977,9 +968,6 @@ func googleSpeechAdaptationV2(s *GoogleSTT) *speechv2pb.SpeechAdaptation {
 	}
 	phrases := make([]*speechv2pb.PhraseSet_Phrase, 0, len(s.keywords))
 	for _, keyword := range s.keywords {
-		if keyword.Value == "" {
-			continue
-		}
 		phrases = append(phrases, &speechv2pb.PhraseSet_Phrase{
 			Value: keyword.Value,
 			Boost: keyword.Boost,
