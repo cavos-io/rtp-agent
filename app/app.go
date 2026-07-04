@@ -4379,8 +4379,73 @@ func googleTTSAudioEncodingFromConfig(cfg AppConfig) *texttospeechpb.AudioEncodi
 }
 
 func googleTTSCustomPronunciationsFromOptions(options map[string]any) *texttospeechpb.CustomPronunciations {
-	custom, _ := options["custom_pronunciations"].(*texttospeechpb.CustomPronunciations)
+	value, ok := options["custom_pronunciations"]
+	if !ok {
+		return nil
+	}
+	if custom, ok := value.(*texttospeechpb.CustomPronunciations); ok {
+		return custom
+	}
+	config, ok := value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	items, ok := anySlice(config["pronunciations"])
+	if !ok {
+		return nil
+	}
+	custom := &texttospeechpb.CustomPronunciations{}
+	for _, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		phrase := modelOptionString(itemMap, "phrase")
+		pronunciation := modelOptionString(itemMap, "pronunciation")
+		encoding, ok := googleTTSCustomPronunciationEncoding(itemMap)
+		if phrase == "" || pronunciation == "" || !ok {
+			continue
+		}
+		custom.Pronunciations = append(custom.Pronunciations, &texttospeechpb.CustomPronunciationParams{
+			Phrase:           &phrase,
+			PhoneticEncoding: &encoding,
+			Pronunciation:    &pronunciation,
+		})
+	}
+	if len(custom.Pronunciations) == 0 {
+		return nil
+	}
 	return custom
+}
+
+func googleTTSCustomPronunciationEncoding(options map[string]any) (texttospeechpb.CustomPronunciationParams_PhoneticEncoding, bool) {
+	value := modelOptionString(options, "phonetic_encoding")
+	if value == "" {
+		value = modelOptionString(options, "phoneticEncoding")
+	}
+	if value == "" {
+		return 0, false
+	}
+	normalized := strings.ToUpper(strings.ReplaceAll(value, "-", "_"))
+	if enumValue, ok := texttospeechpb.CustomPronunciationParams_PhoneticEncoding_value[normalized]; ok {
+		return texttospeechpb.CustomPronunciationParams_PhoneticEncoding(enumValue), true
+	}
+	return 0, false
+}
+
+func anySlice(value any) ([]any, bool) {
+	switch typed := value.(type) {
+	case []any:
+		return typed, true
+	case []map[string]any:
+		items := make([]any, 0, len(typed))
+		for _, item := range typed {
+			items = append(items, item)
+		}
+		return items, true
+	default:
+		return nil, false
+	}
 }
 
 func liveKitTTSOptionsFromConfig(cfg AppConfig) ([]adapterlivekit.TTSOption, error) {

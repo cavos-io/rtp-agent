@@ -13600,6 +13600,34 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciations(t *testin
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceCustomPronunciationJSON(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{
+			"custom_pronunciations": map[string]any{
+				"pronunciations": []any{map[string]any{
+					"phrase":            "Cavos",
+					"phonetic_encoding": "PHONETIC_ENCODING_X_SAMPA",
+					"pronunciation":     "keIvAs",
+				}},
+			},
+		},
+	})
+
+	if googleCfg.customPronunciations == nil || len(googleCfg.customPronunciations.Pronunciations) != 1 {
+		t.Fatalf("custom pronunciations = %#v, want one parsed pronunciation", googleCfg.customPronunciations)
+	}
+	got := googleCfg.customPronunciations.Pronunciations[0]
+	if got.GetPhrase() != "Cavos" {
+		t.Fatalf("phrase = %q, want Cavos", got.GetPhrase())
+	}
+	if got.GetPronunciation() != "keIvAs" {
+		t.Fatalf("pronunciation = %q, want keIvAs", got.GetPronunciation())
+	}
+	if got.GetPhoneticEncoding() != texttospeechpb.CustomPronunciationParams_PHONETIC_ENCODING_X_SAMPA {
+		t.Fatalf("phonetic encoding = %v, want X-SAMPA", got.GetPhoneticEncoding())
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceAudioEncoding(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSEncoding: "mp3",
