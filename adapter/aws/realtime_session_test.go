@@ -990,6 +990,36 @@ func TestAWSRealtimeSessionCommitAudioIsReferenceNoop(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionUpdateOptionsIsReferenceNoop(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	before := len(stream.sent)
+
+	err = session.UpdateOptions(llm.RealtimeSessionOptions{
+		ToolChoice:       "required",
+		ToolChoiceSet:    true,
+		Voice:            "matthew",
+		VoiceSet:         true,
+		TurnDetection:    map[string]any{"type": "server_vad"},
+		TurnDetectionSet: true,
+	})
+
+	if err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if after := len(stream.sent); after != before {
+		t.Fatalf("sent events after UpdateOptions = %d, want unchanged %d", after, before)
+	}
+	if stream.closed {
+		t.Fatal("stream closed after UpdateOptions, want reference no-op")
+	}
+}
+
 func TestAWSRealtimeSessionPushAudioPreservesResampleDurationAcrossFrames(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
