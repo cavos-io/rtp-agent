@@ -1154,7 +1154,7 @@ func (s *googleRealtimeSession) reconnectWithVoiceTurnDetection(voice string, vo
 	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
-		return err
+		return googleRealtimeReconnectError(err)
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -1230,7 +1230,7 @@ func (s *googleRealtimeSession) reconnectWithModelOptions(options googleRealtime
 	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
-		return err
+		return googleRealtimeReconnectError(err)
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -1297,7 +1297,7 @@ func (s *googleRealtimeSession) reconnectWithTools(tools []llm.Tool) error {
 	s.finishCurrentGeneration()
 	nextSession, err := googleRealtimeConnectWithRetry(s.ctx, connector, modelName, config, connectOptions)
 	if err != nil {
-		return err
+		return googleRealtimeReconnectError(err)
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -1575,6 +1575,17 @@ func (s *googleRealtimeSession) currentConnectOptions() llm.APIConnectOptions {
 		return s.owner.connectOptions
 	}
 	return llm.DefaultAPIConnectOptions()
+}
+
+func googleRealtimeReconnectError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var connectionErr *llm.APIConnectionError
+	if errors.As(err, &connectionErr) {
+		return err
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("failed to reconnect Google realtime: %v", err))
 }
 
 func (s *googleRealtimeSession) replayChatContext(liveSession googleRealtimeLiveSession, chatCtx *llm.ChatContext) error {
