@@ -2131,6 +2131,49 @@ func TestAWSRealtimeSessionEmitsReferenceSpeculativeGenerationBeforeTurnFinality
 	}
 }
 
+func TestAWSRealtimeSessionEmitsReferenceToolGenerationBeforeTurnFinality(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"textOutput":{"role":"USER","content":"book a flight","contentId":"user-1"}}}`)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if created.Generation == nil {
+		t.Fatal("Generation = nil, want tool contentStart generation")
+	}
+	stopped := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStopped)
+	if stopped.SpeechStopped == nil || !stopped.SpeechStopped.UserTranscriptionEnabled {
+		t.Fatalf("SpeechStopped = %#v, want user transcription enabled", stopped.SpeechStopped)
+	}
+	final := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeInputAudioTranscriptionCompleted)
+	if final.InputTranscription == nil || !final.InputTranscription.IsFinal || final.InputTranscription.Transcript != "book a flight" {
+		t.Fatalf("final transcription = %#v, want final book a flight after tool generation", final.InputTranscription)
+	}
+	reemit := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	if reemit.Generation == nil || reemit.Generation.ResponseID != created.Generation.ResponseID {
+		t.Fatalf("re-emitted generation = %#v, want same response id %q", reemit.Generation, created.Generation.ResponseID)
+	}
+
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","toolName":"lookup","content":"{\"destination\":\"SFO\"}"}}}`)
+	var call *llm.FunctionCall
+	select {
+	case call = <-created.Generation.FunctionCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for function stream call")
+	}
+	if call.CallID != "tool-1" || call.Name != "lookup" || call.Arguments != `{"destination":"SFO"}` {
+		t.Fatalf("function call = %#v, want lookup tool-1 with destination", call)
+	}
+}
+
 func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
