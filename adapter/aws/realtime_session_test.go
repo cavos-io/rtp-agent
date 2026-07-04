@@ -2303,6 +2303,47 @@ func TestAWSRealtimeSessionStreamsReferenceAssistantTextWithoutOutputRole(t *tes
 	}
 }
 
+func TestAWSRealtimeSessionStreamsReferenceEmptyAssistantTextDelta(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TEXT","role":"ASSISTANT","contentId":"text-empty","additionalModelFields":"{\"generationStage\":\"SPECULATIVE\"}"}}}`)
+	created := assertAWSRealtimeEventEventually(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"textOutput":{"content":"","contentId":"text-empty"}}}`)
+
+	select {
+	case text := <-msg.TextCh:
+		if text != "" {
+			t.Fatalf("text delta = %q, want empty reference delta", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for empty assistant text delta")
+	}
+	awsSession.mu.Lock()
+	chatCtx := awsSession.chatCtx
+	awsSession.mu.Unlock()
+	if chatCtx == nil || len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx items = %#v, want empty assistant provider text history", chatCtx)
+	}
+	assistantMsg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || assistantMsg.Role != llm.ChatRoleAssistant || assistantMsg.TextContent() != "" {
+		t.Fatalf("assistant history = %#v, want empty delta", chatCtx.Items[0])
+	}
+}
+
 func TestAWSRealtimeSessionPreservesReferenceProviderTextHistory(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

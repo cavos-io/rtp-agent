@@ -1004,9 +1004,10 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			})
 		}
 	}
-	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
-		contentID := awsRealtimeNestedString(payload, "event", "textOutput", "contentId")
-		role := awsRealtimeNestedString(payload, "event", "textOutput", "role")
+	if textOutput := awsRealtimeNestedMap(payload, "event", "textOutput"); textOutput != nil {
+		textContent := awsRealtimeMapString(textOutput, "content")
+		contentID := awsRealtimeMapString(textOutput, "contentId")
+		role := awsRealtimeMapString(textOutput, "role")
 		if textContent == awsRealtimeBargeInContent {
 			s.markLastAssistantMessageInterrupted()
 			if !s.hasPendingTools() {
@@ -1179,9 +1180,6 @@ func (s *awsRealtimeSession) isProviderAssistantText(contentID string) bool {
 }
 
 func (s *awsRealtimeSession) updateProviderTextHistory(role llm.ChatRole, text string, contentID string) {
-	if text == "" {
-		return
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.chatCtx == nil {
