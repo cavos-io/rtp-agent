@@ -3023,6 +3023,49 @@ func TestAWSRealtimeSessionGenerateReplyWaitsForReferenceGenerationStart(t *test
 	}
 }
 
+func TestAWSRealtimeSessionGenerateReplyWithoutInstructionsJoinsReferencePendingGeneration(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(
+		WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}),
+		WithAWSRealtimeGenerateReplyTimeout(time.Second),
+	)
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+
+	instructionsDone := make(chan error, 1)
+	go func() {
+		instructionsDone <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{Instructions: "ask for the card number"})
+	}()
+	waitAWSRealtimeTextInput(t, stream, "ask for the card number")
+	sentCount := len(stream.sent)
+
+	joinDone := make(chan error, 1)
+	go func() {
+		joinDone <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{})
+	}()
+
+	select {
+	case err := <-joinDone:
+		t.Fatalf("GenerateReply without instructions returned before pending generation start: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(stream.sent) != sentCount {
+		t.Fatalf("GenerateReply without instructions sent %d provider events, want join existing pending generation", len(stream.sent)-sentCount)
+	}
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	if err := <-instructionsDone; err != nil {
+		t.Fatalf("GenerateReply with instructions error after generation start = %v", err)
+	}
+	if err := <-joinDone; err != nil {
+		t.Fatalf("GenerateReply without instructions error after generation start = %v", err)
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyWaitsForReferenceChatContextGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic2(
