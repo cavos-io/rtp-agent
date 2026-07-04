@@ -652,7 +652,8 @@ func TestAWSRealtimeSessionExcludesReferenceEmptyMessagesBeforeTruncation(t *tes
 	}
 	defer session.Close()
 
-	texts := awsRealtimeSentTextInputContents(t, stream.sent)
+	sent := stream.snapshotSent()
+	texts := awsRealtimeSentTextInputContents(t, sent)
 	for _, text := range texts {
 		if text == "keep this turn" {
 			return
