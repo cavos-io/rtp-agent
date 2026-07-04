@@ -765,6 +765,10 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 					s.closeContext()
 					return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: toolUse delta received before toolUse start", !s.emittedChunk)
 				}
+				if toolDelta.Value.Input == nil {
+					s.closeContext()
+					return nil, llm.NewAPIConnectionErrorWithRetryable("AWS Bedrock LLM stream failed: malformed toolUse delta missing input", !s.emittedChunk)
+				}
 				s.toolArgs += aws.ToString(toolDelta.Value.Input)
 				continue
 			}
