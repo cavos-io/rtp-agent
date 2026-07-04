@@ -96,6 +96,7 @@ type GoogleRealtimeOption func(*googleRealtimeOptions)
 
 type googleRealtimeOptions struct {
 	model                     string
+	modelSet                  bool
 	instructions              string
 	voice                     string
 	voiceSet                  bool
@@ -155,9 +156,8 @@ type googleRealtimeLiveSession interface {
 
 func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
-		if model != "" {
-			options.model = model
-		}
+		options.model = model
+		options.modelSet = true
 	}
 }
 
@@ -364,7 +364,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		vertexAI = *options.vertexAI
 	}
 	modelName := options.model
-	if modelName == "" {
+	if !options.modelSet {
 		if vertexAI {
 			modelName = defaultGoogleRealtimeVertexModel
 		} else {
@@ -571,7 +571,7 @@ func validateGoogleRealtimeModelAPI(model string, vertexAI bool) error {
 }
 
 func (m *RealtimeModel) Model() string {
-	if m == nil || m.model == "" {
+	if m == nil {
 		return defaultGoogleRealtimeGeminiModel
 	}
 	return m.model

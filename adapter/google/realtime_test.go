@@ -62,6 +62,17 @@ func TestGoogleRealtimeDefaultsMatchReference(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeExplicitEmptyModelMatchesReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeModel(""))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	if model.Model() != "" {
+		t.Fatalf("Model() = %q, want explicit empty model", model.Model())
+	}
+}
+
 func TestGoogleRealtimeVertexDefaultsMatchReference(t *testing.T) {
 	model, err := NewRealtimeModel("ignored",
 		WithGoogleRealtimeVertexAI(true),
