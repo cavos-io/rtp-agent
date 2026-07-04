@@ -1039,11 +1039,23 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			}
 		}
 	}
-	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
+	if toolUse := awsRealtimeNestedMap(payload, "event", "toolUse"); toolUse != nil {
+		toolUseID, ok := awsRealtimeRequiredMapString(toolUse, "toolUseId")
+		if !ok {
+			return true
+		}
+		toolName, ok := awsRealtimeRequiredMapString(toolUse, "toolName")
+		if !ok {
+			return true
+		}
+		content, ok := awsRealtimeRequiredMapString(toolUse, "content")
+		if !ok {
+			return true
+		}
 		if !s.sendGenerationFunction(&llm.FunctionCall{
 			CallID:    toolUseID,
-			Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
-			Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
+			Name:      toolName,
+			Arguments: normalizeAWSRealtimeToolArguments(content),
 		}) {
 			return true
 		}

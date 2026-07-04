@@ -2606,6 +2606,39 @@ func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
 	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
 }
 
+func TestAWSRealtimeSessionIgnoresReferenceToolUseMissingName(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","content":"{\"query\":\"weather\"}"}}}`)
+
+	select {
+	case call := <-created.Generation.FunctionCh:
+		t.Fatalf("function call = %#v, want none for missing reference toolName", call)
+	case <-time.After(50 * time.Millisecond):
+	}
+	awsSession.mu.Lock()
+	_, pending := awsSession.pending["tool-1"]
+	activeGeneration := awsSession.generation != nil
+	awsSession.mu.Unlock()
+	if pending {
+		t.Fatal("tool-1 pending = true, want malformed toolUse ignored before pending registration")
+	}
+	if !activeGeneration {
+		t.Fatal("generation closed, want malformed toolUse to leave reference generation open")
+	}
+}
+
 func TestAWSRealtimeSessionMarksReferenceToolPendingDuringEmission(t *testing.T) {
 	provider := NewAWSRealtimeModel("")
 	session := newAWSRealtimeSession(provider, nil)
