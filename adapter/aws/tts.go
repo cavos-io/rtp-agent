@@ -529,6 +529,11 @@ func normalizeAWSTTSFrame(frame *model.AudioFrame, sampleRate int) (*model.Audio
 		return frame, nil
 	}
 	frame = downmixAWSTTSFrameToMono(frame)
+	if sampleRate == 0 && frame.SampleRate != 0 {
+		normalized := *frame
+		normalized.SampleRate = 0
+		return &normalized, nil
+	}
 	if sampleRate <= 0 {
 		return frame, nil
 	}
