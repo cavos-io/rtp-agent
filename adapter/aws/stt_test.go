@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -968,6 +969,42 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamCloseUnblocksInFlightReferencePushFrame(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := newBlockingAWSSTTWriter()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = writer
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- providerStream.PushFrame(&model.AudioFrame{Data: []byte("pcm")})
+	}()
+
+	select {
+	case <-writer.sendStarted:
+	case <-time.After(time.Second):
+		t.Fatal("PushFrame did not start provider send")
+	}
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("in-flight PushFrame error = %v, want nil for reference close cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-flight PushFrame remained blocked after Close")
+	}
+}
+
 func TestAWSSTTStreamPushNilFrameIsReferenceNoop(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}
@@ -1064,6 +1101,79 @@ func TestAWSSTTStreamFlushDoesNotSendReferenceCloseSentinel(t *testing.T) {
 	}
 	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
 		t.Fatalf("chunks after Close = %#v, want one empty AWS close sentinel", writer.chunks)
+	}
+}
+
+func TestAWSSTTStreamEndInputSendsReferenceSentinelAndKeepsOutputOpen(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := &fakeAWSSTTWriter{}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = reader
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+	ending, ok := interface{}(providerStream).(stt.InputEnding)
+	if !ok {
+		t.Fatal("aws STT stream does not implement stt.InputEnding")
+	}
+
+	go providerStream.readLoop()
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v, want nil", err)
+	}
+	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
+		t.Fatalf("chunks after EndInput = %#v, want one empty AWS close sentinel", writer.chunks)
+	}
+	if writer.chunkWasNil[0] {
+		t.Fatal("EndInput chunk = nil, want non-nil empty AWS close sentinel")
+	}
+	if !writer.closed {
+		t.Fatal("writer closed = false, want provider input side closed")
+	}
+	if reader.closed {
+		t.Fatal("reader closed = true, want output side open for final transcripts after EndInput")
+	}
+	if err := providerStream.PushFrame(&model.AudioFrame{Data: []byte("after-end")}); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("PushFrame after EndInput error = %v, want stream input ended", err)
+	}
+	if err := providerStream.Flush(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	}
+	if err := ending.EndInput(); err == nil || !strings.Contains(err.Error(), "stream input ended") {
+		t.Fatalf("second EndInput error = %v, want stream input ended", err)
+	}
+
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{{
+					IsPartial: false,
+					StartTime: 0.1,
+					EndTime:   0.4,
+					Alternatives: []types.Alternative{{
+						Transcript: awsconfig.String("final after end"),
+					}},
+				}},
+			},
+		},
+	}
+	close(reader.events)
+
+	event, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final transcript after EndInput", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript || len(event.Alternatives) != 1 || event.Alternatives[0].Text != "final after end" {
+		t.Fatalf("event = %#v, want final transcript after EndInput", event)
+	}
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close after EndInput error = %v, want nil", err)
+	}
+	if len(writer.chunks) != 1 {
+		t.Fatalf("chunks after Close following EndInput = %#v, want no duplicate AWS close sentinel", writer.chunks)
 	}
 }
 
@@ -1480,6 +1590,46 @@ type fakeAWSSTTWriter struct {
 	err         error
 	closeErr    error
 }
+
+type blockingAWSSTTWriter struct {
+	sendStarted   chan struct{}
+	closeCh       chan struct{}
+	sendStartOnce sync.Once
+}
+
+func newBlockingAWSSTTWriter() *blockingAWSSTTWriter {
+	return &blockingAWSSTTWriter{
+		sendStarted: make(chan struct{}),
+		closeCh:     make(chan struct{}),
+	}
+}
+
+func (w *blockingAWSSTTWriter) Send(ctx context.Context, event types.AudioStream) error {
+	audioEvent, ok := event.(*types.AudioStreamMemberAudioEvent)
+	if !ok || len(audioEvent.Value.AudioChunk) == 0 {
+		return nil
+	}
+	w.sendStartOnce.Do(func() {
+		close(w.sendStarted)
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.closeCh:
+		return io.ErrClosedPipe
+	}
+}
+
+func (w *blockingAWSSTTWriter) Close() error {
+	select {
+	case <-w.closeCh:
+	default:
+		close(w.closeCh)
+	}
+	return nil
+}
+
+func (w *blockingAWSSTTWriter) Err() error { return nil }
 
 func (w *fakeAWSSTTWriter) Send(_ context.Context, event types.AudioStream) error {
 	if w.err != nil {

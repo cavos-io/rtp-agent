@@ -448,6 +448,7 @@ type awsRealtimeSession struct {
 	recycleTimer             *time.Timer
 	recycleVersion           int
 	lastAudioOutput          time.Time
+	awaitingAudioEndTurn     bool
 	currentUserContentID     string
 	audioBStream             *coreaudio.AudioByteStream
 	audioNorm                awsRealtimeInputAudioNormalizer
@@ -695,7 +696,7 @@ func (s *awsRealtimeSession) waitForSessionRecycleTurnBoundary(ctx context.Conte
 	for {
 		s.mu.Lock()
 		done := s.closed || version != s.recycleVersion
-		activeGeneration := s.generation != nil
+		activeGeneration := s.generation != nil || s.awaitingAudioEndTurn
 		s.mu.Unlock()
 		if done {
 			return false
@@ -989,6 +990,13 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	}
 	s.trackGenerationContentStart(payload)
 	if audioOutput := awsRealtimeNestedMap(payload, "event", "audioOutput"); audioOutput != nil {
+		contentID, ok := awsRealtimeRequiredMapString(audioOutput, "contentId")
+		if !ok {
+			return true
+		}
+		if !s.isProviderAssistantAudio(contentID) {
+			return true
+		}
 		audioContent, ok := awsRealtimeRequiredMapString(audioOutput, "content")
 		if !ok {
 			return true
@@ -1006,7 +1014,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			})
 			return false
 		}
-		if s.sendGenerationAudio(awsRealtimeMapString(audioOutput, "contentId"), data) {
+		if s.sendGenerationAudio(contentID, data) {
 			s.markLastAudioOutput()
 			s.emit(llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeAudio,
@@ -1025,9 +1033,11 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		}
 		role := awsRealtimeMapString(textOutput, "role")
 		if textContent == awsRealtimeBargeInContent {
-			s.markLastAssistantMessageInterrupted()
-			if !s.hasPendingTools() {
-				s.closeGeneration()
+			if s.hasGeneration() {
+				s.markLastAssistantMessageInterrupted()
+				if !s.hasPendingTools() {
+					s.closeGeneration()
+				}
 			}
 		} else {
 			if s.shouldStoreProviderUserText(contentID, role) {
@@ -1039,11 +1049,23 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			}
 		}
 	}
-	if toolUseID := awsRealtimeNestedString(payload, "event", "toolUse", "toolUseId"); toolUseID != "" {
+	if toolUse := awsRealtimeNestedMap(payload, "event", "toolUse"); toolUse != nil {
+		toolUseID, ok := awsRealtimeRequiredMapString(toolUse, "toolUseId")
+		if !ok {
+			return true
+		}
+		toolName, ok := awsRealtimeRequiredMapString(toolUse, "toolName")
+		if !ok {
+			return true
+		}
+		content, ok := awsRealtimeRequiredMapString(toolUse, "content")
+		if !ok {
+			return true
+		}
 		if !s.sendGenerationFunction(&llm.FunctionCall{
 			CallID:    toolUseID,
-			Name:      awsRealtimeNestedString(payload, "event", "toolUse", "toolName"),
-			Arguments: normalizeAWSRealtimeToolArguments(awsRealtimeNestedString(payload, "event", "toolUse", "content")),
+			Name:      toolName,
+			Arguments: normalizeAWSRealtimeToolArguments(content),
 		}) {
 			return true
 		}
@@ -1054,7 +1076,10 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if awsRealtimeNestedMap(payload, "event", "completionEnd") != nil {
 		s.closeGeneration()
 	}
-	if awsRealtimeNestedString(payload, "event", "contentEnd", "stopReason") == "END_TURN" {
+	if contentEnd := awsRealtimeNestedMap(payload, "event", "contentEnd"); contentEnd != nil &&
+		awsRealtimeMapString(contentEnd, "stopReason") == "END_TURN" &&
+		(awsRealtimeMapString(contentEnd, "type") == "AUDIO" || awsRealtimeMapString(contentEnd, "type") == "") {
+		s.markAudioEndTurnReceived()
 		s.closeGeneration()
 	}
 	if s.turns != nil {
@@ -1077,6 +1102,12 @@ func (s *awsRealtimeSession) hasPendingTools() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.pending) > 0
+}
+
+func (s *awsRealtimeSession) hasGeneration() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.generation != nil
 }
 
 func (s *awsRealtimeSession) emitGenerationCreated() {
@@ -1137,6 +1168,7 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	switch {
 	case contentType == "AUDIO":
 		streamType = "ASSISTANT_AUDIO"
+		s.markAwaitingAudioEndTurn()
 	case contentType == "TOOL":
 		streamType = "TOOL"
 	case role == "USER" && contentType == "TEXT":
@@ -1183,6 +1215,18 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	s.mu.Unlock()
 }
 
+func (s *awsRealtimeSession) markAwaitingAudioEndTurn() {
+	s.mu.Lock()
+	s.awaitingAudioEndTurn = true
+	s.mu.Unlock()
+}
+
+func (s *awsRealtimeSession) markAudioEndTurnReceived() {
+	s.mu.Lock()
+	s.awaitingAudioEndTurn = false
+	s.mu.Unlock()
+}
+
 func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string, role string) bool {
 	if role != "" && role != "USER" {
 		return false
@@ -1203,6 +1247,12 @@ func (s *awsRealtimeSession) isProviderAssistantText(contentID string) bool {
 		return true
 	}
 	return s.noGenerationContentRoles[contentID] == "ASSISTANT"
+}
+
+func (s *awsRealtimeSession) isProviderAssistantAudio(contentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.generation != nil && s.generation.contentTypes[contentID] == "ASSISTANT_AUDIO"
 }
 
 func (s *awsRealtimeSession) updateProviderTextHistory(role llm.ChatRole, text string, contentID string) {
@@ -1475,18 +1525,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			if strings.TrimSpace(msg.TextContent()) == "" {
 				continue
 			}
-			s.mu.Lock()
-			_, alreadySent := s.sent[msg.ID]
-			s.mu.Unlock()
-			var pending *awsRealtimePendingGenerationStart
-			if !alreadySent {
-				pending = s.createPendingGenerationStart()
-			}
-			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
-				if pending != nil {
-					s.clearPendingGenerationStart(pending)
-				}
-				return err
+			if s.markInteractiveUserTextSent(msg.ID) {
+				pending := s.createPendingGenerationStart()
+				go s.sendInteractiveUserTextAsync(msg, pending)
 			}
 			continue
 		}
@@ -1580,19 +1621,37 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 	if msg.ID == "" || text == "" {
 		return nil
 	}
-	s.mu.Lock()
-	_, alreadySent := s.sent[msg.ID]
-	s.mu.Unlock()
-	if alreadySent {
+	if !s.markInteractiveUserTextSent(msg.ID) {
 		return nil
 	}
+	return s.sendInteractiveUserTextEvents(ctx, text)
+}
+
+func (s *awsRealtimeSession) markInteractiveUserTextSent(messageID string) bool {
+	if messageID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, alreadySent := s.sent[messageID]; alreadySent {
+		return false
+	}
+	s.sent[messageID] = struct{}{}
+	return true
+}
+
+func (s *awsRealtimeSession) sendInteractiveUserTextAsync(msg *llm.ChatMessage, pending *awsRealtimePendingGenerationStart) {
+	if err := s.sendInteractiveUserTextEvents(context.Background(), msg.TextContent()); err != nil {
+		s.clearPendingGenerationStart(pending)
+		pending.resolve(err)
+	}
+}
+
+func (s *awsRealtimeSession) sendInteractiveUserTextEvents(ctx context.Context, text string) error {
 	events, err := s.builder.createInteractiveTextContentBlock(uuid.NewString(), "USER", text)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.sent[msg.ID] = struct{}{}
-	s.mu.Unlock()
 	for _, event := range events {
 		if err := s.sendRawEvent(ctx, event); err != nil {
 			return err
@@ -1706,6 +1765,7 @@ func (s *awsRealtimeSession) recycleForUpdatedTools(ctx context.Context) error {
 	s.builder = newAWSRealtimeEventBuilder(uuid.NewString(), uuid.NewString())
 	s.pending = make(map[string]struct{})
 	s.recycleToolsAfterPending = false
+	s.awaitingAudioEndTurn = false
 	s.mu.Unlock()
 	if stream != nil {
 		for _, event := range closeEvents {

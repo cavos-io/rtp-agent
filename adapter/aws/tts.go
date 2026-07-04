@@ -321,6 +321,10 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
 		s.readErr = make(chan error, 1)
 		first, firstErr := readAWSTTSChunk(s.stream)
+		if s.isClosed() {
+			_ = s.decoder.Close()
+			return nil, io.EOF
+		}
 		if len(first) == 0 && firstErr == io.EOF {
 			_ = s.decoder.Close()
 			if strings.TrimSpace(s.text) != "" {

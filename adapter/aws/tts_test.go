@@ -832,6 +832,42 @@ func TestAWSTTSChunkedStreamCloseDropsLateResponse(t *testing.T) {
 	}
 }
 
+func TestAWSTTSChunkedStreamCloseDuringFirstReadReturnsEOF(t *testing.T) {
+	body := newBlockingFirstAWSReadCloser()
+	stream := &awsTTSChunkedStream{
+		stream:   body,
+		text:     "hello",
+		provider: newAWSTTSWithClient(nil, ""),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			errCh <- fmt.Errorf("Next audio = %+v, want nil after Close", audio)
+			return
+		}
+		errCh <- err
+	}()
+
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start first response read")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close during first read error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next remained blocked after Close during first read")
+	}
+}
+
 func TestAWSTTSStreamReportsUnsupported(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "")
 
@@ -1034,6 +1070,36 @@ func (b *blockingAWSReadCloser) Close() error {
 		close(b.closeCh)
 	}
 	b.mu.Unlock()
+	return nil
+}
+
+type blockingFirstAWSReadCloser struct {
+	readStarted chan struct{}
+	closeCh     chan struct{}
+	closeOnce   sync.Once
+}
+
+func newBlockingFirstAWSReadCloser() *blockingFirstAWSReadCloser {
+	return &blockingFirstAWSReadCloser{
+		readStarted: make(chan struct{}),
+		closeCh:     make(chan struct{}),
+	}
+}
+
+func (b *blockingFirstAWSReadCloser) Read([]byte) (int, error) {
+	b.closeOnce.Do(func() {
+		close(b.readStarted)
+	})
+	<-b.closeCh
+	return 0, io.EOF
+}
+
+func (b *blockingFirstAWSReadCloser) Close() error {
+	select {
+	case <-b.closeCh:
+	default:
+		close(b.closeCh)
+	}
 	return nil
 }
 

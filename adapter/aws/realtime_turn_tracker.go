@@ -144,8 +144,17 @@ func (t *awsRealtimeTurnTracker) maybeEmitGenerationCreated(turn *awsRealtimeTur
 }
 
 func classifyAWSRealtimeTurnEvent(event map[string]any) string {
-	if awsRealtimeNestedString(event, "event", "textOutput", "role") == "USER" {
-		return "USER_TEXT_PARTIAL"
+	if textOutput := awsRealtimeNestedMap(event, "event", "textOutput"); textOutput != nil {
+		role, ok := awsRealtimeRequiredMapString(textOutput, "role")
+		if !ok {
+			return ""
+		}
+		if role == "USER" {
+			return "USER_TEXT_PARTIAL"
+		}
+		if awsRealtimeMapString(textOutput, "content") == awsRealtimeBargeInContent {
+			return "BARGE_IN"
+		}
 	}
 	if awsRealtimeNestedString(event, "event", "contentStart", "type") == "TOOL" {
 		return "TOOL_OUTPUT_CONTENT_START"
@@ -154,9 +163,6 @@ func classifyAWSRealtimeTurnEvent(event map[string]any) string {
 		if strings.Contains(awsRealtimeNestedString(event, "event", "contentStart", "additionalModelFields"), "SPECULATIVE") {
 			return "ASSISTANT_SPEC_START"
 		}
-	}
-	if awsRealtimeNestedString(event, "event", "textOutput", "content") == awsRealtimeBargeInContent {
-		return "BARGE_IN"
 	}
 	if awsRealtimeNestedString(event, "event", "contentEnd", "type") == "AUDIO" {
 		return "ASSISTANT_AUDIO_END"

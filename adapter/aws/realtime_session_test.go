@@ -1413,6 +1413,49 @@ func TestAWSRealtimeSessionRecycleWaitsForReferenceTurnBoundary(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionRecycleWaitsForReferenceAudioEndTurnAfterCompletionEnd(t *testing.T) {
+	first := newFakeAWSRealtimeStream()
+	second := newFakeAWSRealtimeStream()
+	client := &fakeAWSRealtimeClient{streams: []awsRealtimeStream{first, second}}
+	provider := NewAWSRealtimeModel("",
+		WithAWSRealtimeClient(client),
+		WithAWSRealtimeMaxSessionDuration(10*time.Millisecond),
+	)
+	awsSession := newAWSRealtimeSession(provider, client)
+	if err := awsSession.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer awsSession.Close()
+
+	first.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	first.emitJSON(`{"event":{"contentStart":{"contentId":"audio-1","type":"AUDIO"}}}`)
+	assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	first.emitJSON(`{"event":{"completionEnd":{"completionId":"completion-1"}}}`)
+
+	select {
+	case event := <-awsSession.EventCh():
+		if event.Type == llm.RealtimeEventTypeSessionReconnected {
+			t.Fatalf("got reconnect before AUDIO END_TURN after completionEnd: %#v", event)
+		}
+	case <-time.After(50 * time.Millisecond):
+	}
+	if first.closed {
+		t.Fatal("first stream closed before AUDIO END_TURN after completionEnd")
+	}
+
+	first.emitJSON(`{"event":{"contentEnd":{"contentId":"audio-1","type":"AUDIO","stopReason":"END_TURN"}}}`)
+	event := assertAWSRealtimeEvent(t, awsSession.EventCh(), llm.RealtimeEventTypeSessionReconnected)
+	if event.Reconnect == nil {
+		t.Fatal("Reconnect = nil, want reference session recycle after AUDIO END_TURN")
+	}
+	if !first.closed {
+		t.Fatal("first stream closed = false, want recycle after AUDIO END_TURN")
+	}
+	if len(second.sent) == 0 {
+		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
+	}
+}
+
 func TestAWSRealtimeSessionRecycleWaitsForReferenceAudioQuiet(t *testing.T) {
 	first := newFakeAWSRealtimeStream()
 	second := newFakeAWSRealtimeStream()
@@ -1983,6 +2026,43 @@ func TestAWSRealtimeSessionClosesReferenceGenerationOnEndTurnWithoutType(t *test
 	}
 }
 
+func TestAWSRealtimeSessionKeepsReferenceGenerationOpenOnTextEndTurn(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"contentEnd":{"contentId":"text-1","type":"TEXT","stopReason":"END_TURN"}}}`)
+
+	assertNoAWSRealtimeEvent(t, session.EventCh())
+	select {
+	case _, ok := <-msg.TextCh:
+		if !ok {
+			t.Fatal("TextCh closed, want reference text END_TURN to leave generation open")
+		}
+	default:
+	}
+	select {
+	case _, ok := <-msg.AudioCh:
+		if !ok {
+			t.Fatal("AudioCh closed, want reference text END_TURN to leave generation open")
+		}
+	default:
+	}
+}
+
 func TestAWSRealtimeSessionClosesReferenceGenerationOnBargeIn(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -2029,6 +2109,36 @@ func TestAWSRealtimeSessionClosesReferenceGenerationOnBargeIn(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionIgnoresReferenceBargeInWithoutGeneration(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession, ok := session.(*awsRealtimeSession)
+	if !ok {
+		t.Fatalf("session type = %T, want *awsRealtimeSession", session)
+	}
+
+	awsSession.updateProviderTextHistory(llm.ChatRoleAssistant, "still speaking", "")
+
+	stream.emitJSON(`{"event":{"textOutput":{"role":"ASSISTANT","content":` + strconv.Quote(awsRealtimeBargeInContent) + `,"contentId":"barge-late"}}}`)
+
+	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+	if awsSession.chatCtx == nil || len(awsSession.chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx items = %#v, want one assistant message", awsSession.chatCtx)
+	}
+	msg, ok := awsSession.chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok {
+		t.Fatalf("chat item = %#v, want assistant message", awsSession.chatCtx.Items[0])
+	}
+	if msg.Interrupted {
+		t.Fatal("assistant message interrupted = true, want unchanged without active generation")
+	}
+}
+
 func TestAWSRealtimeSessionClosesReferenceGenerationBeforeBargeInSpeechStart(t *testing.T) {
 	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
 	generation, _ := session.ensureGenerationWithCreated("response-1")
@@ -2051,6 +2161,7 @@ func TestAWSRealtimeSessionClosesReferenceGenerationBeforeBargeInSpeechStart(t *
 	session.handleResponseEvent(map[string]any{
 		"event": map[string]any{
 			"textOutput": map[string]any{
+				"role":      "ASSISTANT",
 				"content":   awsRealtimeBargeInContent,
 				"contentId": "barge-in-1",
 			},
@@ -2059,6 +2170,31 @@ func TestAWSRealtimeSessionClosesReferenceGenerationBeforeBargeInSpeechStart(t *
 	if !checked {
 		t.Fatal("barge-in did not emit speech_started")
 	}
+}
+
+func TestAWSRealtimeSessionMissingRoleBargeInClosesGenerationWithoutSpeechStart(t *testing.T) {
+	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
+	defer session.Close()
+	generation, _ := session.ensureGenerationWithCreated("response-1")
+
+	session.handleResponseEvent(map[string]any{
+		"event": map[string]any{
+			"textOutput": map[string]any{
+				"content":   awsRealtimeBargeInContent,
+				"contentId": "barge-in-1",
+			},
+		},
+	})
+
+	select {
+	case _, ok := <-generation.textCh:
+		if ok {
+			t.Fatal("generation TextCh still open, want handler to close on barge-in sentinel")
+		}
+	default:
+		t.Fatal("generation TextCh still open, want handler to close on barge-in sentinel")
+	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
 }
 
 func TestAWSRealtimeSessionMarksReferenceAssistantMessageInterruptedOnBargeIn(t *testing.T) {
@@ -2353,6 +2489,41 @@ func TestAWSRealtimeSessionFiltersReferenceGenerationContent(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionIgnoresReferenceInvalidUntrackedAudioOutput(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	var msg llm.MessageGeneration
+	select {
+	case msg = <-created.Generation.MessageCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for message generation")
+	}
+
+	stream.emitJSON(`{"event":{"audioOutput":{"contentId":"stray-audio","content":"not-base64"}}}`)
+
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeError)
+	select {
+	case frame := <-msg.AudioCh:
+		t.Fatalf("generation audio frame = %#v, want no frame for invalid untracked audio", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+	awsSession.mu.Lock()
+	activeGeneration := awsSession.generation != nil
+	awsSession.mu.Unlock()
+	if !activeGeneration {
+		t.Fatal("generation closed, want invalid untracked audio ignored before decode")
+	}
+}
+
 func TestAWSRealtimeSessionStreamsReferenceAssistantTextWithoutOutputRole(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
@@ -2604,6 +2775,39 @@ func TestAWSRealtimeSessionMapsReferenceToolUseEvent(t *testing.T) {
 		t.Fatalf("arguments = %q, want reference tool content", call.Arguments)
 	}
 	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeFunctionCall)
+}
+
+func TestAWSRealtimeSessionIgnoresReferenceToolUseMissingName(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	created := assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeGenerationCreated)
+	<-created.Generation.MessageCh
+	stream.emitJSON(`{"event":{"contentStart":{"type":"TOOL","role":"TOOL","contentId":"tool-content-1"}}}`)
+	stream.emitJSON(`{"event":{"toolUse":{"toolUseId":"tool-1","content":"{\"query\":\"weather\"}"}}}`)
+
+	select {
+	case call := <-created.Generation.FunctionCh:
+		t.Fatalf("function call = %#v, want none for missing reference toolName", call)
+	case <-time.After(50 * time.Millisecond):
+	}
+	awsSession.mu.Lock()
+	_, pending := awsSession.pending["tool-1"]
+	activeGeneration := awsSession.generation != nil
+	awsSession.mu.Unlock()
+	if pending {
+		t.Fatal("tool-1 pending = true, want malformed toolUse ignored before pending registration")
+	}
+	if !activeGeneration {
+		t.Fatal("generation closed, want malformed toolUse to leave reference generation open")
+	}
 }
 
 func TestAWSRealtimeSessionMarksReferenceToolPendingDuringEmission(t *testing.T) {
@@ -3094,7 +3298,18 @@ func TestAWSRealtimeSessionUpdateChatContextSendsInteractiveUserText(t *testing.
 	if err := session.UpdateChatContext(ctx); err != nil {
 		t.Fatalf("UpdateChatContext error = %v", err)
 	}
-	textEvents := stream.sent[len(stream.sent)-3:]
+	waitAWSRealtimeTextInput(t, stream, "hello sonic")
+	textInputIndex := -1
+	for i, raw := range stream.sent {
+		if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, raw), "event", "textInput", "content"); got == "hello sonic" {
+			textInputIndex = i
+			break
+		}
+	}
+	if textInputIndex < 1 || textInputIndex+1 >= len(stream.sent) {
+		t.Fatalf("text input index = %d in %d events, want surrounding content events", textInputIndex, len(stream.sent))
+	}
+	textEvents := stream.sent[textInputIndex-1 : textInputIndex+2]
 	start := mustAWSRealtimeJSONEvent(t, textEvents[0])
 	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "TEXT" {
 		t.Fatalf("text contentStart type = %q, want TEXT", got)
@@ -3130,7 +3345,7 @@ func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
 	awsSession := session.(*awsRealtimeSession)
 	awsSession.handleResponseEvent(map[string]any{
 		"event": map[string]any{
-			"textOutput": map[string]any{"role": "USER", "content": "hello sonic"},
+			"textOutput": map[string]any{"role": "USER", "content": "hello sonic", "contentId": "user-audio-1"},
 		},
 	})
 	awsSession.handleResponseEvent(map[string]any{
@@ -3138,6 +3353,7 @@ func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
 			"contentStart": map[string]any{
 				"type":                  "TEXT",
 				"role":                  "ASSISTANT",
+				"contentId":             "assistant-spec-1",
 				"additionalModelFields": "SPECULATIVE",
 			},
 		},
@@ -3172,12 +3388,13 @@ func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
 
 func TestAWSRealtimeSessionDoesNotReplayUserTextAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
-	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeGenerateReplyTimeout(50*time.Millisecond), WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
 	if err != nil {
 		t.Fatalf("Session error = %v", err)
 	}
 	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
 
 	ctx := llm.NewChatContext()
 	ctx.Append(&llm.ChatMessage{
@@ -3187,8 +3404,11 @@ func TestAWSRealtimeSessionDoesNotReplayUserTextAfterSendFailure(t *testing.T) {
 	})
 
 	stream.sendErr = errors.New("bedrock send failed")
-	if err := session.UpdateChatContext(ctx); err == nil {
-		t.Fatal("UpdateChatContext error = nil, want send failure")
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want nil because reference sends user text asynchronously", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err == nil {
+		t.Fatal("GenerateReply error = nil, want pending async send failure")
 	}
 	stream.sendErr = nil
 	sentCount := len(stream.sent)
