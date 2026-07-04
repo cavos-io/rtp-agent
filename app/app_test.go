@@ -13959,6 +13959,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceWordTimeOffsetsOption(t *testi
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceWordConfidenceOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"enable_word_confidence": true},
+	})
+
+	if googleCfg.wordConfidence == nil || !*googleCfg.wordConfidence {
+		t.Fatalf("wordConfidence = %#v, want model option enable_word_confidence true", googleCfg.wordConfidence)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{
