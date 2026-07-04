@@ -157,6 +157,19 @@ func TestAWSTTSUpdateOptionsKeepsReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestAWSTTSConstructorPreservesReferenceZeroSampleRate(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "", WithAWSTTSSampleRate(0))
+
+	if provider.SampleRate() != 0 {
+		t.Fatalf("SampleRate = %d, want explicit zero reference sample rate", provider.SampleRate())
+	}
+
+	input := buildAWSSynthesizeSpeechInput(provider, "hello")
+	if input.SampleRate == nil || *input.SampleRate != "0" {
+		t.Fatalf("request sample rate = %v, want explicit zero reference sample rate", input.SampleRate)
+	}
+}
+
 func TestAWSTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "Joanna")
 

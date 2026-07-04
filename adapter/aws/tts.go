@@ -73,9 +73,7 @@ func WithAWSTTSLanguage(language types.LanguageCode) AWSTTSOption {
 
 func WithAWSTTSSampleRate(sampleRate int) AWSTTSOption {
 	return func(t *AWSTTS) {
-		if sampleRate > 0 {
-			t.sampleRate = sampleRate
-		}
+		t.sampleRate = sampleRate
 	}
 }
 
