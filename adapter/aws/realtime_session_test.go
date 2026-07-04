@@ -386,7 +386,8 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	}
 	assertAWSRealtimeEvent(t, session.EventCh(), llm.RealtimeEventTypeSessionReconnected)
 
-	closeEvents := first.sent[len(first.sent)-3:]
+	firstSent := first.snapshotSent()
+	closeEvents := firstSent[len(firstSent)-3:]
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[0]), "event", "contentEnd", "contentName"); got == "" {
 		t.Fatalf("recycle contentEnd contentName empty")
 	}
@@ -396,13 +397,14 @@ func TestAWSRealtimeSessionUpdateToolsRecyclesActiveStream(t *testing.T) {
 	if _, ok := nestedMap(t, mustAWSRealtimeJSONEvent(t, closeEvents[2]), "event")["sessionEnd"].(map[string]any); !ok {
 		t.Fatalf("recycle sessionEnd event = %s", closeEvents[2])
 	}
-	if !first.closed {
+	if !first.isClosed() {
 		t.Fatal("first stream closed = false, want true after active tool update recycle")
 	}
-	if len(second.sent) == 0 {
+	secondSent := second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no events, want restarted prompt with new tools")
 	}
-	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, second.sent[1]), "event", "promptStart", "toolConfiguration")
+	toolConfig := nestedMap(t, mustAWSRealtimeJSONEvent(t, secondSent[1]), "event", "promptStart", "toolConfiguration")
 	tools, ok := toolConfig["tools"].([]any)
 	if !ok || len(tools) != 1 {
 		t.Fatalf("recycled tools = %#v, want one tool", toolConfig["tools"])
@@ -4404,8 +4406,16 @@ func (s *fakeAWSRealtimeStream) Events() <-chan awstypes.InvokeModelWithBidirect
 }
 
 func (s *fakeAWSRealtimeStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.closed = true
 	return nil
+}
+
+func (s *fakeAWSRealtimeStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }
 
 func (s *fakeAWSRealtimeStream) Err() error {

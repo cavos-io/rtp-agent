@@ -945,10 +945,13 @@ func (s *awsRealtimeSession) closeStartupStream() {
 }
 
 func (s *awsRealtimeSession) sendRawEvent(ctx context.Context, event string) error {
-	if s.stream == nil {
+	s.mu.Lock()
+	stream := s.stream
+	s.mu.Unlock()
+	if stream == nil {
 		return errors.New("AWS Nova Sonic realtime stream is not initialized")
 	}
-	return sendAWSRealtimeRawEvent(ctx, s.stream, event)
+	return sendAWSRealtimeRawEvent(ctx, stream, event)
 }
 
 func sendAWSRealtimeRawEvent(ctx context.Context, stream awsRealtimeStream, event string) error {
