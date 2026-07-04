@@ -334,7 +334,7 @@ func newGoogleSTTWithV2Client(client googleSpeechV2Client, opts ...GoogleSTTOpti
 }
 
 func googleSTTEndpoint(s *GoogleSTT) string {
-	if s.location == "" || s.location == "global" {
+	if s.location == "global" {
 		return ""
 	}
 	return s.location + "-speech.googleapis.com"

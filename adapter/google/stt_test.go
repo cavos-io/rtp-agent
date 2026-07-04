@@ -147,6 +147,14 @@ func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTEmptyLocationOptionMatchesReferenceEndpoint(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation(""))
+
+	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
+	}
+}
+
 func TestGoogleSTTClientOptionsUseCurrentReferenceLocation(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
 	options, err := googleSTTClientOptions("", provider)
@@ -172,8 +180,8 @@ func TestGoogleSTTUpdateOptionsPreservesExplicitEmptyLocation(t *testing.T) {
 
 	provider.UpdateOptions(WithGoogleSTTLocation(""))
 
-	if got := googleSTTEndpoint(provider); got != "" {
-		t.Fatalf("endpoint = %q, want empty default endpoint after explicit empty location", got)
+	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
 	}
 }
 
