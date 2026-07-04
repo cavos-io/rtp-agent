@@ -33,6 +33,7 @@ type AWSSTT struct {
 	showSpeakerLabel                  bool
 	enableChannelIdentification       bool
 	numberOfChannels                  int32
+	numberOfChannelsSet               bool
 	enablePartialResultsStabilization bool
 	partialResultsStability           types.PartialResultsStability
 	languageModelName                 string
@@ -134,9 +135,8 @@ func WithAWSSTTEnableChannelIdentification(enable bool) AWSSTTOption {
 
 func WithAWSSTTNumberOfChannels(channels int32) AWSSTTOption {
 	return func(s *AWSSTT) {
-		if channels > 0 {
-			s.numberOfChannels = channels
-		}
+		s.numberOfChannels = channels
+		s.numberOfChannelsSet = true
 	}
 }
 
@@ -387,7 +387,7 @@ func buildAWSStartStreamTranscriptionInput(s *AWSSTT, language string) *transcri
 	}
 	input.ShowSpeakerLabel = s.showSpeakerLabel
 	input.EnableChannelIdentification = s.enableChannelIdentification
-	if s.numberOfChannels > 0 {
+	if s.numberOfChannelsSet {
 		input.NumberOfChannels = aws.Int32(s.numberOfChannels)
 	}
 	input.EnablePartialResultsStabilization = s.enablePartialResultsStabilization

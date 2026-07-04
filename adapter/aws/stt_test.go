@@ -282,6 +282,22 @@ func TestAWSSTTStreamInputOmitsReferenceDetectionOptionsWithoutDetection(t *test
 	}
 }
 
+func TestAWSSTTStreamInputPreservesReferenceZeroChannelCount(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil,
+		WithAWSSTTEnableChannelIdentification(true),
+		WithAWSSTTNumberOfChannels(0),
+	)
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.NumberOfChannels == nil || *input.NumberOfChannels != 0 {
+		t.Fatalf("number of channels = %v, want explicit reference zero", input.NumberOfChannels)
+	}
+}
+
 func TestAWSSTTStreamInputOmitsLanguageWhenIdentifyingLanguage(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTIdentifyLanguage(true),
