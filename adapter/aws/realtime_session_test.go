@@ -3838,6 +3838,33 @@ func TestAWSRealtimeSessionCloseRejectsPendingReferenceGenerateReply(t *testing.
 	}
 }
 
+func TestAWSRealtimeSessionCloseCleansReferenceStreamAfterSendFailure(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+
+	stream.sendErr = errors.New("prompt end send failed")
+	err = session.Close()
+	if err == nil {
+		t.Fatal("Close error = nil, want prompt-end send failure")
+	}
+	if !stream.closed {
+		t.Fatal("provider stream closed = false, want Close to release stream after prompt-end send failure")
+	}
+	select {
+	case _, ok := <-session.EventCh():
+		if ok {
+			t.Fatal("event channel still open after failed Close cleanup")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("event channel did not close after failed Close cleanup")
+	}
+}
+
 func TestAWSRealtimeSessionGenerateReplyAudioOnlyEmitsReferenceEmptyGeneration(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
 	provider := NewAWSRealtimeModelWithNovaSonic1(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))

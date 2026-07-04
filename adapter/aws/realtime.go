@@ -2058,22 +2058,25 @@ func (s *awsRealtimeSession) Close() error {
 	s.rejectPendingGenerationStart(llm.NewRealtimeError("Session closed while waiting for generation", nil))
 	s.closeAudioInputSender()
 	s.closeGeneration()
+	var closeErr error
 	if stream != nil {
 		closeEvents, err := s.builder.createPromptEndBlock()
 		if err != nil {
-			return err
-		}
-		for _, event := range closeEvents {
-			if err := s.sendRawEvent(context.Background(), event); err != nil {
-				return err
+			closeErr = err
+		} else {
+			for _, event := range closeEvents {
+				if err := sendAWSRealtimeRawEvent(context.Background(), stream, event); err != nil {
+					closeErr = err
+					break
+				}
 			}
 		}
-		if err := stream.Close(); err != nil {
-			return err
+		if err := stream.Close(); err != nil && closeErr == nil {
+			closeErr = err
 		}
 	}
 	s.eventStream.Close()
-	return nil
+	return closeErr
 }
 
 func (s *awsRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
