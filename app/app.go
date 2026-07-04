@@ -120,6 +120,7 @@ var appNewAgoraDataPublisher = workeragora.NewSDKDataPublisher
 
 type appGoogleTTSConfig struct {
 	language             string
+	languageSet          bool
 	location             string
 	locationSet          bool
 	voice                string
@@ -398,7 +399,7 @@ var appNewGoogleSTT = func(credentialsFile string, cfg appGoogleSTTConfig) (core
 
 var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (coretts.TTS, error) {
 	ttsOpts := []adaptergoogle.GoogleTTSOption{}
-	if cfg.language != "" {
+	if cfg.languageSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLanguage(cfg.language))
 	}
 	if cfg.locationSet {
@@ -4507,6 +4508,7 @@ func googleSTTKeywordsFromConfig(keywords []deepgram.DeepgramKeyword) []adapterg
 func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	googleCfg := appGoogleTTSConfig{
 		language:    cfg.TTSLanguage,
+		languageSet: cfg.TTSLanguage != "",
 		location:    cfg.TTSRegion,
 		locationSet: cfg.TTSRegion != "",
 		voice:       cfg.TTSVoice,
@@ -4526,8 +4528,11 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 			googleCfg.voiceSet = true
 		}
 	}
-	if googleCfg.language == "" {
-		googleCfg.language = modelOptionString(cfg.TTSModelOptions, "language")
+	if !googleCfg.languageSet {
+		if language, ok := modelOptionStringValue(cfg.TTSModelOptions, "language"); ok {
+			googleCfg.language = language
+			googleCfg.languageSet = true
+		}
 	}
 	if !googleCfg.locationSet {
 		if location, ok := modelOptionStringValue(cfg.TTSModelOptions, "location"); ok {

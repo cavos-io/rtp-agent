@@ -13612,6 +13612,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceLanguageOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyLanguageOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"language": ""},
+	})
+
+	if !googleCfg.languageSet {
+		t.Fatal("languageSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.language != "" {
+		t.Fatalf("language = %q, want explicit empty model option", googleCfg.language)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceGenderOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"gender": "female"},
