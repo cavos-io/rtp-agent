@@ -272,11 +272,17 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	}
 
 	requestID, _ := awsmiddleware.GetRequestIDMetadata(out.ResultMetadata)
-	return &awsLLMStream{
-		stream:    out.GetStream(),
-		requestID: requestID,
-		cancel:    cancel,
-	}, nil
+	chunkStream := newAWSRealtimeQueuedStream[*llm.ChatChunk]()
+	stream := &awsLLMStream{
+		stream:      out.GetStream(),
+		requestID:   requestID,
+		cancel:      cancel,
+		chunks:      chunkStream.Chan(),
+		chunkStream: chunkStream,
+		errCh:       make(chan error, 1),
+	}
+	go stream.readLoop()
+	return stream, nil
 }
 
 func buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
@@ -463,6 +469,9 @@ type awsLLMStream struct {
 	toolName     string
 	toolNameSet  bool
 	toolArgs     string
+	chunks       <-chan *llm.ChatChunk
+	chunkStream  *awsRealtimeQueuedStream[*llm.ChatChunk]
+	errCh        chan error
 }
 
 func buildAWSMessages(chatCtx *llm.ChatContext) ([]types.Message, string) {
@@ -742,7 +751,42 @@ func (s *awsLLMStream) Next() (*llm.ChatChunk, error) {
 	if s.closed {
 		return nil, io.EOF
 	}
+	if s.chunks != nil {
+		chunk, ok := <-s.chunks
+		if ok {
+			return chunk, nil
+		}
+		select {
+		case err := <-s.errCh:
+			return nil, err
+		default:
+			return nil, io.EOF
+		}
+	}
 
+	return s.nextFromProvider()
+}
+
+func (s *awsLLMStream) readLoop() {
+	defer s.chunkStream.Close()
+	for {
+		chunk, err := s.nextFromProvider()
+		if err != nil {
+			if err != io.EOF {
+				select {
+				case s.errCh <- err:
+				default:
+				}
+			}
+			return
+		}
+		if chunk != nil && !s.chunkStream.Send(chunk) {
+			return
+		}
+	}
+}
+
+func (s *awsLLMStream) nextFromProvider() (*llm.ChatChunk, error) {
 	for {
 		event := <-s.stream.Events()
 		if event == nil {
@@ -841,6 +885,9 @@ func (s *awsLLMStream) Close() error {
 		return nil
 	}
 	s.stream.Close()
+	if s.chunkStream != nil {
+		s.chunkStream.Close()
+	}
 	s.closed = true
 	return nil
 }

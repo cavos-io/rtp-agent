@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -487,6 +489,66 @@ func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("Next after tool call err = %v, want EOF", err)
+	}
+}
+
+func TestAWSLLMChatPreservesReferenceQueuedTextDeltas(t *testing.T) {
+	reader := &fakeAWSLLMReader{events: make(chan awstypes.ConverseStreamOutput, 4)}
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{
+			out: newFakeAWSLLMOutput(reader),
+		},
+		model: defaultAWSLLMModel,
+	}
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	stream, err := provider.Chat(context.Background(), chatCtx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+
+	const deltas = 12
+	stop := make(chan struct{})
+	sent := make(chan struct{})
+	go func() {
+		defer close(sent)
+		defer close(reader.events)
+		for i := 0; i < deltas; i++ {
+			event := &awstypes.ConverseStreamOutputMemberContentBlockDelta{
+				Value: awstypes.ContentBlockDeltaEvent{
+					Delta: &awstypes.ContentBlockDeltaMemberText{Value: fmt.Sprintf("delta-%02d", i)},
+				},
+			}
+			select {
+			case reader.events <- event:
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-sent:
+	case <-time.After(150 * time.Millisecond):
+		close(stop)
+		_ = stream.Close()
+		t.Fatalf("AWS LLM provider stream blocked behind %d queued text deltas; want reference background drain into event channel", deltas)
+	}
+
+	for i := 0; i < deltas; i++ {
+		chunk, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next delta %d error = %v", i, err)
+		}
+		want := fmt.Sprintf("delta-%02d", i)
+		if chunk == nil || chunk.Delta == nil || chunk.Delta.Content != want {
+			t.Fatalf("chunk %d = %#v, want text delta %q", i, chunk, want)
+		}
+	}
+	if chunk, err := stream.Next(); err != io.EOF || chunk != nil {
+		t.Fatalf("Next EOF = (%#v, %v), want nil EOF", chunk, err)
 	}
 }
 
@@ -1304,6 +1366,16 @@ func (c fakeAWSLLMClient) ConverseStream(ctx context.Context, input *bedrockrunt
 
 func newFakeAWSLLMReader() *fakeAWSLLMReader {
 	return &fakeAWSLLMReader{events: make(chan awstypes.ConverseStreamOutput, 8)}
+}
+
+func newFakeAWSLLMOutput(reader *fakeAWSLLMReader) *bedrockruntime.ConverseStreamOutput {
+	out := &bedrockruntime.ConverseStreamOutput{}
+	stream := bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+		es.Reader = reader
+	})
+	field := reflect.ValueOf(out).Elem().FieldByName("eventStream")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(reflect.ValueOf(stream))
+	return out
 }
 
 func (r *fakeAWSLLMReader) Events() <-chan awstypes.ConverseStreamOutput {
