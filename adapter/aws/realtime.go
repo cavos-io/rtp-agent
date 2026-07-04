@@ -547,6 +547,9 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 		}
 	}
 	s.markChatContextUserMessagesSent(chatCtx)
+	responseStarted := make(chan struct{})
+	go s.readResponses(responseStarted)
+	<-responseStarted
 	audioStart, err := s.builder.createAudioContentStartEvent(defaultAWSRealtimeInputSampleRate)
 	if err != nil {
 		return err
@@ -566,7 +569,6 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 		}
 	}
 	s.startSessionRecycleTimer()
-	go s.readResponses()
 	return nil
 }
 
@@ -738,12 +740,19 @@ func sendAWSRealtimeRawEvent(ctx context.Context, stream awsRealtimeStream, even
 	return nil
 }
 
-func (s *awsRealtimeSession) readResponses() {
+func (s *awsRealtimeSession) readResponses(started chan<- struct{}) {
 	stream := s.stream
 	if stream == nil {
+		if started != nil {
+			close(started)
+		}
 		return
 	}
-	for event := range stream.Events() {
+	events := stream.Events()
+	if started != nil {
+		close(started)
+	}
+	for event := range events {
 		chunk, ok := event.(*awstypes.InvokeModelWithBidirectionalStreamOutputMemberChunk)
 		if !ok || len(chunk.Value.Bytes) == 0 {
 			continue

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -54,6 +55,22 @@ func TestAWSRealtimeSessionStartsReferenceBedrockStream(t *testing.T) {
 		t.Fatalf("event[5] type = %q, want AUDIO", got)
 	}
 	assertAWSRealtimeJSONNumber(t, nestedMap(t, audioStart, "event", "contentStart", "audioInputConfiguration")["sampleRateHertz"], 16000)
+}
+
+func TestAWSRealtimeSessionStartsReferenceReaderBeforeAudioInput(t *testing.T) {
+	stream := &fakeAWSRealtimeStream{}
+	client := &fakeAWSRealtimeClient{stream: stream}
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(client))
+
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	if stream.audioSentBeforeEvents.Load() {
+		t.Fatal("audio contentStart sent before response Events reader started")
+	}
 }
 
 func TestAWSRealtimeSessionUsesReferenceDefaultSystemPrompt(t *testing.T) {
@@ -2746,11 +2763,13 @@ func (c *fakeAWSRealtimeClient) InvokeModelWithBidirectionalStream(ctx context.C
 }
 
 type fakeAWSRealtimeStream struct {
-	sent    []string
-	closed  bool
-	sendErr error
-	err     error
-	events  chan awstypes.InvokeModelWithBidirectionalStreamOutput
+	sent                  []string
+	closed                bool
+	sendErr               error
+	err                   error
+	events                chan awstypes.InvokeModelWithBidirectionalStreamOutput
+	eventsStarted         atomic.Bool
+	audioSentBeforeEvents atomic.Bool
 }
 
 func awsRealtimeTestStereoFrame(sampleRate uint32, samples [][2]int16) *model.AudioFrame {
@@ -2833,6 +2852,9 @@ func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeMod
 	if err := json.Unmarshal(chunk.Value.Bytes, &decoded); err == nil {
 		encoded, _ := json.Marshal(decoded)
 		s.sent = append(s.sent, string(encoded))
+		if awsRealtimeNestedString(decoded, "event", "contentStart", "type") == "AUDIO" && !s.eventsStarted.Load() {
+			s.audioSentBeforeEvents.Store(true)
+		}
 		return nil
 	}
 	s.sent = append(s.sent, string(chunk.Value.Bytes))
@@ -2840,6 +2862,7 @@ func (s *fakeAWSRealtimeStream) Send(_ context.Context, event awstypes.InvokeMod
 }
 
 func (s *fakeAWSRealtimeStream) Events() <-chan awstypes.InvokeModelWithBidirectionalStreamOutput {
+	s.eventsStarted.Store(true)
 	if s.events == nil {
 		s.events = make(chan awstypes.InvokeModelWithBidirectionalStreamOutput)
 		close(s.events)
