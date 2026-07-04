@@ -134,6 +134,15 @@ func TestGoogleSTTRecognizerUsesReferenceProjectFromCredentialsFile(t *testing.T
 	}
 }
 
+func TestGoogleSTTRecognizerUsesReferenceProjectFromADCEnv(t *testing.T) {
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "adc-project")
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("us-central1"))
+
+	if got := googleSTTRecognizer(provider); got != "projects/adc-project/locations/us-central1/recognizers/_" {
+		t.Fatalf("recognizer = %q, want reference ADC project recognizer", got)
+	}
+}
+
 func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
 

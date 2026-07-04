@@ -902,14 +902,21 @@ func googleEndpointingSensitivityV2(model string, value string) speechv2pb.Strea
 }
 
 func googleSTTRecognizer(s *GoogleSTT) string {
-	if s == nil || s.project == "" {
+	if s == nil {
+		return ""
+	}
+	project := s.project
+	if project == "" {
+		project = googleProjectFromADCEnv()
+	}
+	if project == "" {
 		return ""
 	}
 	location := s.location
 	if location == "" {
 		location = "global"
 	}
-	return "projects/" + s.project + "/locations/" + location + "/recognizers/_"
+	return "projects/" + project + "/locations/" + location + "/recognizers/_"
 }
 
 func googleAlternativeLanguageCodes(s *GoogleSTT, include bool) []string {
