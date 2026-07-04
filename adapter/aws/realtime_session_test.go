@@ -3255,7 +3255,18 @@ func TestAWSRealtimeSessionUpdateChatContextSendsInteractiveUserText(t *testing.
 	if err := session.UpdateChatContext(ctx); err != nil {
 		t.Fatalf("UpdateChatContext error = %v", err)
 	}
-	textEvents := stream.sent[len(stream.sent)-3:]
+	waitAWSRealtimeTextInput(t, stream, "hello sonic")
+	textInputIndex := -1
+	for i, raw := range stream.sent {
+		if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, raw), "event", "textInput", "content"); got == "hello sonic" {
+			textInputIndex = i
+			break
+		}
+	}
+	if textInputIndex < 1 || textInputIndex+1 >= len(stream.sent) {
+		t.Fatalf("text input index = %d in %d events, want surrounding content events", textInputIndex, len(stream.sent))
+	}
+	textEvents := stream.sent[textInputIndex-1 : textInputIndex+2]
 	start := mustAWSRealtimeJSONEvent(t, textEvents[0])
 	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "TEXT" {
 		t.Fatalf("text contentStart type = %q, want TEXT", got)
@@ -3291,7 +3302,7 @@ func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
 	awsSession := session.(*awsRealtimeSession)
 	awsSession.handleResponseEvent(map[string]any{
 		"event": map[string]any{
-			"textOutput": map[string]any{"role": "USER", "content": "hello sonic"},
+			"textOutput": map[string]any{"role": "USER", "content": "hello sonic", "contentId": "user-audio-1"},
 		},
 	})
 	awsSession.handleResponseEvent(map[string]any{
@@ -3299,6 +3310,7 @@ func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
 			"contentStart": map[string]any{
 				"type":                  "TEXT",
 				"role":                  "ASSISTANT",
+				"contentId":             "assistant-spec-1",
 				"additionalModelFields": "SPECULATIVE",
 			},
 		},
@@ -3333,12 +3345,13 @@ func TestAWSRealtimeSessionSkipsReferenceAudioTranscriptUserText(t *testing.T) {
 
 func TestAWSRealtimeSessionDoesNotReplayUserTextAfterSendFailure(t *testing.T) {
 	stream := newFakeAWSRealtimeStream()
-	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeGenerateReplyTimeout(50*time.Millisecond), WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
 	session, err := provider.Session()
 	if err != nil {
 		t.Fatalf("Session error = %v", err)
 	}
 	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
 
 	ctx := llm.NewChatContext()
 	ctx.Append(&llm.ChatMessage{
@@ -3348,8 +3361,11 @@ func TestAWSRealtimeSessionDoesNotReplayUserTextAfterSendFailure(t *testing.T) {
 	})
 
 	stream.sendErr = errors.New("bedrock send failed")
-	if err := session.UpdateChatContext(ctx); err == nil {
-		t.Fatal("UpdateChatContext error = nil, want send failure")
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext error = %v, want nil because reference sends user text asynchronously", err)
+	}
+	if err := session.GenerateReply(llm.RealtimeGenerateReplyOptions{}); err == nil {
+		t.Fatal("GenerateReply error = nil, want pending async send failure")
 	}
 	stream.sendErr = nil
 	sentCount := len(stream.sent)

@@ -1510,18 +1510,9 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 			if strings.TrimSpace(msg.TextContent()) == "" {
 				continue
 			}
-			s.mu.Lock()
-			_, alreadySent := s.sent[msg.ID]
-			s.mu.Unlock()
-			var pending *awsRealtimePendingGenerationStart
-			if !alreadySent {
-				pending = s.createPendingGenerationStart()
-			}
-			if err := s.sendInteractiveUserText(context.Background(), msg); err != nil {
-				if pending != nil {
-					s.clearPendingGenerationStart(pending)
-				}
-				return err
+			if s.markInteractiveUserTextSent(msg.ID) {
+				pending := s.createPendingGenerationStart()
+				go s.sendInteractiveUserTextAsync(msg, pending)
 			}
 			continue
 		}
@@ -1615,19 +1606,37 @@ func (s *awsRealtimeSession) sendInteractiveUserText(ctx context.Context, msg *l
 	if msg.ID == "" || text == "" {
 		return nil
 	}
-	s.mu.Lock()
-	_, alreadySent := s.sent[msg.ID]
-	s.mu.Unlock()
-	if alreadySent {
+	if !s.markInteractiveUserTextSent(msg.ID) {
 		return nil
 	}
+	return s.sendInteractiveUserTextEvents(ctx, text)
+}
+
+func (s *awsRealtimeSession) markInteractiveUserTextSent(messageID string) bool {
+	if messageID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, alreadySent := s.sent[messageID]; alreadySent {
+		return false
+	}
+	s.sent[messageID] = struct{}{}
+	return true
+}
+
+func (s *awsRealtimeSession) sendInteractiveUserTextAsync(msg *llm.ChatMessage, pending *awsRealtimePendingGenerationStart) {
+	if err := s.sendInteractiveUserTextEvents(context.Background(), msg.TextContent()); err != nil {
+		s.clearPendingGenerationStart(pending)
+		pending.resolve(err)
+	}
+}
+
+func (s *awsRealtimeSession) sendInteractiveUserTextEvents(ctx context.Context, text string) error {
 	events, err := s.builder.createInteractiveTextContentBlock(uuid.NewString(), "USER", text)
 	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.sent[msg.ID] = struct{}{}
-	s.mu.Unlock()
 	for _, event := range events {
 		if err := s.sendRawEvent(ctx, event); err != nil {
 			return err
