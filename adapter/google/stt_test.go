@@ -2666,6 +2666,40 @@ func TestGoogleSTTStreamUsesReferenceV2EndpointingConfig(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTStreamV2ExplicitZeroTimeoutEnablesReferenceActivity(t *testing.T) {
+	streamClient := &fakeGoogleV2StreamingRecognizeClient{}
+	provider := newGoogleSTTWithV2Client(
+		&fakeGoogleV2SpeechClient{stream: streamClient},
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTSpeechEndTimeout(0),
+	)
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	if len(streamClient.sent) != 1 {
+		t.Fatalf("sent requests = %d, want initial config", len(streamClient.sent))
+	}
+	streaming := streamClient.sent[0].GetStreamingConfig().GetStreamingFeatures()
+	if streaming == nil {
+		t.Fatal("streaming features = nil")
+	}
+	if !streaming.GetEnableVoiceActivityEvents() {
+		t.Fatal("voice activity events = false, want auto-enabled for explicit zero v2 timeout")
+	}
+	timeout := streaming.GetVoiceActivityTimeout()
+	if timeout == nil || timeout.SpeechEndTimeout == nil {
+		t.Fatalf("voice activity timeout = %#v, want explicit zero speech_end_timeout", timeout)
+	}
+	if timeout.GetSpeechEndTimeout().AsDuration() != 0 {
+		t.Fatalf("speech end timeout = %v, want explicit zero", timeout.GetSpeechEndTimeout().AsDuration())
+	}
+}
+
 func TestGoogleSTTStreamIgnoresReferenceV2EndpointingForNonChirp3(t *testing.T) {
 	streamClient := &fakeGoogleV2StreamingRecognizeClient{}
 	provider := newGoogleSTTWithV2Client(
