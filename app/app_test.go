@@ -13685,6 +13685,19 @@ func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceNameOption(t *testing.T) 
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigPreservesReferenceEmptyVoiceNameOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"voice_name": ""},
+	})
+
+	if !googleCfg.voiceSet {
+		t.Fatal("voiceSet = false, want true for explicit empty model option")
+	}
+	if googleCfg.voice != "" {
+		t.Fatalf("voice = %q, want explicit empty model option", googleCfg.voice)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceVoiceCloningKeyOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"voice_cloning_key": "clone-key-test"},

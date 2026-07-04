@@ -123,6 +123,7 @@ type appGoogleTTSConfig struct {
 	location             string
 	locationSet          bool
 	voice                string
+	voiceSet             bool
 	gender               string
 	cloneKey             string
 	model                string
@@ -402,7 +403,7 @@ var appNewGoogleTTS = func(credentialsFile string, cfg appGoogleTTSConfig) (core
 	if cfg.locationSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSLocation(cfg.location))
 	}
-	if cfg.voice != "" {
+	if cfg.voiceSet {
 		ttsOpts = append(ttsOpts, adaptergoogle.WithGoogleTTSVoice(cfg.voice))
 	}
 	if cfg.gender != "" {
@@ -4508,6 +4509,7 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		location:    cfg.TTSRegion,
 		locationSet: cfg.TTSRegion != "",
 		voice:       cfg.TTSVoice,
+		voiceSet:    cfg.TTSVoice != "",
 		gender:      cfg.TTSGender,
 		cloneKey:    cfg.TTSVoiceID,
 		model:       cfg.TTSModel,
@@ -4516,8 +4518,11 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		streaming:   cfg.TTSStreaming,
 		ssml:        cfg.TTSEnableSSMLParsing,
 	}
-	if googleCfg.voice == "" {
-		googleCfg.voice = modelOptionString(cfg.TTSModelOptions, "voice_name")
+	if !googleCfg.voiceSet {
+		if voice, ok := modelOptionStringValue(cfg.TTSModelOptions, "voice_name"); ok {
+			googleCfg.voice = voice
+			googleCfg.voiceSet = true
+		}
 	}
 	if googleCfg.language == "" {
 		googleCfg.language = modelOptionString(cfg.TTSModelOptions, "language")
