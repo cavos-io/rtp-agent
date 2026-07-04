@@ -230,6 +230,22 @@ func TestAWSSTTExposesConfiguredInputSampleRate(t *testing.T) {
 	}
 }
 
+func TestAWSSTTPreservesReferenceZeroInputSampleRate(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil, WithAWSSTTSampleRate(0))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	if got := provider.InputSampleRate(); got != 0 {
+		t.Fatalf("InputSampleRate = %d, want explicit zero reference sample rate", got)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+	if input.MediaSampleRateHertz == nil || *input.MediaSampleRateHertz != 0 {
+		t.Fatalf("request sample rate = %v, want explicit zero reference sample rate", input.MediaSampleRateHertz)
+	}
+}
+
 func TestAWSSTTStreamInputUsesProviderOptions(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil,
 		WithAWSSTTSampleRate(8000),

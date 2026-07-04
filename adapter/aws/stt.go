@@ -81,9 +81,7 @@ type awsSTTEventStream interface {
 
 func WithAWSSTTSampleRate(sampleRate int32) AWSSTTOption {
 	return func(s *AWSSTT) {
-		if sampleRate > 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
@@ -266,7 +264,7 @@ func (s *AWSSTT) Language() string {
 	return string(s.language)
 }
 func (s *AWSSTT) InputSampleRate() uint32 {
-	if s == nil || s.sampleRate <= 0 {
+	if s == nil {
 		return 24000
 	}
 	return uint32(s.sampleRate)
