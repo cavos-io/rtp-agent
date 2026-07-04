@@ -265,14 +265,8 @@ func buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguratio
 		return nil
 	}
 	config := &types.InferenceConfiguration{}
-	if maxTokens, ok := awsInt32Param(params, "max_output_tokens"); ok {
-		config.MaxTokens = aws.Int32(maxTokens)
-	}
 	if temperature, ok := awsFloat32Param(params, "temperature"); ok {
 		config.Temperature = aws.Float32(temperature)
-	}
-	if topP, ok := awsFloat32Param(params, "top_p"); ok {
-		config.TopP = aws.Float32(topP)
 	}
 	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
 		return nil
@@ -337,23 +331,6 @@ func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.Inference
 		return nil
 	}
 	return config
-}
-
-func awsInt32Param(params map[string]any, key string) (int32, bool) {
-	switch value := params[key].(type) {
-	case int:
-		return int32(value), true
-	case int32:
-		return value, true
-	case int64:
-		return int32(value), true
-	case float64:
-		return int32(value), true
-	case float32:
-		return int32(value), true
-	default:
-		return 0, false
-	}
 }
 
 func awsFloat32Param(params map[string]any, key string) (float32, bool) {

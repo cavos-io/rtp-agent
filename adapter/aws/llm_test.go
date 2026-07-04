@@ -407,7 +407,7 @@ func TestAWSLLMStreamCloseClosesLateReferenceProviderStartup(t *testing.T) {
 	}
 }
 
-func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
+func TestAWSLLMChatAppliesReferencePerCallTemperature(t *testing.T) {
 	provider := &AWSLLM{
 		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
@@ -430,14 +430,14 @@ func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
 	if input == nil || input.InferenceConfig == nil {
 		t.Fatalf("InferenceConfig = %#v, want reference Bedrock inference config", input)
 	}
-	if input.InferenceConfig.MaxTokens == nil || *input.InferenceConfig.MaxTokens != 128 {
-		t.Fatalf("max tokens = %#v, want 128", input.InferenceConfig.MaxTokens)
+	if input.InferenceConfig.MaxTokens != nil {
+		t.Fatalf("max tokens = %#v, want nil for per-call reference extra_kwargs", input.InferenceConfig.MaxTokens)
 	}
 	if input.InferenceConfig.Temperature == nil || *input.InferenceConfig.Temperature != 0.2 {
 		t.Fatalf("temperature = %#v, want 0.2", input.InferenceConfig.Temperature)
 	}
-	if input.InferenceConfig.TopP == nil || *input.InferenceConfig.TopP != 0.7 {
-		t.Fatalf("topP = %#v, want 0.7", input.InferenceConfig.TopP)
+	if input.InferenceConfig.TopP != nil {
+		t.Fatalf("topP = %#v, want nil for per-call reference extra_kwargs", input.InferenceConfig.TopP)
 	}
 }
 
