@@ -77,7 +77,10 @@ func (l *GoogleLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...
 		return nil, err
 	}
 
-	contents, systemInstructions := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
+	contents, systemInstructions, err := buildGoogleContentsWithThoughtSignatures(chatCtx, l.snapshotThoughtSignatures())
+	if err != nil {
+		return nil, err
+	}
 
 	config := buildGoogleGenerateContentConfigForModelWithConnectOptions(l.model, options, systemInstructions, connectOptions)
 	if err := validateGoogleThinkingConfigForModel(config, l.model); err != nil {
@@ -1036,11 +1039,11 @@ type googleLLMStream struct {
 	finishReason      genai.FinishReason
 }
 
-func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string) {
+func buildGoogleContents(chatCtx *llm.ChatContext) ([]*genai.Content, string, error) {
 	return buildGoogleContentsWithThoughtSignatures(chatCtx, nil)
 }
 
-func buildGoogleContentsWithThoughtSignatures(chatCtx *llm.ChatContext, thoughtSignatures map[string][]byte) ([]*genai.Content, string) {
+func buildGoogleContentsWithThoughtSignatures(chatCtx *llm.ChatContext, thoughtSignatures map[string][]byte) ([]*genai.Content, string, error) {
 	contents := make([]*genai.Content, 0, len(chatCtx.Items))
 	var systemInstructions string
 	var currentRole genai.Role
@@ -1082,7 +1085,11 @@ func buildGoogleContentsWithThoughtSignatures(chatCtx *llm.ChatContext, thoughtS
 					appendParts(role, messageParts...)
 				}
 			case *llm.FunctionCall:
-				appendParts(genai.Role(genai.RoleModel), googleFunctionCallPart(msg, thoughtSignatures))
+				part, err := googleFunctionCallPart(msg, thoughtSignatures)
+				if err != nil {
+					return nil, "", err
+				}
+				appendParts(genai.Role(genai.RoleModel), part)
 			case *llm.FunctionCallOutput:
 				appendParts(genai.Role(genai.RoleUser), googleFunctionResponsePart(msg))
 			}
@@ -1094,7 +1101,7 @@ func buildGoogleContentsWithThoughtSignatures(chatCtx *llm.ChatContext, thoughtS
 		contents = append(contents, genai.NewContentFromParts([]*genai.Part{genai.NewPartFromText(".")}, genai.Role(genai.RoleUser)))
 	}
 
-	return contents, systemInstructions
+	return contents, systemInstructions, nil
 }
 
 func googleMessageParts(msg *llm.ChatMessage) []*genai.Part {
@@ -1127,9 +1134,11 @@ func googleImagePart(image *llm.ImageContent) *genai.Part {
 	return genai.NewPartFromURI(img.ExternalURL, mimeType)
 }
 
-func googleFunctionCallPart(fc *llm.FunctionCall, thoughtSignatures map[string][]byte) *genai.Part {
+func googleFunctionCallPart(fc *llm.FunctionCall, thoughtSignatures map[string][]byte) (*genai.Part, error) {
 	args := make(map[string]any)
-	_ = json.Unmarshal([]byte(fc.Arguments), &args)
+	if err := json.Unmarshal([]byte(fc.Arguments), &args); err != nil {
+		return nil, fmt.Errorf("google function call arguments: %w", err)
+	}
 	part := genai.NewPartFromFunctionCall(fc.Name, args)
 	part.FunctionCall.ID = fc.CallID
 	if thoughtSignatures != nil {
@@ -1137,7 +1146,7 @@ func googleFunctionCallPart(fc *llm.FunctionCall, thoughtSignatures map[string][
 			part.ThoughtSignature = append([]byte(nil), signature...)
 		}
 	}
-	return part
+	return part, nil
 }
 
 func googleFunctionResponsePart(fco *llm.FunctionCallOutput) *genai.Part {

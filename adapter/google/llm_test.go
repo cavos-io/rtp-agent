@@ -109,7 +109,10 @@ func TestBuildGoogleContentsGroupsToolCallsWithResponses(t *testing.T) {
 		&llm.FunctionCallOutput{ID: "weather-output", CallID: "call_weather", Name: "weather", Output: "sunny"},
 	}
 
-	contents, systemText := buildGoogleContents(ctx)
+	contents, systemText, err := buildGoogleContents(ctx)
+	if err != nil {
+		t.Fatalf("buildGoogleContents error = %v", err)
+	}
 
 	if systemText != "" {
 		t.Fatalf("systemText = %q, want empty", systemText)
@@ -139,7 +142,10 @@ func TestBuildGoogleContentsPreservesMultipleMatchedToolOutputs(t *testing.T) {
 		&llm.FunctionCallOutput{ID: "lookup-output-2", CallID: "call_lookup", Name: "lookup", Output: "second"},
 	}
 
-	contents, _ := buildGoogleContents(ctx)
+	contents, _, err := buildGoogleContents(ctx)
+	if err != nil {
+		t.Fatalf("buildGoogleContents error = %v", err)
+	}
 
 	if len(contents) != 2 {
 		t.Fatalf("len(contents) = %d, want 2: %#v", len(contents), contents)
@@ -162,9 +168,12 @@ func TestBuildGoogleContentsInjectsReferenceThoughtSignatures(t *testing.T) {
 		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
 	}
 
-	contents, _ := buildGoogleContentsWithThoughtSignatures(ctx, map[string][]byte{
+	contents, _, err := buildGoogleContentsWithThoughtSignatures(ctx, map[string][]byte{
 		"call_lookup": []byte("signature"),
 	})
+	if err != nil {
+		t.Fatalf("buildGoogleContentsWithThoughtSignatures error = %v", err)
+	}
 
 	if len(contents) == 0 || len(contents[0].Parts) < 2 {
 		t.Fatalf("contents = %#v, want model function_call part", contents)
@@ -194,7 +203,10 @@ func TestBuildGoogleContentsFiltersUnmatchedToolItems(t *testing.T) {
 		&llm.FunctionCallOutput{ID: "orphan-output", CallID: "call_missing_call", Name: "lookup", Output: "ignored"},
 	}
 
-	contents, _ := buildGoogleContents(ctx)
+	contents, _, err := buildGoogleContents(ctx)
+	if err != nil {
+		t.Fatalf("buildGoogleContents error = %v", err)
+	}
 
 	if len(contents) != 1 {
 		t.Fatalf("len(contents) = %d, want 1: %#v", len(contents), contents)
@@ -220,7 +232,10 @@ func TestBuildGoogleContentsIncludesImageParts(t *testing.T) {
 		},
 	}
 
-	contents, _ := buildGoogleContents(ctx)
+	contents, _, err := buildGoogleContents(ctx)
+	if err != nil {
+		t.Fatalf("buildGoogleContents error = %v", err)
+	}
 
 	parts := contents[0].Parts
 	if len(parts) != 3 {
@@ -245,7 +260,10 @@ func TestBuildGoogleContentsCollectsSystemText(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 	}
 
-	contents, systemText := buildGoogleContents(ctx)
+	contents, systemText, err := buildGoogleContents(ctx)
+	if err != nil {
+		t.Fatalf("buildGoogleContents error = %v", err)
+	}
 
 	if systemText != "base\ndev\n" {
 		t.Fatalf("systemText = %q, want base/dev", systemText)
@@ -262,7 +280,10 @@ func TestBuildGoogleContentsInjectsDummyUserAfterModelTurn(t *testing.T) {
 		&llm.ChatMessage{ID: "assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "done"}}},
 	}
 
-	contents, _ := buildGoogleContents(ctx)
+	contents, _, err := buildGoogleContents(ctx)
+	if err != nil {
+		t.Fatalf("buildGoogleContents error = %v", err)
+	}
 
 	if len(contents) != 2 {
 		t.Fatalf("len(contents) = %d, want 2: %#v", len(contents), contents)
@@ -1517,6 +1538,33 @@ func TestGoogleLLMStreamMapsProvider499LikeReference(t *testing.T) {
 	}
 	if statusErr.RequestID == "" {
 		t.Fatal("APIStatusError request ID empty, want reference stream request ID")
+	}
+}
+
+func TestBuildGoogleContentsRejectsMalformedFunctionCallArgsLikeReference(t *testing.T) {
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.FunctionCall{
+			ID:        "assistant/tool",
+			CallID:    "call_bad",
+			Name:      "lookup",
+			Arguments: `{"city":`,
+		},
+		&llm.FunctionCallOutput{
+			ID:     "tool-output",
+			CallID: "call_bad",
+			Name:   "lookup",
+			Output: "ignored",
+		},
+	}
+
+	contents, _, err := buildGoogleContents(chatCtx)
+
+	if err == nil {
+		t.Fatalf("buildGoogleContents error = nil, contents = %#v", contents)
+	}
+	if !strings.Contains(err.Error(), "google function call arguments") {
+		t.Fatalf("buildGoogleContents error = %v, want malformed arguments context", err)
 	}
 }
 
