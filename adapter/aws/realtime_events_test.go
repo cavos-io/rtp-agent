@@ -11,6 +11,7 @@ func TestAWSRealtimeEventBuilderCreatesReferencePromptStartBlock(t *testing.T) {
 	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
 	ctx := llm.NewChatContext()
 	ctx.Append(&llm.ChatMessage{Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "orphan"}}})
+	ctx.Append(&llm.ChatMessage{Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "memory rule"}}})
 	ctx.Append(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hi"}}})
 	ctx.Append(&llm.ChatMessage{Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "again"}}})
 	ctx.Append(&llm.ChatMessage{Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "ok"}}})
@@ -31,8 +32,8 @@ func TestAWSRealtimeEventBuilderCreatesReferencePromptStartBlock(t *testing.T) {
 	if len(initEvents) != 5 {
 		t.Fatalf("init event count = %d, want 5", len(initEvents))
 	}
-	if len(historyEvents) != 6 {
-		t.Fatalf("history event count = %d, want 6", len(historyEvents))
+	if len(historyEvents) != 9 {
+		t.Fatalf("history event count = %d, want 9", len(historyEvents))
 	}
 
 	sessionStart := mustAWSRealtimeJSONEvent(t, initEvents[0])
@@ -75,15 +76,22 @@ func TestAWSRealtimeEventBuilderCreatesReferencePromptStartBlock(t *testing.T) {
 	}
 
 	firstHistoryStart := mustAWSRealtimeJSONEvent(t, historyEvents[0])
-	if got := awsRealtimeNestedString(firstHistoryStart, "event", "contentStart", "role"); got != "USER" {
-		t.Fatalf("first history role = %q, want USER after stripping leading assistant", got)
+	if got := awsRealtimeNestedString(firstHistoryStart, "event", "contentStart", "role"); got != "SYSTEM" {
+		t.Fatalf("first history role = %q, want SYSTEM after stripping leading assistant", got)
 	}
-	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, historyEvents[1]), "event", "textInput", "content"); got != "hi\nagain" {
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, historyEvents[1]), "event", "textInput", "content"); got != "memory rule" {
+		t.Fatalf("system history = %q, want memory rule", got)
+	}
+	userHistoryStart := mustAWSRealtimeJSONEvent(t, historyEvents[3])
+	if got := awsRealtimeNestedString(userHistoryStart, "event", "contentStart", "role"); got != "USER" {
+		t.Fatalf("second history role = %q, want USER", got)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, historyEvents[4]), "event", "textInput", "content"); got != "hi\nagain" {
 		t.Fatalf("merged user history = %q, want hi\\nagain", got)
 	}
-	secondHistoryStart := mustAWSRealtimeJSONEvent(t, historyEvents[3])
+	secondHistoryStart := mustAWSRealtimeJSONEvent(t, historyEvents[6])
 	if got := awsRealtimeNestedString(secondHistoryStart, "event", "contentStart", "role"); got != "ASSISTANT" {
-		t.Fatalf("second history role = %q, want ASSISTANT", got)
+		t.Fatalf("third history role = %q, want ASSISTANT", got)
 	}
 }
 
@@ -198,6 +206,38 @@ func TestAWSRealtimeEventBuilderCreatesReferenceAudioAndCloseEvents(t *testing.T
 	sessionEnd := mustAWSRealtimeJSONEvent(t, closeEvents[2])
 	if _, ok := nestedMap(t, sessionEnd, "event")["sessionEnd"].(map[string]any); !ok {
 		t.Fatalf("sessionEnd = %#v, want object", sessionEnd)
+	}
+}
+
+func TestAWSRealtimeEventBuilderCreatesReferenceToolContentStart(t *testing.T) {
+	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
+
+	raw, err := builder.createToolContentStartEvent("tool-content-1", "tool-use-1")
+	if err != nil {
+		t.Fatalf("createToolContentStartEvent error = %v", err)
+	}
+
+	start := nestedMap(t, mustAWSRealtimeJSONEvent(t, raw), "event", "contentStart")
+	if got := start["promptName"]; got != "prompt-1" {
+		t.Fatalf("promptName = %v, want prompt-1", got)
+	}
+	if got := start["contentName"]; got != "tool-content-1" {
+		t.Fatalf("contentName = %v, want tool-content-1", got)
+	}
+	for _, field := range []string{"type", "role", "interactive"} {
+		if _, ok := start[field]; ok {
+			t.Fatalf("tool contentStart field %q = %#v, want omitted like reference", field, start[field])
+		}
+	}
+	toolConfig := nestedMap(t, map[string]any{"root": start}, "root", "toolResultInputConfiguration")
+	if got := toolConfig["toolUseId"]; got != "tool-use-1" {
+		t.Fatalf("toolUseId = %v, want tool-use-1", got)
+	}
+	if got := toolConfig["type"]; got != "TEXT" {
+		t.Fatalf("tool input type = %v, want TEXT", got)
+	}
+	if got := awsRealtimeNestedString(map[string]any{"root": toolConfig}, "root", "textInputConfiguration", "mediaType"); got != "text/plain" {
+		t.Fatalf("tool text media type = %q, want text/plain", got)
 	}
 }
 

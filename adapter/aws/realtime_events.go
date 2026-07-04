@@ -254,9 +254,6 @@ func (b *awsRealtimeEventBuilder) createToolContentStartEvent(contentName string
 		"contentStart": map[string]any{
 			"promptName":  b.promptName,
 			"contentName": contentName,
-			"type":        "TOOL",
-			"interactive": false,
-			"role":        "TOOL",
 			"toolResultInputConfiguration": map[string]any{
 				"toolUseId": toolUseID,
 				"type":      "TEXT",
@@ -406,7 +403,7 @@ func awsRealtimeHistoryMessages(chatCtx *llm.ChatContext) []awsRealtimeHistoryMe
 			continue
 		}
 		role := strings.ToUpper(string(msg.Role))
-		if role != "USER" && role != "ASSISTANT" {
+		if role != "USER" && role != "ASSISTANT" && role != "SYSTEM" {
 			continue
 		}
 		text := msg.TextContent()

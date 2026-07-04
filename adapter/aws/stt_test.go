@@ -968,6 +968,32 @@ func TestAWSSTTStreamPushCloseAndNextError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamPushNilFrameIsReferenceNoop(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	writer := &fakeAWSSTTWriter{}
+	providerStream := &awsSTTStream{
+		stream: transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+			es.Reader = reader
+			es.Writer = writer
+		}),
+		events: make(chan *stt.SpeechEvent),
+		errCh:  make(chan error, 1),
+	}
+
+	if err := providerStream.PushFrame(nil); err != nil {
+		t.Fatalf("PushFrame(nil) error = %v, want nil", err)
+	}
+	if len(writer.chunks) != 0 {
+		t.Fatalf("chunks after PushFrame(nil) = %#v, want no provider audio", writer.chunks)
+	}
+	if err := providerStream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil", err)
+	}
+	if len(writer.chunks) != 1 || len(writer.chunks[0]) != 0 {
+		t.Fatalf("chunks after Close = %#v, want one empty AWS close sentinel", writer.chunks)
+	}
+}
+
 func TestAWSSTTStreamRejectsReferenceSampleRateChange(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	writer := &fakeAWSSTTWriter{}

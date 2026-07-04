@@ -981,8 +981,18 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
 		s.emitGenerationCreated()
 	}
+	if contentStart := awsRealtimeNestedMap(payload, "event", "contentStart"); contentStart != nil {
+		if _, ok := awsRealtimeRequiredMapString(contentStart, "contentId"); !ok {
+			s.handleMalformedContentStart(contentStart)
+			return true
+		}
+	}
 	s.trackGenerationContentStart(payload)
-	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
+	if audioOutput := awsRealtimeNestedMap(payload, "event", "audioOutput"); audioOutput != nil {
+		audioContent, ok := awsRealtimeRequiredMapString(audioOutput, "content")
+		if !ok {
+			return true
+		}
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
 			s.closeGeneration()
@@ -996,7 +1006,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			})
 			return false
 		}
-		if s.sendGenerationAudio(awsRealtimeNestedString(payload, "event", "audioOutput", "contentId"), data) {
+		if s.sendGenerationAudio(awsRealtimeMapString(audioOutput, "contentId"), data) {
 			s.markLastAudioOutput()
 			s.emit(llm.RealtimeEvent{
 				Type: llm.RealtimeEventTypeAudio,
@@ -1004,9 +1014,16 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 			})
 		}
 	}
-	if textContent := awsRealtimeNestedString(payload, "event", "textOutput", "content"); textContent != "" {
-		contentID := awsRealtimeNestedString(payload, "event", "textOutput", "contentId")
-		role := awsRealtimeNestedString(payload, "event", "textOutput", "role")
+	if textOutput := awsRealtimeNestedMap(payload, "event", "textOutput"); textOutput != nil {
+		contentID, ok := awsRealtimeRequiredMapString(textOutput, "contentId")
+		if !ok {
+			return true
+		}
+		textContent, ok := awsRealtimeRequiredMapString(textOutput, "content")
+		if !ok {
+			return true
+		}
+		role := awsRealtimeMapString(textOutput, "role")
 		if textContent == awsRealtimeBargeInContent {
 			s.markLastAssistantMessageInterrupted()
 			if !s.hasPendingTools() {
@@ -1030,9 +1047,6 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		}) {
 			return true
 		}
-		s.mu.Lock()
-		s.pending[toolUseID] = struct{}{}
-		s.mu.Unlock()
 	}
 	if usage := awsRealtimeNestedMap(payload, "event", "usageEvent"); usage != nil {
 		s.emitUsageMetrics(usage)
@@ -1047,6 +1061,16 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		s.turns.feed(payload)
 	}
 	return true
+}
+
+func (s *awsRealtimeSession) handleMalformedContentStart(contentStart map[string]any) {
+	contentType := awsRealtimeMapString(contentStart, "type")
+	role := awsRealtimeMapString(contentStart, "role")
+	additionalFields := awsRealtimeMapString(contentStart, "additionalModelFields")
+	if contentType == "TOOL" ||
+		(role == "ASSISTANT" && contentType == "TEXT" && strings.Contains(additionalFields, "SPECULATIVE")) {
+		s.emitGenerationCreated()
+	}
 }
 
 func (s *awsRealtimeSession) hasPendingTools() bool {
@@ -1182,9 +1206,6 @@ func (s *awsRealtimeSession) isProviderAssistantText(contentID string) bool {
 }
 
 func (s *awsRealtimeSession) updateProviderTextHistory(role llm.ChatRole, text string, contentID string) {
-	if text == "" {
-		return
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.chatCtx == nil {
@@ -1279,6 +1300,9 @@ func (s *awsRealtimeSession) sendGenerationText(contentID string, text string) {
 func (s *awsRealtimeSession) sendGenerationFunction(call *llm.FunctionCall) bool {
 	s.mu.Lock()
 	generation := s.generation
+	if generation != nil && call != nil && call.CallID != "" {
+		s.pending[call.CallID] = struct{}{}
+	}
 	s.mu.Unlock()
 	if generation == nil {
 		return false
@@ -1379,6 +1403,11 @@ func awsRealtimeNestedMap(root map[string]any, path ...string) map[string]any {
 func awsRealtimeMapString(root map[string]any, key string) string {
 	value, _ := root[key].(string)
 	return value
+}
+
+func awsRealtimeRequiredMapString(root map[string]any, key string) (string, bool) {
+	value, ok := root[key].(string)
+	return value, ok
 }
 
 func awsRealtimeNumberAsInt(value any) int {
@@ -1824,7 +1853,9 @@ func (s *awsRealtimeSession) emitEmptyGenerationCreated(userInitiated bool) {
 	})
 }
 
-func (s *awsRealtimeSession) Say(string) error { return awsRealtimeUnsupported("say") }
+func (s *awsRealtimeSession) Say(string) error {
+	return fmt.Errorf("awsRealtimeSession does not implement say(). use a TTS model instead")
+}
 func (s *awsRealtimeSession) Truncate(llm.RealtimeTruncateOptions) error {
 	return nil
 }
@@ -2103,8 +2134,4 @@ func (s *awsRealtimeSession) CommitAudio() error {
 }
 func (s *awsRealtimeSession) ClearAudio() error {
 	return nil
-}
-
-func awsRealtimeUnsupported(operation string) error {
-	return fmt.Errorf("%s is not supported by the AWS Nova Sonic realtime model", operation)
 }
