@@ -345,13 +345,11 @@ func (b *awsRealtimeEventBuilder) createTextContentStartEvent(contentName string
 		"promptName":  b.promptName,
 		"contentName": contentName,
 		"type":        "TEXT",
+		"interactive": interactive,
 		"role":        role,
 		"textInputConfiguration": map[string]any{
 			"mediaType": "text/plain",
 		},
-	}
-	if interactive {
-		contentStart["interactive"] = true
 	}
 	return marshalAWSRealtimeEvent(map[string]any{
 		"contentStart": contentStart,

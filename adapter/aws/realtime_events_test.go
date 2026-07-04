@@ -95,7 +95,7 @@ func TestAWSRealtimeEventBuilderCreatesReferencePromptStartBlock(t *testing.T) {
 	}
 }
 
-func TestAWSRealtimeEventBuilderOmitsReferenceInteractiveFalse(t *testing.T) {
+func TestAWSRealtimeEventBuilderEmitsReferenceInteractiveFalse(t *testing.T) {
 	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
 
 	nonInteractive, err := builder.createTextContentStartEvent("content-1", "USER", false)
@@ -103,8 +103,11 @@ func TestAWSRealtimeEventBuilderOmitsReferenceInteractiveFalse(t *testing.T) {
 		t.Fatalf("createTextContentStartEvent error = %v", err)
 	}
 	start := nestedMap(t, mustAWSRealtimeJSONEvent(t, nonInteractive), "event", "contentStart")
-	if _, ok := start["interactive"]; ok {
-		t.Fatalf("non-interactive contentStart interactive = %#v, want field omitted like reference", start["interactive"])
+	if got := start["interactive"]; got != false {
+		t.Fatalf("non-interactive contentStart interactive = %#v, want false", got)
+	}
+	if got := awsRealtimeNestedString(map[string]any{"root": start}, "root", "textInputConfiguration", "mediaType"); got != "text/plain" {
+		t.Fatalf("non-interactive text media type = %q, want text/plain", got)
 	}
 
 	interactive, err := builder.createTextContentStartEvent("content-2", "USER", true)
