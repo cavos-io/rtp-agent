@@ -520,6 +520,26 @@ func (s *awsRealtimeQueuedStream[T]) Send(value T) bool {
 	return true
 }
 
+func (s *awsRealtimeQueuedStream[T]) TryPopQueued() (T, bool) {
+	var zero T
+	if s == nil {
+		return zero, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queue) == 0 {
+		return zero, false
+	}
+	value := s.queue[0]
+	s.queue[0] = zero
+	s.queue = s.queue[1:]
+	if len(s.queue) == 0 && s.closed && !s.sending {
+		s.closeOutLocked()
+		s.notifyLocked()
+	}
+	return value, true
+}
+
 func (s *awsRealtimeQueuedStream[T]) Close() {
 	if s == nil {
 		return

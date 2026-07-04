@@ -922,13 +922,25 @@ func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
 		}
 		return event, nil
 	case err := <-s.errCh:
-		select {
-		case event, ok := <-s.events:
-			if ok {
-				return event, nil
-			}
-		default:
+		if event, ok := s.nextQueuedSpeechEvent(); ok {
+			return event, nil
 		}
 		return nil, err
 	}
+}
+
+func (s *awsSTTStream) nextQueuedSpeechEvent() (*stt.SpeechEvent, bool) {
+	if s.eventStream != nil {
+		if event, ok := s.eventStream.TryPopQueued(); ok {
+			return event, true
+		}
+	}
+	select {
+	case event, ok := <-s.events:
+		if ok {
+			return event, true
+		}
+	default:
+	}
+	return nil, false
 }

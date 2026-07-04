@@ -1405,6 +1405,37 @@ func TestAWSSTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T) {
 	}
 }
 
+func TestAWSSTTNextDrainsReferenceQueuedStreamTranscriptBeforeError(t *testing.T) {
+	event := &stt.SpeechEvent{
+		Type: stt.SpeechEventFinalTranscript,
+		Alternatives: []stt.SpeechData{
+			{Text: "queued final"},
+		},
+	}
+	eventStream := &awsRealtimeQueuedStream[*stt.SpeechEvent]{
+		out:   make(chan *stt.SpeechEvent),
+		wake:  make(chan struct{}, 1),
+		queue: []*stt.SpeechEvent{event},
+	}
+	providerStream := &awsSTTStream{
+		events:      eventStream.Chan(),
+		eventStream: eventStream,
+		errCh:       make(chan error, 1),
+	}
+	providerStream.errCh <- errors.New("stream failed")
+
+	got, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want queued transcript before stream error", err)
+	}
+	if got == nil || got.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("Next event = %#v, want queued final transcript", got)
+	}
+	if got.Alternatives[0].Text != "queued final" {
+		t.Fatalf("transcript = %q, want queued final", got.Alternatives[0].Text)
+	}
+}
+
 func TestAWSSTTProviderStreamErrorReturnsAPIConnectionError(t *testing.T) {
 	reader := newFakeAWSSTTReader()
 	reader.err = errors.New("transcribe stream reset")
