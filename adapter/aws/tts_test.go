@@ -157,6 +157,19 @@ func TestAWSTTSUpdateOptionsKeepsReferenceSampleRate(t *testing.T) {
 	}
 }
 
+func TestAWSTTSConstructorPreservesReferenceZeroSampleRate(t *testing.T) {
+	provider := newAWSTTSWithClient(nil, "", WithAWSTTSSampleRate(0))
+
+	if provider.SampleRate() != 0 {
+		t.Fatalf("SampleRate = %d, want explicit zero reference sample rate", provider.SampleRate())
+	}
+
+	input := buildAWSSynthesizeSpeechInput(provider, "hello")
+	if input.SampleRate == nil || *input.SampleRate != "0" {
+		t.Fatalf("request sample rate = %v, want explicit zero reference sample rate", input.SampleRate)
+	}
+}
+
 func TestAWSTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
 	provider := newAWSTTSWithClient(nil, "Joanna")
 
@@ -221,6 +234,56 @@ func TestAWSTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 	if requests != 0 {
 		t.Fatalf("provider requests after Close before Next = %d, want none", requests)
+	}
+}
+
+func TestAWSTTSSynthesizeAppliesReferenceRequestTimeout(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read reference mp3: %v", err)
+	}
+	var hasDeadline bool
+	var remaining time.Duration
+	client := polly.New(polly.Options{
+		Region: "us-east-1",
+		Credentials: awssdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(
+			"test-access-key",
+			"test-secret-key",
+			"",
+		)),
+		HTTPClient: awsHTTPClientFunc(func(req *http.Request) (*http.Response, error) {
+			deadline, ok := req.Context().Deadline()
+			hasDeadline = ok
+			if ok {
+				remaining = time.Until(deadline)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type":     []string{"audio/mpeg"},
+					"X-Amzn-Requestid": []string{"timeout-polly-request"},
+					"Content-Length":   []string{fmt.Sprintf("%d", len(mp3Data))},
+				},
+				Body: io.NopCloser(bytes.NewReader(mp3Data)),
+			}, nil
+		}),
+	})
+	provider := newAWSTTSWithClient(client, "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want AWS reference connect timeout")
+	}
+	if remaining <= 0 || remaining > llm.DefaultAPIConnectOptions().Timeout {
+		t.Fatalf("request context deadline remaining = %v, want bounded by AWS reference 10s timeout", remaining)
 	}
 }
 
@@ -289,6 +352,28 @@ func TestAWSTTSChunkedStreamUsesReferenceSnapshotSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 16000 {
 		t.Fatalf("sample rate = %d, want stream snapshot sample rate 16000", audio.Frame.SampleRate)
+	}
+}
+
+func TestAWSTTSChunkedStreamUsesReferenceZeroSnapshotSampleRate(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	provider := newAWSTTSWithClient(nil, "", WithAWSTTSSampleRate(0))
+	stream := &awsTTSChunkedStream{
+		stream:   io.NopCloser(bytes.NewReader(mp3Data)),
+		provider: provider,
+		options:  provider.snapshotOptions(),
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio.Frame.SampleRate != 0 {
+		t.Fatalf("sample rate = %d, want reference snapshot sample rate 0", audio.Frame.SampleRate)
 	}
 }
 

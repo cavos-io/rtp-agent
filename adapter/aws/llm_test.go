@@ -407,7 +407,7 @@ func TestAWSLLMStreamCloseClosesLateReferenceProviderStartup(t *testing.T) {
 	}
 }
 
-func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
+func TestAWSLLMChatAppliesReferencePerCallTemperature(t *testing.T) {
 	provider := &AWSLLM{
 		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
@@ -430,14 +430,38 @@ func TestAWSLLMChatAppliesReferenceInferenceConfig(t *testing.T) {
 	if input == nil || input.InferenceConfig == nil {
 		t.Fatalf("InferenceConfig = %#v, want reference Bedrock inference config", input)
 	}
-	if input.InferenceConfig.MaxTokens == nil || *input.InferenceConfig.MaxTokens != 128 {
-		t.Fatalf("max tokens = %#v, want 128", input.InferenceConfig.MaxTokens)
+	if input.InferenceConfig.MaxTokens != nil {
+		t.Fatalf("max tokens = %#v, want nil for per-call reference extra_kwargs", input.InferenceConfig.MaxTokens)
 	}
 	if input.InferenceConfig.Temperature == nil || *input.InferenceConfig.Temperature != 0.2 {
 		t.Fatalf("temperature = %#v, want 0.2", input.InferenceConfig.Temperature)
 	}
-	if input.InferenceConfig.TopP == nil || *input.InferenceConfig.TopP != 0.7 {
-		t.Fatalf("topP = %#v, want 0.7", input.InferenceConfig.TopP)
+	if input.InferenceConfig.TopP != nil {
+		t.Fatalf("topP = %#v, want nil for per-call reference extra_kwargs", input.InferenceConfig.TopP)
+	}
+}
+
+func TestAWSLLMChatKeepsReferenceEmptyInferenceConfig(t *testing.T) {
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
+		model:  defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+
+	input := stream.(*awsLLMStream).request
+	if input == nil || input.InferenceConfig == nil {
+		t.Fatalf("InferenceConfig = %#v, want reference empty Bedrock inference config", input)
+	}
+	if input.InferenceConfig.MaxTokens != nil || input.InferenceConfig.Temperature != nil || input.InferenceConfig.TopP != nil {
+		t.Fatalf("InferenceConfig = %#v, want empty reference inference config", input.InferenceConfig)
 	}
 }
 
@@ -474,7 +498,7 @@ func TestAWSLLMChatAppliesReferenceProviderInferenceDefaults(t *testing.T) {
 	}
 }
 
-func TestAWSLLMChatForwardsReferenceAdditionalRequestFields(t *testing.T) {
+func TestAWSLLMChatIgnoresReferencePerCallAdditionalRequestFields(t *testing.T) {
 	provider := &AWSLLM{
 		client: fakeAWSLLMClient{err: errors.New("stop after capture")},
 		model:  defaultAWSLLMModel,
@@ -494,8 +518,11 @@ func TestAWSLLMChatForwardsReferenceAdditionalRequestFields(t *testing.T) {
 	}
 	input := stream.(*awsLLMStream).request
 
-	if input == nil || input.AdditionalModelRequestFields == nil {
-		t.Fatalf("AdditionalModelRequestFields = %#v, want reference additional request fields", input)
+	if input == nil {
+		t.Fatal("ConverseStreamInput = nil")
+	}
+	if input.AdditionalModelRequestFields != nil {
+		t.Fatalf("AdditionalModelRequestFields = %#v, want nil for per-call reference extra_kwargs", input.AdditionalModelRequestFields)
 	}
 }
 
@@ -1206,6 +1233,37 @@ func TestBuildAWSMessagesMapsReferenceToolResultText(t *testing.T) {
 	}
 	if text.Value != "sunny" {
 		t.Fatalf("tool result text = %q, want sunny", text.Value)
+	}
+}
+
+func TestAWSLLMChatRejectsReferenceMalformedToolArguments(t *testing.T) {
+	var captured *bedrockruntime.ConverseStreamInput
+	provider := &AWSLLM{
+		client: fakeAWSLLMClient{
+			err:          errors.New("bedrock should not be called"),
+			inputCapture: &captured,
+		},
+		model: defaultAWSLLMModel,
+	}
+	ctx := llm.NewChatContext()
+	groupID := "assistant-turn"
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "weather?"}}},
+		&llm.ChatMessage{ID: groupID, Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: groupID + "/tool-1", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+
+	stream, err := provider.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{awsRequestTestTool{}}))
+
+	if stream != nil {
+		t.Fatalf("Chat stream = %#v, want nil for malformed reference tool arguments", stream)
+	}
+	if err == nil || !strings.Contains(err.Error(), "invalid AWS Bedrock tool arguments") {
+		t.Fatalf("Chat error = %v, want malformed tool argument error", err)
+	}
+	if captured != nil {
+		t.Fatalf("ConverseStream input = %#v, want no provider call for malformed tool arguments", captured)
 	}
 }
 

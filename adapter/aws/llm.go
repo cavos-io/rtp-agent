@@ -214,6 +214,12 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 		}
 		return nil, err
 	}
+	if err := validateAWSFunctionCallArguments(chatCtx); err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
 	messages, systemText := buildAWSMessages(chatCtx)
 
 	req := &bedrockruntime.ConverseStreamInput{
@@ -223,9 +229,7 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 	if inferenceConfig := l.buildAWSInferenceConfig(options.ExtraParams); inferenceConfig != nil {
 		req.InferenceConfig = inferenceConfig
 	}
-	if fields, ok := options.ExtraParams["additional_request_fields"]; ok {
-		req.AdditionalModelRequestFields = document.NewLazyDocument(fields)
-	} else if l.additionalFields != nil {
+	if l.additionalFields != nil {
 		req.AdditionalModelRequestFields = document.NewLazyDocument(l.additionalFields)
 	}
 
@@ -257,21 +261,12 @@ func (l *AWSLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts ...llm
 }
 
 func buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
-	if len(params) == 0 {
-		return nil
-	}
 	config := &types.InferenceConfiguration{}
-	if maxTokens, ok := awsInt32Param(params, "max_output_tokens"); ok {
-		config.MaxTokens = aws.Int32(maxTokens)
+	if len(params) == 0 {
+		return config
 	}
 	if temperature, ok := awsFloat32Param(params, "temperature"); ok {
 		config.Temperature = aws.Float32(temperature)
-	}
-	if topP, ok := awsFloat32Param(params, "top_p"); ok {
-		config.TopP = aws.Float32(topP)
-	}
-	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
-		return nil
 	}
 	return config
 }
@@ -301,11 +296,22 @@ func validateAWSMessageImages(chatCtx *llm.ChatContext) error {
 	return nil
 }
 
+func validateAWSFunctionCallArguments(chatCtx *llm.ChatContext) error {
+	if chatCtx == nil {
+		return nil
+	}
+	for _, group := range groupAWSChatItems(convertAWSMidConversationInstructions(chatCtx.Items)) {
+		for _, toolCall := range group.toolCalls {
+			if _, err := parseAWSFunctionArguments(toolCall.Arguments); err != nil {
+				return fmt.Errorf("invalid AWS Bedrock tool arguments for %q: %w", toolCall.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
 func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.InferenceConfiguration {
 	config := buildAWSInferenceConfig(params)
-	if config == nil {
-		config = &types.InferenceConfiguration{}
-	}
 	if config.MaxTokens == nil && l.maxOutputTokensSet {
 		config.MaxTokens = aws.Int32(l.maxOutputTokens)
 	}
@@ -315,27 +321,7 @@ func (l *AWSLLM) buildAWSInferenceConfig(params map[string]any) *types.Inference
 	if config.TopP == nil && l.topPSet {
 		config.TopP = aws.Float32(l.topP)
 	}
-	if config.MaxTokens == nil && config.Temperature == nil && config.TopP == nil {
-		return nil
-	}
 	return config
-}
-
-func awsInt32Param(params map[string]any, key string) (int32, bool) {
-	switch value := params[key].(type) {
-	case int:
-		return int32(value), true
-	case int32:
-		return value, true
-	case int64:
-		return int32(value), true
-	case float64:
-		return int32(value), true
-	case float32:
-		return int32(value), true
-	default:
-		return 0, false
-	}
 }
 
 func awsFloat32Param(params map[string]any, key string) (float32, bool) {
@@ -571,10 +557,9 @@ func awsImageBlock(image *llm.ImageContent) types.ContentBlock {
 }
 
 func awsToolUseBlock(fc *llm.FunctionCall) types.ContentBlock {
-	var args map[string]interface{}
-	_ = json.Unmarshal([]byte(fc.Arguments), &args)
-	if args == nil {
-		args = map[string]interface{}{}
+	args, err := parseAWSFunctionArguments(fc.Arguments)
+	if err != nil {
+		args = map[string]any{}
 	}
 
 	return &types.ContentBlockMemberToolUse{
@@ -584,6 +569,20 @@ func awsToolUseBlock(fc *llm.FunctionCall) types.ContentBlock {
 			Input:     document.NewLazyDocument(args),
 		},
 	}
+}
+
+func parseAWSFunctionArguments(rawArgs string) (any, error) {
+	if rawArgs == "" {
+		rawArgs = "{}"
+	}
+	var args any
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return nil, err
+	}
+	if args == nil {
+		return map[string]any{}, nil
+	}
+	return args, nil
 }
 
 func awsToolResultBlock(fco *llm.FunctionCallOutput) types.ContentBlock {

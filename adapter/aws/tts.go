@@ -73,9 +73,7 @@ func WithAWSTTSLanguage(language types.LanguageCode) AWSTTSOption {
 
 func WithAWSTTSSampleRate(sampleRate int) AWSTTSOption {
 	return func(t *AWSTTS) {
-		if sampleRate > 0 {
-			t.sampleRate = sampleRate
-		}
+		t.sampleRate = sampleRate
 	}
 }
 
@@ -385,6 +383,14 @@ func (s *awsTTSChunkedStream) open() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	var timeoutCancel context.CancelFunc
+	if _, ok := ctx.Deadline(); !ok {
+		timeout := llm.DefaultAPIConnectOptions().Timeout
+		if timeout > 0 {
+			ctx, timeoutCancel = context.WithTimeout(ctx, timeout)
+			defer timeoutCancel()
+		}
+	}
 	out, err := s.provider.client.SynthesizeSpeech(ctx, buildAWSSynthesizeSpeechInputFromOptions(s.options, s.text))
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -531,6 +537,11 @@ func normalizeAWSTTSFrame(frame *model.AudioFrame, sampleRate int) (*model.Audio
 		return frame, nil
 	}
 	frame = downmixAWSTTSFrameToMono(frame)
+	if sampleRate == 0 && frame.SampleRate != 0 {
+		normalized := *frame
+		normalized.SampleRate = 0
+		return &normalized, nil
+	}
 	if sampleRate <= 0 {
 		return frame, nil
 	}

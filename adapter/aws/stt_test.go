@@ -19,7 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
-func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
+func TestAWSSpeechDataFromAlternativeOmitsReferenceWordSpeakerLabels(t *testing.T) {
 	alt := types.Alternative{
 		Transcript: awsconfig.String("hello world"),
 		Items: []types.Item{
@@ -34,6 +34,7 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 			{
 				Type:    types.ItemTypePunctuation,
 				Content: awsconfig.String(","),
+				Speaker: awsconfig.String("spk_punct"),
 			},
 			{
 				Type:       types.ItemTypePronunciation,
@@ -56,11 +57,14 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 	if len(data.Words) != 3 {
 		t.Fatalf("words = %d, want pronunciation plus punctuation items", len(data.Words))
 	}
-	if got := data.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.94 || got.SpeakerID != "spk_0" {
-		t.Fatalf("first word = %+v, want hello timing with speaker", got)
+	if got := data.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.94 || got.SpeakerID != "" {
+		t.Fatalf("first word = %+v, want hello timing without speaker", got)
 	}
-	if got := data.Words[2]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.91 || got.SpeakerID != "spk_1" {
-		t.Fatalf("second word = %+v, want world timing with speaker", got)
+	if got := data.Words[2]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.91 || got.SpeakerID != "" {
+		t.Fatalf("second word = %+v, want world timing without speaker", got)
+	}
+	if got := data.Words[1]; got.Text != "," || got.SpeakerID != "" {
+		t.Fatalf("punctuation word = %+v, want punctuation without speaker", got)
 	}
 
 	punctuationOnly := awsSpeechDataFromAlternative(types.Alternative{
@@ -195,6 +199,19 @@ func TestAWSSTTStreamInputUsesReferenceConfiguredLanguage(t *testing.T) {
 	}
 }
 
+func TestAWSSTTStreamInputDefaultsReferenceEmptyLanguage(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil, WithAWSSTTLanguage(""))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+
+	if input.LanguageCode != types.LanguageCodeEnUs {
+		t.Fatalf("language = %q, want reference default en-US for empty language", input.LanguageCode)
+	}
+}
+
 func TestAWSSTTExposesReferenceInputSampleRate(t *testing.T) {
 	provider, err := newAWSSTTWithClient(nil)
 	if err != nil {
@@ -214,6 +231,22 @@ func TestAWSSTTExposesConfiguredInputSampleRate(t *testing.T) {
 
 	if got := provider.InputSampleRate(); got != 8000 {
 		t.Fatalf("InputSampleRate = %d, want configured sample rate 8000", got)
+	}
+}
+
+func TestAWSSTTPreservesReferenceZeroInputSampleRate(t *testing.T) {
+	provider, err := newAWSSTTWithClient(nil, WithAWSSTTSampleRate(0))
+	if err != nil {
+		t.Fatalf("newAWSSTTWithClient error = %v", err)
+	}
+
+	if got := provider.InputSampleRate(); got != 0 {
+		t.Fatalf("InputSampleRate = %d, want explicit zero reference sample rate", got)
+	}
+
+	input := buildAWSStartStreamTranscriptionInput(provider, "")
+	if input.MediaSampleRateHertz == nil || *input.MediaSampleRateHertz != 0 {
+		t.Fatalf("request sample rate = %v, want explicit zero reference sample rate", input.MediaSampleRateHertz)
 	}
 }
 
@@ -918,6 +951,42 @@ func TestAWSSTTStreamIgnoresReferenceNilTranscriptEvent(t *testing.T) {
 	}
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %v, want EOF after ignored nil transcript", err)
+	}
+}
+
+func TestAWSSTTStreamDoesNotStartSpeechForReferenceTiminglessResult(t *testing.T) {
+	reader := newFakeAWSSTTReader()
+	stream := transcribestreaming.NewStartStreamTranscriptionEventStream(func(es *transcribestreaming.StartStreamTranscriptionEventStream) {
+		es.Reader = reader
+		es.Writer = &fakeAWSSTTWriter{}
+	})
+	providerStream := &awsSTTStream{
+		stream: stream,
+		events: make(chan *stt.SpeechEvent, 10),
+		errCh:  make(chan error, 1),
+	}
+
+	go providerStream.readLoop()
+	reader.events <- &types.TranscriptResultStreamMemberTranscriptEvent{
+		Value: types.TranscriptEvent{
+			Transcript: &types.Transcript{
+				Results: []types.Result{{IsPartial: false}},
+			},
+		},
+	}
+	close(reader.events)
+
+	event, err := providerStream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want reference end-of-speech event", err)
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event type = %q, want end_of_speech without false start_of_speech", event.Type)
+	}
+
+	_, err = providerStream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next EOF error = %v, want io.EOF", err)
 	}
 }
 

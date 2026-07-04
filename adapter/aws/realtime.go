@@ -188,15 +188,13 @@ func NewAWSRealtimeModelWithNovaSonic2(opts ...AWSRealtimeOption) *AWSRealtimeMo
 
 func WithAWSRealtimeModel(model string) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
-		if model != "" {
-			provider.model = model
-		}
+		provider.model = model
 	}
 }
 
 func WithAWSRealtimeRegion(region string) AWSRealtimeOption {
 	return func(provider *AWSRealtimeModel) {
-		provider.region = awsRegionOrDefault(region)
+		provider.region = region
 	}
 }
 
@@ -437,6 +435,7 @@ type awsRealtimeSession struct {
 	generation               *awsRealtimeGeneration
 	chatCtx                  *llm.ChatContext
 	instructions             string
+	instructionsSet          bool
 	tools                    []llm.Tool
 	pending                  map[string]struct{}
 	sent                     map[string]struct{}
@@ -688,7 +687,7 @@ func (s *awsRealtimeSession) startWithOptions(ctx context.Context, options awsRe
 	chatCtx := s.chatCtx
 	tools := append([]llm.Tool(nil), s.tools...)
 	s.mu.Unlock()
-	if systemPrompt == "" {
+	if systemPrompt == "" && !s.instructionsSet {
 		systemPrompt = defaultAWSRealtimeSystemPrompt
 	}
 	if chatCtx != nil && len(chatCtx.Items) > defaultAWSRealtimeMaxMessages {
@@ -1184,7 +1183,6 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 		if !ok {
 			return true
 		}
-		role := awsRealtimeMapString(textOutput, "role")
 		if textContent == awsRealtimeBargeInContent {
 			if s.hasGeneration() {
 				s.markLastAssistantMessageInterrupted()
@@ -1193,7 +1191,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 				}
 			}
 		} else {
-			if s.shouldStoreProviderUserText(contentID, role) {
+			if s.shouldStoreProviderUserText(contentID) {
 				s.updateProviderTextHistory(llm.ChatRoleUser, textContent, contentID)
 			}
 			if s.isProviderAssistantText(contentID) {
@@ -1428,10 +1426,7 @@ func (s *awsRealtimeSession) markAudioEndTurnReceived() {
 	s.mu.Unlock()
 }
 
-func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string, role string) bool {
-	if role != "" && role != "USER" {
-		return false
-	}
+func (s *awsRealtimeSession) shouldStoreProviderUserText(contentID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != nil {
@@ -1692,6 +1687,7 @@ func (s *awsRealtimeSession) emit(event llm.RealtimeEvent) {
 func (s *awsRealtimeSession) UpdateInstructions(instructions string) error {
 	s.mu.Lock()
 	s.instructions = instructions
+	s.instructionsSet = true
 	s.mu.Unlock()
 	return nil
 }
@@ -1722,6 +1718,7 @@ func (s *awsRealtimeSession) UpdateChatContext(chatCtx *llm.ChatContext) error {
 				continue
 			}
 			if strings.TrimSpace(msg.TextContent()) == "" {
+				s.markInteractiveUserTextSent(msg.ID)
 				continue
 			}
 			if s.markInteractiveUserTextSent(msg.ID) {
@@ -2001,7 +1998,7 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		s.emitEmptyGenerationCreated(true)
 		return nil
 	}
-	if options.Instructions == "" {
+	if !options.InstructionsSet && options.Instructions == "" {
 		s.mu.Lock()
 		pending := s.pendingGenerationStart
 		s.mu.Unlock()
@@ -2011,11 +2008,6 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		return s.waitForGenerationStart(pending)
 	}
 	pending := s.createPendingGenerationStart()
-	msg := &llm.ChatMessage{
-		ID:      uuid.NewString(),
-		Role:    llm.ChatRoleUser,
-		Content: []llm.ChatContent{{Text: options.Instructions}},
-	}
 	timeout := s.model.generateReplyTimeout
 	ctx := context.Background()
 	var cancel context.CancelFunc
@@ -2023,7 +2015,7 @@ func (s *awsRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyOpti
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
-	if err := s.sendInteractiveUserText(ctx, msg); err != nil {
+	if err := s.sendInteractiveUserTextEvents(ctx, options.Instructions); err != nil {
 		s.clearPendingGenerationStart(pending)
 		return err
 	}
@@ -2168,7 +2160,7 @@ func (s *awsRealtimeSession) Close() error {
 func (s *awsRealtimeSession) EventCh() <-chan llm.RealtimeEvent { return s.eventCh }
 
 func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
-	if frame == nil || len(frame.Data) == 0 {
+	if !awsRealtimeInputFrameOK(frame) {
 		return nil
 	}
 	s.mu.Lock()
@@ -2189,6 +2181,23 @@ func (s *awsRealtimeSession) PushAudio(frame *model.AudioFrame) error {
 		s.enqueueAudioInputEvent(event)
 	}
 	return nil
+}
+
+func awsRealtimeInputFrameOK(frame *model.AudioFrame) bool {
+	if frame == nil || len(frame.Data) == 0 {
+		return false
+	}
+	if frame.SampleRate == 0 || frame.NumChannels == 0 {
+		return false
+	}
+	if len(frame.Data)%2 != 0 {
+		return false
+	}
+	if frame.SamplesPerChannel == 0 {
+		return true
+	}
+	expectedBytes := int(frame.SamplesPerChannel * frame.NumChannels * 2)
+	return len(frame.Data) >= expectedBytes
 }
 
 type awsRealtimeAudioInputEvent struct {

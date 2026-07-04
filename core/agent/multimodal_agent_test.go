@@ -586,6 +586,9 @@ func TestMultimodalAgentGenerateReplySendsRealtimeOverrides(t *testing.T) {
 	if opts.Instructions != "answer tersely" {
 		t.Fatalf("Instructions = %q, want answer tersely", opts.Instructions)
 	}
+	if !opts.InstructionsSet {
+		t.Fatal("InstructionsSet = false, want explicit realtime instructions marker")
+	}
 	if opts.ToolChoice != "none" {
 		t.Fatalf("ToolChoice = %#v, want none", opts.ToolChoice)
 	}

@@ -259,6 +259,25 @@ func TestAWSRealtimeSessionStartsWithReferenceUpdatedInstructions(t *testing.T) 
 	}
 }
 
+func TestAWSRealtimeSessionStartsWithReferenceEmptyInstructions(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session := newAWSRealtimeSession(provider, &fakeAWSRealtimeClient{stream: stream})
+
+	if err := session.UpdateInstructions(""); err != nil {
+		t.Fatalf("UpdateInstructions error = %v", err)
+	}
+	if err := session.start(context.Background()); err != nil {
+		t.Fatalf("start error = %v", err)
+	}
+	defer session.Close()
+
+	sent := stream.snapshotSent()
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, sent[3]), "event", "textInput", "content"); got != "" {
+		t.Fatalf("system prompt = %q, want explicit empty instructions", got)
+	}
+}
+
 func TestAWSRealtimeSessionRestartUsesReferenceUpdatedInstructions(t *testing.T) {
 	first := newFakeAWSRealtimeStream()
 	second := newFakeAWSRealtimeStream()
@@ -852,6 +871,20 @@ func TestAWSRealtimeSessionUpdateChatContextIgnoresReferenceBlankUserText(t *tes
 	if len(stream.sent) != sentCount {
 		t.Fatalf("UpdateChatContext blank user sent %d events, want none", len(stream.sent)-sentCount)
 	}
+
+	ctx = llm.NewChatContext()
+	ctx.Append(&llm.ChatMessage{
+		ID:      "blank-user",
+		Role:    llm.ChatRoleUser,
+		Content: []llm.ChatContent{{Text: "now has text"}},
+	})
+	if err := session.UpdateChatContext(ctx); err != nil {
+		t.Fatalf("UpdateChatContext rewritten blank user error = %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if len(stream.sent) != sentCount {
+		t.Fatalf("UpdateChatContext rewritten blank user sent %d events, want none after reference sent-id mark", len(stream.sent)-sentCount)
+	}
 }
 
 func TestAWSRealtimeSessionStripsReferenceLeadingAssistantOnInitialChatContext(t *testing.T) {
@@ -927,6 +960,54 @@ func TestAWSRealtimeSessionPushAudioNormalizesReferenceInputFormat(t *testing.T)
 	}
 	if got := int16(binary.LittleEndian.Uint16(decoded)); got != 20 {
 		t.Fatalf("normalized sample = %d, want first downmixed 16k mono sample 20", got)
+	}
+}
+
+func TestAWSRealtimeSessionPushAudioDropsInvalidReferenceFrames(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
+	invalidFrames := []*model.AudioFrame{
+		{Data: []byte{1, 2}, SampleRate: 0, NumChannels: 1, SamplesPerChannel: 1},
+		{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 0, SamplesPerChannel: 1},
+		{Data: []byte{1}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 1},
+		{Data: []byte{1, 2}, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2},
+	}
+	for i, frame := range invalidFrames {
+		if err := session.PushAudio(frame); err != nil {
+			t.Fatalf("PushAudio invalid frame %d error = %v, want nil dropped frame", i, err)
+		}
+	}
+	sent = stream.snapshotSent()
+	if got := countAWSRealtimeAudioInputs(t, sent[sentCount:]); got != 0 {
+		t.Fatalf("audioInput events after invalid frames = %d, want none", got)
+	}
+
+	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 512))); err != nil {
+		t.Fatalf("PushAudio valid frame error = %v", err)
+	}
+	audioInputs := waitAWSRealtimeAudioInputPayloads(t, stream, sentCount, 1)
+	if len(audioInputs) != 1 {
+		t.Fatalf("audioInput events after valid frame = %d, want one", len(audioInputs))
+	}
+	decoded, err := base64.StdEncoding.DecodeString(audioInputs[0])
+	if err != nil {
+		t.Fatalf("audioInput base64 decode error = %v", err)
+	}
+	if got, want := len(decoded), 512*2; got != want {
+		t.Fatalf("audioInput bytes = %d, want valid chunk %d", got, want)
+	}
+	for i, b := range decoded {
+		if b != 0 {
+			t.Fatalf("audioInput byte %d = %d, want invalid frames dropped before zero valid audio", i, b)
+		}
 	}
 }
 
@@ -3041,6 +3122,46 @@ func TestAWSRealtimeSessionPreservesReferenceBareUserTextHistory(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeSessionDefaultsReferenceUntrackedTextOutputToUser(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModel("", WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	awsSession := session.(*awsRealtimeSession)
+
+	stream.emitJSON(`{"event":{"textOutput":{"role":"ASSISTANT","content":"untracked transcript","contentId":"untracked-text"}}}`)
+
+	var chatCtx *llm.ChatContext
+	deadline := time.After(time.Second)
+	for {
+		awsSession.mu.Lock()
+		chatCtx = awsSession.chatCtx
+		awsSession.mu.Unlock()
+		if chatCtx != nil && len(chatCtx.Items) > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("chatCtx items = %#v, want untracked text treated as provider USER ASR", chatCtx)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if chatCtx == nil || len(chatCtx.Items) != 1 {
+		t.Fatalf("chatCtx items = %#v, want untracked text treated as provider USER ASR", chatCtx)
+	}
+	userMsg, ok := chatCtx.Items[0].(*llm.ChatMessage)
+	if !ok || userMsg.Role != llm.ChatRoleUser || userMsg.TextContent() != "untracked transcript" {
+		t.Fatalf("user history = %#v, want reference default USER text", chatCtx.Items[0])
+	}
+	if !awsSession.isAudioTranscriptMessage(userMsg.ID) {
+		t.Fatalf("untracked text message id %q not marked as provider audio transcript", userMsg.ID)
+	}
+	assertNoAWSRealtimeEventType(t, session.EventCh(), llm.RealtimeEventTypeSpeechStarted)
+}
+
 func TestAWSRealtimeSessionIgnoresReferenceTextOutputMissingContentID(t *testing.T) {
 	session := newAWSRealtimeSession(NewAWSRealtimeModel(""), nil)
 	defer session.Close()
@@ -3786,6 +3907,56 @@ func TestAWSRealtimeSessionGenerateReplySendsReferenceInstructions(t *testing.T)
 	}
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, textEvents[1]), "event", "textInput", "content"); got != "ask for the card number" {
 		t.Fatalf("text input = %q, want instructions", got)
+	}
+	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, textEvents[2]), "event", "contentEnd", "contentName"); got == "" {
+		t.Fatal("contentEnd contentName empty")
+	}
+	stream.emitJSON(`{"event":{"completionStart":{"completionId":"completion-1"}}}`)
+	if err := <-done; err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+}
+
+func TestAWSRealtimeSessionGenerateReplySendsReferenceEmptyInstructions(t *testing.T) {
+	stream := newFakeAWSRealtimeStream()
+	provider := NewAWSRealtimeModelWithNovaSonic2(WithAWSRealtimeClient(&fakeAWSRealtimeClient{stream: stream}))
+	session, err := provider.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+	waitAWSRealtimeAudioContentStart(t, stream, 0)
+	sentCount := len(stream.snapshotSent())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.GenerateReply(llm.RealtimeGenerateReplyOptions{InstructionsSet: true})
+	}()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for len(stream.snapshotSent()) < sentCount+3 {
+		select {
+		case <-deadline:
+			t.Fatalf("sent events = %d, want reference empty instruction text triplet", len(stream.snapshotSent())-sentCount)
+		case <-ticker.C:
+		}
+	}
+
+	textEvents := stream.snapshotSent()[sentCount:]
+	if got := len(textEvents); got != 3 {
+		t.Fatalf("GenerateReply sent %d events, want reference empty instruction text triplet", got)
+	}
+	start := mustAWSRealtimeJSONEvent(t, textEvents[0])
+	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "TEXT" {
+		t.Fatalf("text contentStart type = %q, want TEXT", got)
+	}
+	if got := nestedMap(t, start, "event", "contentStart")["interactive"]; got != true {
+		t.Fatalf("interactive = %v, want true", got)
+	}
+	textInput := nestedMap(t, mustAWSRealtimeJSONEvent(t, textEvents[1]), "event", "textInput")
+	if got, ok := textInput["content"]; !ok || got != "" {
+		t.Fatalf("textInput content = %#v present=%v, want explicit empty string", got, ok)
 	}
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, textEvents[2]), "event", "contentEnd", "contentName"); got == "" {
 		t.Fatal("contentEnd contentName empty")
