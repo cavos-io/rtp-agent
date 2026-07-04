@@ -694,7 +694,8 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	}
 
 	frame := awsRealtimeTestMonoFrame(16000, make([]int16, 512))
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.PushAudio(frame); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
@@ -706,7 +707,8 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	if err := session.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	closeEvents := stream.sent[len(stream.sent)-3:]
+	sent = stream.snapshotSent()
+	closeEvents := sent[len(sent)-3:]
 	if got := awsRealtimeNestedString(mustAWSRealtimeJSONEvent(t, closeEvents[0]), "event", "contentEnd", "contentName"); got == "" {
 		t.Fatalf("contentEnd contentName empty")
 	}
@@ -716,7 +718,7 @@ func TestAWSRealtimeSessionPushAudioAndCloseSendReferenceEvents(t *testing.T) {
 	if _, ok := nestedMap(t, mustAWSRealtimeJSONEvent(t, closeEvents[2]), "event")["sessionEnd"].(map[string]any); !ok {
 		t.Fatalf("sessionEnd event = %s", closeEvents[2])
 	}
-	if !stream.closed {
+	if !stream.isClosed() {
 		t.Fatal("stream closed = false, want true")
 	}
 }
