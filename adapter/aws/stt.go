@@ -431,6 +431,8 @@ type awsSTTStream struct {
 	streamMu                 sync.Mutex
 	closed                   bool
 	closedCh                 chan struct{}
+	inputEnded               bool
+	inputEndedCh             chan struct{}
 	pushedSampleRate         uint32
 	speaking                 bool
 	timingMu                 sync.Mutex
@@ -530,6 +532,16 @@ func closeAWSSTTEventStream(stream awsSTTEventStream) {
 		},
 	})
 	_ = stream.Close()
+}
+
+func closeAWSSTTEventStreamInput(stream awsSTTEventStream) error {
+	if stream == nil {
+		return nil
+	}
+	if sdkStream, ok := stream.(*transcribestreaming.StartStreamTranscriptionEventStream); ok && sdkStream.Writer != nil {
+		return sdkStream.Writer.Close()
+	}
+	return stream.Close()
 }
 
 func (s *awsSTTStream) currentStream() awsSTTEventStream {
@@ -674,9 +686,13 @@ func (s *awsSTTStream) PushFrame(frame *model.AudioFrame) error {
 	s.streamMu.Lock()
 	stream := s.stream
 	closed := s.closed
-	if closed {
+	inputEnded := s.inputEnded
+	if closed || inputEnded {
 		s.streamMu.Unlock()
-		return io.ErrClosedPipe
+		if closed {
+			return io.ErrClosedPipe
+		}
+		return fmt.Errorf("stream input ended")
 	}
 	if frame != nil && frame.SampleRate != 0 {
 		if s.pushedSampleRate != 0 && s.pushedSampleRate != frame.SampleRate {
@@ -715,7 +731,7 @@ func (s *awsSTTStream) writeContext() (context.Context, context.CancelFunc) {
 	done := make(chan struct{})
 	go func() {
 		select {
-		case <-s.closedSignal():
+		case <-s.inputClosedSignal():
 			cancel()
 		case <-done:
 		}
@@ -730,16 +746,16 @@ func (s *awsSTTStream) Flush() error {
 	if s.isClosed() {
 		return io.ErrClosedPipe
 	}
+	if s.isInputEnded() {
+		return fmt.Errorf("stream input ended")
+	}
 	return nil
 }
 
-func (s *awsSTTStream) Close() error {
-	if s.provider != nil {
-		s.provider.unregisterStream(s)
-	}
-	stream, closed := s.closeStream()
-	if closed {
-		return nil
+func (s *awsSTTStream) EndInput() error {
+	stream, err := s.endInputStream()
+	if err != nil {
+		return err
 	}
 	if stream == nil {
 		return nil
@@ -749,6 +765,28 @@ func (s *awsSTTStream) Close() error {
 			AudioChunk: []byte{},
 		},
 	})
+	_ = closeAWSSTTEventStreamInput(stream)
+	return nil
+}
+
+func (s *awsSTTStream) Close() error {
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	stream, closed, inputAlreadyEnded := s.closeStream()
+	if closed {
+		return nil
+	}
+	if stream == nil {
+		return nil
+	}
+	if !inputAlreadyEnded {
+		_ = stream.Send(context.Background(), &types.AudioStreamMemberAudioEvent{
+			Value: types.AudioEvent{
+				AudioChunk: []byte{},
+			},
+		})
+	}
 	_ = stream.Close()
 	return nil
 }
@@ -762,24 +800,55 @@ func (s *awsSTTStream) sendSpeechEvent(event *stt.SpeechEvent) bool {
 	}
 }
 
-func (s *awsSTTStream) closeStream() (awsSTTEventStream, bool) {
+func (s *awsSTTStream) closeStream() (awsSTTEventStream, bool, bool) {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 	if s.closed {
-		return nil, true
+		return nil, true, s.inputEnded
 	}
+	wasInputEnded := s.inputEnded
 	s.closed = true
+	s.inputEnded = true
 	if s.closedCh == nil {
 		s.closedCh = make(chan struct{})
 	}
+	if s.inputEndedCh == nil {
+		s.inputEndedCh = make(chan struct{})
+	}
 	close(s.closedCh)
-	return s.stream, false
+	if !wasInputEnded {
+		close(s.inputEndedCh)
+	}
+	return s.stream, false, wasInputEnded
+}
+
+func (s *awsSTTStream) endInputStream() (awsSTTEventStream, error) {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.inputEnded {
+		return nil, fmt.Errorf("stream input ended")
+	}
+	if s.closed {
+		return nil, io.ErrClosedPipe
+	}
+	s.inputEnded = true
+	if s.inputEndedCh == nil {
+		s.inputEndedCh = make(chan struct{})
+	}
+	close(s.inputEndedCh)
+	return s.stream, nil
 }
 
 func (s *awsSTTStream) isClosed() bool {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 	return s.closed
+}
+
+func (s *awsSTTStream) isInputEnded() bool {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	return s.inputEnded
 }
 
 func (s *awsSTTStream) closedSignal() <-chan struct{} {
@@ -792,6 +861,18 @@ func (s *awsSTTStream) closedSignal() <-chan struct{} {
 		}
 	}
 	return s.closedCh
+}
+
+func (s *awsSTTStream) inputClosedSignal() <-chan struct{} {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.inputEndedCh == nil {
+		s.inputEndedCh = make(chan struct{})
+		if s.inputEnded || s.closed {
+			close(s.inputEndedCh)
+		}
+	}
+	return s.inputEndedCh
 }
 
 func (s *awsSTTStream) Next() (*stt.SpeechEvent, error) {
