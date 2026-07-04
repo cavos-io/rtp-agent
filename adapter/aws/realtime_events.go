@@ -94,9 +94,6 @@ func normalizeAWSRealtimePromptStartOptions(options awsRealtimePromptStartOption
 	if len(options.tools) > 0 && !options.temperatureSet {
 		options.temperature = 1.0
 	}
-	if options.endpointingSensitivity == "" {
-		options.endpointingSensitivity = defaultAWSRealtimeTurnDetection
-	}
 	return options
 }
 

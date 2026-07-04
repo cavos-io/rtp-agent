@@ -112,6 +112,24 @@ func TestAWSRealtimeEventBuilderPreservesReferenceEmptyVoice(t *testing.T) {
 	}
 }
 
+func TestAWSRealtimeEventBuilderPreservesReferenceEmptyEndpointing(t *testing.T) {
+	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
+
+	initEvents, _, err := builder.createPromptStartBlock(awsRealtimePromptStartOptions{
+		voiceID:                defaultAWSRealtimeVoice,
+		systemContent:          "system prompt",
+		endpointingSensitivity: "",
+	})
+	if err != nil {
+		t.Fatalf("createPromptStartBlock error = %v", err)
+	}
+
+	sessionStart := mustAWSRealtimeJSONEvent(t, initEvents[0])
+	if got := awsRealtimeNestedString(sessionStart, "event", "sessionStart", "endpointingSensitivity"); got != "" {
+		t.Fatalf("endpointingSensitivity = %q, want explicit empty reference turn detection", got)
+	}
+}
+
 func TestAWSRealtimeEventBuilderEmitsReferenceInteractiveFalse(t *testing.T) {
 	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
 
