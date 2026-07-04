@@ -4456,6 +4456,9 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 		streaming:  cfg.TTSStreaming,
 		ssml:       cfg.TTSEnableSSMLParsing,
 	}
+	if googleCfg.prompt == "" {
+		googleCfg.prompt = modelOptionString(cfg.TTSModelOptions, "prompt")
+	}
 	googleCfg.audioEncoding = googleTTSAudioEncodingFromConfig(cfg)
 	switch {
 	case strings.EqualFold(cfg.TTSTextType, "markup"):
