@@ -1422,10 +1422,11 @@ func TestAWSRealtimeSessionRestartsAfterReferenceModelTimeoutReadFailure(t *test
 	if event.Reconnect == nil {
 		t.Fatal("Reconnect = nil, want reference restart for model timeout")
 	}
-	if !first.closed {
+	if !first.isClosed() {
 		t.Fatal("first stream closed = false, want stale timeout stream closed")
 	}
-	if len(second.sent) == 0 {
+	secondSent := second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no startup events, want restarted Nova Sonic session")
 	}
 	assertNoAWSRealtimeEventType(t, awsSession.EventCh(), llm.RealtimeEventTypeError)
@@ -1449,10 +1450,11 @@ func TestAWSRealtimeSessionRecyclesIdleStreamAfterReferenceDuration(t *testing.T
 	if event.Reconnect == nil {
 		t.Fatal("Reconnect = nil, want reference session recycle notification")
 	}
-	if !first.closed {
+	if !first.isClosed() {
 		t.Fatal("first stream closed = false, want stale duration-limited stream closed")
 	}
-	if len(second.sent) == 0 {
+	secondSent := second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
 	}
 }
@@ -1482,7 +1484,7 @@ func TestAWSRealtimeSessionRecycleWaitsForReferenceTurnBoundary(t *testing.T) {
 		}
 	case <-time.After(50 * time.Millisecond):
 	}
-	if first.closed {
+	if first.isClosed() {
 		t.Fatal("first stream closed before AUDIO END_TURN")
 	}
 
@@ -1491,10 +1493,11 @@ func TestAWSRealtimeSessionRecycleWaitsForReferenceTurnBoundary(t *testing.T) {
 	if event.Reconnect == nil {
 		t.Fatal("Reconnect = nil, want reference session recycle after turn boundary")
 	}
-	if !first.closed {
+	if !first.isClosed() {
 		t.Fatal("first stream closed = false, want recycle after AUDIO END_TURN")
 	}
-	if len(second.sent) == 0 {
+	secondSent := second.snapshotSent()
+	if len(secondSent) == 0 {
 		t.Fatal("second stream sent no startup events, want recycled Nova Sonic session")
 	}
 }
