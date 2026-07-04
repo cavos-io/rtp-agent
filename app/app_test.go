@@ -15131,6 +15131,41 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeSessionResumptionOptions(t *te
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeConnectOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "connect_max_retry=1,connect_timeout_ms=1500,connect_retry_interval_ms=250")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.connectOptions == nil {
+		t.Fatal("connectOptions = nil, want reference connect options")
+	}
+	if capturedCfg.connectOptions.MaxRetry != 1 {
+		t.Fatalf("MaxRetry = %d, want 1", capturedCfg.connectOptions.MaxRetry)
+	}
+	if capturedCfg.connectOptions.Timeout != 1500*time.Millisecond {
+		t.Fatalf("Timeout = %v, want 1500ms", capturedCfg.connectOptions.Timeout)
+	}
+	if capturedCfg.connectOptions.RetryInterval != 250*time.Millisecond {
+		t.Fatalf("RetryInterval = %v, want 250ms", capturedCfg.connectOptions.RetryInterval)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")

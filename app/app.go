@@ -178,6 +178,7 @@ type appGoogleRealtimeConfig struct {
 	thinkingConfig           *genai.ThinkingConfig
 	mediaResolution          genai.MediaResolution
 	sessionResumptionHandle  string
+	connectOptions           *llm.APIConnectOptions
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -244,6 +245,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.sessionResumptionHandle != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeSessionResumptionHandle(c.sessionResumptionHandle))
+	}
+	if c.connectOptions != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeConnectOptions(*c.connectOptions))
 	}
 	return opts
 }
@@ -7151,7 +7155,29 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 	googleCfg.thinkingConfig = googleRealtimeThinkingConfigFromOptions(cfg.RealtimeModelOptions)
 	googleCfg.mediaResolution = genai.MediaResolution(modelOptionString(cfg.RealtimeModelOptions, "media_resolution"))
 	googleCfg.sessionResumptionHandle = modelOptionString(cfg.RealtimeModelOptions, "session_resumption_handle")
+	googleCfg.connectOptions = googleRealtimeConnectOptionsFromOptions(cfg.RealtimeModelOptions)
 	return googleCfg
+}
+
+func googleRealtimeConnectOptionsFromOptions(options map[string]any) *llm.APIConnectOptions {
+	connectOptions := llm.DefaultAPIConnectOptions()
+	configured := false
+	if maxRetry, ok := modelOptionIntValue(options, "connect_max_retry"); ok {
+		connectOptions.MaxRetry = maxRetry
+		configured = true
+	}
+	if timeoutMS, ok := modelOptionIntValue(options, "connect_timeout_ms"); ok {
+		connectOptions.Timeout = time.Duration(timeoutMS) * time.Millisecond
+		configured = true
+	}
+	if retryIntervalMS, ok := modelOptionIntValue(options, "connect_retry_interval_ms"); ok {
+		connectOptions.RetryInterval = time.Duration(retryIntervalMS) * time.Millisecond
+		configured = true
+	}
+	if !configured {
+		return nil
+	}
+	return &connectOptions
 }
 
 func googleRealtimeContextWindowCompressionFromOptions(options map[string]any) *genai.ContextWindowCompressionConfig {
