@@ -1230,7 +1230,7 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	}
 	if contentEnd := awsRealtimeNestedMap(payload, "event", "contentEnd"); contentEnd != nil &&
 		awsRealtimeMapString(contentEnd, "stopReason") == "END_TURN" &&
-		(awsRealtimeMapString(contentEnd, "type") == "AUDIO" || awsRealtimeMapString(contentEnd, "type") == "") {
+		awsRealtimeMapString(contentEnd, "type") == "AUDIO" {
 		s.markAudioEndTurnReceived()
 		s.closeGeneration()
 	}
