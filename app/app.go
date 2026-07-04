@@ -4459,6 +4459,9 @@ func googleTTSConfigFromAppConfig(cfg AppConfig) appGoogleTTSConfig {
 	if googleCfg.voice == "" {
 		googleCfg.voice = modelOptionString(cfg.TTSModelOptions, "voice_name")
 	}
+	if googleCfg.language == "" {
+		googleCfg.language = modelOptionString(cfg.TTSModelOptions, "language")
+	}
 	if googleCfg.cloneKey == "" {
 		googleCfg.cloneKey = modelOptionString(cfg.TTSModelOptions, "voice_cloning_key")
 	}

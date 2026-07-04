@@ -13589,6 +13589,16 @@ func TestGoogleTTSConfigFromAppConfigMapsReferencePromptOption(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSConfigFromAppConfigMapsReferenceLanguageOption(t *testing.T) {
+	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
+		TTSModelOptions: map[string]any{"language": "id-ID"},
+	})
+
+	if googleCfg.language != "id-ID" {
+		t.Fatalf("language = %q, want model option language", googleCfg.language)
+	}
+}
+
 func TestGoogleTTSConfigFromAppConfigMapsReferenceSpeakingRateOption(t *testing.T) {
 	googleCfg := googleTTSConfigFromAppConfig(AppConfig{
 		TTSModelOptions: map[string]any{"speaking_rate": 0.92},
