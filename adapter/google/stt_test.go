@@ -147,6 +147,14 @@ func TestGoogleSTTLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTEmptyLocationOptionMatchesReferenceEndpoint(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation(""))
+
+	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
+	}
+}
+
 func TestGoogleSTTClientOptionsUseCurrentReferenceLocation(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTLocation("europe-west1"))
 	options, err := googleSTTClientOptions("", provider)
@@ -172,8 +180,8 @@ func TestGoogleSTTUpdateOptionsPreservesExplicitEmptyLocation(t *testing.T) {
 
 	provider.UpdateOptions(WithGoogleSTTLocation(""))
 
-	if got := googleSTTEndpoint(provider); got != "" {
-		t.Fatalf("endpoint = %q, want empty default endpoint after explicit empty location", got)
+	if got := googleSTTEndpoint(provider); got != "-speech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
 	}
 }
 
@@ -228,19 +236,25 @@ func TestGoogleSTTStreamingCapabilityMatchesReferenceOption(t *testing.T) {
 	if capabilities.Streaming {
 		t.Fatal("Streaming capability = true, want false from reference use_streaming option")
 	}
-	if capabilities.InterimResults {
-		t.Fatal("InterimResults capability = true, want false when streaming disabled")
+	if !capabilities.InterimResults {
+		t.Fatal("InterimResults capability = false, want true like reference even when streaming disabled")
 	}
 	if capabilities.AlignedTranscript != "" {
 		t.Fatalf("AlignedTranscript = %q, want empty when streaming disabled", capabilities.AlignedTranscript)
+	}
+	if !capabilities.OfflineRecognize {
+		t.Fatal("OfflineRecognize capability = false, want true like reference")
 	}
 }
 
 func TestGoogleSTTInterimCapabilityMatchesReferenceOption(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTInterimResults(false))
 
-	if provider.Capabilities().InterimResults {
-		t.Fatal("InterimResults capability = true, want false from reference interim_results option")
+	if provider.interimResults {
+		t.Fatal("interimResults option = true, want request option still disabled")
+	}
+	if !provider.Capabilities().InterimResults {
+		t.Fatal("InterimResults capability = false, want true like reference despite interim_results option")
 	}
 }
 
@@ -360,6 +374,53 @@ func TestGoogleStreamingRecognitionConfigV2UsesReferenceKeywordAdaptation(t *tes
 	}
 }
 
+func TestGoogleSTTPreservesReferenceEmptyKeywordAdaptation(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTKeywords(
+			GoogleSTTKeyword{Value: "", Boost: 4.5},
+			GoogleSTTKeyword{Value: "Cavos", Boost: 12.5},
+		),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if config.Adaptation == nil || len(config.Adaptation.PhraseSets) != 1 {
+		t.Fatalf("adaptation = %#v, want one phrase set", config.Adaptation)
+	}
+	phrases := config.Adaptation.PhraseSets[0].Phrases
+	if len(phrases) != 2 {
+		t.Fatalf("phrases = %#v, want empty keyword phrase preserved", phrases)
+	}
+	if got := phrases[0]; got.Value != "" || got.Boost != 4.5 {
+		t.Fatalf("first phrase = %#v, want empty value boost 4.5", got)
+	}
+	if got := phrases[1]; got.Value != "Cavos" || got.Boost != 12.5 {
+		t.Fatalf("second phrase = %#v, want Cavos boost 12.5", got)
+	}
+
+	v2Provider := newGoogleSTTWithV2Client(nil,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTKeywords(
+			GoogleSTTKeyword{Value: "", Boost: 4.5},
+			GoogleSTTKeyword{Value: "Cavos", Boost: 12.5},
+		),
+	)
+
+	v2Config := googleStreamingRecognitionConfigV2(v2Provider, "en-US", true)
+	v2PhraseSet := v2Config.GetConfig().GetAdaptation().GetPhraseSets()[0].GetInlinePhraseSet()
+	v2Phrases := v2PhraseSet.GetPhrases()
+	if len(v2Phrases) != 2 {
+		t.Fatalf("v2 phrases = %#v, want empty keyword phrase preserved", v2Phrases)
+	}
+	if got := v2Phrases[0]; got.GetValue() != "" || got.GetBoost() != 4.5 {
+		t.Fatalf("first v2 phrase = %#v, want empty value boost 4.5", got)
+	}
+	if got := v2Phrases[1]; got.GetValue() != "Cavos" || got.GetBoost() != 12.5 {
+		t.Fatalf("second v2 phrase = %#v, want Cavos boost 12.5", got)
+	}
+}
+
 func TestGoogleStreamingRecognitionConfigV2UsesReferenceCustomAdaptationOverKeywords(t *testing.T) {
 	adaptation := &speechv2pb.SpeechAdaptation{
 		PhraseSets: []*speechv2pb.SpeechAdaptation_AdaptationPhraseSet{{
@@ -452,6 +513,29 @@ func TestGoogleRecognitionConfigUsesReferenceAlternativeLanguages(t *testing.T) 
 	}
 }
 
+func TestGoogleRecognitionConfigPreservesReferenceEmptyAlternativeLanguage(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTAlternativeLanguages("", "fr-FR"),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if got := config.AlternativeLanguageCodes; len(got) != 2 || got[0] != "" || got[1] != "fr-FR" {
+		t.Fatalf("alternative languages = %#v, want [\"\" fr-FR]", got)
+	}
+
+	v2Provider := newGoogleSTTWithV2Client(nil,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTAlternativeLanguages("", "fr-FR"),
+	)
+
+	v2Config := googleStreamingRecognitionConfigV2(v2Provider, "en-US", true)
+	if got := v2Config.GetConfig().GetLanguageCodes(); len(got) != 3 || got[0] != "en-US" || got[1] != "" || got[2] != "fr-FR" {
+		t.Fatalf("v2 language codes = %#v, want [en-US \"\" fr-FR]", got)
+	}
+}
+
 func TestGoogleRecognitionConfigOmitsAlternativeLanguagesWhenDetectionDisabled(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil,
 		WithGoogleSTTDetectLanguage(false),
@@ -532,6 +616,17 @@ func TestGoogleSTTExposesInputSampleRate(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil, WithGoogleSTTSampleRate(16000))
 	if got := provider.InputSampleRate(); got != 16000 {
 		t.Fatalf("InputSampleRate = %d, want 16000", got)
+	}
+}
+
+func TestGoogleSTTPreservesReferenceExplicitZeroSampleRate(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil, WithGoogleSTTSampleRate(0))
+	if got := provider.InputSampleRate(); got != 0 {
+		t.Fatalf("InputSampleRate = %d, want explicit zero", got)
+	}
+	config := googleRecognitionConfig(provider, "en-US")
+	if got := config.GetSampleRateHertz(); got != 0 {
+		t.Fatalf("stream sample rate = %d, want explicit zero", got)
 	}
 }
 
@@ -1008,6 +1103,34 @@ func TestGoogleSTTStreamResamplesPushedAudioLikeReference(t *testing.T) {
 	}
 	if got, want := streamClient.sent[1].GetAudioContent(), []byte{1, 0, 4, 0}; !bytes.Equal(got, want) {
 		t.Fatalf("audio content = %#v, want 48k->16k reference resampled PCM %#v", got, want)
+	}
+}
+
+func TestGoogleSTTStreamDownmixesStereoInputLikeReference(t *testing.T) {
+	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
+
+	stream, err := provider.Stream(context.Background(), "en-US")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+
+	frame := &model.AudioFrame{
+		Data:              []byte{232, 3, 184, 11, 208, 7, 160, 15},
+		SampleRate:        16000,
+		NumChannels:       2,
+		SamplesPerChannel: 2,
+	}
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
+	}
+
+	if len(streamClient.sent) != 2 {
+		t.Fatalf("sent requests = %d, want config plus downmixed audio", len(streamClient.sent))
+	}
+	if got, want := streamClient.sent[1].GetAudioContent(), []byte{208, 7, 184, 11}; !bytes.Equal(got, want) {
+		t.Fatalf("audio content = %#v, want mono averaged PCM %#v", got, want)
 	}
 }
 

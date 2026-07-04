@@ -3,6 +3,7 @@ package google
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"strconv"
@@ -172,9 +173,7 @@ func WithGoogleSTTWordTimeOffsets(enabled bool) GoogleSTTOption {
 
 func WithGoogleSTTSampleRate(sampleRate int32) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		if sampleRate > 0 {
-			s.sampleRate = sampleRate
-		}
+		s.sampleRate = sampleRate
 	}
 }
 
@@ -186,13 +185,7 @@ func WithGoogleSTTMinConfidenceThreshold(threshold float64) GoogleSTTOption {
 
 func WithGoogleSTTKeywords(keywords ...GoogleSTTKeyword) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		s.keywords = nil
-		for _, keyword := range keywords {
-			if keyword.Value == "" {
-				continue
-			}
-			s.keywords = append(s.keywords, keyword)
-		}
+		s.keywords = append([]GoogleSTTKeyword(nil), keywords...)
 	}
 }
 
@@ -218,13 +211,7 @@ func WithGoogleSTTDenoiserConfig(config *speechv2pb.DenoiserConfig) GoogleSTTOpt
 
 func WithGoogleSTTAlternativeLanguages(languages ...string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		s.alternativeLanguages = nil
-		for _, language := range languages {
-			if language == "" {
-				continue
-			}
-			s.alternativeLanguages = append(s.alternativeLanguages, language)
-		}
+		s.alternativeLanguages = append([]string(nil), languages...)
 	}
 }
 
@@ -336,7 +323,7 @@ func newGoogleSTTWithV2Client(client googleSpeechV2Client, opts ...GoogleSTTOpti
 }
 
 func googleSTTEndpoint(s *GoogleSTT) string {
-	if s.location == "" || s.location == "global" {
+	if s.location == "global" {
 		return ""
 	}
 	return s.location + "-speech.googleapis.com"
@@ -349,7 +336,7 @@ func (s *GoogleSTT) Capabilities() stt.STTCapabilities {
 	if s.streaming && googleEnableWordTimeOffsets(s) {
 		alignedTranscript = "word"
 	}
-	return stt.STTCapabilities{Streaming: s.streaming, InterimResults: s.streaming && s.interimResults, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
+	return stt.STTCapabilities{Streaming: s.streaming, InterimResults: true, Diarization: false, AlignedTranscript: alignedTranscript, OfflineRecognize: true}
 }
 
 func (s *GoogleSTT) UpdateOptions(opts ...GoogleSTTOption) error {
@@ -948,9 +935,6 @@ func googleSpeechAdaptation(s *GoogleSTT) *speechpb.SpeechAdaptation {
 	}
 	phrases := make([]*speechpb.PhraseSet_Phrase, 0, len(s.keywords))
 	for _, keyword := range s.keywords {
-		if keyword.Value == "" {
-			continue
-		}
 		phrases = append(phrases, &speechpb.PhraseSet_Phrase{
 			Value: keyword.Value,
 			Boost: keyword.Boost,
@@ -979,9 +963,6 @@ func googleSpeechAdaptationV2(s *GoogleSTT) *speechv2pb.SpeechAdaptation {
 	}
 	phrases := make([]*speechv2pb.PhraseSet_Phrase, 0, len(s.keywords))
 	for _, keyword := range s.keywords {
-		if keyword.Value == "" {
-			continue
-		}
 		phrases = append(phrases, &speechv2pb.PhraseSet_Phrase{
 			Value: keyword.Value,
 			Boost: keyword.Boost,
@@ -1293,6 +1274,55 @@ func (n *googleSTTInputAudioNormalizer) reset() {
 	n.targetRate = 0
 	n.remainder = 0
 	n.lastSample = nil
+}
+
+func googleSTTMonoAudioFrame(frame *model.AudioFrame) (*model.AudioFrame, error) {
+	if frame == nil || frame.NumChannels <= 1 {
+		return frame, nil
+	}
+	if len(frame.Data)%2 != 0 {
+		return nil, errors.New("cannot downmix non-16-bit PCM audio")
+	}
+	samplesPerChannel := frame.SamplesPerChannel
+	if samplesPerChannel == 0 && len(frame.Data) != 0 {
+		bytesPerSampleSet := int(frame.NumChannels * 2)
+		if len(frame.Data)%bytesPerSampleSet != 0 {
+			return nil, errors.New("audio frame data is not aligned to declared channels")
+		}
+		samplesPerChannel = uint32(len(frame.Data) / bytesPerSampleSet)
+	}
+	expectedBytes := int(samplesPerChannel * frame.NumChannels * 2)
+	if len(frame.Data) < expectedBytes {
+		return nil, errors.New("audio frame data is shorter than declared sample count")
+	}
+	if samplesPerChannel == 0 {
+		return &model.AudioFrame{
+			SampleRate:        frame.SampleRate,
+			NumChannels:       1,
+			SamplesPerChannel: 0,
+			ParticipantID:     frame.ParticipantID,
+		}, nil
+	}
+
+	channelCount := int(frame.NumChannels)
+	out := make([]byte, int(samplesPerChannel*2))
+	for sample := 0; sample < int(samplesPerChannel); sample++ {
+		var sum int32
+		for ch := 0; ch < channelCount; ch++ {
+			offset := (sample*channelCount + ch) * 2
+			sum += int32(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
+		}
+		avg := int16(sum / int32(channelCount))
+		binary.LittleEndian.PutUint16(out[sample*2:], uint16(avg))
+	}
+
+	return &model.AudioFrame{
+		Data:              out,
+		SampleRate:        frame.SampleRate,
+		NumChannels:       1,
+		SamplesPerChannel: samplesPerChannel,
+		ParticipantID:     frame.ParticipantID,
+	}, nil
 }
 
 func (s *googleSTTStream) readLoop() {
@@ -2030,6 +2060,12 @@ func (s *googleSTTStream) PushFrame(frame *model.AudioFrame) error {
 		}
 		frame = normalized
 	}
+	mono, err := googleSTTMonoAudioFrame(frame)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	frame = mono
 	s.mu.Unlock()
 	return s.sendAudioFrame(frame)
 }
@@ -2112,8 +2148,13 @@ func (s *googleSTTStream) Flush() error {
 		return io.ErrClosedPipe
 	}
 	if tail := s.inputAudio.flush(); tail != nil {
+		mono, err := googleSTTMonoAudioFrame(tail)
+		if err != nil {
+			s.mu.Unlock()
+			return err
+		}
 		s.mu.Unlock()
-		return s.sendAudioFrame(tail)
+		return s.sendAudioFrame(mono)
 	}
 	s.mu.Unlock()
 	return nil

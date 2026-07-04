@@ -532,18 +532,13 @@ func TestGoogleTTSStreamErrorsWhenReferenceTextProducesNoAudio(t *testing.T) {
 	}
 }
 
-func TestGoogleTTSStreamSynthesizesSecondSegmentLikeReference(t *testing.T) {
+func TestGoogleTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	firstStream := &fakeGoogleTTSStream{
 		responses: []*texttospeech.StreamingSynthesizeResponse{{
 			AudioContent: []byte{1, 2, 3, 4},
 		}},
 	}
-	secondStream := &fakeGoogleTTSStream{
-		responses: []*texttospeech.StreamingSynthesizeResponse{{
-			AudioContent: []byte{5, 6, 7, 8},
-		}},
-	}
-	client := &fakeGoogleTTSClient{streams: []*fakeGoogleTTSStream{firstStream, secondStream}}
+	client := &fakeGoogleTTSClient{streams: []*fakeGoogleTTSStream{firstStream}}
 	provider := newGoogleTTSWithClient(client)
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
@@ -573,6 +568,16 @@ func TestGoogleTTSStreamSynthesizesSecondSegmentLikeReference(t *testing.T) {
 	if client.streamCalls != 1 || len(firstStream.sent) != 2 {
 		t.Fatalf("first segment calls = %d sent=%d, want one stream with config and input", client.streamCalls, len(firstStream.sent))
 	}
+	if firstStream.sent[0].GetStreamingConfig() == nil {
+		t.Fatal("first request missing streaming config")
+	}
+	firstInput := firstStream.sent[1].GetInput()
+	if firstInput == nil {
+		t.Fatal("first input request missing input")
+	}
+	if got := firstInput.GetText(); got != "first" {
+		t.Fatalf("first input text = %q, want first", got)
+	}
 
 	if err := stream.PushText("second"); err != nil {
 		t.Fatalf("PushText second returned error: %v", err)
@@ -580,41 +585,48 @@ func TestGoogleTTSStreamSynthesizesSecondSegmentLikeReference(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush second returned error: %v", err)
 	}
-	if client.streamCalls != 2 {
-		t.Fatalf("stream calls after second segment = %d, want second provider segment", client.streamCalls)
+	if client.streamCalls != 1 {
+		t.Fatalf("stream calls after ignored second segment = %d, want still one", client.streamCalls)
 	}
-	if len(secondStream.sent) != 2 {
-		t.Fatalf("second stream sent requests = %d, want config and input", len(secondStream.sent))
+	if len(firstStream.sent) != 2 {
+		t.Fatalf("first stream sent requests after ignored second segment = %d, want still config and first input only", len(firstStream.sent))
 	}
-	if !secondStream.closed {
-		t.Fatal("second stream closed = false after second Flush")
+	if got := firstStream.sent[1].GetInput().GetText(); got != "first" {
+		t.Fatalf("first stream text after ignored second segment = %q, want first", got)
 	}
-	secondAudio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("second Next audio error = %v", err)
-	}
-	if secondAudio == nil || secondAudio.Frame == nil || !bytes.Equal(secondAudio.Frame.Data, []byte{5, 6, 7, 8}) {
-		t.Fatalf("second Next audio = %+v, want second segment audio", secondAudio)
-	}
-	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
-		t.Fatalf("second final = (%+v, %v), want final marker", final, err)
+	if !firstStream.closed {
+		t.Fatal("first stream closed = false after ignored second segment")
 	}
 	googleStream := stream.(*googleTTSSynthesizeStream)
 	googleStream.mu.Lock()
 	buffered := googleStream.buffer.String()
 	flushed := googleStream.flushed
+	active := googleStream.active
+	streams := len(googleStream.streams)
 	googleStream.mu.Unlock()
 	if buffered != "" {
 		t.Fatalf("buffer after second segment = %q, want empty", buffered)
 	}
-	if flushed != 2 {
-		t.Fatalf("flush count after second segment = %d, want two provider segments", flushed)
+	if flushed != 1 {
+		t.Fatalf("flush count after ignored second segment = %d, want one provider segment", flushed)
+	}
+	if active != nil {
+		t.Fatal("active stream after ignored second segment = non-nil, want nil")
+	}
+	if streams != 0 {
+		t.Fatalf("queued streams after ignored second segment = %d, want none", streams)
 	}
 	if err := googleStream.EndInput(); err != nil {
 		t.Fatalf("EndInput after second segment returned error: %v", err)
 	}
-	if client.streamCalls != 2 {
-		t.Fatalf("stream calls after EndInput = %d, want still two", client.streamCalls)
+	if client.streamCalls != 1 {
+		t.Fatalf("stream calls after EndInput = %d, want still one", client.streamCalls)
+	}
+	if len(firstStream.sent) != 2 {
+		t.Fatalf("first stream sent requests after EndInput = %d, want unchanged", len(firstStream.sent))
+	}
+	if audio, err := stream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after ignored second segment = (%+v, %v), want nil EOF", audio, err)
 	}
 }
 
@@ -704,6 +716,69 @@ func TestGoogleTTSUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestGoogleTTSPreservesReferenceExplicitZeroSampleRate(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6, 7, 8}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSampleRate(0))
+
+	if got := provider.SampleRate(); got != 0 {
+		t.Fatalf("SampleRate = %d, want explicit zero", got)
+	}
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetSampleRateHertz(); got != 0 {
+		t.Fatalf("synthesize sample rate = %d, want explicit zero", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetSampleRateHertz(); got != 0 {
+		t.Fatalf("stream config sample rate = %d, want explicit zero", got)
+	}
+}
+
+func TestGoogleTTSChunkedFramePreservesReferenceExplicitZeroSampleRate(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSSampleRate(0))
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+
+	audio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next audio = %+v, want PCM frame", audio)
+	}
+	if got := audio.Frame.SampleRate; got != 0 {
+		t.Fatalf("chunked frame sample rate = %d, want explicit zero", got)
+	}
+}
+
 func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -755,6 +830,42 @@ func TestGoogleTTSUsesReferenceAudioEncoding(t *testing.T) {
 	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
 	if got := config.GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
 		t.Fatalf("stream audio encoding = %v, want reference PCM fallback for MP3", got)
+	}
+}
+
+func TestGoogleTTSPreservesReferenceUnspecifiedAudioEncoding(t *testing.T) {
+	client := &fakeGoogleTTSClient{
+		response: &texttospeech.SynthesizeSpeechResponse{AudioContent: []byte{1, 2, 3, 4}},
+		stream: &fakeGoogleTTSStream{
+			responses: []*texttospeech.StreamingSynthesizeResponse{{AudioContent: []byte{5, 6, 7, 8}}},
+		},
+	}
+	provider := newGoogleTTSWithClient(client, WithGoogleTTSAudioEncoding(texttospeech.AudioEncoding_AUDIO_ENCODING_UNSPECIFIED))
+
+	chunked, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer chunked.Close()
+	req := requireGoogleTTSSynthesizeRequest(t, chunked, client)
+	if got := req.GetAudioConfig().GetAudioEncoding(); got != texttospeech.AudioEncoding_AUDIO_ENCODING_UNSPECIFIED {
+		t.Fatalf("synthesize audio encoding = %v, want explicit unspecified", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText returned error: %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush returned error: %v", err)
+	}
+	config := client.stream.sent[0].GetStreamingConfig().GetStreamingAudioConfig()
+	if got := config.GetAudioEncoding(); got != texttospeech.AudioEncoding_PCM {
+		t.Fatalf("stream audio encoding = %v, want reference PCM fallback for unspecified", got)
 	}
 }
 
@@ -1034,6 +1145,14 @@ func TestGoogleTTSLocationOptionMatchesReferenceEndpoint(t *testing.T) {
 
 	if got := googleTTSEndpoint(cfg); got != "europe-west1-texttospeech.googleapis.com" {
 		t.Fatalf("endpoint = %q, want europe-west1-texttospeech.googleapis.com", got)
+	}
+}
+
+func TestGoogleTTSEmptyLocationOptionMatchesReferenceEndpoint(t *testing.T) {
+	cfg := googleTTSConfigFromOptions(WithGoogleTTSLocation(""))
+
+	if got := googleTTSEndpoint(cfg); got != "-texttospeech.googleapis.com" {
+		t.Fatalf("endpoint = %q, want reference explicit empty location endpoint", got)
 	}
 }
 

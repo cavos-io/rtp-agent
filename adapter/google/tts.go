@@ -89,10 +89,8 @@ func WithGoogleTTSLanguage(language string) GoogleTTSOption {
 
 func WithGoogleTTSLocation(location string) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if location != "" {
-			cfg.location = location
-			cfg.locationSet = true
-		}
+		cfg.location = location
+		cfg.locationSet = true
 	}
 }
 
@@ -163,19 +161,15 @@ func WithGoogleTTSVolumeGainDB(volumeGainDB float64) GoogleTTSOption {
 
 func WithGoogleTTSSampleRate(sampleRate int32) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if sampleRate > 0 {
-			cfg.sampleRate = sampleRate
-			cfg.sampleSet = true
-		}
+		cfg.sampleRate = sampleRate
+		cfg.sampleSet = true
 	}
 }
 
 func WithGoogleTTSAudioEncoding(encoding texttospeechpb.AudioEncoding) GoogleTTSOption {
 	return func(cfg *googleTTSConfig) {
-		if encoding != texttospeechpb.AudioEncoding_AUDIO_ENCODING_UNSPECIFIED {
-			cfg.encoding = encoding
-			cfg.encodingSet = true
-		}
+		cfg.encoding = encoding
+		cfg.encodingSet = true
 	}
 }
 
@@ -270,7 +264,7 @@ func validateGoogleTTSConfig(cfg googleTTSConfig) error {
 }
 
 func googleTTSEndpoint(cfg googleTTSConfig) string {
-	if cfg.location == "" || cfg.location == "global" {
+	if cfg.location == "global" || (cfg.location == "" && !cfg.locationSet) {
 		return ""
 	}
 	return cfg.location + "-texttospeech.googleapis.com"
@@ -567,11 +561,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	if frameData := googleTTSPopPCMFrame(&s.pcmFrames); frameData != nil {
 		s.emittedAudio = true
-		sampleRate := s.sampleRate
-		if sampleRate == 0 {
-			sampleRate = 24000
-		}
-		return &tts.SynthesizedAudio{Frame: googleTTSRawPCMFrame(frameData, sampleRate)}, nil
+		return &tts.SynthesizedAudio{Frame: googleTTSRawPCMFrame(frameData, s.sampleRate)}, nil
 	}
 
 	if !s.pcmFlushed {
@@ -581,11 +571,7 @@ func (s *googleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			frameData := bytes.Clone(s.pcmBuffer[:completeLen])
 			s.pcmBuffer = nil
 			s.emittedAudio = true
-			sampleRate := s.sampleRate
-			if sampleRate == 0 {
-				sampleRate = 24000
-			}
-			return &tts.SynthesizedAudio{Frame: googleTTSRawPCMFrame(frameData, sampleRate)}, nil
+			return &tts.SynthesizedAudio{Frame: googleTTSRawPCMFrame(frameData, s.sampleRate)}, nil
 		}
 		s.pcmBuffer = nil
 	}
@@ -757,6 +743,10 @@ func (s *googleTTSSynthesizeStream) PushText(text string) error {
 		return io.ErrClosedPipe
 	}
 	if s.inputEnded {
+		s.mu.Unlock()
+		return nil
+	}
+	if s.flushed >= 1 && s.active == nil {
 		s.mu.Unlock()
 		return nil
 	}

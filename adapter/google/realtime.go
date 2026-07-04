@@ -49,6 +49,7 @@ type RealtimeModel struct {
 	mu                        sync.Mutex
 	apiKey                    string
 	instructions              string
+	instructionsSet           bool
 	model                     string
 	voice                     string
 	language                  string
@@ -99,6 +100,7 @@ type googleRealtimeOptions struct {
 	model                     string
 	modelSet                  bool
 	instructions              string
+	instructionsSet           bool
 	voice                     string
 	voiceSet                  bool
 	language                  string
@@ -108,6 +110,7 @@ type googleRealtimeOptions struct {
 	location                  string
 	locationSet               bool
 	modalities                []string
+	modalitiesSet             bool
 	turnDetection             *bool
 	inputAudioTranscription   *bool
 	outputAudioTranscription  *bool
@@ -166,6 +169,7 @@ func WithGoogleRealtimeModel(model string) GoogleRealtimeOption {
 func WithGoogleRealtimeInstructions(instructions string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.instructions = instructions
+		options.instructionsSet = true
 	}
 }
 
@@ -205,6 +209,7 @@ func WithGoogleRealtimeLocation(location string) GoogleRealtimeOption {
 func WithGoogleRealtimeModalities(modalities []string) GoogleRealtimeOption {
 	return func(options *googleRealtimeOptions) {
 		options.modalities = append([]string(nil), modalities...)
+		options.modalitiesSet = true
 	}
 }
 
@@ -408,7 +413,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 		voice = defaultGoogleRealtimeVoice
 	}
 	modalities := options.modalities
-	if len(modalities) == 0 {
+	if !options.modalitiesSet {
 		modalities = []string{"AUDIO"}
 	} else {
 		modalities = append([]string(nil), modalities...)
@@ -448,6 +453,7 @@ func NewRealtimeModel(apiKey string, opts ...GoogleRealtimeOption) (*RealtimeMod
 	return &RealtimeModel{
 		apiKey:                    apiKey,
 		instructions:              options.instructions,
+		instructionsSet:           options.instructionsSet,
 		model:                     modelName,
 		voice:                     voice,
 		language:                  options.language,
@@ -724,7 +730,7 @@ func (m *RealtimeModel) liveConnectConfig() *genai.LiveConnectConfig {
 		},
 		SessionResumption: &genai.SessionResumptionConfig{Handle: m.sessionResumptionHandle},
 	}
-	if m.instructions != "" {
+	if m.instructionsSet {
 		config.SystemInstruction = &genai.Content{Parts: []*genai.Part{{Text: m.instructions}}}
 	}
 	if m.inputAudioTranscription {
@@ -1402,7 +1408,7 @@ func (s *googleRealtimeSession) GenerateReply(options llm.RealtimeGenerateReplyO
 		return err
 	}
 	turns := make([]*genai.Content, 0, 2)
-	if options.Instructions != "" {
+	if options.InstructionsSet || options.Instructions != "" {
 		turns = append(turns, &genai.Content{
 			Role:  "model",
 			Parts: []*genai.Part{{Text: options.Instructions}},

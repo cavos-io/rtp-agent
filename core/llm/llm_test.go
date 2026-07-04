@@ -1101,8 +1101,8 @@ func TestRealtimeGenerateReplyOptionsExposePerResponseOverrides(t *testing.T) {
 		Tools:           []Tool{},
 	}
 
-	if options.Instructions != "answer briefly" {
-		t.Fatalf("Instructions = %q, want answer briefly", options.Instructions)
+	if options.Instructions != "answer briefly" || !options.InstructionsSet {
+		t.Fatalf("Instructions = (%q, %v), want explicit answer briefly", options.Instructions, options.InstructionsSet)
 	}
 	if !options.InstructionsSet {
 		t.Fatal("InstructionsSet = false, want explicit instructions marker")

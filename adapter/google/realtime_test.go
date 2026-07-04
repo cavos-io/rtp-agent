@@ -185,6 +185,24 @@ func TestGoogleRealtimeCapabilitiesReflectReferenceOptions(t *testing.T) {
 	}
 }
 
+func TestGoogleRealtimeExplicitEmptyModalitiesMatchReference(t *testing.T) {
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeModalities([]string{}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	if model.Capabilities().AudioOutput {
+		t.Fatal("AudioOutput = true, want false for explicit empty modalities")
+	}
+	if len(model.modalities) != 0 {
+		t.Fatalf("modalities = %#v, want explicit empty list", model.modalities)
+	}
+	config := model.liveConnectConfig()
+	if len(config.ResponseModalities) != 0 {
+		t.Fatalf("response modalities = %#v, want explicit empty list", config.ResponseModalities)
+	}
+}
+
 func TestGoogleRealtimeUpdateOptionsMatchesReference(t *testing.T) {
 	model, err := NewRealtimeModel("test-key")
 	if err != nil {
@@ -802,6 +820,28 @@ func TestGoogleRealtimeExplicitEmptyVoiceMatchesReference(t *testing.T) {
 
 	if model.voice != "" {
 		t.Fatalf("voice = %q, want explicit empty voice", model.voice)
+	}
+}
+
+func TestGoogleRealtimeExplicitEmptyInstructionsMatchReference(t *testing.T) {
+	connector := &fakeGoogleRealtimeConnector{session: &fakeGoogleRealtimeLiveSession{}}
+	model, err := NewRealtimeModel("test-key",
+		WithGoogleRealtimeConnector(connector),
+		WithGoogleRealtimeInstructions(""),
+	)
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+	defer session.Close()
+
+	instruction := connector.config.SystemInstruction
+	if instruction == nil || len(instruction.Parts) != 1 || instruction.Parts[0].Text != "" {
+		t.Fatalf("system instruction = %#v, want explicit empty instruction part", instruction)
 	}
 }
 
@@ -1550,6 +1590,37 @@ func TestGoogleRealtimeSessionGenerateReplySendsReferenceTurn(t *testing.T) {
 	}
 	if content.Turns[1].Role != "user" || len(content.Turns[1].Parts) != 1 || content.Turns[1].Parts[0].Text != "." {
 		t.Fatalf("placeholder turn = %#v, want user dot", content.Turns[1])
+	}
+}
+
+func TestGoogleRealtimeSessionGenerateReplyPreservesReferenceEmptyInstructions(t *testing.T) {
+	liveSession := &fakeGoogleRealtimeLiveSession{}
+	model, err := NewRealtimeModel("test-key", WithGoogleRealtimeConnector(&fakeGoogleRealtimeConnector{session: liveSession}))
+	if err != nil {
+		t.Fatalf("NewRealtimeModel error = %v", err)
+	}
+	session, err := model.Session()
+	if err != nil {
+		t.Fatalf("Session error = %v", err)
+	}
+
+	err = session.GenerateReply(llm.RealtimeGenerateReplyOptions{InstructionsSet: true})
+	if err != nil {
+		t.Fatalf("GenerateReply error = %v", err)
+	}
+
+	if len(liveSession.clientContents) != 1 {
+		t.Fatalf("client content count = %d, want one turn-complete request", len(liveSession.clientContents))
+	}
+	turns := liveSession.clientContents[0].Turns
+	if len(turns) != 2 {
+		t.Fatalf("turn count = %d, want empty instructions plus placeholder user turn", len(turns))
+	}
+	if turns[0].Role != "model" || len(turns[0].Parts) != 1 || turns[0].Parts[0].Text != "" {
+		t.Fatalf("instruction turn = %#v, want explicit empty model instruction", turns[0])
+	}
+	if turns[1].Role != "user" || len(turns[1].Parts) != 1 || turns[1].Parts[0].Text != "." {
+		t.Fatalf("placeholder turn = %#v, want user dot", turns[1])
 	}
 }
 
