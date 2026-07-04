@@ -319,6 +319,10 @@ func (s *awsTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		first, firstErr := readAWSTTSChunk(s.stream)
 		if len(first) == 0 && firstErr == io.EOF {
 			_ = s.decoder.Close()
+			if strings.TrimSpace(s.text) != "" {
+				_ = s.Close()
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+			}
 			s.finalSent = true
 			return &tts.SynthesizedAudio{RequestID: s.requestID, IsFinal: true}, nil
 		}
