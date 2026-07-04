@@ -412,6 +412,30 @@ func TestAWSLLMStreamClosedState(t *testing.T) {
 	}
 }
 
+func TestAWSLLMStreamNextAfterCloseReturnsReferenceEOF(t *testing.T) {
+	reader := newFakeAWSLLMReader()
+	reader.err = errors.New("bedrock stream reset")
+	stream := &awsLLMStream{
+		stream: bedrockruntime.NewConverseStreamEventStream(func(es *bedrockruntime.ConverseStreamEventStream) {
+			es.Reader = reader
+		}),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !reader.closed {
+		t.Fatal("provider stream closed = false, want Close to cancel Bedrock stream")
+	}
+	chunk, err := stream.Next()
+	if chunk != nil {
+		t.Fatalf("Next chunk = %#v, want nil after Close", chunk)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %v, want EOF after Close", err)
+	}
+}
+
 func TestAWSLLMStreamBuffersToolUseUntilContentBlockStop(t *testing.T) {
 	reader := newFakeAWSLLMReader()
 	reader.events <- &awstypes.ConverseStreamOutputMemberContentBlockStart{
