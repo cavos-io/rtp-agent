@@ -254,9 +254,6 @@ func (b *awsRealtimeEventBuilder) createToolContentStartEvent(contentName string
 		"contentStart": map[string]any{
 			"promptName":  b.promptName,
 			"contentName": contentName,
-			"type":        "TOOL",
-			"interactive": false,
-			"role":        "TOOL",
 			"toolResultInputConfiguration": map[string]any{
 				"toolUseId": toolUseID,
 				"type":      "TEXT",

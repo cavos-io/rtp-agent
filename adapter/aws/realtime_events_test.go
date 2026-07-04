@@ -201,6 +201,38 @@ func TestAWSRealtimeEventBuilderCreatesReferenceAudioAndCloseEvents(t *testing.T
 	}
 }
 
+func TestAWSRealtimeEventBuilderCreatesReferenceToolContentStart(t *testing.T) {
+	builder := newAWSRealtimeEventBuilder("prompt-1", "audio-1")
+
+	raw, err := builder.createToolContentStartEvent("tool-content-1", "tool-use-1")
+	if err != nil {
+		t.Fatalf("createToolContentStartEvent error = %v", err)
+	}
+
+	start := nestedMap(t, mustAWSRealtimeJSONEvent(t, raw), "event", "contentStart")
+	if got := start["promptName"]; got != "prompt-1" {
+		t.Fatalf("promptName = %v, want prompt-1", got)
+	}
+	if got := start["contentName"]; got != "tool-content-1" {
+		t.Fatalf("contentName = %v, want tool-content-1", got)
+	}
+	for _, field := range []string{"type", "role", "interactive"} {
+		if _, ok := start[field]; ok {
+			t.Fatalf("tool contentStart field %q = %#v, want omitted like reference", field, start[field])
+		}
+	}
+	toolConfig := nestedMap(t, map[string]any{"root": start}, "root", "toolResultInputConfiguration")
+	if got := toolConfig["toolUseId"]; got != "tool-use-1" {
+		t.Fatalf("toolUseId = %v, want tool-use-1", got)
+	}
+	if got := toolConfig["type"]; got != "TEXT" {
+		t.Fatalf("tool input type = %v, want TEXT", got)
+	}
+	if got := awsRealtimeNestedString(map[string]any{"root": toolConfig}, "root", "textInputConfiguration", "mediaType"); got != "text/plain" {
+		t.Fatalf("tool text media type = %q, want text/plain", got)
+	}
+}
+
 func mustAWSRealtimeJSONEvent(t *testing.T, raw string) map[string]any {
 	t.Helper()
 	var decoded map[string]any

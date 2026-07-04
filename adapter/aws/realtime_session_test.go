@@ -2589,8 +2589,11 @@ func TestAWSRealtimeSessionUpdateChatContextSendsReferenceToolResult(t *testing.
 
 	toolEvents := stream.sent[len(stream.sent)-3:]
 	start := mustAWSRealtimeJSONEvent(t, toolEvents[0])
-	if got := awsRealtimeNestedString(start, "event", "contentStart", "type"); got != "TOOL" {
-		t.Fatalf("tool contentStart type = %q, want TOOL", got)
+	contentStart := nestedMap(t, start, "event", "contentStart")
+	for _, field := range []string{"type", "role", "interactive"} {
+		if _, ok := contentStart[field]; ok {
+			t.Fatalf("tool contentStart field %q = %#v, want omitted like reference", field, contentStart[field])
+		}
 	}
 	if got := awsRealtimeNestedString(start, "event", "contentStart", "toolResultInputConfiguration", "toolUseId"); got != "tool-1" {
 		t.Fatalf("toolUseId = %q, want tool-1", got)
