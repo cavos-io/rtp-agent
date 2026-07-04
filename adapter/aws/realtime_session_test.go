@@ -1081,7 +1081,8 @@ func TestAWSRealtimeSessionCommitAudioIsReferenceNoop(t *testing.T) {
 		t.Fatalf("Session error = %v", err)
 	}
 
-	sentCount := len(stream.sent)
+	sent := stream.snapshotSent()
+	sentCount := len(sent)
 	if err := session.PushAudio(awsRealtimeTestMonoFrame(16000, make([]int16, 256))); err != nil {
 		t.Fatalf("PushAudio error = %v", err)
 	}
@@ -1089,14 +1090,16 @@ func TestAWSRealtimeSessionCommitAudioIsReferenceNoop(t *testing.T) {
 		t.Fatalf("CommitAudio error = %v", err)
 	}
 
-	audioInputs := collectAWSRealtimeAudioInputPayloads(t, stream.sent[sentCount:])
+	sent = stream.snapshotSent()
+	audioInputs := collectAWSRealtimeAudioInputPayloads(t, sent[sentCount:])
 	if len(audioInputs) != 0 {
 		t.Fatalf("audioInput events after CommitAudio = %d, want no-op", len(audioInputs))
 	}
 	if err := session.CommitAudio(); err != nil {
 		t.Fatalf("second CommitAudio error = %v", err)
 	}
-	if got := countAWSRealtimeAudioInputs(t, stream.sent[sentCount:]); got != 0 {
+	sent = stream.snapshotSent()
+	if got := countAWSRealtimeAudioInputs(t, sent[sentCount:]); got != 0 {
 		t.Fatalf("audioInput events after second CommitAudio = %d, want no-op", got)
 	}
 	if err := session.Close(); err != nil {
