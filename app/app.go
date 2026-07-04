@@ -110,6 +110,7 @@ import (
 	livekitlogger "github.com/livekit/protocol/logger"
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	goopenai "github.com/sashabaranov/go-openai"
+	"google.golang.org/genai"
 )
 
 var appNewAgoraChannelClient = workeragora.NewSDKChannelClient
@@ -172,6 +173,7 @@ type appGoogleRealtimeConfig struct {
 	proactivity              *bool
 	affectiveDialog          *bool
 	apiVersion               string
+	realtimeInputConfig      *genai.RealtimeInputConfig
 }
 
 func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRealtimeOption {
@@ -223,6 +225,9 @@ func (c appGoogleRealtimeConfig) options(model string) []adaptergoogle.GoogleRea
 	}
 	if c.apiVersion != "" {
 		opts = append(opts, adaptergoogle.WithGoogleRealtimeAPIVersion(c.apiVersion))
+	}
+	if c.realtimeInputConfig != nil {
+		opts = append(opts, adaptergoogle.WithGoogleRealtimeInputConfig(c.realtimeInputConfig))
 	}
 	return opts
 }
@@ -7125,7 +7130,22 @@ func googleRealtimeConfigFromAppConfig(cfg AppConfig) appGoogleRealtimeConfig {
 		googleCfg.affectiveDialog = affectiveDialog
 	}
 	googleCfg.apiVersion = modelOptionString(cfg.RealtimeModelOptions, "api_version")
+	googleCfg.realtimeInputConfig = googleRealtimeInputConfigFromOptions(cfg.RealtimeModelOptions)
 	return googleCfg
+}
+
+func googleRealtimeInputConfigFromOptions(options map[string]any) *genai.RealtimeInputConfig {
+	var config genai.RealtimeInputConfig
+	if disabled := modelOptionBool(options, "automatic_activity_detection_disabled"); disabled != nil {
+		config.AutomaticActivityDetection = &genai.AutomaticActivityDetection{Disabled: *disabled}
+	}
+	if activityHandling := modelOptionString(options, "activity_handling"); activityHandling != "" {
+		config.ActivityHandling = genai.ActivityHandling(activityHandling)
+	}
+	if config.AutomaticActivityDetection == nil && config.ActivityHandling == "" {
+		return nil
+	}
+	return &config
 }
 
 var googleLLMExtraParamKeys = []string{

@@ -14976,6 +14976,38 @@ func TestDefaultConfigFromEnvSelectsGoogleRealtimeProactivityOptions(t *testing.
 	}
 }
 
+func TestDefaultConfigFromEnvSelectsGoogleRealtimeInputConfigOptions(t *testing.T) {
+	original := appNewGoogleRealtime
+	defer func() { appNewGoogleRealtime = original }()
+
+	var capturedCfg appGoogleRealtimeConfig
+	appNewGoogleRealtime = func(_ string, model string, cfg appGoogleRealtimeConfig) (llm.RealtimeModel, error) {
+		capturedCfg = cfg
+		return fakeAppRealtimeModel{provider: "Gemini", model: model}, nil
+	}
+
+	t.Setenv("GOOGLE_API_KEY", "test-google-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "google")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "automatic_activity_detection_disabled=true,activity_handling=NO_INTERRUPTION")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if capturedCfg.realtimeInputConfig == nil || capturedCfg.realtimeInputConfig.AutomaticActivityDetection == nil {
+		t.Fatalf("realtimeInputConfig = %#v, want automatic activity detection config", capturedCfg.realtimeInputConfig)
+	}
+	if !capturedCfg.realtimeInputConfig.AutomaticActivityDetection.Disabled {
+		t.Fatalf("automatic activity disabled = false, want true")
+	}
+	if string(capturedCfg.realtimeInputConfig.ActivityHandling) != "NO_INTERRUPTION" {
+		t.Fatalf("activityHandling = %q, want NO_INTERRUPTION", capturedCfg.realtimeInputConfig.ActivityHandling)
+	}
+}
+
 func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
