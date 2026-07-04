@@ -918,14 +918,14 @@ func googleRealtimeToolResponses(chatCtx *llm.ChatContext, vertexAI bool, schedu
 			Name:     output.Name,
 			Response: payload,
 		}
+		switch value := scheduling.(type) {
+		case genai.FunctionResponseScheduling:
+			response.Scheduling = value
+		case string:
+			response.Scheduling = genai.FunctionResponseScheduling(value)
+		}
 		if !vertexAI {
 			response.ID = output.CallID
-			switch value := scheduling.(type) {
-			case genai.FunctionResponseScheduling:
-				response.Scheduling = value
-			case string:
-				response.Scheduling = genai.FunctionResponseScheduling(value)
-			}
 		}
 		responses = append(responses, response)
 	}
