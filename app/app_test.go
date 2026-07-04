@@ -13929,6 +13929,16 @@ func TestGoogleSTTConfigFromAppConfigMapsReferenceUseStreamingOption(t *testing.
 	}
 }
 
+func TestGoogleSTTConfigFromAppConfigMapsReferenceInterimResultsOption(t *testing.T) {
+	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
+		STTModelOptions: map[string]any{"interim_results": false},
+	})
+
+	if googleCfg.interimResults == nil || *googleCfg.interimResults {
+		t.Fatalf("interimResults = %#v, want model option interim_results false", googleCfg.interimResults)
+	}
+}
+
 func TestGoogleSTTConfigFromAppConfigMapsReferenceDenoiserConfig(t *testing.T) {
 	googleCfg := googleSTTConfigFromAppConfig(AppConfig{
 		STTModelOptions: map[string]any{

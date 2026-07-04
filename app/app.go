@@ -4241,6 +4241,9 @@ func googleSTTConfigFromAppConfig(cfg AppConfig) appGoogleSTTConfig {
 	if googleCfg.streaming == nil {
 		googleCfg.streaming = modelOptionBool(cfg.STTModelOptions, "use_streaming")
 	}
+	if googleCfg.interimResults == nil {
+		googleCfg.interimResults = modelOptionBool(cfg.STTModelOptions, "interim_results")
+	}
 	if cfg.STTEndpointingMS != nil {
 		googleCfg.speechEndTimeout = time.Duration(*cfg.STTEndpointingMS) * time.Millisecond
 	} else if cfg.STTEndpointingSeconds != nil {
