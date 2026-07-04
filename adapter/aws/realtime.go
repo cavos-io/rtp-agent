@@ -899,10 +899,10 @@ func (s *awsRealtimeSession) handleResponseEvent(payload map[string]any) bool {
 	if completionStart := awsRealtimeNestedMap(payload, "event", "completionStart"); completionStart != nil {
 		s.emitGenerationCreated()
 	}
+	s.trackGenerationContentStart(payload)
 	if s.turns != nil {
 		s.turns.feed(payload)
 	}
-	s.trackGenerationContentStart(payload)
 	if audioContent := awsRealtimeNestedString(payload, "event", "audioOutput", "content"); audioContent != "" {
 		data, err := base64.StdEncoding.DecodeString(audioContent)
 		if err != nil {
@@ -979,7 +979,7 @@ func (s *awsRealtimeSession) emitGenerationCreated() {
 }
 
 func (s *awsRealtimeSession) emitGenerationCreatedWithResponseID(responseID string) {
-	generation := s.ensureGeneration(responseID)
+	generation, _ := s.ensureGenerationWithCreated(responseID)
 	s.emit(llm.RealtimeEvent{
 		Type: llm.RealtimeEventTypeGenerationCreated,
 		Generation: &llm.GenerationCreatedEvent{
@@ -990,11 +990,11 @@ func (s *awsRealtimeSession) emitGenerationCreatedWithResponseID(responseID stri
 	})
 }
 
-func (s *awsRealtimeSession) ensureGeneration(responseID string) *awsRealtimeGeneration {
+func (s *awsRealtimeSession) ensureGenerationWithCreated(responseID string) (*awsRealtimeGeneration, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.generation != nil {
-		return s.generation
+		return s.generation, false
 	}
 	if responseID == "" {
 		responseID = uuid.NewString()
@@ -1016,7 +1016,7 @@ func (s *awsRealtimeSession) ensureGeneration(responseID string) *awsRealtimeGen
 		ModalitiesCh: generation.modalitiesCh,
 	}
 	s.generation = generation
-	return generation
+	return generation, true
 }
 
 func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any) {
@@ -1031,6 +1031,8 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 	switch {
 	case contentType == "AUDIO":
 		streamType = "ASSISTANT_AUDIO"
+	case contentType == "TOOL":
+		streamType = "TOOL"
 	case role == "USER" && contentType == "TEXT":
 		streamType = "USER_ASR"
 	case role == "ASSISTANT" &&
@@ -1043,8 +1045,19 @@ func (s *awsRealtimeSession) trackGenerationContentStart(payload map[string]any)
 		return
 	}
 	var generation *awsRealtimeGeneration
-	if streamType == "ASSISTANT_TEXT" {
-		generation = s.ensureGeneration("")
+	if streamType == "ASSISTANT_TEXT" || streamType == "TOOL" {
+		created := false
+		generation, created = s.ensureGenerationWithCreated("")
+		if created {
+			s.emit(llm.RealtimeEvent{
+				Type: llm.RealtimeEventTypeGenerationCreated,
+				Generation: &llm.GenerationCreatedEvent{
+					MessageCh:  generation.messageCh,
+					FunctionCh: generation.functionCh,
+					ResponseID: generation.responseID,
+				},
+			})
+		}
 	} else {
 		s.mu.Lock()
 		generation = s.generation
