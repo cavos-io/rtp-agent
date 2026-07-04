@@ -695,11 +695,11 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	if googleSTTUsesV2(s.model) {
 		clientV2, err := s.ensureClientV2(ctx)
 		if err != nil {
-			return nil, googleSTTStreamError(err)
+			return nil, googleSTTRecognizeError(err)
 		}
 		recognizer := googleSTTRecognizer(s)
 		if recognizer == "" {
-			return nil, googleSTTStreamError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
+			return nil, googleSTTRecognizeError(errors.New("google STT v2 project is required via WithGoogleSTTProject"))
 		}
 		resp, err := clientV2.Recognize(ctx, &speechv2pb.RecognizeRequest{
 			Recognizer: recognizer,
@@ -709,7 +709,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 			},
 		})
 		if err != nil {
-			return nil, googleSTTStreamError(err)
+			return nil, googleSTTRecognizeError(err)
 		}
 		alternatives, err := googleSpeechDataFromRecognizeResultsV2Strict(resp.GetResults())
 		if err != nil {
@@ -723,7 +723,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 
 	client, err := s.ensureClient(ctx)
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTRecognizeError(err)
 	}
 	resp, err := client.Recognize(ctx, &speechpb.RecognizeRequest{
 		Config: googleRecognitionConfigForFrames(s, language, !explicitLanguage, frames),
@@ -735,7 +735,7 @@ func (s *GoogleSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	})
 
 	if err != nil {
-		return nil, googleSTTStreamError(err)
+		return nil, googleSTTRecognizeError(err)
 	}
 
 	alternatives, err := googleSpeechDataFromRecognizeResultsStrict(resp.Results)
@@ -1778,7 +1778,14 @@ func googleSTTStreamError(err error) error {
 }
 
 func googleSTTStartupError(err error) error {
-	mapped := googleSTTStreamError(err)
+	return googleSTTWrapGenericConnectionError(googleSTTStreamError(err))
+}
+
+func googleSTTRecognizeError(err error) error {
+	return googleSTTWrapGenericConnectionError(googleSTTStreamError(err))
+}
+
+func googleSTTWrapGenericConnectionError(mapped error) error {
 	if mapped == nil {
 		return nil
 	}

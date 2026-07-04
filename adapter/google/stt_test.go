@@ -885,6 +885,46 @@ func TestGoogleSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGoogleSTTRecognizeGenericErrorReturnsAPIConnectionError(t *testing.T) {
+	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{recognizeErr: errors.New("socket closed")})
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "")
+
+	if event != nil {
+		t.Fatalf("Recognize event = %#v, want nil", event)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError like reference generic wrapper", err, err)
+	}
+	if !connErr.Retryable {
+		t.Fatal("Recognize APIConnectionError retryable = false, want true for provider connection failure")
+	}
+}
+
+func TestGoogleSTTRecognizeV2GenericErrorReturnsAPIConnectionError(t *testing.T) {
+	v1Client := &fakeGoogleSpeechClient{}
+	v2Client := &fakeGoogleV2SpeechClient{recognizeErr: errors.New("socket closed")}
+	provider := newGoogleSTTWithClient(v1Client,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+	)
+	provider.clientV2 = v2Client
+
+	event, err := provider.Recognize(context.Background(), []*model.AudioFrame{{Data: []byte("pcm")}}, "")
+
+	if event != nil {
+		t.Fatalf("Recognize event = %#v, want nil", event)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Recognize error = %T %v, want APIConnectionError like reference generic wrapper", err, err)
+	}
+	if !connErr.Retryable {
+		t.Fatal("Recognize APIConnectionError retryable = false, want true for provider connection failure")
+	}
+}
+
 func TestGoogleSTTRecognizeCombinesReferenceResultSegments(t *testing.T) {
 	client := &fakeGoogleSpeechClient{
 		recognizeResponse: &speechpb.RecognizeResponse{
