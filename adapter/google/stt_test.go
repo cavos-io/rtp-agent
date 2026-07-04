@@ -513,6 +513,29 @@ func TestGoogleRecognitionConfigUsesReferenceAlternativeLanguages(t *testing.T) 
 	}
 }
 
+func TestGoogleRecognitionConfigPreservesReferenceEmptyAlternativeLanguage(t *testing.T) {
+	provider := newGoogleSTTWithClient(nil,
+		WithGoogleSTTAlternativeLanguages("", "fr-FR"),
+	)
+
+	config := googleRecognitionConfig(provider, "en-US")
+
+	if got := config.AlternativeLanguageCodes; len(got) != 2 || got[0] != "" || got[1] != "fr-FR" {
+		t.Fatalf("alternative languages = %#v, want [\"\" fr-FR]", got)
+	}
+
+	v2Provider := newGoogleSTTWithV2Client(nil,
+		WithGoogleSTTModel("chirp_3"),
+		WithGoogleSTTProject("voice-project"),
+		WithGoogleSTTAlternativeLanguages("", "fr-FR"),
+	)
+
+	v2Config := googleStreamingRecognitionConfigV2(v2Provider, "en-US", true)
+	if got := v2Config.GetConfig().GetLanguageCodes(); len(got) != 3 || got[0] != "en-US" || got[1] != "" || got[2] != "fr-FR" {
+		t.Fatalf("v2 language codes = %#v, want [en-US \"\" fr-FR]", got)
+	}
+}
+
 func TestGoogleRecognitionConfigOmitsAlternativeLanguagesWhenDetectionDisabled(t *testing.T) {
 	provider := newGoogleSTTWithClient(nil,
 		WithGoogleSTTDetectLanguage(false),

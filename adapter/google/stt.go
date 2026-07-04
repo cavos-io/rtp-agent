@@ -210,13 +210,7 @@ func WithGoogleSTTDenoiserConfig(config *speechv2pb.DenoiserConfig) GoogleSTTOpt
 
 func WithGoogleSTTAlternativeLanguages(languages ...string) GoogleSTTOption {
 	return func(s *GoogleSTT) {
-		s.alternativeLanguages = nil
-		for _, language := range languages {
-			if language == "" {
-				continue
-			}
-			s.alternativeLanguages = append(s.alternativeLanguages, language)
-		}
+		s.alternativeLanguages = append([]string(nil), languages...)
 	}
 }
 
