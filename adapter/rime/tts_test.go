@@ -2010,6 +2010,94 @@ func TestRimeTTSProviderCloseSendsReferenceEOS(t *testing.T) {
 	assertRimePayload(t, writes[0], "operation", "eos")
 }
 
+func TestRimeTTSProviderCloseWaitsForReferenceEOSAck(t *testing.T) {
+	eosReceived := make(chan struct{})
+	sendAck := make(chan struct{})
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() {},
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode eos: %v", err)
+			}
+			assertRimePayload(t, message, "operation", "eos")
+			close(eosReceived)
+			return nil
+		},
+		readMessage: func() (int, []byte, error) {
+			<-sendAck
+			return websocket.TextMessage, []byte(`{"type":"done"}`), nil
+		},
+		closeConn: func() error { return nil },
+	}
+	provider.registerStream(stream)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- provider.Close()
+	}()
+
+	select {
+	case <-eosReceived:
+	case err := <-closeDone:
+		t.Fatalf("Close returned before eos was written: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for eos")
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before provider eos ack: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(sendAck)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for Close after eos ack")
+	}
+}
+
+func TestRimeTTSProviderCloseContinuesAfterReferenceEOSAckTimeout(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	readStarted := make(chan struct{})
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() {},
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode eos: %v", err)
+			}
+			assertRimePayload(t, message, "operation", "eos")
+			return nil
+		},
+		readMessage: func() (int, []byte, error) {
+			close(readStarted)
+			return 0, nil, rimeTimeoutError{}
+		},
+		closeConn: func() error { return nil },
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v, want timeout ignored like reference close sequence", err)
+	}
+	select {
+	case <-readStarted:
+	default:
+		t.Fatal("Close did not wait for eos ack before closing")
+	}
+}
+
+type rimeTimeoutError struct{}
+
+func (rimeTimeoutError) Error() string   { return "timeout" }
+func (rimeTimeoutError) Timeout() bool   { return true }
+func (rimeTimeoutError) Temporary() bool { return true }
+
 func TestRimeTTSProviderCloseClosesAfterReferenceEOSFailure(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
 	writeErr := errors.New("eos write failed")

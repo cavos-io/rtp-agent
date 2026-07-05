@@ -1263,6 +1263,7 @@ type rimeTTSSynthesizeStream struct {
 	inputEnded            bool
 
 	writeMessage func(int, []byte) error
+	readMessage  func() (int, []byte, error)
 	closeConn    func() error
 }
 
@@ -1436,11 +1437,22 @@ func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 			}
 			return err
 		}
+		s.waitForEOSAckLocked()
 	}
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
 	return s.closeConnection()
+}
+
+func (s *rimeTTSSynthesizeStream) waitForEOSAckLocked() {
+	if s.readStarted {
+		return
+	}
+	if s.conn != nil {
+		_ = s.conn.SetReadDeadline(time.Now().Add(time.Second))
+	}
+	_, _, _ = s.readMessageData()
 }
 
 func (s *rimeTTSSynthesizeStream) writeMessageData(messageType int, data []byte) error {
@@ -1450,11 +1462,25 @@ func (s *rimeTTSSynthesizeStream) writeMessageData(messageType int, data []byte)
 	return s.writeWebsocketMessage(messageType, data)
 }
 
+func (s *rimeTTSSynthesizeStream) readMessageData() (int, []byte, error) {
+	if s.readMessage != nil {
+		return s.readMessage()
+	}
+	return s.readWebsocketMessage()
+}
+
 func (s *rimeTTSSynthesizeStream) writeWebsocketMessage(messageType int, data []byte) error {
 	if s.conn == nil {
 		return io.ErrClosedPipe
 	}
 	return s.conn.WriteMessage(messageType, data)
+}
+
+func (s *rimeTTSSynthesizeStream) readWebsocketMessage() (int, []byte, error) {
+	if s.conn == nil {
+		return 0, nil, io.ErrClosedPipe
+	}
+	return s.conn.ReadMessage()
 }
 
 func (s *rimeTTSSynthesizeStream) closeConnection() error {
