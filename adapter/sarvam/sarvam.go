@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
@@ -1637,7 +1638,7 @@ func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, err
 		}
 		s.nextAudio++
-		return sarvamTTSAudioFrame(data, s.sampleRate, s.requestID, s.outputAudioCodec), nil
+		return sarvamTTSAudioFrame(data, s.sampleRate, s.requestID, s.outputAudioCodec)
 	}
 	if len(s.audios) > 0 && !s.finalSent {
 		s.finalSent = true
@@ -1888,7 +1889,8 @@ func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int, outputAudio
 		if len(data) == 0 {
 			return nil, false, nil
 		}
-		return sarvamTTSAudioFrame(data, sampleRate, message.Data.RequestID, outputAudioCodec), false, nil
+		audio, err := sarvamTTSAudioFrame(data, sampleRate, message.Data.RequestID, outputAudioCodec)
+		return audio, false, err
 	case "event":
 		if message.Data.EventType == "final" {
 			return &tts.SynthesizedAudio{RequestID: message.Data.RequestID, IsFinal: true}, true, nil
@@ -1924,7 +1926,10 @@ func sarvamCompactJSON(payload []byte) string {
 	return compact.String()
 }
 
-func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAudioCodec string) *tts.SynthesizedAudio {
+func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAudioCodec string) (*tts.SynthesizedAudio, error) {
+	if outputAudioCodec == "mp3" {
+		return sarvamTTSDecodeMP3AudioFrame(data, requestID)
+	}
 	frameData := sarvamTTSDecodeTelephony(outputAudioCodec, data)
 	return &tts.SynthesizedAudio{
 		RequestID: requestID,
@@ -1934,7 +1939,21 @@ func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAu
 			NumChannels:       1,
 			SamplesPerChannel: uint32(len(frameData) / 2),
 		},
+	}, nil
+}
+
+func sarvamTTSDecodeMP3AudioFrame(data []byte, requestID string) (*tts.SynthesizedAudio, error) {
+	decoder := codecs.NewMP3AudioStreamDecoder()
+	defer decoder.Close()
+	go func() {
+		decoder.Push(data)
+		decoder.EndInput()
+	}()
+	frame, err := decoder.Next()
+	if err != nil {
+		return nil, err
 	}
+	return &tts.SynthesizedAudio{RequestID: requestID, Frame: frame}, nil
 }
 
 func sarvamTTSDecodeTelephony(codec string, data []byte) []byte {

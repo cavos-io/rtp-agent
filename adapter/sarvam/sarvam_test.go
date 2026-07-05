@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -840,7 +842,7 @@ func TestSarvamTTSChunkedStreamEmitsAllReferenceAudioChunks(t *testing.T) {
 			"audios":["AQI=","AwQ="]
 		}`))},
 		sampleRate:       22050,
-		outputAudioCodec: "mp3",
+		outputAudioCodec: "linear16",
 	}
 	defer stream.Close()
 
@@ -1290,7 +1292,7 @@ func decodeSarvamTTSMessage(t *testing.T, payload []byte) map[string]any {
 }
 
 func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
-	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050, "mp3")
+	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050, "linear16")
 	if err != nil {
 		t.Fatalf("audio from stream message: %v", err)
 	}
@@ -1316,6 +1318,50 @@ func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	}
 	if finished.RequestID != "req-2" {
 		t.Fatalf("final marker request id = %q, want req-2", finished.RequestID)
+	}
+}
+
+func TestSarvamTTSAudioFromStreamMessageDecodesReferenceMP3(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type": "audio",
+		"data": map[string]any{
+			"audio":      base64.StdEncoding.EncodeToString(mp3Data),
+			"request_id": "req-mp3",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal mp3 message: %v", err)
+	}
+
+	audio, done, err := sarvamTTSAudioFromStreamMessage(payload, 22050, "mp3")
+	if err != nil {
+		t.Fatalf("audio from mp3 stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for mp3 audio message")
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatal("audio frame = nil, want decoded mp3 PCM frame")
+	}
+	if audio.RequestID != "req-mp3" {
+		t.Fatalf("request id = %q, want req-mp3", audio.RequestID)
+	}
+	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 2 {
+		t.Fatalf("frame format = %d Hz/%d ch, want decoded mp3 native format", audio.Frame.SampleRate, audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame data empty")
+	}
+	prefixLen := len(audio.Frame.Data)
+	if prefixLen > len(mp3Data) {
+		prefixLen = len(mp3Data)
+	}
+	if bytes.Equal(audio.Frame.Data[:prefixLen], mp3Data[:prefixLen]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
 	}
 }
 
