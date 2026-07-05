@@ -3855,6 +3855,77 @@ func TestRimeTTSStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSActiveStreamKeepsReferenceReadTimeout(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go func() {
+				defer server.Close()
+				if err := rimeTestWebsocketHandshake(server); err != nil {
+					t.Errorf("websocket handshake: %v", err)
+					return
+				}
+				if _, err := rimeTestReadClientTextFrame(server); err != nil {
+					t.Errorf("read text message: %v", err)
+					return
+				}
+				time.Sleep(50 * time.Millisecond)
+				payload, err := json.Marshal(map[string]any{
+					"type": "chunk",
+					"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+				})
+				if err != nil {
+					t.Errorf("marshal chunk: %v", err)
+					return
+				}
+				if err := rimeTestWriteServerTextFrame(server, payload); err != nil {
+					t.Errorf("write chunk message: %v", err)
+					return
+				}
+				if err := rimeTestWriteServerTextFrame(server, []byte(`{"type":"done"}`)); err != nil {
+					t.Errorf("write done message: %v", err)
+				}
+			}()
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+		WithRimeTTSStreamResponseTimeout(200*time.Millisecond),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	if err := provider.UpdateOptions(WithRimeTTSStreamResponseTimeout(5 * time.Millisecond)); err != nil {
+		t.Fatalf("UpdateOptions timeout error = %v", err)
+	}
+	if err := stream.PushText("This sentence is definitely long enough."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %T %v, want active stream keep creation timeout", err, err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("Next audio = %+v, want provider audio before original timeout", audio)
+	}
+}
+
 func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 	audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"chunk","data":"AQIDBA=="}`), 24000)
 	if err != nil {

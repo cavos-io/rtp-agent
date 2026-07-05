@@ -814,16 +814,17 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rimeTTSSynthesizeStream{
-		conn:           conn,
-		ctx:            streamCtx,
-		cancel:         cancel,
-		provider:       t,
-		requestID:      cavosmath.ShortUUID(""),
-		contextID:      cavosmath.ShortUUID(""),
-		websocketURL:   websocketURL,
-		poolGeneration: poolGeneration,
-		events:         make(chan *tts.SynthesizedAudio, 100),
-		errCh:          make(chan error, 1),
+		conn:            conn,
+		ctx:             streamCtx,
+		cancel:          cancel,
+		provider:        t,
+		requestID:       cavosmath.ShortUUID(""),
+		contextID:       cavosmath.ShortUUID(""),
+		websocketURL:    websocketURL,
+		poolGeneration:  poolGeneration,
+		responseTimeout: t.streamResponseTimeout,
+		events:          make(chan *tts.SynthesizedAudio, 100),
+		errCh:           make(chan error, 1),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -1461,6 +1462,7 @@ type rimeTTSSynthesizeStream struct {
 	contextID             string
 	websocketURL          string
 	poolGeneration        uint64
+	responseTimeout       time.Duration
 	events                chan *tts.SynthesizedAudio
 	errCh                 chan error
 	mu                    sync.Mutex
@@ -1788,9 +1790,8 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *rimeTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
-		if s.provider != nil && s.provider.streamResponseTimeout > 0 && s.conn != nil {
-			timeout := s.provider.streamResponseTimeout
-			_ = s.conn.SetReadDeadline(time.Now().Add(timeout))
+		if s.responseTimeout > 0 && s.conn != nil {
+			_ = s.conn.SetReadDeadline(time.Now().Add(s.responseTimeout))
 		}
 		msgType, payload, err := s.readMessageData()
 		if err != nil {
