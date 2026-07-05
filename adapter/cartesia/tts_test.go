@@ -312,13 +312,17 @@ func TestCartesiaTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 
 	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
 
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Synthesize error = nil, want APIStatusError")
+		t.Fatal("Next error = nil, want APIStatusError")
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -358,6 +362,9 @@ func TestCartesiaTTSSynthesizeSendsReferenceHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Synthesize error = %v", err)
 	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -389,8 +396,58 @@ func TestCartesiaTTSSynthesizeUsesReferenceVersionHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Synthesize error = %v", err)
 	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
+	}
+}
+
+func TestCartesiaTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	requests := 0
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: cartesiaRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	defer func() {
+		http.DefaultClient = oldClient
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests before Next = %d, want 0", requests)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+
+	closedStream, err := provider.Synthesize(context.Background(), "cancelled")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	if err := closedStream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if _, err := closedStream.Next(); err != io.EOF {
+		t.Fatalf("Next after close = %v, want EOF", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after close-before-Next = %d, want 1", requests)
 	}
 }
 
@@ -405,10 +462,14 @@ func TestCartesiaTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 
 	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
 
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	_, err = stream.Next()
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -424,10 +485,14 @@ func TestCartesiaTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 
 	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("https://cartesia.test"))
 
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	_, err = stream.Next()
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
