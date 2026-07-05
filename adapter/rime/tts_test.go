@@ -626,14 +626,15 @@ func TestRimeTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestRimeTTSRejectsNonAudioResponse(t *testing.T) {
+func TestRimeTTSNonAudioResponseEndsLikeReference(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte(`{"error":"not audio"}`))}
 	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"error":"not audio"}`)),
+			Body:       body,
 			Request:    r,
 		}, nil
 	})}
@@ -648,8 +649,11 @@ func TestRimeTTSRejectsNonAudioResponse(t *testing.T) {
 	}
 	defer stream.Close()
 	_, err = stream.Next()
-	if !strings.Contains(err.Error(), "non-audio") {
-		t.Fatalf("Next error = %q, want non-audio guidance", err)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next error = %T %v, want EOF", err, err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
 	}
 }
 

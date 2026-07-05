@@ -638,9 +638,9 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 		return llm.NewAPIStatusError("Rime TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return fmt.Errorf("rime tts returned non-audio data: %s", string(respBody))
+		s.finalSent = true
+		return io.EOF
 	}
 
 	s.resp = resp
