@@ -20,6 +20,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/stt"
+	"github.com/cavos-io/rtp-agent/library/utils/language"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -857,7 +858,7 @@ func processXaiSTTPartial(state *xaiSTTStreamState, payload map[string]any) []*s
 				Type:      stt.SpeechEventInterimTranscript,
 				RequestID: state.requestID,
 				Alternatives: []stt.SpeechData{{
-					Language: language,
+					Language: xaiNormalizeLanguage(language),
 					Text:     text,
 				}},
 			})
@@ -917,7 +918,7 @@ func xaiSTTBatchSpeechEvent(enableDiarization bool, resp xaiSTTResponse) *stt.Sp
 
 func xaiSTTSpeechData(words []xaiSTTWord, text, language string, enableDiarization bool) stt.SpeechData {
 	data := stt.SpeechData{
-		Language:   language,
+		Language:   xaiNormalizeLanguage(language),
 		Text:       text,
 		Confidence: stt.DefaultTranscriptConfidence(text),
 	}
@@ -966,6 +967,13 @@ func xaiSTTWords(raw any) []xaiSTTWord {
 		words = append(words, word)
 	}
 	return words
+}
+
+func xaiNormalizeLanguage(languageCode string) string {
+	if normalized := language.NormalizeLanguage(languageCode); normalized != "" {
+		return normalized
+	}
+	return languageCode
 }
 
 func payloadString(payload map[string]any, key string) string {

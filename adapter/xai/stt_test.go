@@ -1073,6 +1073,23 @@ func TestXaiSTTDoneTranscriptUsesReferenceRequestID(t *testing.T) {
 	}
 }
 
+func TestXaiSTTStreamNormalizesReferenceLanguageAliases(t *testing.T) {
+	state := &xaiSTTStreamState{requestID: "xai-request-lang"}
+
+	events := processXaiSTTStreamEvent(state, map[string]any{
+		"type":         "transcript.partial",
+		"text":         "hello",
+		"language":     "eng",
+		"is_final":     true,
+		"speech_final": true,
+	})
+
+	assertXaiEvent(t, events, 1, stt.SpeechEventFinalTranscript, "hello")
+	if got := events[1].Alternatives[0].Language; got != "en" {
+		t.Fatalf("language = %q, want normalized reference language en", got)
+	}
+}
+
 func TestXaiSTTStreamChunksAndFlushesReferenceAudio(t *testing.T) {
 	var writes [][]byte
 	stream := &xaiSTTStream{
