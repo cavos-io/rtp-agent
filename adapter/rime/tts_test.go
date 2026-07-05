@@ -291,6 +291,29 @@ func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
 	}
 }
 
+func TestRimeTTSUpdateOptionsNormalizesReferenceDefaultBaseURLOnTransportChange(t *testing.T) {
+	provider := NewRimeTTS("test-key", "")
+
+	if err := provider.UpdateOptions(WithRimeTTSWebsocket(true)); err != nil {
+		t.Fatalf("UpdateOptions websocket true error = %v", err)
+	}
+	u := buildRimeTTSWebsocketURL(provider)
+	if got := u.Scheme + "://" + u.Host + u.Path; got != "wss://users-ws.rime.ai/ws3" {
+		t.Fatalf("websocket URL after update = %q, want reference default websocket endpoint", got)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSWebsocket(false)); err != nil {
+		t.Fatalf("UpdateOptions websocket false error = %v", err)
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request after websocket false update: %v", err)
+	}
+	if got := req.URL.String(); got != "https://users.rime.ai/v1/rime-tts" {
+		t.Fatalf("HTTP URL after update = %q, want reference default HTTP endpoint", got)
+	}
+}
+
 func TestRimeTTSUpdateOptionsRejectsReferenceMistV2TimeScaleFactor(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"), WithRimeTTSTimeScaleFactor(1.1))
 

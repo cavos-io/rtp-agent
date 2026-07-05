@@ -208,9 +208,7 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		opt(provider)
 	}
 	provider.sampleRate = provider.requestSampleRate
-	if provider.useWebsocket && provider.baseURL == defaultRimeHTTPBaseURL {
-		provider.baseURL = defaultRimeWSBaseURL
-	}
+	normalizeRimeTransportBaseURL(provider)
 	if voice == "" {
 		voice = defaultRimeVoice(provider.model)
 	}
@@ -278,6 +276,8 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	}
 	if !candidate.websocketOptionSet {
 		candidate.useWebsocket = currentUseWebsocket
+	} else {
+		normalizeRimeTransportBaseURL(candidate)
 	}
 
 	t.mu.Lock()
@@ -301,6 +301,16 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.segment = candidate.segment
 	t.streamResponseTimeout = candidate.streamResponseTimeout
 	return nil
+}
+
+func normalizeRimeTransportBaseURL(t *RimeTTS) {
+	if t.useWebsocket && t.baseURL == defaultRimeHTTPBaseURL {
+		t.baseURL = defaultRimeWSBaseURL
+		return
+	}
+	if !t.useWebsocket && t.baseURL == defaultRimeWSBaseURL {
+		t.baseURL = defaultRimeHTTPBaseURL
+	}
 }
 
 func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
