@@ -914,6 +914,48 @@ func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeSendsReferenceEmptyText(t *testing.T) {
+	requests := 0
+	var text string
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		text, _ = payload["text"].(string)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after empty text Next = %d, want reference request", requests)
+	}
+	if text != "" {
+		t.Fatalf("request text = %q, want empty string", text)
+	}
+	if audio == nil || audio.Frame == nil || string(audio.Frame.Data) != string([]byte{0x01, 0x02}) {
+		t.Fatalf("empty text audio = %#v, want provider audio", audio)
+	}
+}
+
 func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceBaseURL(t *testing.T) {
 	var requestedURL string
 	originalClient := http.DefaultClient

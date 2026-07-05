@@ -712,7 +712,7 @@ func (s *rimeTTSChunkedStream) annotateAudio(audio *tts.SynthesizedAudio) *tts.S
 }
 
 func (s *rimeTTSChunkedStream) ensureResponse() error {
-	if s.resp != nil || s.requested || s.text == "" {
+	if s.resp != nil || s.requested {
 		return nil
 	}
 	s.requested = true
