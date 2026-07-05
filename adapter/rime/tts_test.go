@@ -1707,6 +1707,40 @@ func TestRimeTTSChunkedStreamCloseCancelsPendingReferenceRequest(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	body := &rimeBlockingCancelBody{
+		readStarted: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start body read")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close during read error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not unblock body read")
+	}
+}
+
 func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -3628,6 +3662,25 @@ func (b *rimeCloseCountBody) Close() error {
 	if b.closeCount > 1 {
 		return errors.New("closed twice")
 	}
+	return nil
+}
+
+type rimeBlockingCancelBody struct {
+	readStarted chan struct{}
+	closeCalled chan struct{}
+	closeOnce   sync.Once
+}
+
+func (b *rimeBlockingCancelBody) Read([]byte) (int, error) {
+	close(b.readStarted)
+	<-b.closeCalled
+	return 0, context.Canceled
+}
+
+func (b *rimeBlockingCancelBody) Close() error {
+	b.closeOnce.Do(func() {
+		close(b.closeCalled)
+	})
 	return nil
 }
 

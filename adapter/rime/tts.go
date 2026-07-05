@@ -1235,6 +1235,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				return nil, io.EOF
 			}
+			if s.finalSent {
+				return nil, io.EOF
+			}
 			return nil, rimeTTSReadBodyError(err)
 		}
 	}
