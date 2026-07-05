@@ -1372,6 +1372,45 @@ func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	}
 }
 
+func TestRimeTTSEmptyAudioResponseReportsReferenceNoAudio(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := &rimeCloseCountBody{Reader: bytes.NewReader(nil)}
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+	audio, err = stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio = (%+v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestRimeTTSWhitespaceNonAudioResponseEndsLikeReference(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })

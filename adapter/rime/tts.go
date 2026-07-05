@@ -597,6 +597,7 @@ type rimeTTSChunkedStream struct {
 	sampleRate   int
 	requestID    string
 	requested    bool
+	audioSeen    bool
 	pendingPCM   []byte
 	pendingFinal bool
 	pendingErr   error
@@ -638,6 +639,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 					s.pendingPCM = nil
 					s.pendingFinal = false
 					s.finalSent = true
+					if !s.audioSeen {
+						return nil, s.noAudioError()
+					}
 					return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
 				}
 				if s.pendingErr != nil {
@@ -647,6 +651,7 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				continue
 			}
+			s.audioSeen = true
 			return s.annotateAudio(&tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              frameData,
@@ -661,6 +666,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				s.pendingPCM = nil
 				if !s.finalSent {
 					s.finalSent = true
+					if !s.audioSeen {
+						return nil, s.noAudioError()
+					}
 					return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
 				}
 				return nil, io.EOF
@@ -668,6 +676,17 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, rimeTTSReadBodyError(err)
 		}
 	}
+}
+
+func (s *rimeTTSChunkedStream) noAudioError() error {
+	if s.resp != nil && s.resp.Body != nil {
+		_ = s.resp.Body.Close()
+		s.resp = nil
+	}
+	if strings.TrimSpace(s.text) == "" {
+		return io.EOF
+	}
+	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 }
 
 func rimeTTSReadBodyError(err error) error {
