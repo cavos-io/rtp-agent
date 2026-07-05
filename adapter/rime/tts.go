@@ -49,21 +49,50 @@ type RimeTTS struct {
 	voiceSet                 bool
 	lang                     string
 	langSet                  bool
+	langByModel              map[string]rimeStringOption
 	sampleRate               int
 	requestSampleRate        int
+	requestSampleRateSet     bool
+	requestSampleRates       map[string]*int
 	timeScaleFactor          *float64
+	timeScaleFactors         map[string]*float64
 	repetitionPenalty        *float64
+	arcanaRepetitionPenalty  *float64
 	temperature              *float64
+	arcanaTemperature        *float64
 	topP                     *float64
+	arcanaTopP               *float64
 	maxTokens                *int
+	maxTokensByModel         map[string]*int
 	speedAlpha               *float64
+	mistSpeedAlpha           *float64
 	reduceLatency            *bool
+	mistReduceLatency        *bool
 	pauseBetweenBrackets     *bool
+	mistPauseBetweenBrackets *bool
 	phonemizeBetweenBrackets *bool
+	mistPhonemizeBrackets    *bool
 	useWebsocket             bool
 	segment                  string
 	streamResponseTimeout    time.Duration
 	closed                   bool
+	modelTouched             bool
+	langTouched              bool
+	requestSampleRateTouched bool
+	timeScaleFactorTouched   bool
+	repetitionPenaltyTouched bool
+	temperatureTouched       bool
+	topPTouched              bool
+	maxTokensTouched         bool
+	speedAlphaTouched        bool
+	reduceLatencyTouched     bool
+	pauseBracketsTouched     bool
+	phonemizeBracketsTouched bool
+}
+
+type rimeStringOption struct {
+	value string
+	set   bool
 }
 
 type RimeTTSOption func(*RimeTTS)
@@ -80,6 +109,12 @@ func WithRimeTTSBaseURL(baseURL string) RimeTTSOption {
 func WithRimeTTSModel(model string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.model = model
+		t.modelTouched = true
+		t.restoreCommonParamsForModel()
+		t.restoreTimeScaleFactorForModel()
+		t.restoreArcanaParamsForModel()
+		t.restoreMistParamsForModel()
+		t.restoreMaxTokensForModel()
 		if !t.voiceSet && t.voice == "" {
 			t.voice = defaultRimeVoice(model)
 		}
@@ -97,6 +132,8 @@ func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if sampleRate >= 0 {
 			t.requestSampleRate = sampleRate
+			t.requestSampleRateSet = true
+			t.requestSampleRateTouched = true
 		}
 	}
 }
@@ -105,60 +142,71 @@ func WithRimeTTSLang(lang string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.lang = lang
 		t.langSet = true
+		t.langTouched = true
 	}
 }
 
 func WithRimeTTSTimeScaleFactor(timeScaleFactor float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.timeScaleFactor = &timeScaleFactor
+		t.timeScaleFactorTouched = true
+		t.storeTimeScaleFactorForModel()
 	}
 }
 
 func WithRimeTTSRepetitionPenalty(repetitionPenalty float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.repetitionPenalty = &repetitionPenalty
+		t.repetitionPenaltyTouched = true
 	}
 }
 
 func WithRimeTTSTemperature(temperature float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.temperature = &temperature
+		t.temperatureTouched = true
 	}
 }
 
 func WithRimeTTSTopP(topP float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.topP = &topP
+		t.topPTouched = true
 	}
 }
 
 func WithRimeTTSMaxTokens(maxTokens int) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.maxTokens = &maxTokens
+		t.maxTokensTouched = true
 	}
 }
 
 func WithRimeTTSSpeedAlpha(speedAlpha float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.speedAlpha = &speedAlpha
+		t.speedAlphaTouched = true
 	}
 }
 
 func WithRimeTTSReduceLatency(reduceLatency bool) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.reduceLatency = &reduceLatency
+		t.reduceLatencyTouched = true
 	}
 }
 
 func WithRimeTTSPauseBetweenBrackets(pauseBetweenBrackets bool) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.pauseBetweenBrackets = &pauseBetweenBrackets
+		t.pauseBracketsTouched = true
 	}
 }
 
 func WithRimeTTSPhonemizeBetweenBrackets(phonemizeBetweenBrackets bool) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.phonemizeBetweenBrackets = &phonemizeBetweenBrackets
+		t.phonemizeBracketsTouched = true
 	}
 }
 
@@ -191,14 +239,23 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		baseURL:               defaultRimeHTTPBaseURL,
 		model:                 defaultRimeModel,
 		lang:                  defaultRimeLang,
+		langByModel:           make(map[string]rimeStringOption),
 		sampleRate:            defaultRimeSampleRate,
 		requestSampleRate:     defaultRimeSampleRate,
+		requestSampleRateSet:  true,
+		requestSampleRates:    make(map[string]*int),
+		timeScaleFactors:      make(map[string]*float64),
+		maxTokensByModel:      make(map[string]*int),
 		segment:               defaultRimeSegment,
 		streamResponseTimeout: defaultRimeStreamTimeout,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.storeCommonParamsForModel()
+	provider.storeArcanaParamsForModel()
+	provider.storeMistParamsForModel()
+	provider.storeTouchedMaxTokensForModel()
 	provider.sampleRate = provider.requestSampleRate
 	if strings.HasPrefix(provider.baseURL, "ws://") || strings.HasPrefix(provider.baseURL, "wss://") {
 		provider.useWebsocket = true
@@ -224,6 +281,322 @@ func defaultRimeVoice(model string) string {
 	default:
 		return defaultRimeArcanaVoice
 	}
+}
+
+func (t *RimeTTS) storeTimeScaleFactorForModel() {
+	bucket := rimeTimeScaleFactorBucket(t.model)
+	if bucket == "" {
+		return
+	}
+	if t.timeScaleFactors == nil {
+		t.timeScaleFactors = make(map[string]*float64)
+	}
+	t.timeScaleFactors[bucket] = cloneFloat64Ptr(t.timeScaleFactor)
+}
+
+func (t *RimeTTS) restoreTimeScaleFactorForModel() {
+	if t.timeScaleFactorTouched {
+		t.storeTimeScaleFactorForModel()
+		return
+	}
+	if t.model == "mistv2" && !t.timeScaleFactorTouched {
+		t.timeScaleFactor = nil
+		return
+	}
+	bucket := rimeTimeScaleFactorBucket(t.model)
+	if bucket == "" {
+		t.timeScaleFactor = nil
+		return
+	}
+	t.timeScaleFactor = cloneFloat64Ptr(t.timeScaleFactors[bucket])
+}
+
+func rimeTimeScaleFactorBucket(model string) string {
+	switch {
+	case model == "arcana":
+		return "arcana"
+	case model == "coda":
+		return "coda"
+	case strings.Contains(model, "mist"):
+		return "mist"
+	default:
+		return ""
+	}
+}
+
+func (t *RimeTTS) storeCommonParamsForModel() {
+	bucket := rimeCommonParamsBucket(t.model)
+	if bucket == "" {
+		return
+	}
+	if t.langByModel == nil {
+		t.langByModel = make(map[string]rimeStringOption)
+	}
+	t.langByModel[bucket] = rimeStringOption{value: t.lang, set: t.langSet || t.lang != ""}
+	if t.requestSampleRates == nil {
+		t.requestSampleRates = make(map[string]*int)
+	}
+	if t.requestSampleRateSet {
+		t.requestSampleRates[bucket] = cloneIntPtr(&t.requestSampleRate)
+	} else {
+		t.requestSampleRates[bucket] = nil
+	}
+}
+
+func (t *RimeTTS) storeTouchedCommonParamsForModel() {
+	if !t.langTouched && !t.requestSampleRateTouched {
+		return
+	}
+	bucket := rimeCommonParamsBucket(t.model)
+	if bucket == "" {
+		return
+	}
+	if t.langTouched {
+		if t.langByModel == nil {
+			t.langByModel = make(map[string]rimeStringOption)
+		}
+		t.langByModel[bucket] = rimeStringOption{value: t.lang, set: true}
+	}
+	if t.requestSampleRateTouched {
+		if t.requestSampleRates == nil {
+			t.requestSampleRates = make(map[string]*int)
+		}
+		t.requestSampleRates[bucket] = cloneIntPtr(&t.requestSampleRate)
+	}
+}
+
+func (t *RimeTTS) restoreCommonParamsForModel() {
+	if !t.langTouched {
+		bucket := rimeCommonParamsBucket(t.model)
+		if bucket == "" {
+			t.lang = ""
+			t.langSet = false
+		} else if opt, ok := t.langByModel[bucket]; ok {
+			t.lang = opt.value
+			t.langSet = opt.set
+		} else {
+			t.lang = ""
+			t.langSet = false
+		}
+	}
+	if !t.requestSampleRateTouched {
+		bucket := rimeCommonParamsBucket(t.model)
+		if bucket == "" {
+			t.requestSampleRate = 0
+			t.requestSampleRateSet = false
+		} else if value, ok := t.requestSampleRates[bucket]; ok && value != nil {
+			t.requestSampleRate = *value
+			t.requestSampleRateSet = true
+		} else {
+			t.requestSampleRate = 0
+			t.requestSampleRateSet = false
+		}
+	}
+}
+
+func rimeCommonParamsBucket(model string) string {
+	switch {
+	case model == "arcana":
+		return "arcana"
+	case model == "coda":
+		return "coda"
+	case strings.Contains(model, "mist"):
+		return "mist"
+	default:
+		return ""
+	}
+}
+
+func (t *RimeTTS) storeArcanaParamsForModel() {
+	if t.model != "arcana" {
+		return
+	}
+	t.arcanaRepetitionPenalty = cloneFloat64Ptr(t.repetitionPenalty)
+	t.arcanaTemperature = cloneFloat64Ptr(t.temperature)
+	t.arcanaTopP = cloneFloat64Ptr(t.topP)
+}
+
+func (t *RimeTTS) storeTouchedArcanaParamsForModel() {
+	if t.model != "arcana" {
+		return
+	}
+	if t.repetitionPenaltyTouched {
+		t.arcanaRepetitionPenalty = cloneFloat64Ptr(t.repetitionPenalty)
+	}
+	if t.temperatureTouched {
+		t.arcanaTemperature = cloneFloat64Ptr(t.temperature)
+	}
+	if t.topPTouched {
+		t.arcanaTopP = cloneFloat64Ptr(t.topP)
+	}
+}
+
+func (t *RimeTTS) restoreArcanaParamsForModel() {
+	if t.model != "arcana" {
+		return
+	}
+	if !t.repetitionPenaltyTouched {
+		t.repetitionPenalty = cloneFloat64Ptr(t.arcanaRepetitionPenalty)
+	}
+	if !t.temperatureTouched {
+		t.temperature = cloneFloat64Ptr(t.arcanaTemperature)
+	}
+	if !t.topPTouched {
+		t.topP = cloneFloat64Ptr(t.arcanaTopP)
+	}
+}
+
+func (t *RimeTTS) storeMistParamsForModel() {
+	if !strings.Contains(t.model, "mist") {
+		return
+	}
+	t.mistSpeedAlpha = cloneFloat64Ptr(t.speedAlpha)
+	t.mistReduceLatency = cloneBoolPtr(t.reduceLatency)
+	t.mistPauseBetweenBrackets = cloneBoolPtr(t.pauseBetweenBrackets)
+	t.mistPhonemizeBrackets = cloneBoolPtr(t.phonemizeBetweenBrackets)
+}
+
+func (t *RimeTTS) storeTouchedMistParamsForModel() {
+	if !strings.Contains(t.model, "mist") {
+		return
+	}
+	if t.speedAlphaTouched {
+		t.mistSpeedAlpha = cloneFloat64Ptr(t.speedAlpha)
+	}
+	if t.reduceLatencyTouched {
+		t.mistReduceLatency = cloneBoolPtr(t.reduceLatency)
+	}
+	if t.pauseBracketsTouched {
+		t.mistPauseBetweenBrackets = cloneBoolPtr(t.pauseBetweenBrackets)
+	}
+	if t.phonemizeBracketsTouched {
+		t.mistPhonemizeBrackets = cloneBoolPtr(t.phonemizeBetweenBrackets)
+	}
+}
+
+func (t *RimeTTS) restoreMistParamsForModel() {
+	if !strings.Contains(t.model, "mist") {
+		return
+	}
+	if !t.speedAlphaTouched {
+		t.speedAlpha = cloneFloat64Ptr(t.mistSpeedAlpha)
+	}
+	if !t.reduceLatencyTouched {
+		t.reduceLatency = cloneBoolPtr(t.mistReduceLatency)
+	}
+	if !t.pauseBracketsTouched {
+		t.pauseBetweenBrackets = cloneBoolPtr(t.mistPauseBetweenBrackets)
+	}
+	if !t.phonemizeBracketsTouched {
+		t.phonemizeBetweenBrackets = cloneBoolPtr(t.mistPhonemizeBrackets)
+	}
+}
+
+func (t *RimeTTS) storeTouchedMaxTokensForModel() {
+	if !t.maxTokensTouched {
+		return
+	}
+	t.storeMaxTokensForModel()
+}
+
+func (t *RimeTTS) storeMaxTokensForModel() {
+	bucket := rimeMaxTokensBucket(t.model)
+	if bucket == "" {
+		return
+	}
+	if t.maxTokensByModel == nil {
+		t.maxTokensByModel = make(map[string]*int)
+	}
+	t.maxTokensByModel[bucket] = cloneIntPtr(t.maxTokens)
+}
+
+func (t *RimeTTS) restoreMaxTokensForModel() {
+	if t.maxTokensTouched {
+		return
+	}
+	bucket := rimeMaxTokensBucket(t.model)
+	if bucket == "" {
+		t.maxTokens = nil
+		return
+	}
+	t.maxTokens = cloneIntPtr(t.maxTokensByModel[bucket])
+}
+
+func rimeMaxTokensBucket(model string) string {
+	switch model {
+	case "arcana", "coda":
+		return model
+	default:
+		return ""
+	}
+}
+
+func cloneRimeTimeScaleFactors(src map[string]*float64) map[string]*float64 {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]*float64, len(src))
+	for key, value := range src {
+		dst[key] = cloneFloat64Ptr(value)
+	}
+	return dst
+}
+
+func cloneRimeMaxTokensByModel(src map[string]*int) map[string]*int {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]*int, len(src))
+	for key, value := range src {
+		dst[key] = cloneIntPtr(value)
+	}
+	return dst
+}
+
+func cloneRimeStringOptions(src map[string]rimeStringOption) map[string]rimeStringOption {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]rimeStringOption, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func cloneRimeIntPtrs(src map[string]*int) map[string]*int {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]*int, len(src))
+	for key, value := range src {
+		dst[key] = cloneIntPtr(value)
+	}
+	return dst
+}
+
+func cloneFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneIntPtr(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func (t *RimeTTS) Label() string { return "rime.TTS" }
@@ -252,17 +625,29 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		voiceSet:                 t.voiceSet,
 		lang:                     t.lang,
 		langSet:                  t.langSet,
+		langByModel:              cloneRimeStringOptions(t.langByModel),
 		sampleRate:               t.sampleRate,
 		requestSampleRate:        t.requestSampleRate,
+		requestSampleRateSet:     t.requestSampleRateSet,
+		requestSampleRates:       cloneRimeIntPtrs(t.requestSampleRates),
 		timeScaleFactor:          t.timeScaleFactor,
+		timeScaleFactors:         cloneRimeTimeScaleFactors(t.timeScaleFactors),
 		repetitionPenalty:        t.repetitionPenalty,
+		arcanaRepetitionPenalty:  cloneFloat64Ptr(t.arcanaRepetitionPenalty),
 		temperature:              t.temperature,
+		arcanaTemperature:        cloneFloat64Ptr(t.arcanaTemperature),
 		topP:                     t.topP,
-		maxTokens:                t.maxTokens,
+		arcanaTopP:               cloneFloat64Ptr(t.arcanaTopP),
+		maxTokens:                cloneIntPtr(t.maxTokens),
+		maxTokensByModel:         cloneRimeMaxTokensByModel(t.maxTokensByModel),
 		speedAlpha:               t.speedAlpha,
+		mistSpeedAlpha:           cloneFloat64Ptr(t.mistSpeedAlpha),
 		reduceLatency:            t.reduceLatency,
+		mistReduceLatency:        cloneBoolPtr(t.mistReduceLatency),
 		pauseBetweenBrackets:     t.pauseBetweenBrackets,
+		mistPauseBetweenBrackets: cloneBoolPtr(t.mistPauseBetweenBrackets),
 		phonemizeBetweenBrackets: t.phonemizeBetweenBrackets,
+		mistPhonemizeBrackets:    cloneBoolPtr(t.mistPhonemizeBrackets),
 		useWebsocket:             t.useWebsocket,
 		segment:                  t.segment,
 		streamResponseTimeout:    t.streamResponseTimeout,
@@ -272,6 +657,10 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	for _, opt := range opts {
 		opt(candidate)
 	}
+	candidate.storeTouchedCommonParamsForModel()
+	candidate.storeTouchedArcanaParamsForModel()
+	candidate.storeTouchedMistParamsForModel()
+	candidate.storeTouchedMaxTokensForModel()
 	if err := validateRimeTimeScaleFactor(candidate); err != nil {
 		return err
 	}
@@ -286,16 +675,28 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.voiceSet = candidate.voiceSet
 	t.lang = candidate.lang
 	t.langSet = candidate.langSet
+	t.langByModel = candidate.langByModel
 	t.requestSampleRate = candidate.requestSampleRate
+	t.requestSampleRateSet = candidate.requestSampleRateSet
+	t.requestSampleRates = candidate.requestSampleRates
 	t.timeScaleFactor = candidate.timeScaleFactor
+	t.timeScaleFactors = candidate.timeScaleFactors
 	t.repetitionPenalty = candidate.repetitionPenalty
+	t.arcanaRepetitionPenalty = candidate.arcanaRepetitionPenalty
 	t.temperature = candidate.temperature
+	t.arcanaTemperature = candidate.arcanaTemperature
 	t.topP = candidate.topP
+	t.arcanaTopP = candidate.arcanaTopP
 	t.maxTokens = candidate.maxTokens
+	t.maxTokensByModel = candidate.maxTokensByModel
 	t.speedAlpha = candidate.speedAlpha
+	t.mistSpeedAlpha = candidate.mistSpeedAlpha
 	t.reduceLatency = candidate.reduceLatency
+	t.mistReduceLatency = candidate.mistReduceLatency
 	t.pauseBetweenBrackets = candidate.pauseBetweenBrackets
+	t.mistPauseBetweenBrackets = candidate.mistPauseBetweenBrackets
 	t.phonemizeBetweenBrackets = candidate.phonemizeBetweenBrackets
+	t.mistPhonemizeBrackets = candidate.mistPhonemizeBrackets
 	t.useWebsocket = candidate.useWebsocket
 	t.segment = candidate.segment
 	t.streamResponseTimeout = candidate.streamResponseTimeout
@@ -342,14 +743,9 @@ func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Re
 		return nil, err
 	}
 	reqBody := map[string]interface{}{
-		"speaker":      t.voice,
-		"text":         text,
-		"modelId":      t.model,
-		"lang":         t.lang,
-		"samplingRate": t.requestSampleRate,
-	}
-	if t.timeScaleFactor != nil {
-		reqBody["timeScaleFactor"] = *t.timeScaleFactor
+		"speaker": t.voice,
+		"text":    text,
+		"modelId": t.model,
 	}
 	addRimeModelParams(reqBody, t, true)
 
@@ -500,12 +896,6 @@ func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
 	query.Set("audioFormat", "pcm")
 	query.Set("samplingRate", strconv.Itoa(t.sampleRate))
 	query.Set("segment", t.segment)
-	if t.lang != "" || t.langSet {
-		query.Set("lang", t.lang)
-	}
-	if t.timeScaleFactor != nil {
-		query.Set("timeScaleFactor", strconv.FormatFloat(*t.timeScaleFactor, 'f', -1, 64))
-	}
 	addRimeModelQueryParams(query, t)
 	wsURL.RawQuery = query.Encode()
 	return wsURL
@@ -514,6 +904,7 @@ func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
 func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOnly bool) {
 	switch {
 	case t.model == "arcana":
+		addRimeCommonModelParams(params, t, includeHTTPOnly)
 		if t.repetitionPenalty != nil {
 			params["repetition_penalty"] = *t.repetitionPenalty
 		}
@@ -527,10 +918,12 @@ func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOn
 			params["max_tokens"] = *t.maxTokens
 		}
 	case t.model == "coda":
+		addRimeCommonModelParams(params, t, includeHTTPOnly)
 		if t.maxTokens != nil {
 			params["max_tokens"] = *t.maxTokens
 		}
 	case strings.Contains(t.model, "mist"):
+		addRimeCommonModelParams(params, t, includeHTTPOnly)
 		if t.speedAlpha != nil {
 			params["speedAlpha"] = *t.speedAlpha
 		}
@@ -543,6 +936,18 @@ func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOn
 		if includeHTTPOnly && t.model == "mistv2" && t.reduceLatency != nil {
 			params["reduceLatency"] = *t.reduceLatency
 		}
+	}
+}
+
+func addRimeCommonModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOnly bool) {
+	if t.lang != "" || t.langSet {
+		params["lang"] = t.lang
+	}
+	if includeHTTPOnly && t.requestSampleRateSet {
+		params["samplingRate"] = t.requestSampleRate
+	}
+	if t.timeScaleFactor != nil {
+		params["timeScaleFactor"] = *t.timeScaleFactor
 	}
 }
 
@@ -593,6 +998,7 @@ type rimeTTSChunkedStream struct {
 	sampleRate   int
 	requestID    string
 	requested    bool
+	audioSeen    bool
 	pendingPCM   []byte
 	pendingFinal bool
 	pendingErr   error
@@ -634,6 +1040,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 					s.pendingPCM = nil
 					s.pendingFinal = false
 					s.finalSent = true
+					if !s.audioSeen {
+						return nil, s.noAudioError()
+					}
 					return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
 				}
 				if s.pendingErr != nil {
@@ -643,6 +1052,7 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				continue
 			}
+			s.audioSeen = true
 			return s.annotateAudio(&tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              frameData,
@@ -657,6 +1067,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				s.pendingPCM = nil
 				if !s.finalSent {
 					s.finalSent = true
+					if !s.audioSeen {
+						return nil, s.noAudioError()
+					}
 					return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
 				}
 				return nil, io.EOF
@@ -664,6 +1077,17 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			return nil, rimeTTSReadBodyError(err)
 		}
 	}
+}
+
+func (s *rimeTTSChunkedStream) noAudioError() error {
+	if s.resp != nil && s.resp.Body != nil {
+		_ = s.resp.Body.Close()
+		s.resp = nil
+	}
+	if strings.TrimSpace(s.text) == "" {
+		return io.EOF
+	}
+	return llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
 }
 
 func rimeTTSReadBodyError(err error) error {
@@ -708,7 +1132,7 @@ func (s *rimeTTSChunkedStream) annotateAudio(audio *tts.SynthesizedAudio) *tts.S
 }
 
 func (s *rimeTTSChunkedStream) ensureResponse() error {
-	if s.resp != nil || s.requested || s.text == "" {
+	if s.resp != nil || s.requested {
 		return nil
 	}
 	s.requested = true
@@ -732,6 +1156,7 @@ func rimeTTSApplyLazyHTTPOptionUpdates(opts *RimeTTS, provider *RimeTTS) {
 	opts.lang = provider.lang
 	opts.langSet = provider.langSet
 	opts.requestSampleRate = provider.requestSampleRate
+	opts.requestSampleRateSet = provider.requestSampleRateSet
 	opts.timeScaleFactor = provider.timeScaleFactor
 
 	switch {

@@ -496,6 +496,12 @@ func TestRimeTTSModelOptionsAllowReferenceEmptyValue(t *testing.T) {
 	}
 	assertRimePayload(t, payload, "modelId", "")
 	assertRimePayload(t, payload, "speaker", "astra")
+	if _, ok := payload["lang"]; ok {
+		t.Fatalf("empty model lang = %#v, want omitted like reference", payload["lang"])
+	}
+	if _, ok := payload["samplingRate"]; ok {
+		t.Fatalf("empty model samplingRate = %#v, want omitted like reference", payload["samplingRate"])
+	}
 
 	updatable := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"))
 	if err := updatable.UpdateOptions(WithRimeTTSModel("")); err != nil {
@@ -505,8 +511,12 @@ func TestRimeTTSModelOptionsAllowReferenceEmptyValue(t *testing.T) {
 		t.Fatalf("updated model = %q, want explicit empty value", updatable.Model())
 	}
 	u := buildRimeTTSWebsocketURL(updatable)
-	assertRimePayload(t, queryMap(u.Query()), "modelId", "")
-	assertRimePayload(t, queryMap(u.Query()), "speaker", "lyra")
+	query := queryMap(u.Query())
+	assertRimePayload(t, query, "modelId", "")
+	assertRimePayload(t, query, "speaker", "lyra")
+	if _, ok := query["lang"]; ok {
+		t.Fatalf("empty model websocket lang = %#v, want omitted like reference", query["lang"])
+	}
 }
 
 func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
@@ -537,15 +547,283 @@ func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
 	}
 }
 
-func TestRimeTTSUpdateOptionsRejectsReferenceMistV2TimeScaleFactor(t *testing.T) {
+func TestRimeTTSUpdateOptionsDropsReferenceTimeScaleOnModelChange(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"), WithRimeTTSTimeScaleFactor(1.1))
 
-	err := provider.UpdateOptions(WithRimeTTSModel("mistv2"))
-	if err == nil || !strings.Contains(err.Error(), "time_scale_factor is not supported by the mistv2 model") {
-		t.Fatalf("UpdateOptions error = %v, want reference mistv2 time_scale_factor error", err)
+	if err := provider.UpdateOptions(WithRimeTTSModel("mistv2")); err != nil {
+		t.Fatalf("UpdateOptions model change error = %v, want stale coda timeScaleFactor ignored", err)
 	}
-	if provider.Model() != "coda" {
-		t.Fatalf("model after rejected update = %q, want unchanged coda", provider.Model())
+	if provider.Model() != "mistv2" {
+		t.Fatalf("model after update = %q, want mistv2", provider.Model())
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build mistv2 request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode mistv2 request: %v", err)
+	}
+	if _, ok := payload["timeScaleFactor"]; ok {
+		t.Fatalf("mistv2 payload timeScaleFactor = %#v, want omitted stale value", payload["timeScaleFactor"])
+	}
+
+	err = provider.UpdateOptions(WithRimeTTSTimeScaleFactor(1.2))
+	if err == nil || !strings.Contains(err.Error(), "time_scale_factor is not supported by the mistv2 model") {
+		t.Fatalf("UpdateOptions explicit timeScaleFactor error = %v, want reference mistv2 rejection", err)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions back to coda error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build coda request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode coda request: %v", err)
+	}
+	if got := payload["timeScaleFactor"]; got != 1.1 {
+		t.Fatalf("restored coda timeScaleFactor = %#v, want previous reference value 1.1", got)
+	}
+}
+
+func TestRimeTTSUpdateOptionsKeepsReferenceMaxTokensModelSpecific(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"), WithRimeTTSMaxTokens(64))
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build initial coda request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode initial coda request: %v", err)
+	}
+	if got := payload["max_tokens"]; got != float64(64) {
+		t.Fatalf("initial coda max_tokens = %#v, want 64", got)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana")); err != nil {
+		t.Fatalf("UpdateOptions arcana error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build arcana request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode arcana request: %v", err)
+	}
+	if _, ok := payload["max_tokens"]; ok {
+		t.Fatalf("arcana max_tokens = %#v, want omitted stale coda value", payload["max_tokens"])
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions back to coda error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build restored coda request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode restored coda request: %v", err)
+	}
+	if got := payload["max_tokens"]; got != float64(64) {
+		t.Fatalf("restored coda max_tokens = %#v, want previous reference value 64", got)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana"), WithRimeTTSMaxTokens(32)); err != nil {
+		t.Fatalf("UpdateOptions explicit arcana max_tokens error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build explicit arcana request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode explicit arcana request: %v", err)
+	}
+	if got := payload["max_tokens"]; got != float64(32) {
+		t.Fatalf("explicit arcana max_tokens = %#v, want 32", got)
+	}
+}
+
+func TestRimeTTSUpdateOptionsKeepsReferenceCommonParamsModelSpecific(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"))
+	if err := provider.UpdateOptions(WithRimeTTSLang("spa"), WithRimeTTSSampleRate(24000)); err != nil {
+		t.Fatalf("UpdateOptions coda common params error = %v", err)
+	}
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build updated coda request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated coda request: %v", err)
+	}
+	assertRimePayload(t, payload, "lang", "spa")
+	if got := payload["samplingRate"]; got != float64(24000) {
+		t.Fatalf("updated coda samplingRate = %#v, want 24000", got)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana")); err != nil {
+		t.Fatalf("UpdateOptions arcana error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build arcana request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode arcana request: %v", err)
+	}
+	if _, ok := payload["lang"]; ok {
+		t.Fatalf("arcana lang = %#v, want omitted stale coda value", payload["lang"])
+	}
+	if _, ok := payload["samplingRate"]; ok {
+		t.Fatalf("arcana samplingRate = %#v, want omitted stale coda value", payload["samplingRate"])
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions back to coda error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build restored coda request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode restored coda request: %v", err)
+	}
+	assertRimePayload(t, payload, "lang", "spa")
+	if got := payload["samplingRate"]; got != float64(24000) {
+		t.Fatalf("restored coda samplingRate = %#v, want 24000", got)
+	}
+}
+
+func TestRimeTTSUpdateOptionsKeepsReferenceArcanaParamsModelSpecific(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"))
+	if err := provider.UpdateOptions(
+		WithRimeTTSRepetitionPenalty(1.2),
+		WithRimeTTSTemperature(0.7),
+		WithRimeTTSTopP(0.8),
+	); err != nil {
+		t.Fatalf("UpdateOptions coda arcana-only params error = %v", err)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana")); err != nil {
+		t.Fatalf("UpdateOptions arcana error = %v", err)
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build arcana request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode arcana request: %v", err)
+	}
+	for _, key := range []string{"repetition_penalty", "temperature", "top_p"} {
+		if _, ok := payload[key]; ok {
+			t.Fatalf("arcana %s = %#v, want omitted value ignored while model was coda", key, payload[key])
+		}
+	}
+
+	if err := provider.UpdateOptions(
+		WithRimeTTSRepetitionPenalty(1.3),
+		WithRimeTTSTemperature(0.6),
+		WithRimeTTSTopP(0.9),
+	); err != nil {
+		t.Fatalf("UpdateOptions explicit arcana params error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions coda error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana")); err != nil {
+		t.Fatalf("UpdateOptions back to arcana error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build restored arcana request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode restored arcana request: %v", err)
+	}
+	if got := payload["repetition_penalty"]; got != 1.3 {
+		t.Fatalf("restored repetition_penalty = %#v, want 1.3", got)
+	}
+	if got := payload["temperature"]; got != 0.6 {
+		t.Fatalf("restored temperature = %#v, want 0.6", got)
+	}
+	if got := payload["top_p"]; got != 0.9 {
+		t.Fatalf("restored top_p = %#v, want 0.9", got)
+	}
+}
+
+func TestRimeTTSUpdateOptionsKeepsReferenceMistParamsModelSpecific(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("arcana"))
+	if err := provider.UpdateOptions(
+		WithRimeTTSSpeedAlpha(0.6),
+		WithRimeTTSReduceLatency(true),
+		WithRimeTTSPauseBetweenBrackets(true),
+		WithRimeTTSPhonemizeBetweenBrackets(false),
+	); err != nil {
+		t.Fatalf("UpdateOptions arcana mist-only params error = %v", err)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("mistv2")); err != nil {
+		t.Fatalf("UpdateOptions mistv2 error = %v", err)
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build mistv2 request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode mistv2 request: %v", err)
+	}
+	for _, key := range []string{"speedAlpha", "reduceLatency", "pauseBetweenBrackets", "phonemizeBetweenBrackets"} {
+		if _, ok := payload[key]; ok {
+			t.Fatalf("mistv2 %s = %#v, want omitted value ignored while model was arcana", key, payload[key])
+		}
+	}
+
+	if err := provider.UpdateOptions(
+		WithRimeTTSSpeedAlpha(0.7),
+		WithRimeTTSReduceLatency(true),
+		WithRimeTTSPauseBetweenBrackets(true),
+		WithRimeTTSPhonemizeBetweenBrackets(false),
+	); err != nil {
+		t.Fatalf("UpdateOptions explicit mist params error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions coda error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSModel("mistv2")); err != nil {
+		t.Fatalf("UpdateOptions back to mistv2 error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build restored mistv2 request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode restored mistv2 request: %v", err)
+	}
+	if got := payload["speedAlpha"]; got != 0.7 {
+		t.Fatalf("restored speedAlpha = %#v, want 0.7", got)
+	}
+	if got := payload["reduceLatency"]; got != true {
+		t.Fatalf("restored reduceLatency = %#v, want true", got)
+	}
+	if got := payload["pauseBetweenBrackets"]; got != true {
+		t.Fatalf("restored pauseBetweenBrackets = %#v, want true", got)
+	}
+	if got := payload["phonemizeBetweenBrackets"]; got != false {
+		t.Fatalf("restored phonemizeBetweenBrackets = %#v, want false", got)
 	}
 }
 
@@ -901,6 +1179,48 @@ func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+}
+
+func TestRimeTTSSynthesizeSendsReferenceEmptyText(t *testing.T) {
+	requests := 0
+	var text string
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		text, _ = payload["text"].(string)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after empty text Next = %d, want reference request", requests)
+	}
+	if text != "" {
+		t.Fatalf("request text = %q, want empty string", text)
+	}
+	if audio == nil || audio.Frame == nil || string(audio.Frame.Data) != string([]byte{0x01, 0x02}) {
+		t.Fatalf("empty text audio = %#v, want provider audio", audio)
 	}
 }
 
@@ -1303,6 +1623,45 @@ func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 		t.Fatalf("Synthesize() error = %v", err)
 	}
 	defer stream.Close()
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+	audio, err = stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio = (%+v, %v), want nil EOF", audio, err)
+	}
+}
+
+func TestRimeTTSEmptyAudioResponseReportsReferenceNoAudio(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := &rimeCloseCountBody{Reader: bytes.NewReader(nil)}
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       body,
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
 	audio, err := stream.Next()
 	if audio != nil {
 		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
