@@ -741,10 +741,13 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 			cancel()
 			return nil
 		}
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
-		return llm.NewAPIStatusError("Rime TTS request failed", resp.StatusCode, "", string(respBody))
+		message := http.StatusText(resp.StatusCode)
+		if message == "" {
+			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
 		resp.Body.Close()

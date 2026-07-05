@@ -155,8 +155,11 @@ func TestRimeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
-	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	if statusErr.Message != "Too Many Requests" {
+		t.Fatalf("message = %q, want reference reason phrase", statusErr.Message)
+	}
+	if statusErr.Body != nil {
+		t.Fatalf("body = %#v, want nil like reference ClientResponseError", statusErr.Body)
 	}
 }
 
