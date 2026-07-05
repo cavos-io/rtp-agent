@@ -671,7 +671,6 @@ func awsTimedStringsOffset(items []types.Item, startTimeOffset float64) []stt.Ti
 			EndTime:         item.EndTime + startTimeOffset,
 			StartTimeOffset: startTimeOffset,
 			Confidence:      aws.ToFloat64(item.Confidence),
-			SpeakerID:       aws.ToString(item.Speaker),
 		})
 	}
 	return words

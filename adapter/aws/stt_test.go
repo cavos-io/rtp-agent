@@ -19,7 +19,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/stt"
 )
 
-func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
+func TestAWSSpeechDataFromAlternativeOmitsReferenceWordSpeakerLabels(t *testing.T) {
 	alt := types.Alternative{
 		Transcript: awsconfig.String("hello world"),
 		Items: []types.Item{
@@ -34,6 +34,7 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 			{
 				Type:    types.ItemTypePunctuation,
 				Content: awsconfig.String(","),
+				Speaker: awsconfig.String("spk_punct"),
 			},
 			{
 				Type:       types.ItemTypePronunciation,
@@ -56,11 +57,14 @@ func TestAWSSpeechDataFromAlternativePreservesPronunciationItems(t *testing.T) {
 	if len(data.Words) != 3 {
 		t.Fatalf("words = %d, want pronunciation plus punctuation items", len(data.Words))
 	}
-	if got := data.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.94 || got.SpeakerID != "spk_0" {
-		t.Fatalf("first word = %+v, want hello timing with speaker", got)
+	if got := data.Words[0]; got.Text != "hello" || got.StartTime != 0.1 || got.EndTime != 0.3 || got.Confidence != 0.94 || got.SpeakerID != "" {
+		t.Fatalf("first word = %+v, want hello timing without speaker", got)
 	}
-	if got := data.Words[2]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.91 || got.SpeakerID != "spk_1" {
-		t.Fatalf("second word = %+v, want world timing with speaker", got)
+	if got := data.Words[2]; got.Text != "world" || got.StartTime != 0.4 || got.EndTime != 0.8 || got.Confidence != 0.91 || got.SpeakerID != "" {
+		t.Fatalf("second word = %+v, want world timing without speaker", got)
+	}
+	if got := data.Words[1]; got.Text != "," || got.SpeakerID != "" {
+		t.Fatalf("punctuation word = %+v, want punctuation without speaker", got)
 	}
 
 	punctuationOnly := awsSpeechDataFromAlternative(types.Alternative{
