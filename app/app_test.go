@@ -12287,6 +12287,7 @@ func TestRimeTTSFallbackPassesReferenceOptions(t *testing.T) {
 	t.Cleanup(func() { http.DefaultClient = originalClient })
 
 	sampleRate := 24000
+	maxTokens := 1200
 	provider, err := fallbackTTSFromProvider(AppConfig{
 		RimeAPIKey:    "test-rime-key",
 		TTSBaseURL:    "https://rime.example/v1/rime-tts",
@@ -12295,6 +12296,7 @@ func TestRimeTTSFallbackPassesReferenceOptions(t *testing.T) {
 		TTSLanguage:   "spa",
 		TTSSampleRate: &sampleRate,
 		TTSSpeed:      1.1,
+		TTSMaxTokens:  &maxTokens,
 	}, providerRime)
 	if err != nil {
 		t.Fatalf("fallbackTTSFromProvider() error = %v", err)
@@ -12322,6 +12324,9 @@ func TestRimeTTSFallbackPassesReferenceOptions(t *testing.T) {
 	stream, err := provider.Synthesize(context.Background(), "hola")
 	if err != nil {
 		t.Fatalf("Synthesize() error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("stream.Next() error = %v", err)
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("stream.Close() error = %v", err)
@@ -12353,6 +12358,9 @@ func TestRimeTTSFallbackPassesReferenceOptions(t *testing.T) {
 	}
 	if got, want := gotPayload["timeScaleFactor"], 1.1; got != want {
 		t.Fatalf("payload timeScaleFactor = %#v, want %#v", got, want)
+	}
+	if got, want := gotPayload["max_tokens"], float64(1200); got != want {
+		t.Fatalf("payload max_tokens = %#v, want %#v", got, want)
 	}
 	if _, ok := gotPayload["audioFormat"]; ok {
 		t.Fatalf("payload audioFormat = %#v, want omitted for HTTP reference payload", gotPayload["audioFormat"])
