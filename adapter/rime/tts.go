@@ -564,6 +564,7 @@ type rimeTTSChunkedStream struct {
 	sampleRate   int
 	requestID    string
 	requested    bool
+	pendingPCM   []byte
 	pendingFinal bool
 	pendingErr   error
 	finalSent    bool
@@ -589,41 +590,51 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
-	buf := make([]byte, 4096)
-	n, err := s.resp.Body.Read(buf)
-	if n > 0 {
-		if err == io.EOF {
-			s.pendingFinal = true
-		} else if err != nil {
-			s.pendingErr = rimeTTSReadBodyError(err)
-		}
-		return s.annotateAudio(&tts.SynthesizedAudio{
-			Frame: &model.AudioFrame{
-				Data:              buf[:n],
-				SampleRate:        uint32(s.sampleRate),
-				NumChannels:       1,
-				SamplesPerChannel: uint32(n / 2),
-			},
-		}), nil
-	}
-	if err != nil {
-		if err == io.EOF {
-			if !s.finalSent {
-				s.finalSent = true
-				return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
+	for {
+		buf := make([]byte, 4096)
+		n, err := s.resp.Body.Read(buf)
+		if n > 0 {
+			if err == io.EOF {
+				s.pendingFinal = true
+			} else if err != nil {
+				s.pendingErr = rimeTTSReadBodyError(err)
 			}
-			return nil, io.EOF
+			frameData := rimeTTSPCMFrameData(&s.pendingPCM, buf[:n])
+			if len(frameData) == 0 {
+				if s.pendingFinal {
+					s.pendingPCM = nil
+					s.pendingFinal = false
+					s.finalSent = true
+					return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
+				}
+				if s.pendingErr != nil {
+					err := s.pendingErr
+					s.pendingErr = nil
+					return nil, err
+				}
+				continue
+			}
+			return s.annotateAudio(&tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              frameData,
+					SampleRate:        uint32(s.sampleRate),
+					NumChannels:       1,
+					SamplesPerChannel: uint32(len(frameData) / 2),
+				},
+			}), nil
 		}
-		return nil, rimeTTSReadBodyError(err)
+		if err != nil {
+			if err == io.EOF {
+				s.pendingPCM = nil
+				if !s.finalSent {
+					s.finalSent = true
+					return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
+				}
+				return nil, io.EOF
+			}
+			return nil, rimeTTSReadBodyError(err)
+		}
 	}
-	return s.annotateAudio(&tts.SynthesizedAudio{
-		Frame: &model.AudioFrame{
-			Data:              buf[:n],
-			SampleRate:        uint32(s.sampleRate),
-			NumChannels:       1,
-			SamplesPerChannel: uint32(n / 2),
-		},
-	}), nil
 }
 
 func rimeTTSReadBodyError(err error) error {
@@ -635,6 +646,24 @@ func rimeTTSReadBodyError(err error) error {
 		return llm.NewAPITimeoutError(err.Error())
 	}
 	return rimeTTSConnectionError("Rime TTS stream read failed", err)
+}
+
+func rimeTTSPCMFrameData(pending *[]byte, data []byte) []byte {
+	if len(*pending) > 0 {
+		combined := make([]byte, 0, len(*pending)+len(data))
+		combined = append(combined, (*pending)...)
+		combined = append(combined, data...)
+		data = combined
+		*pending = nil
+	}
+	if len(data)%2 != 0 {
+		*pending = append((*pending)[:0], data[len(data)-1])
+		data = data[:len(data)-1]
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	return bytes.Clone(data)
 }
 
 func (s *rimeTTSChunkedStream) annotateAudio(audio *tts.SynthesizedAudio) *tts.SynthesizedAudio {
