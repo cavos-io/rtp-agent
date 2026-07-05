@@ -316,6 +316,24 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	}
 }
 
+func TestRimeTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
+	provider := NewRimeTTS("test-key", "")
+
+	if err := provider.UpdateOptions(WithRimeTTSVoice("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertRimePayload(t, payload, "speaker", "")
+}
+
 func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 	if provider.Capabilities().Streaming {

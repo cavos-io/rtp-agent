@@ -90,9 +90,7 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 
 func WithRimeTTSVoice(voice string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if voice != "" {
-			t.voice = voice
-		}
+		t.voice = voice
 	}
 }
 
