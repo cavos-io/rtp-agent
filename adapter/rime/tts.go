@@ -723,7 +723,6 @@ type rimeTTSSynthesizeStream struct {
 	started     bool
 	readStarted bool
 	pendingText string
-	emptyFinal  bool
 	inputEnded  bool
 
 	writeMessage func(int, []byte) error
@@ -736,13 +735,12 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return nil
 	}
-	s.emptyFinal = false
+	if s.closed {
+		return io.ErrClosedPipe
+	}
 	s.pendingText += text
 	if err := s.sendCompleteSentencesLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -754,11 +752,11 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 func (s *rimeTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return nil
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	return s.flushLocked(false)
 }
@@ -766,16 +764,27 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 func (s *rimeTTSSynthesizeStream) EndInput() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.closed {
-		return io.ErrClosedPipe
-	}
 	if s.inputEnded {
 		return nil
+	}
+	if s.closed {
+		return io.ErrClosedPipe
 	}
 	if err := s.flushLocked(true); err != nil {
 		return err
 	}
 	s.inputEnded = true
+	if !s.started {
+		s.closed = true
+		s.cancel()
+		if s.events != nil {
+			close(s.events)
+		}
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return s.closeConnection()
+	}
 	return nil
 }
 
@@ -783,19 +792,12 @@ func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
-		s.emptyFinal = false
 		if err := s.sendSentenceLocked(text); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
 	}
 	if !s.started {
-		if !s.emptyFinal {
-			audio := &tts.SynthesizedAudio{IsFinal: true}
-			s.annotateAudio(audio)
-			s.events <- audio
-			s.emptyFinal = true
-		}
 		return nil
 	}
 	if !sendProviderFlush {

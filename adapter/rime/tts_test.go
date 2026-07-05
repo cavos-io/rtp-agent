@@ -1067,9 +1067,10 @@ func TestRimeTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestRimeTTSStreamEmptyFlushEmitsReferenceFinalMarker(t *testing.T) {
+func TestRimeTTSStreamEmptyFlushIsReferenceNoop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	closeCalls := 0
 	stream := &rimeTTSSynthesizeStream{
 		ctx:    ctx,
 		cancel: cancel,
@@ -1080,7 +1081,7 @@ func TestRimeTTSStreamEmptyFlushEmitsReferenceFinalMarker(t *testing.T) {
 			return nil
 		},
 		closeConn: func() error {
-			t.Fatal("empty Flush closed connection, want stream remain open")
+			closeCalls++
 			return nil
 		},
 	}
@@ -1088,12 +1089,23 @@ func TestRimeTTSStreamEmptyFlushEmitsReferenceFinalMarker(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next error = %v, want final marker", err)
+	select {
+	case audio := <-stream.events:
+		t.Fatalf("empty Flush audio = %#v, want no event", audio)
+	default:
 	}
-	if audio == nil || !audio.IsFinal || audio.Frame != nil {
-		t.Fatalf("Next = %#v, want boundary-only final marker", audio)
+	if closeCalls != 0 {
+		t.Fatalf("empty Flush close calls = %d, want 0", closeCalls)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after empty EndInput = (%#v, %v), want nil EOF", audio, err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("empty EndInput close calls = %d, want 1", closeCalls)
 	}
 }
 
@@ -1142,12 +1154,21 @@ func TestRimeTTSStreamDoesNotReadProviderBeforeReferenceInput(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("empty Flush error = %v", err)
 	}
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next error = %v, want empty-turn final marker", err)
+	select {
+	case audio := <-rimeStream.events:
+		t.Fatalf("empty Flush audio = %+v, want no event", audio)
+	default:
 	}
-	if audio == nil || !audio.IsFinal {
-		t.Fatalf("Next audio = %+v, want final marker", audio)
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after empty EndInput = (%+v, %v), want nil EOF", audio, err)
 	}
 }
 
