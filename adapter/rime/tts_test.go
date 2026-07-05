@@ -213,8 +213,8 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	if provider.Model() != "coda" {
 		t.Fatalf("model = %q, want coda", provider.Model())
 	}
-	if provider.SampleRate() != 24000 {
-		t.Fatalf("sample rate = %d, want 24000", provider.SampleRate())
+	if provider.SampleRate() != 22050 {
+		t.Fatalf("sample rate = %d, want constructor sample rate unchanged like reference", provider.SampleRate())
 	}
 	u := buildRimeTTSWebsocketURL(provider)
 	if got := u.Scheme + "://" + u.Host + u.Path; got != "wss://rime.example/ws3" {
@@ -224,9 +224,21 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	assertRimePayload(t, queryMap(query), "speaker", "ember")
 	assertRimePayload(t, queryMap(query), "modelId", "coda")
 	assertRimePayload(t, queryMap(query), "lang", "spa")
-	assertRimePayload(t, queryMap(query), "samplingRate", "24000")
+	assertRimePayload(t, queryMap(query), "samplingRate", "22050")
 	assertRimePayload(t, queryMap(query), "timeScaleFactor", "1.2")
 	assertRimePayload(t, queryMap(query), "segment", "immediate")
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hola")
+	if err != nil {
+		t.Fatalf("build updated request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated request: %v", err)
+	}
+	if got := payload["samplingRate"]; got != float64(24000) {
+		t.Fatalf("HTTP samplingRate = %#v, want updated request sample rate", got)
+	}
 }
 
 func TestRimeTTSUpdateOptionsRejectsReferenceMistV2TimeScaleFactor(t *testing.T) {
@@ -420,6 +432,57 @@ func TestRimeTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) {
+	cases := []struct {
+		name      string
+		model     string
+		wantLimit time.Duration
+	}{
+		{name: "arcana", model: "arcana", wantLimit: 240 * time.Second},
+		{name: "coda", model: "coda", wantLimit: 240 * time.Second},
+		{name: "mist", model: "mistv3", wantLimit: 30 * time.Second},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var hasDeadline bool
+			var remaining time.Duration
+			originalClient := http.DefaultClient
+			t.Cleanup(func() { http.DefaultClient = originalClient })
+			http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				deadline, ok := r.Context().Deadline()
+				hasDeadline = ok
+				if ok {
+					remaining = time.Until(deadline)
+				}
+				return &http.Response{
+					StatusCode: http.StatusTeapot,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"error":"stop"}`)),
+					Request:    r,
+				}, nil
+			})}
+
+			provider := NewRimeTTS("test-key", "", WithRimeTTSModel(tc.model))
+			stream, err := provider.Synthesize(context.Background(), "hello")
+			if err != nil {
+				t.Fatalf("Synthesize() error = %v", err)
+			}
+			defer stream.Close()
+			_, err = stream.Next()
+			if err == nil {
+				t.Fatal("Next error = nil, want provider error after request capture")
+			}
+			if !hasDeadline {
+				t.Fatal("request context has no deadline, want reference total timeout")
+			}
+			if remaining <= 0 || remaining > tc.wantLimit {
+				t.Fatalf("request context deadline remaining = %v, want bounded by %s total timeout", remaining, tc.wantLimit)
+			}
+		})
+	}
+}
+
 func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	requests := 0
 	originalClient := http.DefaultClient
@@ -520,9 +583,54 @@ func TestRimeTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) 
 	}
 }
 
+func TestRimeTTSChunkedStreamKeepsAudioBeforeReferenceReadFailure(t *testing.T) {
+	readErr := errors.New("rime response broke after audio")
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: &rimeAudioThenErrorReader{data: []byte{0x01, 0x00}, err: readErr}},
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want audio before read error", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x00}) {
+		t.Fatalf("first Next audio = %+v, want provider audio bytes", audio)
+	}
+	audio, err = stream.Next()
+	if err == nil {
+		t.Fatal("second Next error = nil, want APIConnectionError")
+	}
+	if audio != nil {
+		t.Fatalf("second Next audio = %+v, want nil with read error", audio)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestRimeTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: rimeTimeoutReader{}},
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestRimeTTSChunkedStreamNetReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: rimeNetTimeoutReader{}},
 		sampleRate: 22050,
 	}
 	defer stream.Close()
@@ -626,14 +734,15 @@ func TestRimeTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestRimeTTSRejectsNonAudioResponse(t *testing.T) {
+func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte(`{"error":"not audio"}`))}
 	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"error":"not audio"}`)),
+			Body:       body,
 			Request:    r,
 		}, nil
 	})}
@@ -647,9 +756,20 @@ func TestRimeTTSRejectsNonAudioResponse(t *testing.T) {
 		t.Fatalf("Synthesize() error = %v", err)
 	}
 	defer stream.Close()
-	_, err = stream.Next()
-	if !strings.Contains(err.Error(), "non-audio") {
-		t.Fatalf("Next error = %q, want non-audio guidance", err)
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+	audio, err = stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio = (%+v, %v), want nil EOF", audio, err)
 	}
 }
 
@@ -728,7 +848,7 @@ func TestRimeTTSWebsocketMessagesMatchReference(t *testing.T) {
 	assertRimePayload(t, flushPayload, "contextId", "ctx-1")
 }
 
-func TestRimeTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+func TestRimeTTSStreamSendsSentencesAndDrainsTailLikeReference(t *testing.T) {
 	var writes []map[string]any
 	stream := &rimeTTSSynthesizeStream{
 		contextID: "ctx-1",
@@ -753,12 +873,70 @@ func TestRimeTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	if len(writes) != 3 {
-		t.Fatalf("writes after Flush = %d, want tail text and flush", len(writes))
+	if len(writes) != 2 {
+		t.Fatalf("writes after Flush = %d, want completed sentence and tail text only", len(writes))
 	}
 	assertRimePayload(t, writes[1], "text", "Tail ")
+	if _, ok := writes[1]["operation"]; ok {
+		t.Fatalf("tail write operation = %#v, want text packet without provider flush", writes[1])
+	}
+
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if len(writes) != 3 {
+		t.Fatalf("writes after EndInput = %d, want provider flush", len(writes))
+	}
 	assertRimePayload(t, writes[2], "operation", "flush")
 	assertRimePayload(t, writes[2], "contextId", "ctx-1")
+}
+
+func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+
+	if err := stream.PushText("Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("writes after EndInput = %d, want tail text and flush", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "Tail ")
+	assertRimePayload(t, writes[1], "operation", "flush")
+	assertRimePayload(t, writes[1], "contextId", "ctx-1")
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want nil", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want nil", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("writes after closed input = %d, want no extra provider messages", len(writes))
+	}
 }
 
 func TestRimeTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
@@ -832,6 +1010,36 @@ func TestRimeTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamCloseDoesNotSendReferenceEOS(t *testing.T) {
+	cancelled := false
+	writeCalls := 0
+	closeCalls := 0
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() { cancelled = true },
+		writeMessage: func(int, []byte) error {
+			writeCalls++
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called on Close")
+	}
+	if writeCalls != 0 {
+		t.Fatalf("write calls = %d, want 0 reference eos messages", writeCalls)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+}
+
 func TestRimeTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &rimeTTSSynthesizeStream{
@@ -859,9 +1067,10 @@ func TestRimeTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestRimeTTSStreamEmptyFlushEmitsReferenceFinalMarker(t *testing.T) {
+func TestRimeTTSStreamEmptyFlushIsReferenceNoop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	closeCalls := 0
 	stream := &rimeTTSSynthesizeStream{
 		ctx:    ctx,
 		cancel: cancel,
@@ -872,7 +1081,7 @@ func TestRimeTTSStreamEmptyFlushEmitsReferenceFinalMarker(t *testing.T) {
 			return nil
 		},
 		closeConn: func() error {
-			t.Fatal("empty Flush closed connection, want stream remain open")
+			closeCalls++
 			return nil
 		},
 	}
@@ -880,12 +1089,138 @@ func TestRimeTTSStreamEmptyFlushEmitsReferenceFinalMarker(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next error = %v, want final marker", err)
+	select {
+	case audio := <-stream.events:
+		t.Fatalf("empty Flush audio = %#v, want no event", audio)
+	default:
 	}
-	if audio == nil || !audio.IsFinal || audio.Frame != nil {
-		t.Fatalf("Next = %#v, want boundary-only final marker", audio)
+	if closeCalls != 0 {
+		t.Fatalf("empty Flush close calls = %d, want 0", closeCalls)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after empty EndInput = (%#v, %v), want nil EOF", audio, err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("empty EndInput close calls = %d, want 1", closeCalls)
+	}
+}
+
+func TestRimeTTSStreamDoesNotReadProviderBeforeReferenceInput(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+		close(serverClosed)
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	rimeStream := stream.(*rimeTTSSynthesizeStream)
+	select {
+	case <-serverClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for provider close")
+	}
+	select {
+	case err := <-rimeStream.errCh:
+		t.Fatalf("read error before input = %v, want receive delayed like reference", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("empty Flush error = %v", err)
+	}
+	select {
+	case audio := <-rimeStream.events:
+		t.Fatalf("empty Flush audio = %+v, want no event", audio)
+	default:
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after empty EndInput = (%+v, %v), want nil EOF", audio, err)
+	}
+}
+
+func TestRimeTTSStreamDoneWithoutAudioReportsReferenceNoAudio(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read text message: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: Hello there.") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
 	}
 }
 
@@ -1110,6 +1445,50 @@ func TestRimeTTSReadTimeoutReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	releaseServer := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		<-releaseServer
+	}))
+	defer server.Close()
+	defer close(releaseServer)
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+		WithRimeTTSStreamResponseTimeout(20*time.Millisecond),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("This sentence is definitely long enough."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 	audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"chunk","data":"AQIDBA=="}`), 24000)
 	if err != nil {
@@ -1257,6 +1636,22 @@ func (r *rimeFinalEOFReader) Read(p []byte) (int, error) {
 
 func (r *rimeFinalEOFReader) Close() error { return nil }
 
+type rimeAudioThenErrorReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *rimeAudioThenErrorReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), r.err
+}
+
+func (r *rimeAudioThenErrorReader) Close() error { return nil }
+
 type rimeErrorReader struct{}
 
 func (rimeErrorReader) Read([]byte) (int, error) {
@@ -1272,3 +1667,17 @@ func (rimeTimeoutReader) Read([]byte) (int, error) {
 }
 
 func (rimeTimeoutReader) Close() error { return nil }
+
+type rimeNetTimeoutReader struct{}
+
+func (rimeNetTimeoutReader) Read([]byte) (int, error) {
+	return 0, rimeNetTimeoutError{}
+}
+
+func (rimeNetTimeoutReader) Close() error { return nil }
+
+type rimeNetTimeoutError struct{}
+
+func (rimeNetTimeoutError) Error() string   { return "i/o timeout" }
+func (rimeNetTimeoutError) Timeout() bool   { return true }
+func (rimeNetTimeoutError) Temporary() bool { return true }

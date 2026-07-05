@@ -4741,6 +4741,56 @@ func liveKitTTSOptionsFromConfig(cfg AppConfig) ([]adapterlivekit.TTSOption, err
 	return ttsOpts, nil
 }
 
+func rimeTTSOptionsFromConfig(cfg AppConfig) []rime.RimeTTSOption {
+	ttsOpts := []rime.RimeTTSOption{}
+	if cfg.TTSBaseURL != "" {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSBaseURL))
+	}
+	if cfg.TTSWebsocketURL != "" {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSWebsocketURL), rime.WithRimeTTSWebsocket(true))
+	}
+	if cfg.TTSModel != "" {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSModel(cfg.TTSModel))
+	}
+	if cfg.TTSLanguage != "" {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSLang(cfg.TTSLanguage))
+	}
+	if cfg.TTSSampleRate != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSSampleRate(*cfg.TTSSampleRate))
+	}
+	if cfg.TTSSpeed != 0 {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSTimeScaleFactor(cfg.TTSSpeed))
+	}
+	if cfg.TTSDeliveryMode != "" {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSSegment(cfg.TTSDeliveryMode))
+	}
+	if cfg.TTSTemperature != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSTemperature(*cfg.TTSTemperature))
+	}
+	if cfg.TTSTopP != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSTopP(*cfg.TTSTopP))
+	}
+	if cfg.TTSMaxTokens != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSMaxTokens(*cfg.TTSMaxTokens))
+	}
+	if repetitionPenalty := modelOptionFloat(cfg.TTSModelOptions, "repetition_penalty"); repetitionPenalty != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSRepetitionPenalty(*repetitionPenalty))
+	}
+	if speedAlpha := modelOptionFloat(cfg.TTSModelOptions, "speed_alpha"); speedAlpha != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSSpeedAlpha(*speedAlpha))
+	}
+	if reduceLatency := modelOptionBool(cfg.TTSModelOptions, "reduce_latency"); reduceLatency != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSReduceLatency(*reduceLatency))
+	}
+	if pauseBetweenBrackets := modelOptionBool(cfg.TTSModelOptions, "pause_between_brackets"); pauseBetweenBrackets != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSPauseBetweenBrackets(*pauseBetweenBrackets))
+	}
+	if phonemizeBetweenBrackets := modelOptionBool(cfg.TTSModelOptions, "phonemize_between_brackets"); phonemizeBetweenBrackets != nil {
+		ttsOpts = append(ttsOpts, rime.WithRimeTTSPhonemizeBetweenBrackets(*phonemizeBetweenBrackets))
+	}
+	return ttsOpts
+}
+
 func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error) {
 	switch normalizeProvider(provider) {
 	case providerOpenAI:
@@ -5235,29 +5285,7 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return respeecher.NewRespeecherTTS(cfg.RespeecherAPIKey, "", ttsOpts...), nil
 	case providerRime:
-		ttsOpts := []rime.RimeTTSOption{}
-		if cfg.TTSBaseURL != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSBaseURL))
-		}
-		if cfg.TTSWebsocketURL != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSWebsocketURL), rime.WithRimeTTSWebsocket(true))
-		}
-		if cfg.TTSModel != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSModel(cfg.TTSModel))
-		}
-		if cfg.TTSLanguage != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSLang(cfg.TTSLanguage))
-		}
-		if cfg.TTSSampleRate != nil {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSSampleRate(*cfg.TTSSampleRate))
-		}
-		if cfg.TTSSpeed != 0 {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSTimeScaleFactor(cfg.TTSSpeed))
-		}
-		if cfg.TTSDeliveryMode != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSSegment(cfg.TTSDeliveryMode))
-		}
-		return rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, ttsOpts...), nil
+		return rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, rimeTTSOptionsFromConfig(cfg)...), nil
 	case providerSarvam:
 		ttsOpts := []sarvam.SarvamTTSOption{}
 		if cfg.TTSBaseURL != "" {
@@ -6977,29 +7005,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = respeecher.NewRespeecherTTS(cfg.RespeecherAPIKey, "", ttsOpts...)
 	case providerRime:
-		ttsOpts := []rime.RimeTTSOption{}
-		if cfg.TTSBaseURL != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSBaseURL))
-		}
-		if cfg.TTSWebsocketURL != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSBaseURL(cfg.TTSWebsocketURL), rime.WithRimeTTSWebsocket(true))
-		}
-		if cfg.TTSModel != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSModel(cfg.TTSModel))
-		}
-		if cfg.TTSLanguage != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSLang(cfg.TTSLanguage))
-		}
-		if cfg.TTSSampleRate != nil {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSSampleRate(*cfg.TTSSampleRate))
-		}
-		if cfg.TTSSpeed != 0 {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSTimeScaleFactor(cfg.TTSSpeed))
-		}
-		if cfg.TTSDeliveryMode != "" {
-			ttsOpts = append(ttsOpts, rime.WithRimeTTSSegment(cfg.TTSDeliveryMode))
-		}
-		a.TTS = rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, ttsOpts...)
+		a.TTS = rime.NewRimeTTS(cfg.RimeAPIKey, cfg.TTSVoice, rimeTTSOptionsFromConfig(cfg)...)
 	case providerSarvam:
 		ttsOpts := []sarvam.SarvamTTSOption{}
 		if cfg.TTSBaseURL != "" {

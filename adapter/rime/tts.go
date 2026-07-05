@@ -25,15 +25,18 @@ import (
 )
 
 const (
-	defaultRimeHTTPBaseURL = "https://users.rime.ai/v1/rime-tts"
-	defaultRimeWSBaseURL   = "wss://users-ws.rime.ai"
-	defaultRimeModel       = "arcana"
-	defaultRimeArcanaVoice = "astra"
-	defaultRimeMistVoice   = "cove"
-	defaultRimeCodaVoice   = "lyra"
-	defaultRimeLang        = "eng"
-	defaultRimeSampleRate  = 22050
-	defaultRimeSegment     = "bySentence"
+	defaultRimeHTTPBaseURL   = "https://users.rime.ai/v1/rime-tts"
+	defaultRimeWSBaseURL     = "wss://users-ws.rime.ai"
+	defaultRimeModel         = "arcana"
+	defaultRimeArcanaVoice   = "astra"
+	defaultRimeMistVoice     = "cove"
+	defaultRimeCodaVoice     = "lyra"
+	defaultRimeLang          = "eng"
+	defaultRimeSampleRate    = 22050
+	defaultRimeSegment       = "bySentence"
+	defaultRimeStreamTimeout = 10 * time.Second
+	rimeArcanaModelTimeout   = 240 * time.Second
+	rimeMistModelTimeout     = 30 * time.Second
 )
 
 type RimeTTS struct {
@@ -45,6 +48,7 @@ type RimeTTS struct {
 	voice                    string
 	lang                     string
 	sampleRate               int
+	requestSampleRate        int
 	timeScaleFactor          *float64
 	repetitionPenalty        *float64
 	temperature              *float64
@@ -56,6 +60,7 @@ type RimeTTS struct {
 	phonemizeBetweenBrackets *bool
 	useWebsocket             bool
 	segment                  string
+	streamResponseTimeout    time.Duration
 	closed                   bool
 }
 
@@ -94,7 +99,7 @@ func WithRimeTTSVoice(voice string) RimeTTSOption {
 func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if sampleRate > 0 {
-			t.sampleRate = sampleRate
+			t.requestSampleRate = sampleRate
 		}
 	}
 }
@@ -175,21 +180,32 @@ func WithRimeTTSSegment(segment string) RimeTTSOption {
 	}
 }
 
+func WithRimeTTSStreamResponseTimeout(timeout time.Duration) RimeTTSOption {
+	return func(t *RimeTTS) {
+		if timeout >= 0 {
+			t.streamResponseTimeout = timeout
+		}
+	}
+}
+
 func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("RIME_API_KEY")
 	}
 	provider := &RimeTTS{
-		apiKey:     apiKey,
-		baseURL:    defaultRimeHTTPBaseURL,
-		model:      defaultRimeModel,
-		lang:       defaultRimeLang,
-		sampleRate: defaultRimeSampleRate,
-		segment:    defaultRimeSegment,
+		apiKey:                apiKey,
+		baseURL:               defaultRimeHTTPBaseURL,
+		model:                 defaultRimeModel,
+		lang:                  defaultRimeLang,
+		sampleRate:            defaultRimeSampleRate,
+		requestSampleRate:     defaultRimeSampleRate,
+		segment:               defaultRimeSegment,
+		streamResponseTimeout: defaultRimeStreamTimeout,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.sampleRate = provider.requestSampleRate
 	if provider.useWebsocket && provider.baseURL == defaultRimeHTTPBaseURL {
 		provider.baseURL = defaultRimeWSBaseURL
 	}
@@ -235,6 +251,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		voice:                    t.voice,
 		lang:                     t.lang,
 		sampleRate:               t.sampleRate,
+		requestSampleRate:        t.requestSampleRate,
 		timeScaleFactor:          t.timeScaleFactor,
 		repetitionPenalty:        t.repetitionPenalty,
 		temperature:              t.temperature,
@@ -246,6 +263,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		phonemizeBetweenBrackets: t.phonemizeBetweenBrackets,
 		useWebsocket:             t.useWebsocket,
 		segment:                  t.segment,
+		streamResponseTimeout:    t.streamResponseTimeout,
 	}
 	t.mu.Unlock()
 
@@ -263,7 +281,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.model = candidate.model
 	t.voice = candidate.voice
 	t.lang = candidate.lang
-	t.sampleRate = candidate.sampleRate
+	t.requestSampleRate = candidate.requestSampleRate
 	t.timeScaleFactor = candidate.timeScaleFactor
 	t.repetitionPenalty = candidate.repetitionPenalty
 	t.temperature = candidate.temperature
@@ -275,6 +293,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.phonemizeBetweenBrackets = candidate.phonemizeBetweenBrackets
 	t.useWebsocket = candidate.useWebsocket
 	t.segment = candidate.segment
+	t.streamResponseTimeout = candidate.streamResponseTimeout
 	return nil
 }
 
@@ -311,7 +330,7 @@ func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Re
 		"text":         text,
 		"modelId":      t.model,
 		"lang":         t.lang,
-		"samplingRate": t.sampleRate,
+		"samplingRate": t.requestSampleRate,
 	}
 	if t.timeScaleFactor != nil {
 		reqBody["timeScaleFactor"] = *t.timeScaleFactor
@@ -378,7 +397,6 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		conn.Close()
 		return nil, io.ErrClosedPipe
 	}
-	go stream.readLoop()
 	return stream, nil
 }
 
@@ -540,12 +558,14 @@ func buildRimeTTSFlushMessage(contextID string) ([]byte, error) {
 type rimeTTSChunkedStream struct {
 	resp         *http.Response
 	ctx          context.Context
+	cancel       context.CancelFunc
 	text         string
 	opts         RimeTTS
 	sampleRate   int
 	requestID    string
 	requested    bool
 	pendingFinal bool
+	pendingErr   error
 	finalSent    bool
 }
 
@@ -556,19 +576,26 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err := s.ensureResponse(); err != nil {
 		return nil, err
 	}
-	if s.resp == nil || s.resp.Body == nil {
-		return nil, io.EOF
-	}
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
 		return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
+	}
+	if s.pendingErr != nil {
+		err := s.pendingErr
+		s.pendingErr = nil
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
 	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if n > 0 {
 		if err == io.EOF {
 			s.pendingFinal = true
+		} else if err != nil {
+			s.pendingErr = rimeTTSReadBodyError(err)
 		}
 		return s.annotateAudio(&tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
@@ -587,10 +614,7 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			return nil, io.EOF
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, rimeTTSConnectionError("Rime TTS stream read failed", err)
+		return nil, rimeTTSReadBodyError(err)
 	}
 	return s.annotateAudio(&tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
@@ -600,6 +624,17 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			SamplesPerChannel: uint32(n / 2),
 		},
 	}), nil
+}
+
+func rimeTTSReadBodyError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return rimeTTSConnectionError("Rime TTS stream read failed", err)
 }
 
 func (s *rimeTTSChunkedStream) annotateAudio(audio *tts.SynthesizedAudio) *tts.SynthesizedAudio {
@@ -619,13 +654,16 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 		return nil
 	}
 	s.requested = true
-	req, err := buildRimeTTSRequest(s.ctx, &s.opts, s.text)
+	requestCtx, cancel := context.WithTimeout(s.ctx, rimeTTSTotalTimeout(s.opts.model))
+	req, err := buildRimeTTSRequest(requestCtx, &s.opts, s.text)
 	if err != nil {
+		cancel()
 		return err
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		cancel()
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
@@ -635,26 +673,40 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		cancel()
 		return llm.NewAPIStatusError("Rime TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return fmt.Errorf("rime tts returned non-audio data: %s", string(respBody))
+		cancel()
+		s.pendingErr = llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		return nil
 	}
 
 	s.resp = resp
+	s.cancel = cancel
 	return nil
 }
 
 func (s *rimeTTSChunkedStream) Close() error {
 	s.finalSent = true
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}
 	body := s.resp.Body
 	s.resp = nil
 	return body.Close()
+}
+
+func rimeTTSTotalTimeout(model string) time.Duration {
+	if model == "arcana" || model == "coda" {
+		return rimeArcanaModelTimeout
+	}
+	return rimeMistModelTimeout
 }
 
 type rimeTTSSynthesizeStream struct {
@@ -669,8 +721,11 @@ type rimeTTSSynthesizeStream struct {
 	mu          sync.Mutex
 	closed      bool
 	started     bool
+	readStarted bool
 	pendingText string
-	emptyFinal  bool
+	pushedText  string
+	audioSeen   bool
+	inputEnded  bool
 
 	writeMessage func(int, []byte) error
 	closeConn    func() error
@@ -682,10 +737,12 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputEnded {
+		return nil
+	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
-	s.emptyFinal = false
 	s.pendingText += text
 	if err := s.sendCompleteSentencesLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -697,25 +754,55 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 func (s *rimeTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inputEnded {
+		return nil
+	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	return s.flushLocked(false)
+}
+
+func (s *rimeTTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.inputEnded {
+		return nil
+	}
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if err := s.flushLocked(true); err != nil {
+		return err
+	}
+	s.inputEnded = true
+	if !s.started {
+		s.closed = true
+		s.cancel()
+		if s.events != nil {
+			close(s.events)
+		}
+		if s.provider != nil {
+			s.provider.unregisterStream(s)
+		}
+		return s.closeConnection()
+	}
+	return nil
+}
+
+func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
-		s.emptyFinal = false
 		if err := s.sendSentenceLocked(text); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
 	}
 	if !s.started {
-		if !s.emptyFinal {
-			audio := &tts.SynthesizedAudio{IsFinal: true}
-			s.annotateAudio(audio)
-			s.events <- audio
-			s.emptyFinal = true
-		}
+		return nil
+	}
+	if !sendProviderFlush {
 		return nil
 	}
 	message, err := buildRimeTTSFlushMessage(s.contextID)
@@ -758,8 +845,24 @@ func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+		return err
+	}
+	if s.pushedText != "" {
+		s.pushedText += " "
+	}
+	s.pushedText += text
 	s.started = true
-	return s.writeMessageData(websocket.TextMessage, message)
+	s.startReadLoopLocked()
+	return nil
+}
+
+func (s *rimeTTSSynthesizeStream) startReadLoopLocked() {
+	if s.readStarted || s.conn == nil || s.events == nil || s.errCh == nil {
+		return
+	}
+	s.readStarted = true
+	go s.readLoop()
 }
 
 func (s *rimeTTSSynthesizeStream) Close() error {
@@ -775,7 +878,6 @@ func (s *rimeTTSSynthesizeStream) Close() error {
 			s.provider.unregisterStream(s)
 		}
 	}()
-	_ = s.writeMessageData(websocket.TextMessage, []byte(`{"operation":"eos"}`))
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
@@ -869,6 +971,10 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *rimeTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
+		if s.provider != nil && s.provider.streamResponseTimeout > 0 {
+			timeout := s.provider.streamResponseTimeout
+			_ = s.conn.SetReadDeadline(time.Now().Add(timeout))
+		}
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
@@ -882,6 +988,18 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage(payload, s.provider.sampleRate)
 		if err != nil {
 			s.errCh <- err
+			return
+		}
+		hasAudio := audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0
+		s.mu.Lock()
+		if hasAudio {
+			s.audioSeen = true
+		}
+		audioSeen := s.audioSeen
+		pushedText := s.pushedText
+		s.mu.Unlock()
+		if done && !audioSeen && strings.TrimSpace(pushedText) != "" {
+			s.errCh <- llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
 			return
 		}
 		if audio != nil {
@@ -909,6 +1027,10 @@ func (s *rimeTTSSynthesizeStream) annotateAudio(audio *tts.SynthesizedAudio) {
 
 func rimeTTSReadError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 		return llm.NewAPITimeoutError(err.Error())
 	}
 	var closeErr *websocket.CloseError
