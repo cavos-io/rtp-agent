@@ -257,6 +257,17 @@ func TestRimeTTSOptionsMatchReferenceModels(t *testing.T) {
 	if got := payload["timeScaleFactor"]; got != 1.1 {
 		t.Fatalf("timeScaleFactor = %#v, want 1.1", got)
 	}
+
+	customVoice := NewRimeTTS("test-key", "", WithRimeTTSVoice("ember"))
+	req, err = buildRimeTTSRequest(context.Background(), customVoice, "hello")
+	if err != nil {
+		t.Fatalf("build custom voice request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode custom voice body: %v", err)
+	}
+	assertRimePayload(t, payload, "speaker", "ember")
 }
 
 func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {

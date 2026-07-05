@@ -207,10 +207,13 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 	}
 	provider.sampleRate = provider.requestSampleRate
 	normalizeRimeTransportBaseURL(provider)
-	if voice == "" {
-		voice = defaultRimeVoice(provider.model)
+	if voice != "" {
+		provider.voice = voice
 	}
-	provider.voice = voice
+	if provider.voice == "" {
+		voice = defaultRimeVoice(provider.model)
+		provider.voice = voice
+	}
 	return provider
 }
 
