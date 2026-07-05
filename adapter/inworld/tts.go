@@ -253,17 +253,8 @@ func (t *InworldTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Inworld TTS request failed", resp.StatusCode, req.Header.Get("X-Request-Id"), string(respBody))
-	}
 	return &inworldTTSChunkedStream{
-		resp:            resp,
+		req:             req,
 		sampleRate:      t.sampleRate,
 		flushAfterAudio: strings.EqualFold(t.encoding, defaultInworldEncoding),
 	}, nil
@@ -478,6 +469,7 @@ func inworldTTSBasePayload(t *InworldTTS) map[string]interface{} {
 }
 
 type inworldTTSChunkedStream struct {
+	req             *http.Request
 	resp            *http.Response
 	sampleRate      int
 	scanner         *bufio.Scanner
@@ -489,6 +481,9 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.pendingFinal {
 		s.pendingFinal = false
 		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
 	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
@@ -524,6 +519,23 @@ func (s *inworldTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, err
 	}
 	return nil, io.EOF
+}
+
+func (s *inworldTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.req == nil {
+		return nil
+	}
+	resp, err := http.DefaultClient.Do(s.req)
+	if err != nil {
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Inworld TTS request failed", resp.StatusCode, s.req.Header.Get("X-Request-Id"), string(respBody))
+	}
+	s.resp = resp
+	return nil
 }
 
 func (s *inworldTTSChunkedStream) Close() error {

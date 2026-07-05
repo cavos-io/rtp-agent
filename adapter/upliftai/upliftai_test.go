@@ -101,7 +101,9 @@ func TestUpliftAITTSRequiresAPIKeyBeforeRequest(t *testing.T) {
 func TestUpliftAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	oldClient := http.DefaultClient
 	body := &upliftAICloseCountBody{reader: strings.NewReader("audio")}
+	var httpCalls int
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       body,
@@ -121,13 +123,16 @@ func TestUpliftAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if got, want := body.closeCount, 1; got != want {
-		t.Fatalf("active stream close count = %d, want %d", got, want)
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls before stream consumption = %d, want 0", httpCalls)
+	}
+	if got, want := body.closeCount, 0; got != want {
+		t.Fatalf("active unconsumed stream close count = %d, want %d", got, want)
 	}
 	if err := provider.Close(); err != nil {
 		t.Fatalf("second Close error = %v", err)
 	}
-	if got, want := body.closeCount, 1; got != want {
+	if got, want := body.closeCount, 0; got != want {
 		t.Fatalf("second provider Close close count = %d, want %d", got, want)
 	}
 }
@@ -170,15 +175,18 @@ func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 
 	provider := NewUpliftAITTS("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if stream != nil {
-		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
 	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Synthesize error = nil, want APIConnectionError")
+		t.Fatal("Next error = nil, want APIConnectionError")
 	}
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -194,21 +202,59 @@ func TestUpliftAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 
 	provider := NewUpliftAITTS("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if stream != nil {
-		t.Fatalf("Synthesize stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
 	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Synthesize error = nil, want APIStatusError")
+		t.Fatal("Next error = nil, want APIStatusError")
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("StatusCode = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
 	}
 	if statusErr.Body != `{"error":"rate limited"}` {
 		t.Fatalf("Body = %#v, want provider body", statusErr.Body)
+	}
+}
+
+func TestUpliftAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls before Next = %d, want 0", httpCalls)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("Next audio = %#v, want first audio frame", audio)
+	}
+	if httpCalls != 1 {
+		t.Fatalf("HTTP calls after Next = %d, want 1", httpCalls)
 	}
 }
 

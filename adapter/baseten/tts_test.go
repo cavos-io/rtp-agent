@@ -158,6 +158,10 @@ func TestBasetenTTSSynthesizePostsReferencePayloadAndReturnsChunks(t *testing.T)
 	}
 	defer stream.Close()
 
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want audio", err)
+	}
 	if gotAuth != "Api-Key test-key" {
 		t.Fatalf("Authorization = %q, want Api-Key header", gotAuth)
 	}
@@ -165,11 +169,6 @@ func TestBasetenTTSSynthesizePostsReferencePayloadAndReturnsChunks(t *testing.T)
 	assertBasetenPayload(t, payload, "voice", "emma")
 	assertBasetenPayload(t, payload, "language", "es")
 	assertBasetenPayload(t, payload, "temperature", float64(0.8))
-
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next error = %v, want audio", err)
-	}
 	if string(audio.Frame.Data) != "pcm" {
 		t.Fatalf("audio = %q, want pcm", string(audio.Frame.Data))
 	}
@@ -207,10 +206,51 @@ func TestBasetenTTSUpdateOptionsAppliesToFutureSynthesize(t *testing.T) {
 		t.Fatalf("Synthesize error = %v", err)
 	}
 	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
 
 	assertBasetenPayload(t, payload, "voice", "emma")
 	assertBasetenPayload(t, payload, "language", "es")
 	assertBasetenPayload(t, payload, "temperature", float64(0.8))
+}
+
+func TestBasetenTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	var requests int
+	client := basetenTTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("pcm")),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})
+
+	provider := mustNewBasetenTTS(t, "test-key", "",
+		WithBasetenTTSModelEndpoint("https://baseten.test/predict"),
+		withBasetenTTSHTTPClient(client),
+	)
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests before Next = %d, want 0", requests)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("Next audio = %#v, want first audio frame", audio)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
 }
 
 func TestBasetenTTSSynthesizeReturnsHTTPErrorBody(t *testing.T) {
@@ -228,11 +268,17 @@ func TestBasetenTTSSynthesizeReturnsHTTPErrorBody(t *testing.T) {
 		withBasetenTTSHTTPClient(client),
 	)
 
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status code = %d, want 400", statusErr.StatusCode)
@@ -252,11 +298,17 @@ func TestBasetenTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 		withBasetenTTSHTTPClient(client),
 	)
 
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error before stream consumption = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 	if !strings.Contains(connectionErr.Message, "dial refused") {
 		t.Fatalf("message = %q, want transport context", connectionErr.Message)

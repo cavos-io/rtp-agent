@@ -176,25 +176,10 @@ func (t *SmallestAITTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 		return nil, err
 	}
 
-	req, err := buildSmallestAITTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("SmallestAI TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	stream := &smallestaiTTSChunkedStream{
 		owner:      t,
-		resp:       resp,
+		ctx:        ctx,
+		text:       text,
 		sampleRate: t.sampleRate,
 	}
 	if !t.registerChunkedStream(stream) {
@@ -363,6 +348,8 @@ func buildSmallestAITTSStreamMessage(t *SmallestAITTS, text string) ([]byte, err
 
 type smallestaiTTSChunkedStream struct {
 	owner        *SmallestAITTS
+	ctx          context.Context
+	text         string
 	resp         *http.Response
 	sampleRate   int
 	mu           sync.Mutex
@@ -373,15 +360,28 @@ type smallestaiTTSChunkedStream struct {
 func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
 	resp := s.resp
+	finalSent := s.finalSent
+	s.mu.Unlock()
+	if finalSent {
+		return nil, io.EOF
+	}
+	if resp == nil {
+		if err := s.ensureResponse(); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		resp = s.resp
+		s.mu.Unlock()
+	}
+	s.mu.Lock()
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
 		s.mu.Unlock()
 		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
-	finalSent := s.finalSent
 	s.mu.Unlock()
-	if resp == nil || resp.Body == nil || finalSent {
+	if resp == nil || resp.Body == nil {
 		return nil, io.EOF
 	}
 	buf := make([]byte, 4096)
@@ -417,6 +417,29 @@ func (s *smallestaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *smallestaiTTSChunkedStream) ensureResponse() error {
+	if s.owner == nil {
+		return nil
+	}
+	req, err := buildSmallestAITTSRequest(s.ctx, s.owner, s.text)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("SmallestAI TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.mu.Lock()
+	s.resp = resp
+	s.mu.Unlock()
+	return nil
+}
+
 func (s *smallestaiTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -433,11 +456,11 @@ func (s *smallestaiTTSChunkedStream) Close() error {
 	s.resp = nil
 	s.finalSent = true
 	s.mu.Unlock()
-	if resp == nil || resp.Body == nil {
-		return nil
-	}
 	if s.owner != nil {
 		s.owner.unregisterChunkedStream(s)
+	}
+	if resp == nil || resp.Body == nil {
+		return nil
 	}
 	return resp.Body.Close()
 }

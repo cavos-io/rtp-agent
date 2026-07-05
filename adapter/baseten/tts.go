@@ -215,23 +215,25 @@ func (t *BasetenTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 		t.mu.Unlock()
 		return nil, io.ErrClosedPipe
 	}
-	req, err := buildBasetenTTSRequest(ctx, t, text)
 	client := t.httpClient
+	apiKey := t.apiKey
+	endpoint := t.modelEndpoint
+	voice := t.voice
+	language := t.language
+	temperature := t.temperature
 	sampleRate := t.sampleRate
 	t.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Baseten TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-	return &basetenTTSChunkedStream{body: resp.Body, sampleRate: sampleRate}, nil
+	return &basetenTTSChunkedStream{
+		ctx:         ctx,
+		text:        text,
+		client:      client,
+		apiKey:      apiKey,
+		endpoint:    endpoint,
+		voice:       voice,
+		language:    language,
+		temperature: temperature,
+		sampleRate:  sampleRate,
+	}, nil
 }
 
 func buildBasetenTTSRequest(ctx context.Context, t *BasetenTTS, text string) (*http.Request, error) {
@@ -360,6 +362,14 @@ func buildBasetenTTSEndMessage() ([]byte, error) {
 }
 
 type basetenTTSChunkedStream struct {
+	ctx          context.Context
+	text         string
+	client       basetenTTSHTTPDoer
+	apiKey       string
+	endpoint     string
+	voice        string
+	language     string
+	temperature  float64
 	body         io.ReadCloser
 	sampleRate   int
 	pendingFinal bool
@@ -369,6 +379,12 @@ type basetenTTSChunkedStream struct {
 
 func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.body == nil {
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
@@ -400,6 +416,39 @@ func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Baseten TTS response read failed: %v", err))
 	}
 	return s.emitFinal()
+}
+
+func (s *basetenTTSChunkedStream) ensureResponse() error {
+	if s.body != nil {
+		return nil
+	}
+	reqBody := map[string]interface{}{
+		"prompt":      s.text,
+		"voice":       s.voice,
+		"temperature": s.temperature,
+		"language":    s.language,
+	}
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(s.ctx, http.MethodPost, s.endpoint, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Api-Key "+s.apiKey)
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Baseten TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.body = resp.Body
+	return nil
 }
 
 func (s *basetenTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {

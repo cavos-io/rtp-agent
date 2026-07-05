@@ -129,6 +129,9 @@ func TestSimplismartTTSDefaultsAndRequestMatchReference(t *testing.T) {
 		t.Fatalf("Synthesize returned error: %v", err)
 	}
 	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
 }
 
 func TestSimplismartTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
@@ -145,19 +148,57 @@ func TestSimplismartTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewSimplismartTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize returned error before stream consumption: %v", err)
 	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
 	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestSimplismartTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	var requests int
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: simplismartRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("pcm")),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSimplismartTTS("test-key", "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests before Next = %d, want 0", requests)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("Next audio = %#v, want first audio frame", audio)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
 	}
 }
 
@@ -171,13 +212,15 @@ func TestSimplismartTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	provider := NewSimplismartTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIConnectionError")
+	if err != nil {
+		t.Fatalf("Synthesize returned error before stream consumption: %v", err)
 	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -191,13 +234,15 @@ func TestSimplismartTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	provider := NewSimplismartTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APITimeoutError")
+	if err != nil {
+		t.Fatalf("Synthesize returned error before stream consumption: %v", err)
 	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -211,12 +256,14 @@ func TestSimplismartTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T
 	provider := NewSimplismartTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want context.Canceled")
+	if err != nil {
+		t.Fatalf("Synthesize returned error before stream consumption: %v", err)
 	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Synthesize error = %v, want context.Canceled", err)
+		t.Fatalf("Next error = %v, want context.Canceled", err)
 	}
 }
 
