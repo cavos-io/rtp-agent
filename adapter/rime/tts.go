@@ -64,6 +64,8 @@ type RimeTTS struct {
 	segment                  string
 	streamResponseTimeout    time.Duration
 	closed                   bool
+	modelTouched             bool
+	timeScaleFactorTouched   bool
 }
 
 type RimeTTSOption func(*RimeTTS)
@@ -80,6 +82,7 @@ func WithRimeTTSBaseURL(baseURL string) RimeTTSOption {
 func WithRimeTTSModel(model string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.model = model
+		t.modelTouched = true
 		if !t.voiceSet && t.voice == "" {
 			t.voice = defaultRimeVoice(model)
 		}
@@ -111,6 +114,7 @@ func WithRimeTTSLang(lang string) RimeTTSOption {
 func WithRimeTTSTimeScaleFactor(timeScaleFactor float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.timeScaleFactor = &timeScaleFactor
+		t.timeScaleFactorTouched = true
 	}
 }
 
@@ -244,6 +248,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	}
 	t.mu.Lock()
 	currentUseWebsocket := t.useWebsocket
+	currentModel := t.model
 	candidate := &RimeTTS{
 		apiKey:                   t.apiKey,
 		baseURL:                  t.baseURL,
@@ -271,6 +276,9 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 
 	for _, opt := range opts {
 		opt(candidate)
+	}
+	if candidate.modelTouched && candidate.model != currentModel && !candidate.timeScaleFactorTouched {
+		candidate.timeScaleFactor = nil
 	}
 	if err := validateRimeTimeScaleFactor(candidate); err != nil {
 		return err

@@ -547,15 +547,30 @@ func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
 	}
 }
 
-func TestRimeTTSUpdateOptionsRejectsReferenceMistV2TimeScaleFactor(t *testing.T) {
+func TestRimeTTSUpdateOptionsDropsReferenceTimeScaleOnModelChange(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"), WithRimeTTSTimeScaleFactor(1.1))
 
-	err := provider.UpdateOptions(WithRimeTTSModel("mistv2"))
-	if err == nil || !strings.Contains(err.Error(), "time_scale_factor is not supported by the mistv2 model") {
-		t.Fatalf("UpdateOptions error = %v, want reference mistv2 time_scale_factor error", err)
+	if err := provider.UpdateOptions(WithRimeTTSModel("mistv2")); err != nil {
+		t.Fatalf("UpdateOptions model change error = %v, want stale coda timeScaleFactor ignored", err)
 	}
-	if provider.Model() != "coda" {
-		t.Fatalf("model after rejected update = %q, want unchanged coda", provider.Model())
+	if provider.Model() != "mistv2" {
+		t.Fatalf("model after update = %q, want mistv2", provider.Model())
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build mistv2 request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode mistv2 request: %v", err)
+	}
+	if _, ok := payload["timeScaleFactor"]; ok {
+		t.Fatalf("mistv2 payload timeScaleFactor = %#v, want omitted stale value", payload["timeScaleFactor"])
+	}
+
+	err = provider.UpdateOptions(WithRimeTTSTimeScaleFactor(1.2))
+	if err == nil || !strings.Contains(err.Error(), "time_scale_factor is not supported by the mistv2 model") {
+		t.Fatalf("UpdateOptions explicit timeScaleFactor error = %v, want reference mistv2 rejection", err)
 	}
 }
 
