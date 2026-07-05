@@ -179,6 +179,38 @@ func TestSpitchSTTRecognizeRequestUsesReferenceDefaultLanguage(t *testing.T) {
 	}
 }
 
+func TestSpitchSTTRecognizeRequestAsksReferenceWordTimestampsForEnglish(t *testing.T) {
+	provider := NewSpitchSTT("test-key")
+
+	req, err := buildSpitchSTTRecognizeRequest(context.Background(), provider, []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	fields := spitchMultipartFields(t, req)
+	if got := fields["timestamp"]; got != "word" {
+		t.Fatalf("timestamp field = %q, want reference word timestamps for English", got)
+	}
+
+	req, err = buildSpitchSTTRecognizeRequest(context.Background(), provider, []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x02},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "fr")
+	if err != nil {
+		t.Fatalf("build French request: %v", err)
+	}
+	fields = spitchMultipartFields(t, req)
+	if _, ok := fields["timestamp"]; ok {
+		t.Fatalf("timestamp field present for French request: %#v", fields["timestamp"])
+	}
+}
+
 func TestSpitchSTTResponsePreservesReferenceSegments(t *testing.T) {
 	event := spitchSTTResponseToEvent(spitchSTTResponse{
 		Text: "hello world",
@@ -614,6 +646,41 @@ func assertSpitchPayload(t *testing.T, payload map[string]any, key string, want 
 	if got := payload[key]; got != want {
 		t.Fatalf("%s = %#v, want %q", key, got, want)
 	}
+}
+
+func spitchMultipartFields(t *testing.T, req *http.Request) map[string]string {
+	t.Helper()
+	mediaType, params, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatalf("parse content type: %v", err)
+	}
+	if mediaType != "multipart/form-data" {
+		t.Fatalf("content type = %q, want multipart/form-data", mediaType)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	fields := map[string]string{}
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read multipart: %v", err)
+		}
+		if part.FileName() != "" {
+			continue
+		}
+		value, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("read field %s: %v", part.FormName(), err)
+		}
+		fields[part.FormName()] = string(value)
+	}
+	return fields
 }
 
 type spitchCloseErrorBody struct {
