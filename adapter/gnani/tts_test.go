@@ -202,19 +202,67 @@ func TestGnaniTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewTTS("test-key")
 
 	stream, err := provider.Synthesize(context.Background(), "namaste")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+		t.Fatal("Next error = nil, want APIStatusError")
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
 	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestGnaniTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	requests := 0
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniTTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewTTS("test-key")
+
+	stream, err := provider.Synthesize(context.Background(), "namaste")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests before Next = %d, want 0", requests)
+	}
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("Next = (%#v, %v), want provider audio", audio, err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+
+	closedStream, err := provider.Synthesize(context.Background(), "cancelled")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	if err := closedStream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if audio, err := closedStream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after close = (%#v, %v), want nil EOF", audio, err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after close-before-Next = %d, want 1", requests)
 	}
 }
 
