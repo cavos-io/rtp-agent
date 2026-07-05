@@ -212,31 +212,12 @@ func (t *FishAudioTTS) Synthesize(ctx context.Context, text string) (tts.Chunked
 	if err := validateFishAudioAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-
-	req, err := buildFishAudioTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("FishAudio TTS request failed", resp.StatusCode, "", string(respBody))
-	}
+	opts := *t
 
 	return &fishaudioTTSChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		text:       text,
+		opts:       opts,
 		sampleRate: t.sampleRate,
 		format:     t.outputFormat,
 	}, nil
@@ -397,14 +378,24 @@ func (t *FishAudioTTS) unregisterStream(stream *fishAudioTTSSynthesizeStream) {
 
 type fishaudioTTSChunkedStream struct {
 	resp         *http.Response
+	ctx          context.Context
+	text         string
+	opts         FishAudioTTS
 	sampleRate   int
 	format       string
+	requested    bool
 	pendingFinal bool
 	finalSent    bool
 }
 
 func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
-	if s.resp == nil || s.resp.Body == nil || s.finalSent {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
@@ -449,6 +440,34 @@ func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, fishAudioTTSConnectionError("Fish Audio TTS audio decode failed", err)
 	}
 	return audio, nil
+}
+
+func (s *fishaudioTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildFishAudioTTSRequest(s.ctx, &s.opts, s.text)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("FishAudio TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
 }
 
 func (s *fishaudioTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
