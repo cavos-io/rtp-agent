@@ -135,19 +135,13 @@ func (t *TelnyxTTS) unregisterStream(stream *telnyxTTSStream) {
 }
 
 func (t *TelnyxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	stream, err := t.Stream(ctx)
-	if err != nil {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
+	if err := validateTelnyxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	if err := stream.PushText(text); err != nil {
-		stream.Close()
-		return nil, err
-	}
-	if err := stream.Flush(); err != nil {
-		stream.Close()
-		return nil, err
-	}
-	return &telnyxTTSChunkedStream{stream: stream}, nil
+	return &telnyxTTSChunkedStream{provider: t, ctx: ctx, text: text}, nil
 }
 
 func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -227,14 +221,56 @@ func writeTelnyxTTSMessage(conn *websocket.Conn, message map[string]string) erro
 }
 
 type telnyxTTSChunkedStream struct {
-	stream tts.SynthesizeStream
+	provider *TelnyxTTS
+	ctx      context.Context
+	text     string
+	stream   tts.SynthesizeStream
+	closed   bool
+	started  bool
 }
 
 func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+	if err := s.ensureStream(); err != nil {
+		return nil, err
+	}
+	if s.stream == nil {
+		return nil, io.EOF
+	}
 	return s.stream.Next()
 }
 
+func (s *telnyxTTSChunkedStream) ensureStream() error {
+	if s.started {
+		return nil
+	}
+	s.started = true
+	stream, err := s.provider.Stream(s.ctx)
+	if err != nil {
+		s.closed = true
+		return err
+	}
+	if err := stream.PushText(s.text); err != nil {
+		_ = stream.Close()
+		s.closed = true
+		return err
+	}
+	if err := stream.Flush(); err != nil {
+		_ = stream.Close()
+		s.closed = true
+		return err
+	}
+	s.stream = stream
+	return nil
+}
+
 func (s *telnyxTTSChunkedStream) Close() error {
+	s.closed = true
+	if s.stream == nil {
+		return nil
+	}
 	return s.stream.Close()
 }
 

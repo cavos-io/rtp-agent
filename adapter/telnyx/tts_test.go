@@ -96,6 +96,51 @@ func TestTelnyxTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSSynthesizeDefersReferenceConnectUntilNext(t *testing.T) {
+	dials := 0
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, errors.New("telnyx websocket dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewTelnyxTTS("test-key", "", WithTelnyxTTSBaseURL("wss://telnyx.test/v2/tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if dials != 0 {
+		t.Fatalf("dials before Next = %d, want 0", dials)
+	}
+
+	_, err = stream.Next()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if dials != 1 {
+		t.Fatalf("dials after Next = %d, want 1", dials)
+	}
+
+	closedStream, err := provider.Synthesize(context.Background(), "cancelled")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	if err := closedStream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if audio, err := closedStream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after close = (%#v, %v), want nil EOF", audio, err)
+	}
+	if dials != 1 {
+		t.Fatalf("dials after close-before-Next = %d, want 1", dials)
+	}
+}
+
 func TestTelnyxTTSStreamURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewTelnyxTTS("test-key", "voice-1", WithTelnyxTTSBaseURL("wss://telnyx.example/speech"))
 
