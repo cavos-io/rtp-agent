@@ -139,6 +139,7 @@ func TestRimeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusTooManyRequests,
+			Status:     "429 Rime Capacity Exhausted",
 			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
 			Header:     make(http.Header),
 			Request:    r,
@@ -160,7 +161,7 @@ func TestRimeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
-	if statusErr.Message != "Too Many Requests" {
+	if statusErr.Message != "Rime Capacity Exhausted" {
 		t.Fatalf("message = %q, want reference reason phrase", statusErr.Message)
 	}
 	if statusErr.Body != nil {

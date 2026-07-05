@@ -1413,7 +1413,10 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 		}
 		resp.Body.Close()
 		cancel()
-		message := http.StatusText(resp.StatusCode)
+		message := strings.TrimSpace(strings.TrimPrefix(resp.Status, strconv.Itoa(resp.StatusCode)))
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
 		if message == "" {
 			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		}
