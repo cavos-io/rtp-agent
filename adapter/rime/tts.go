@@ -325,6 +325,7 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	return &rimeTTSChunkedStream{
 		ctx:        ctx,
 		text:       text,
+		provider:   t,
 		opts:       opts,
 		sampleRate: t.sampleRate,
 		requestID:  cavosmath.ShortUUID(""),
@@ -576,6 +577,7 @@ type rimeTTSChunkedStream struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	text         string
+	provider     *RimeTTS
 	opts         RimeTTS
 	sampleRate   int
 	requestID    string
@@ -699,6 +701,11 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 		return nil
 	}
 	s.requested = true
+	if s.provider != nil {
+		s.provider.mu.Lock()
+		s.opts.baseURL = s.provider.baseURL
+		s.provider.mu.Unlock()
+	}
 	requestCtx, cancel := context.WithTimeout(s.ctx, rimeTTSTotalTimeout(s.opts.model))
 	req, err := buildRimeTTSRequest(requestCtx, &s.opts, s.text)
 	if err != nil {

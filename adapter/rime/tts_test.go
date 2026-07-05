@@ -625,6 +625,38 @@ func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceBaseURL(t *testing.T) {
+	var requestedURL string
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requestedURL = r.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/old"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := provider.UpdateOptions(WithRimeTTSBaseURL("https://rime.example/new")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if requestedURL != "https://rime.example/new" {
+		t.Fatalf("request URL = %q, want updated reference base URL", requestedURL)
+	}
+}
+
 func TestRimeTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
