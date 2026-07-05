@@ -1670,6 +1670,10 @@ func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
+	if !sendEOS {
+		_ = s.closeConnection()
+		return nil
+	}
 	return s.closeConnection()
 }
 

@@ -3044,6 +3044,27 @@ func TestRimeTTSStreamCloseDoesNotSendReferenceEOS(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamCloseIgnoresReferenceWebsocketCloseError(t *testing.T) {
+	cancelled := false
+	closeErr := errors.New("websocket close failed")
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() { cancelled = true },
+		closeConn: func() error {
+			return closeErr
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v, want nil like reference aclose cancellation", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called on Close")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v, want nil", err)
+	}
+}
+
 func TestRimeTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &rimeTTSSynthesizeStream{
