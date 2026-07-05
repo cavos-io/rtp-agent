@@ -720,6 +720,58 @@ func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceBaseURL(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceModelOptions(t *testing.T) {
+	var payload map[string]any
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSModel("coda"),
+		WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := provider.UpdateOptions(
+		WithRimeTTSLang("spa"),
+		WithRimeTTSSampleRate(24000),
+		WithRimeTTSTimeScaleFactor(1.2),
+		WithRimeTTSMaxTokens(64),
+	); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+
+	assertRimePayload(t, payload, "modelId", "coda")
+	assertRimePayload(t, payload, "speaker", "lyra")
+	assertRimePayload(t, payload, "lang", "spa")
+	if got := payload["samplingRate"]; got != float64(24000) {
+		t.Fatalf("samplingRate = %#v, want updated reference value 24000", got)
+	}
+	if got := payload["timeScaleFactor"]; got != 1.2 {
+		t.Fatalf("timeScaleFactor = %#v, want updated reference value 1.2", got)
+	}
+	if got := payload["max_tokens"]; got != float64(64) {
+		t.Fatalf("max_tokens = %#v, want updated reference value 64", got)
+	}
+}
+
 func TestRimeTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{

@@ -716,6 +716,7 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	if s.provider != nil {
 		s.provider.mu.Lock()
 		s.opts.baseURL = s.provider.baseURL
+		rimeTTSApplyLazyHTTPOptionUpdates(&s.opts, s.provider)
 		timeout := rimeTTSTotalTimeout(s.provider.model)
 		s.provider.mu.Unlock()
 		requestCtx, cancel := context.WithTimeout(s.ctx, timeout)
@@ -723,6 +724,30 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	}
 	requestCtx, cancel := context.WithTimeout(s.ctx, rimeTTSTotalTimeout(s.opts.model))
 	return s.openResponse(requestCtx, cancel)
+}
+
+func rimeTTSApplyLazyHTTPOptionUpdates(opts *RimeTTS, provider *RimeTTS) {
+	if opts == nil || provider == nil || opts.model != provider.model {
+		return
+	}
+	opts.lang = provider.lang
+	opts.requestSampleRate = provider.requestSampleRate
+	opts.timeScaleFactor = provider.timeScaleFactor
+
+	switch {
+	case opts.model == "arcana":
+		opts.repetitionPenalty = provider.repetitionPenalty
+		opts.temperature = provider.temperature
+		opts.topP = provider.topP
+		opts.maxTokens = provider.maxTokens
+	case opts.model == "coda":
+		opts.maxTokens = provider.maxTokens
+	case strings.Contains(opts.model, "mist"):
+		opts.speedAlpha = provider.speedAlpha
+		opts.reduceLatency = provider.reduceLatency
+		opts.pauseBetweenBrackets = provider.pauseBetweenBrackets
+		opts.phonemizeBetweenBrackets = provider.phonemizeBetweenBrackets
+	}
 }
 
 func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel context.CancelFunc) error {
