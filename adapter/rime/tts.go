@@ -1252,6 +1252,9 @@ func (s *rimeTTSChunkedStream) noAudioError() error {
 }
 
 func rimeTTSReadBodyError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(err.Error())
 	}
@@ -1346,6 +1349,9 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		cancel()
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}

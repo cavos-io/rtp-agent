@@ -1052,6 +1052,49 @@ func TestRimeTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	provider := NewRimeTTS("test-key", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connErr *llm.APIConnectionError
+		if errors.As(err, &connErr) {
+			t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next remained blocked after caller cancellation")
+	}
+}
+
 func TestRimeTTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -1477,6 +1520,23 @@ func TestRimeTTSChunkedStreamNetReadTimeoutReturnsAPITimeoutError(t *testing.T) 
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestRimeTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: rimeCanceledReader{}},
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connErr *llm.APIConnectionError
+	if errors.As(err, &connErr) {
+		t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
 	}
 }
 
@@ -3574,6 +3634,14 @@ func (rimeNetTimeoutReader) Read([]byte) (int, error) {
 }
 
 func (rimeNetTimeoutReader) Close() error { return nil }
+
+type rimeCanceledReader struct{}
+
+func (rimeCanceledReader) Read([]byte) (int, error) {
+	return 0, context.Canceled
+}
+
+func (rimeCanceledReader) Close() error { return nil }
 
 type rimeNetTimeoutError struct{}
 
