@@ -1930,6 +1930,72 @@ func TestRimeTTSExpiredPooledWebsocketReconnectsLikeReference(t *testing.T) {
 	_ = provider.Close()
 }
 
+func TestRimeTTSEmptyStreamReturnsWebsocketToPoolLikeReference(t *testing.T) {
+	var connections atomic.Int32
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go rimeTestServeReusableWebsocket(t, server, &connections)
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+	)
+	emptyStream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("empty Stream error = %v", err)
+	}
+	ending, ok := any(emptyStream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("empty EndInput error = %v", err)
+	}
+	audio, err := emptyStream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("empty Next = (%#v, %v), want nil EOF", audio, err)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("second Stream error = %v", err)
+	}
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("second PushText error = %v", err)
+	}
+	ending, ok = any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v", err)
+	}
+	for {
+		_, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("second Next error = %v", err)
+		}
+	}
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("websocket connections = %d, want empty stream returned pooled connection", got)
+	}
+	_ = provider.Close()
+}
+
 func rimeTestServeReusableWebsocket(t *testing.T, conn net.Conn, connections *atomic.Int32) {
 	t.Helper()
 	defer conn.Close()

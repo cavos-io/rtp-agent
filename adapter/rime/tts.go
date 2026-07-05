@@ -1437,14 +1437,16 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 
 func (s *rimeTTSSynthesizeStream) EndInput() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.inputEnded {
+		s.mu.Unlock()
 		return nil
 	}
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	if err := s.flushLocked(true); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	s.inputEnded = true
@@ -1457,8 +1459,19 @@ func (s *rimeTTSSynthesizeStream) EndInput() error {
 		if s.provider != nil {
 			s.provider.unregisterStream(s)
 		}
-		return s.closeConnection()
+		if s.provider != nil && s.conn != nil {
+			conn := s.conn
+			s.conn = nil
+			websocketURL := s.websocketURL
+			s.mu.Unlock()
+			s.provider.cachePrewarmedConn(conn, websocketURL)
+			return nil
+		}
+		err := s.closeConnection()
+		s.mu.Unlock()
+		return err
 	}
+	s.mu.Unlock()
 	return nil
 }
 
