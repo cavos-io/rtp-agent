@@ -2972,6 +2972,68 @@ func TestRimeTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamProviderErrorUnregistersLikeReference(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go func() {
+				defer server.Close()
+				if err := rimeTestWebsocketHandshake(server); err != nil {
+					t.Errorf("websocket handshake: %v", err)
+					return
+				}
+				if _, err := rimeTestReadClientTextFrame(server); err != nil {
+					t.Errorf("read text message: %v", err)
+					return
+				}
+				if _, err := rimeTestReadClientTextFrame(server); err != nil {
+					t.Errorf("read flush message: %v", err)
+					return
+				}
+				if err := rimeTestWriteServerTextFrame(server, []byte(`{"type":"error","message":"bad request"}`)); err != nil {
+					t.Errorf("write provider error: %v", err)
+				}
+			}()
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+	})
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSBaseURL("ws://rime.example"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "Rime ws error: bad request") {
+		t.Fatalf("Next error = %T %v, want Rime APIError", err, err)
+	}
+	provider.mu.Lock()
+	_, registered := provider.streams[stream.(*rimeTTSSynthesizeStream)]
+	provider.mu.Unlock()
+	if registered {
+		t.Fatal("stream remains registered after provider error, want removed like reference connection context")
+	}
+}
+
 func TestRimeTTSStreamAnnotatesReferenceRequestAndSegmentIDs(t *testing.T) {
 	stream := &rimeTTSSynthesizeStream{
 		requestID: "req-1",

@@ -1709,6 +1709,7 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
+				s.dropConnectionAfterProviderError()
 				s.errCh <- rimeTTSReadErrorWithRequestID(err, s.requestID)
 			}
 			return
@@ -1718,6 +1719,7 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		}
 		audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage(payload, s.provider.sampleRate)
 		if err != nil {
+			s.dropConnectionAfterProviderError()
 			s.errCh <- err
 			return
 		}
@@ -1742,6 +1744,7 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		pushedText := s.pushedText
 		s.mu.Unlock()
 		if done && !audioSeen && strings.TrimSpace(pushedText) != "" {
+			s.dropConnectionAfterProviderError()
 			s.errCh <- llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
 			return
 		}
@@ -1771,6 +1774,19 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 			s.releaseConnectionAfterDone()
 			return
 		}
+	}
+}
+
+func (s *rimeTTSSynthesizeStream) dropConnectionAfterProviderError() {
+	s.mu.Lock()
+	conn := s.conn
+	s.conn = nil
+	s.mu.Unlock()
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
 	}
 }
 
