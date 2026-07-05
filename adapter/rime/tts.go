@@ -1182,6 +1182,7 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.pendingErr != nil {
 		err := s.pendingErr
 		s.pendingErr = nil
+		s.closeResponseBody()
 		return nil, err
 	}
 	if s.resp == nil || s.resp.Body == nil {
@@ -1215,6 +1216,7 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				if s.pendingErr != nil {
 					err := s.pendingErr
 					s.pendingErr = nil
+					s.closeResponseBody()
 					return nil, err
 				}
 				continue
@@ -1245,7 +1247,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if s.finalSent {
 				return nil, io.EOF
 			}
-			return nil, rimeTTSReadBodyError(err)
+			readErr := rimeTTSReadBodyError(err)
+			s.closeResponseBody()
+			return nil, readErr
 		}
 	}
 }
