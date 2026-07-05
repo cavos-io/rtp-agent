@@ -213,8 +213,8 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	if provider.Model() != "coda" {
 		t.Fatalf("model = %q, want coda", provider.Model())
 	}
-	if provider.SampleRate() != 24000 {
-		t.Fatalf("sample rate = %d, want 24000", provider.SampleRate())
+	if provider.SampleRate() != 22050 {
+		t.Fatalf("sample rate = %d, want constructor sample rate unchanged like reference", provider.SampleRate())
 	}
 	u := buildRimeTTSWebsocketURL(provider)
 	if got := u.Scheme + "://" + u.Host + u.Path; got != "wss://rime.example/ws3" {
@@ -224,9 +224,21 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	assertRimePayload(t, queryMap(query), "speaker", "ember")
 	assertRimePayload(t, queryMap(query), "modelId", "coda")
 	assertRimePayload(t, queryMap(query), "lang", "spa")
-	assertRimePayload(t, queryMap(query), "samplingRate", "24000")
+	assertRimePayload(t, queryMap(query), "samplingRate", "22050")
 	assertRimePayload(t, queryMap(query), "timeScaleFactor", "1.2")
 	assertRimePayload(t, queryMap(query), "segment", "immediate")
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hola")
+	if err != nil {
+		t.Fatalf("build updated request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated request: %v", err)
+	}
+	if got := payload["samplingRate"]; got != float64(24000) {
+		t.Fatalf("HTTP samplingRate = %#v, want updated request sample rate", got)
+	}
 }
 
 func TestRimeTTSUpdateOptionsRejectsReferenceMistV2TimeScaleFactor(t *testing.T) {

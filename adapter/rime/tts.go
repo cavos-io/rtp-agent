@@ -48,6 +48,7 @@ type RimeTTS struct {
 	voice                    string
 	lang                     string
 	sampleRate               int
+	requestSampleRate        int
 	timeScaleFactor          *float64
 	repetitionPenalty        *float64
 	temperature              *float64
@@ -98,7 +99,7 @@ func WithRimeTTSVoice(voice string) RimeTTSOption {
 func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if sampleRate > 0 {
-			t.sampleRate = sampleRate
+			t.requestSampleRate = sampleRate
 		}
 	}
 }
@@ -197,12 +198,14 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		model:                 defaultRimeModel,
 		lang:                  defaultRimeLang,
 		sampleRate:            defaultRimeSampleRate,
+		requestSampleRate:     defaultRimeSampleRate,
 		segment:               defaultRimeSegment,
 		streamResponseTimeout: defaultRimeStreamTimeout,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.sampleRate = provider.requestSampleRate
 	if provider.useWebsocket && provider.baseURL == defaultRimeHTTPBaseURL {
 		provider.baseURL = defaultRimeWSBaseURL
 	}
@@ -248,6 +251,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		voice:                    t.voice,
 		lang:                     t.lang,
 		sampleRate:               t.sampleRate,
+		requestSampleRate:        t.requestSampleRate,
 		timeScaleFactor:          t.timeScaleFactor,
 		repetitionPenalty:        t.repetitionPenalty,
 		temperature:              t.temperature,
@@ -277,7 +281,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.model = candidate.model
 	t.voice = candidate.voice
 	t.lang = candidate.lang
-	t.sampleRate = candidate.sampleRate
+	t.requestSampleRate = candidate.requestSampleRate
 	t.timeScaleFactor = candidate.timeScaleFactor
 	t.repetitionPenalty = candidate.repetitionPenalty
 	t.temperature = candidate.temperature
@@ -326,7 +330,7 @@ func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Re
 		"text":         text,
 		"modelId":      t.model,
 		"lang":         t.lang,
-		"samplingRate": t.sampleRate,
+		"samplingRate": t.requestSampleRate,
 	}
 	if t.timeScaleFactor != nil {
 		reqBody["timeScaleFactor"] = *t.timeScaleFactor
