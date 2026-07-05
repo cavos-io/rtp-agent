@@ -57,6 +57,7 @@ type RimeTTS struct {
 	temperature              *float64
 	topP                     *float64
 	maxTokens                *int
+	maxTokensByModel         map[string]*int
 	speedAlpha               *float64
 	reduceLatency            *bool
 	pauseBetweenBrackets     *bool
@@ -67,6 +68,7 @@ type RimeTTS struct {
 	closed                   bool
 	modelTouched             bool
 	timeScaleFactorTouched   bool
+	maxTokensTouched         bool
 }
 
 type RimeTTSOption func(*RimeTTS)
@@ -85,6 +87,7 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 		t.model = model
 		t.modelTouched = true
 		t.restoreTimeScaleFactorForModel()
+		t.restoreMaxTokensForModel()
 		if !t.voiceSet && t.voice == "" {
 			t.voice = defaultRimeVoice(model)
 		}
@@ -142,6 +145,7 @@ func WithRimeTTSTopP(topP float64) RimeTTSOption {
 func WithRimeTTSMaxTokens(maxTokens int) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.maxTokens = &maxTokens
+		t.maxTokensTouched = true
 	}
 }
 
@@ -201,12 +205,14 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		sampleRate:            defaultRimeSampleRate,
 		requestSampleRate:     defaultRimeSampleRate,
 		timeScaleFactors:      make(map[string]*float64),
+		maxTokensByModel:      make(map[string]*int),
 		segment:               defaultRimeSegment,
 		streamResponseTimeout: defaultRimeStreamTimeout,
 	}
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.storeTouchedMaxTokensForModel()
 	provider.sampleRate = provider.requestSampleRate
 	if strings.HasPrefix(provider.baseURL, "ws://") || strings.HasPrefix(provider.baseURL, "wss://") {
 		provider.useWebsocket = true
@@ -275,6 +281,45 @@ func rimeTimeScaleFactorBucket(model string) string {
 	}
 }
 
+func (t *RimeTTS) storeTouchedMaxTokensForModel() {
+	if !t.maxTokensTouched {
+		return
+	}
+	t.storeMaxTokensForModel()
+}
+
+func (t *RimeTTS) storeMaxTokensForModel() {
+	bucket := rimeMaxTokensBucket(t.model)
+	if bucket == "" {
+		return
+	}
+	if t.maxTokensByModel == nil {
+		t.maxTokensByModel = make(map[string]*int)
+	}
+	t.maxTokensByModel[bucket] = cloneIntPtr(t.maxTokens)
+}
+
+func (t *RimeTTS) restoreMaxTokensForModel() {
+	if t.maxTokensTouched {
+		return
+	}
+	bucket := rimeMaxTokensBucket(t.model)
+	if bucket == "" {
+		t.maxTokens = nil
+		return
+	}
+	t.maxTokens = cloneIntPtr(t.maxTokensByModel[bucket])
+}
+
+func rimeMaxTokensBucket(model string) string {
+	switch model {
+	case "arcana", "coda":
+		return model
+	default:
+		return ""
+	}
+}
+
 func cloneRimeTimeScaleFactors(src map[string]*float64) map[string]*float64 {
 	if src == nil {
 		return nil
@@ -286,7 +331,26 @@ func cloneRimeTimeScaleFactors(src map[string]*float64) map[string]*float64 {
 	return dst
 }
 
+func cloneRimeMaxTokensByModel(src map[string]*int) map[string]*int {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]*int, len(src))
+	for key, value := range src {
+		dst[key] = cloneIntPtr(value)
+	}
+	return dst
+}
+
 func cloneFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func cloneIntPtr(value *int) *int {
 	if value == nil {
 		return nil
 	}
@@ -327,7 +391,8 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		repetitionPenalty:        t.repetitionPenalty,
 		temperature:              t.temperature,
 		topP:                     t.topP,
-		maxTokens:                t.maxTokens,
+		maxTokens:                cloneIntPtr(t.maxTokens),
+		maxTokensByModel:         cloneRimeMaxTokensByModel(t.maxTokensByModel),
 		speedAlpha:               t.speedAlpha,
 		reduceLatency:            t.reduceLatency,
 		pauseBetweenBrackets:     t.pauseBetweenBrackets,
@@ -341,6 +406,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	for _, opt := range opts {
 		opt(candidate)
 	}
+	candidate.storeTouchedMaxTokensForModel()
 	if err := validateRimeTimeScaleFactor(candidate); err != nil {
 		return err
 	}
@@ -362,6 +428,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.temperature = candidate.temperature
 	t.topP = candidate.topP
 	t.maxTokens = candidate.maxTokens
+	t.maxTokensByModel = candidate.maxTokensByModel
 	t.speedAlpha = candidate.speedAlpha
 	t.reduceLatency = candidate.reduceLatency
 	t.pauseBetweenBrackets = candidate.pauseBetweenBrackets

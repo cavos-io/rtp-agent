@@ -589,6 +589,67 @@ func TestRimeTTSUpdateOptionsDropsReferenceTimeScaleOnModelChange(t *testing.T) 
 	}
 }
 
+func TestRimeTTSUpdateOptionsKeepsReferenceMaxTokensModelSpecific(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"), WithRimeTTSMaxTokens(64))
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build initial coda request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode initial coda request: %v", err)
+	}
+	if got := payload["max_tokens"]; got != float64(64) {
+		t.Fatalf("initial coda max_tokens = %#v, want 64", got)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana")); err != nil {
+		t.Fatalf("UpdateOptions arcana error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build arcana request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode arcana request: %v", err)
+	}
+	if _, ok := payload["max_tokens"]; ok {
+		t.Fatalf("arcana max_tokens = %#v, want omitted stale coda value", payload["max_tokens"])
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions back to coda error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build restored coda request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode restored coda request: %v", err)
+	}
+	if got := payload["max_tokens"]; got != float64(64) {
+		t.Fatalf("restored coda max_tokens = %#v, want previous reference value 64", got)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana"), WithRimeTTSMaxTokens(32)); err != nil {
+		t.Fatalf("UpdateOptions explicit arcana max_tokens error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build explicit arcana request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode explicit arcana request: %v", err)
+	}
+	if got := payload["max_tokens"]; got != float64(32) {
+		t.Fatalf("explicit arcana max_tokens = %#v, want 32", got)
+	}
+}
+
 func TestRimeTTSModelSpecificOptionsMatchReferenceRequests(t *testing.T) {
 	arcana := NewRimeTTS("test-key", "",
 		WithRimeTTSRepetitionPenalty(1.2),
