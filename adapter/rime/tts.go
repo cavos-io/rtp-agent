@@ -939,8 +939,14 @@ func (t *RimeTTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
 		dialCtx, cancelDial = context.WithTimeout(ctx, t.streamResponseTimeout)
 		defer cancelDial()
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
+	conn, resp, err := websocket.DefaultDialer.DialContext(dialCtx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
 	if err != nil {
+		if resp != nil && resp.StatusCode > 0 {
+			if resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return nil, llm.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
+		}
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
@@ -950,6 +956,17 @@ func (t *RimeTTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial rime tts websocket: %v", err))
 	}
 	return conn, nil
+}
+
+func rimeHTTPStatusReason(statusCode int, status string) string {
+	message := strings.TrimSpace(strings.TrimPrefix(status, strconv.Itoa(statusCode)))
+	if message == "" {
+		message = http.StatusText(statusCode)
+	}
+	if message == "" {
+		message = fmt.Sprintf("HTTP %d", statusCode)
+	}
+	return message
 }
 
 func (t *RimeTTS) Close() error {
@@ -1413,14 +1430,7 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 		}
 		resp.Body.Close()
 		cancel()
-		message := strings.TrimSpace(strings.TrimPrefix(resp.Status, strconv.Itoa(resp.StatusCode)))
-		if message == "" {
-			message = http.StatusText(resp.StatusCode)
-		}
-		if message == "" {
-			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		}
-		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
+		return llm.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(contentType), "audio") {
 		resp.Body.Close()
