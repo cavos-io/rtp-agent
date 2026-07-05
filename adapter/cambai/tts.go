@@ -140,28 +140,17 @@ func (t *CambaiTTS) SampleRate() int  { return t.sampleRate }
 func (t *CambaiTTS) NumChannels() int { return 1 }
 
 func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	req, err := buildCambaiTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
 	client := t.httpClient
 	if client == nil {
 		client = http.DefaultClient
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Camb.ai TTS failed", resp.StatusCode, resp.Header.Get("x-request-id"), string(respBody))
-	}
+	opts := *t
 
 	return &cambaiTTSChunkedStream{
-		resp:         resp,
+		ctx:          ctx,
+		text:         text,
+		opts:         opts,
+		httpClient:   client,
 		sampleRate:   t.sampleRate,
 		outputFormat: t.outputFormat,
 	}, nil
@@ -199,8 +188,13 @@ func (t *CambaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 
 type cambaiTTSChunkedStream struct {
 	resp         *http.Response
+	ctx          context.Context
+	text         string
+	opts         CambaiTTS
+	httpClient   *http.Client
 	sampleRate   int
 	outputFormat string
+	requested    bool
 	emitted      bool
 	pendingFinal bool
 	finalSent    bool
@@ -209,6 +203,12 @@ type cambaiTTSChunkedStream struct {
 
 func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.outputFormat == "wav" {
@@ -254,6 +254,32 @@ func (s *cambaiTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *cambaiTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildCambaiTTSRequest(s.ctx, &s.opts, s.text)
+	if err != nil {
+		return err
+	}
+	client := s.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Camb.ai TTS failed", resp.StatusCode, resp.Header.Get("x-request-id"), string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *cambaiTTSChunkedStream) nextWAV() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -283,6 +309,9 @@ func (s *cambaiTTSChunkedStream) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
 	return s.resp.Body.Close()
 }
 

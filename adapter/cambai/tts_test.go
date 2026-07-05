@@ -232,6 +232,41 @@ func TestCambaiTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	}
 }
 
+func TestCambaiTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	provider, err := NewCambaiTTS("test-key", "")
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
+	requests := 0
+	provider.httpClient = &http.Client{
+		Transport: cambaiRoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}),
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want 0 before Next", requests)
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+}
+
 func TestCambaiTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider, err := NewCambaiTTS("test-key", "")
 	if err != nil {
@@ -251,13 +286,14 @@ func TestCambaiTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
