@@ -1432,7 +1432,7 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 		cancel()
 		return llm.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
 	}
-	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(contentType), "audio") {
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "audio") {
 		resp.Body.Close()
 		cancel()
 		if strings.TrimSpace(s.text) != "" {

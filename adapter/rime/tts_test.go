@@ -229,14 +229,14 @@ func TestRimeTTSSynthesizeAcceptsReferenceSuccessStatusClass(t *testing.T) {
 	}
 }
 
-func TestRimeTTSAcceptsReferenceAudioContentTypeCase(t *testing.T) {
+func TestRimeTTSAcceptsReferenceAudioContentTypeFormat(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
 	body := []byte{0x01, 0x02}
 	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"Audio/PCM"}},
+			Header:     http.Header{"Content-Type": []string{" Audio/PCM ; charset=binary "}},
 			Body:       io.NopCloser(bytes.NewReader(body)),
 			Request:    r,
 		}, nil
@@ -253,7 +253,7 @@ func TestRimeTTSAcceptsReferenceAudioContentTypeCase(t *testing.T) {
 
 	audio, err := stream.Next()
 	if err != nil {
-		t.Fatalf("Next audio error = %v, want successful audio despite content-type case", err)
+		t.Fatalf("Next audio error = %v, want successful audio despite content-type format", err)
 	}
 	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, body) {
 		t.Fatalf("Next audio = %+v, want body bytes %v", audio, body)
