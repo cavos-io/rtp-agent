@@ -3572,7 +3572,7 @@ func TestGoogleSTTStreamResetsReferenceV2UsageAfterUpdateReconnect(t *testing.T)
 func TestGoogleSTTStreamRestartsV2AfterReference409(t *testing.T) {
 	firstStream := &fakeGoogleV2StreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
 	restartedRecv := make(chan struct{})
-	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: restartedRecv}
+	secondStream := &fakeGoogleV2StreamingRecognizeClient{recvBlock: restartedRecv, sentCh: make(chan int, 2)}
 	client := &fakeGoogleV2SpeechClient{
 		streams:      []speechv2pb.Speech_StreamingRecognizeClient{firstStream, secondStream},
 		streamCallCh: make(chan int, 2),
@@ -3601,6 +3601,7 @@ func TestGoogleSTTStreamRestartsV2AfterReference409(t *testing.T) {
 	if !firstStream.closed {
 		t.Fatal("first v2 stream closed = false after restart")
 	}
+	waitForGoogleStreamingConfig(t, secondStream.sentCh)
 	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
 		t.Fatalf("second v2 stream sent = %#v, want fresh config", secondStream.sent)
 	}
@@ -3924,7 +3925,7 @@ func TestGoogleSTTStreamTreatsReference409AsRetryable(t *testing.T) {
 func TestGoogleSTTStreamRestartsAfterReference409WithAudio(t *testing.T) {
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
 	restartedRecv := make(chan struct{})
-	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv}
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv, sentCh: make(chan int, 2)}
 	client := &fakeGoogleSpeechClient{
 		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
 		streamCallCh: make(chan int, 2),
@@ -3952,6 +3953,7 @@ func TestGoogleSTTStreamRestartsAfterReference409WithAudio(t *testing.T) {
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after restart")
 	}
+	waitForGoogleStreamingConfig(t, secondStream.sentCh)
 	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
 		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
 	}
@@ -3968,7 +3970,7 @@ func TestGoogleSTTStreamRestartsAfterReference409WithAudio(t *testing.T) {
 func TestGoogleSTTStreamRestartsAfterReference409BeforeAudio(t *testing.T) {
 	firstStream := &fakeGoogleStreamingRecognizeClient{recvErr: status.Error(codes.AlreadyExists, "stream conflict")}
 	restartedRecv := make(chan struct{})
-	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv}
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv, sentCh: make(chan int, 2)}
 	client := &fakeGoogleSpeechClient{
 		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
 		streamCallCh: make(chan int, 2),
@@ -3993,6 +3995,7 @@ func TestGoogleSTTStreamRestartsAfterReference409BeforeAudio(t *testing.T) {
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after pre-audio restart")
 	}
+	waitForGoogleStreamingConfig(t, secondStream.sentCh)
 	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
 		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
 	}
@@ -4056,7 +4059,7 @@ func TestGoogleSTTStreamRestartsAfterReferenceMaxSessionFinal(t *testing.T) {
 		},
 	}}
 	restartedRecv := make(chan struct{})
-	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv}
+	secondStream := &fakeGoogleStreamingRecognizeClient{recvBlock: restartedRecv, sentCh: make(chan int, 2)}
 	client := &fakeGoogleSpeechClient{
 		streams:      []speechpb.Speech_StreamingRecognizeClient{firstStream, secondStream},
 		streamCallCh: make(chan int, 2),
@@ -4098,6 +4101,7 @@ func TestGoogleSTTStreamRestartsAfterReferenceMaxSessionFinal(t *testing.T) {
 	if !firstStream.closed {
 		t.Fatal("first stream closed = false after max-session restart")
 	}
+	waitForGoogleStreamingConfig(t, secondStream.sentCh)
 	if len(secondStream.sent) != 1 || secondStream.sent[0].GetStreamingConfig() == nil {
 		t.Fatalf("second stream sent = %#v, want fresh config", secondStream.sent)
 	}
@@ -4669,8 +4673,18 @@ func googleSTTContextDeadline(ctx context.Context) time.Duration {
 	return time.Until(deadline)
 }
 
+func waitForGoogleStreamingConfig(t *testing.T, sentCh <-chan int) {
+	t.Helper()
+	select {
+	case <-sentCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("timed out waiting for restarted stream config send")
+	}
+}
+
 type fakeGoogleV2StreamingRecognizeClient struct {
 	sent      []*speechv2pb.StreamingRecognizeRequest
+	sentCh    chan int
 	responses []*speechv2pb.StreamingRecognizeResponse
 	recvIndex int
 	recvBlock chan struct{}
@@ -4681,6 +4695,12 @@ type fakeGoogleV2StreamingRecognizeClient struct {
 
 func (c *fakeGoogleV2StreamingRecognizeClient) Send(req *speechv2pb.StreamingRecognizeRequest) error {
 	c.sent = append(c.sent, req)
+	if c.sentCh != nil {
+		select {
+		case c.sentCh <- len(c.sent):
+		default:
+		}
+	}
 	return nil
 }
 
@@ -4715,6 +4735,7 @@ func (c *fakeGoogleV2StreamingRecognizeClient) RecvMsg(m any) error      { retur
 
 type fakeGoogleStreamingRecognizeClient struct {
 	sent               []*speechpb.StreamingRecognizeRequest
+	sentCh             chan int
 	responses          []*speechpb.StreamingRecognizeResponse
 	recvIndex          int
 	recvErr            error
@@ -4731,6 +4752,12 @@ type fakeGoogleStreamingRecognizeClient struct {
 
 func (c *fakeGoogleStreamingRecognizeClient) Send(req *speechpb.StreamingRecognizeRequest) error {
 	c.sent = append(c.sent, req)
+	if c.sentCh != nil {
+		select {
+		case c.sentCh <- len(c.sent):
+		default:
+		}
+	}
 	if req.GetStreamingConfig() != nil && c.sendErrOnConfig != nil {
 		return c.sendErrOnConfig
 	}
