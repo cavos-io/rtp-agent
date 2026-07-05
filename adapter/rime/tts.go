@@ -739,24 +739,26 @@ func rimeTTSTotalTimeout(model string) time.Duration {
 }
 
 type rimeTTSSynthesizeStream struct {
-	conn        *websocket.Conn
-	ctx         context.Context
-	cancel      context.CancelFunc
-	provider    *RimeTTS
-	requestID   string
-	contextID   string
-	events      chan *tts.SynthesizedAudio
-	errCh       chan error
-	mu          sync.Mutex
-	closed      bool
-	started     bool
-	readStarted bool
-	pendingText string
-	pushedText  string
-	audioSeen   bool
-	pendingPCM  []byte
-	segmentDone bool
-	inputEnded  bool
+	conn                  *websocket.Conn
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	provider              *RimeTTS
+	requestID             string
+	contextID             string
+	events                chan *tts.SynthesizedAudio
+	errCh                 chan error
+	mu                    sync.Mutex
+	closed                bool
+	started               bool
+	readStarted           bool
+	pendingText           string
+	pushedText            string
+	audioSeen             bool
+	pendingPCM            []byte
+	pendingTranscriptText string
+	pendingTranscript     []tts.TimedString
+	segmentDone           bool
+	inputEnded            bool
 
 	writeMessage func(int, []byte) error
 	closeConn    func() error
@@ -1049,7 +1051,20 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 			s.errCh <- llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
 			return
 		}
+		if audio != nil && audio.Frame == nil && len(audio.TimedTranscript) > 0 {
+			s.pendingTranscriptText += audio.DeltaText
+			s.pendingTranscript = append(s.pendingTranscript, audio.TimedTranscript...)
+			audio = nil
+		}
 		if audio != nil {
+			if s.pendingTranscriptText != "" && audio.DeltaText == "" {
+				audio.DeltaText = s.pendingTranscriptText
+				s.pendingTranscriptText = ""
+			}
+			if len(s.pendingTranscript) > 0 && len(audio.TimedTranscript) == 0 {
+				audio.TimedTranscript = append(audio.TimedTranscript, s.pendingTranscript...)
+				s.pendingTranscript = nil
+			}
 			s.annotateAudio(audio)
 			s.events <- audio
 		}

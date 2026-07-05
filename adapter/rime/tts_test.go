@@ -1409,6 +1409,86 @@ func TestRimeTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamBuffersTimedTranscriptUntilAudioLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read text message: %v", err)
+			return
+		}
+		timestamps := `{"type":"timestamps","word_timestamps":{"words":["hello","world"],"start":[0.1,0.3],"end":[0.2,0.5]}}`
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(timestamps)); err != nil {
+			t.Errorf("write timestamps message: %v", err)
+			return
+		}
+		chunk, err := json.Marshal(map[string]any{
+			"type": "chunk",
+			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		})
+		if err != nil {
+			t.Errorf("marshal chunk: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, chunk); err != nil {
+			t.Errorf("write chunk message: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Hello world."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil {
+		t.Fatal("Next audio = nil")
+	}
+	if audio.Frame == nil {
+		t.Fatalf("metadata-only event = %#v, want transcript buffered until PCM audio", audio)
+	}
+	if audio.DeltaText != "hello world " {
+		t.Fatalf("DeltaText = %q, want hello world", audio.DeltaText)
+	}
+	if len(audio.TimedTranscript) != 2 {
+		t.Fatalf("TimedTranscript = %#v, want two timed words", audio.TimedTranscript)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("PCM frame = %#v, want provider audio", audio.Frame.Data)
+	}
+}
+
 func TestRimeTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	stream := &rimeTTSSynthesizeStream{
 		ctx:    context.Background(),
