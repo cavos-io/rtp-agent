@@ -1098,6 +1098,15 @@ func TestRimeTTSInfersWebsocketModeFromBaseURL(t *testing.T) {
 	if !provider.Capabilities().Streaming {
 		t.Fatal("streaming = false, want true for ws base URL")
 	}
+
+	provider = NewRimeTTS("test-key", "",
+		WithRimeTTSBaseURL("wss://rime.example"),
+		WithRimeTTSWebsocket(false),
+	)
+
+	if !provider.Capabilities().Streaming {
+		t.Fatal("streaming = false after explicit false option, want ws base URL to match reference")
+	}
 }
 
 func TestRimeTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {

@@ -206,6 +206,9 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		opt(provider)
 	}
 	provider.sampleRate = provider.requestSampleRate
+	if strings.HasPrefix(provider.baseURL, "ws://") || strings.HasPrefix(provider.baseURL, "wss://") {
+		provider.useWebsocket = true
+	}
 	normalizeRimeTransportBaseURL(provider)
 	if voice != "" {
 		provider.voice = voice
