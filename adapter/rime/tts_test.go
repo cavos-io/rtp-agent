@@ -860,6 +860,32 @@ func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	}
 }
 
+func TestRimeTTSWhitespaceNonAudioResponseEndsLikeReference(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/plain"}},
+			Body:       io.NopCloser(strings.NewReader("no audio")),
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next = (%#v, %v), want EOF without no-audio error for whitespace input", audio, err)
+	}
+}
+
 func TestRimeTTSWebsocketModeMatchesReference(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
 

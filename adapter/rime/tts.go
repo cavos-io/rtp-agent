@@ -714,7 +714,9 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
 		resp.Body.Close()
 		cancel()
-		s.pendingErr = llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		if strings.TrimSpace(s.text) != "" {
+			s.pendingErr = llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		}
 		return nil
 	}
 
