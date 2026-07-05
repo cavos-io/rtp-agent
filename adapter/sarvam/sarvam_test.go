@@ -1400,6 +1400,64 @@ func TestSarvamTTSAudioFromStreamMessageDecodesReferenceWAV(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSAudioFromStreamMessageDecodesReferenceCompressedCodecs(t *testing.T) {
+	tests := []struct {
+		name       string
+		codec      string
+		fixtureB64 string
+	}{
+		{name: "opus", codec: "opus", fixtureB64: sarvamOpusOggFixtureBase64},
+		{name: "aac", codec: "aac", fixtureB64: sarvamAACADTSFixtureBase64},
+		{name: "flac", codec: "flac", fixtureB64: sarvamFLACFixtureBase64},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compressed, err := base64.StdEncoding.DecodeString(tt.fixtureB64)
+			if err != nil {
+				t.Fatalf("decode %s fixture: %v", tt.codec, err)
+			}
+			payload, err := json.Marshal(map[string]any{
+				"type": "audio",
+				"data": map[string]any{
+					"audio":      base64.StdEncoding.EncodeToString(compressed),
+					"request_id": "req-" + tt.codec,
+				},
+			})
+			if err != nil {
+				t.Fatalf("marshal %s message: %v", tt.codec, err)
+			}
+
+			audio, done, err := sarvamTTSAudioFromStreamMessage(payload, 24000, tt.codec)
+			if err != nil {
+				t.Fatalf("audio from %s stream message: %v", tt.codec, err)
+			}
+			if done {
+				t.Fatalf("done = true for %s audio message", tt.codec)
+			}
+			if audio == nil || audio.Frame == nil {
+				t.Fatalf("%s audio frame = nil, want decoded PCM frame", tt.codec)
+			}
+			if audio.RequestID != "req-"+tt.codec {
+				t.Fatalf("request id = %q, want req-%s", audio.RequestID, tt.codec)
+			}
+			if len(audio.Frame.Data) == 0 {
+				t.Fatalf("%s decoded frame data empty", tt.codec)
+			}
+			prefixLen := len(audio.Frame.Data)
+			if prefixLen > len(compressed) {
+				prefixLen = len(compressed)
+			}
+			if bytes.Equal(audio.Frame.Data[:prefixLen], compressed[:prefixLen]) {
+				t.Fatalf("%s frame data still contains compressed bytes", tt.codec)
+			}
+			if got, want := len(audio.Frame.Data), int(audio.Frame.SamplesPerChannel*audio.Frame.NumChannels*2); got != want {
+				t.Fatalf("%s frame byte length = %d, want %d from samples/channels", tt.codec, got, want)
+			}
+		})
+	}
+}
+
 func TestSarvamTTSAudioFromStreamMessageReturnsTypedErrors(t *testing.T) {
 	_, _, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"error","data":{"message":"bad voice","code":"invalid_voice"}}`), 22050, "mp3")
 	if err == nil {
@@ -1548,6 +1606,12 @@ func sarvamTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
 	wav.Write(pcm)
 	return wav.Bytes()
 }
+
+const sarvamOpusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
+
+const sarvamAACADTSFixtureBase64 = "//FYQCW//N4CAExhdmM1OS4zNy4xMDAAAkivW6qEHV2Era+88Zx+Lmqu6laZJJuSSdvOREkl//+xxdxr2VxbpLZtPUzbWI83eI1VlnJXPMf/z/t8jbtgVAi7i5pzVxrsrPuOsRwqmaa771bhdqxuKsNiynHYnHbTt2U5VYbFWZ7G2Kw1qNjo1+sOOsNirNirMdWY6NjlKpSqUqlKpSqUqlKpSqUqlKpSqUqlKpSqUqlKpSqUriSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSnBRJRJRLklyS5JKcFRRRRRRRRZ2hVDGydCyDBt6FdMLIULJr87Nyau3n5NeSIoiFRIosqnJDFdorqF/4/fvbfuXtv3LrXW2XaSo3JcM4P/xWEAv//wBTJ7Zu9tyGlF3I4RCrddMhL+P/4fGS7vTS1evPz8/v1AXq76/t/T/cXq7ulX+f9f9y7u7uKACEPCTwwZ2dnZ2dnYWdn79ra1ShMEvRxEo87yHMSqOqu7MBm3hsjdUTH5leOGyNhDr2FVOxysSf22tuaTBdtNotAHOZ+jamA1fKflIMDO4SEgwM7hISDAwM7uEhISDAwM7uEhIT/P3b94fy/lst7vcB/L1fyQ9pfVxGvDOIiNxJ3CuOGJu39ZDoCoTgRoMSkxIvLOB94REf6sQGPzuWoMsh3Dc1yRPaV68HbXFPnZuTVIJ20WpqkE50XJyqmqQTgTtps6bU1VTSghgXOmziamqo1UC4FzprTNTVUaVS0palqhnTZzJTP/G/q3ya7du6ZCQnUwMDA1269oSEhIT6PPpuNezge2oTGWYIvlErXOCc2FMRFBf133vVsTPYmess9Oz062nZ5q2nWzVtOyTVs1VNVTU0xNYY4YyUuzs7Ozhg1QO//FYQCV//AEin7bUJIPF/kPy/p/3tq5F3d3/29/v99LVABSncK/EKYrRESC9SpDC4T6d7Tx4FvvUy7s3w+7N8PuzfD7t2ab4eHzRf4/wHx0gf406QP8adIB8fl/jSAf4/x/j4gB/j/HxiuLOwQAAcc8gAB/V+ogAARhvItaAABGRFIw4YAAEYLyLnAAARixCMOEAABGDAIveRc0i1gAAAAARQgic5ExiJigAAAABFByJzkTGImMAAAAAESlIlKRIQiQhEYyIxgAAAAAAAERjIiEREIiIREQSIQgAAAAAAAEQhIhCRCAiABEACIAEQAIgAAAAAAAAAAABEAP/3/9//f/3/9//f/0AAAAAAAAAAP/3/9//f/3/9//f/3/9//f/0AAAAAAAAAAAAA4="
+
+const sarvamFLACFixtureBase64 = "ZkxhQwAAACIJAAkAAAFxAAFxBdwA8AAAA8DrQTcn425MUFIsj3pbRk7HhAAALg0AAABMYXZmNTkuMjcuMTAwAQAAABUAAABlbmNvZGVyPUxhdmY1OS4yNy4xMDD/+HcIAAO/OEIASwHH5r+TwAAqAAFAmabaVU3y9oypCEoUjaNIUjKQJCIFT08KaFJKEIgGGTMkyZkyUOcMpLCphEnDIhkzAKGTkNDCmQIJOBTh+SZwiQLAiHDhQhJQmcLDJz0KZQNJSckoFkKQlDmEJJhSUJSkp5cshJKSgZJyFDmThQhKEQ8OFKFJTKUMhmEySGQiBkycKTQMyJDykpgRmTJQgYYcOBlCFDkmc4GETJScoSyTCoZIEkk0JECk5KZNDkEmhyZoFQMoFCTMIGSUChTKGgXOUJYFClIaSFJhkkwkyQCzJQqTwsmcLJBJmYczMMoQ4cwIXKaeU5zCwlAIRAzMmQ5mHDSUgaUlCJlCISIQsyUDDDJmYUKHChECwKcPQwoU8JEOEpJwIJkw55DOU5TKBShzIgEQMocMkpIUCFDJKTzKcvlISZwyScKGGhSScCaSgXIWZlC8mTqYrIqoyeioyKjKtCSixgeAQAAkK1k="
 
 func assertSarvamQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()

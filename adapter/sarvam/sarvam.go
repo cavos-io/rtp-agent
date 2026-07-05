@@ -1929,7 +1929,7 @@ func sarvamCompactJSON(payload []byte) string {
 
 func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAudioCodec string) (*tts.SynthesizedAudio, error) {
 	if outputAudioCodec == "mp3" {
-		return sarvamTTSDecodeMP3AudioFrame(data, requestID)
+		return sarvamTTSDecodeAudioFrame(data, requestID, codecs.NewMP3AudioStreamDecoder())
 	}
 	if outputAudioCodec == "wav" {
 		frame, err := sarvamTTSDecodeWAVPCM16(data)
@@ -1937,6 +1937,14 @@ func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAu
 			return nil, err
 		}
 		return &tts.SynthesizedAudio{RequestID: requestID, Frame: frame}, nil
+	}
+	switch outputAudioCodec {
+	case "opus":
+		return sarvamTTSDecodeAudioFrame(data, requestID, codecs.NewOpusAudioStreamDecoder(sampleRate, 1))
+	case "aac":
+		return sarvamTTSDecodeAudioFrame(data, requestID, codecs.NewAACAudioStreamDecoder())
+	case "flac":
+		return sarvamTTSDecodeAudioFrame(data, requestID, codecs.NewFLACAudioStreamDecoder())
 	}
 	frameData := sarvamTTSDecodeTelephony(outputAudioCodec, data)
 	return &tts.SynthesizedAudio{
@@ -1950,8 +1958,7 @@ func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAu
 	}, nil
 }
 
-func sarvamTTSDecodeMP3AudioFrame(data []byte, requestID string) (*tts.SynthesizedAudio, error) {
-	decoder := codecs.NewMP3AudioStreamDecoder()
+func sarvamTTSDecodeAudioFrame(data []byte, requestID string, decoder codecs.AudioStreamDecoder) (*tts.SynthesizedAudio, error) {
 	defer decoder.Close()
 	go func() {
 		decoder.Push(data)
