@@ -450,6 +450,37 @@ func TestRimeTTSBaseURLOptionsAllowReferenceEmptyValue(t *testing.T) {
 	}
 }
 
+func TestRimeTTSBaseURLOptionsPreserveReferenceTrailingSlash(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/"))
+	if provider.baseURL != "https://rime.example/" {
+		t.Fatalf("constructor base URL = %q, want trailing slash preserved", provider.baseURL)
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.String() != "https://rime.example/" {
+		t.Fatalf("request URL = %q, want trailing slash preserved", req.URL.String())
+	}
+
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("wss://rime.example/"))
+	if !streaming.Capabilities().Streaming {
+		t.Fatal("streaming = false, want websocket inferred from base URL")
+	}
+	u := buildRimeTTSWebsocketURL(streaming)
+	if got := u.Scheme + "://" + u.Host + u.Path; got != "wss://rime.example//ws3" {
+		t.Fatalf("websocket URL base = %q, want trailing slash preserved before /ws3", got)
+	}
+
+	updatable := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/old"))
+	if err := updatable.UpdateOptions(WithRimeTTSBaseURL("https://rime.example/new/")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if updatable.baseURL != "https://rime.example/new/" {
+		t.Fatalf("updated base URL = %q, want trailing slash preserved", updatable.baseURL)
+	}
+}
+
 func TestRimeTTSModelOptionsAllowReferenceEmptyValue(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSModel(""))
 	if provider.Model() != "" {
