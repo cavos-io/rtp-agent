@@ -590,6 +590,55 @@ func TestRimeTTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) 
 	}
 }
 
+func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	var modelID string
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		modelID, _ = payload["modelId"].(string)
+		return &http.Response{
+			StatusCode: http.StatusTeapot,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"stop"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("arcana"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	if err := provider.UpdateOptions(WithRimeTTSModel("mistv3")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want provider error after request capture")
+	}
+	if modelID != "arcana" {
+		t.Fatalf("request modelId = %q, want stream snapshot model arcana", modelID)
+	}
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want reference total timeout")
+	}
+	if remaining <= 0 || remaining > 35*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want updated mist timeout", remaining)
+	}
+}
+
 func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	requests := 0
 	originalClient := http.DefaultClient

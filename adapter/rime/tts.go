@@ -704,9 +704,16 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	if s.provider != nil {
 		s.provider.mu.Lock()
 		s.opts.baseURL = s.provider.baseURL
+		timeout := rimeTTSTotalTimeout(s.provider.model)
 		s.provider.mu.Unlock()
+		requestCtx, cancel := context.WithTimeout(s.ctx, timeout)
+		return s.openResponse(requestCtx, cancel)
 	}
 	requestCtx, cancel := context.WithTimeout(s.ctx, rimeTTSTotalTimeout(s.opts.model))
+	return s.openResponse(requestCtx, cancel)
+}
+
+func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel context.CancelFunc) error {
 	req, err := buildRimeTTSRequest(requestCtx, &s.opts, s.text)
 	if err != nil {
 		cancel()
