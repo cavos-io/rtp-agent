@@ -192,20 +192,12 @@ func (t *RespeecherTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 		return nil, err
 	}
 
-	req, err := buildRespeecherTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Respeecher TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-	return &respeecherTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
+	return &respeecherTTSChunkedStream{
+		ctx:        ctx,
+		provider:   t,
+		text:       text,
+		sampleRate: t.sampleRate,
+	}, nil
 }
 
 func buildRespeecherTTSRequest(ctx context.Context, t *RespeecherTTS, text string) (*http.Request, error) {
@@ -283,6 +275,9 @@ func validateRespeecherAPIKey(apiKey string) error {
 }
 
 type respeecherTTSChunkedStream struct {
+	ctx        context.Context
+	provider   *RespeecherTTS
+	text       string
 	resp       *http.Response
 	sampleRate int
 	decoded    bool
@@ -295,6 +290,9 @@ type respeecherTTSChunkedStream struct {
 func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
 		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
 	}
 	if !s.decoded {
 		s.decoded = true
@@ -319,6 +317,27 @@ func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	return s.emitFinal()
 }
 
+func (s *respeecherTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil {
+		return nil
+	}
+	req, err := buildRespeecherTTSRequest(s.ctx, s.provider, s.text)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Respeecher TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *respeecherTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -330,6 +349,9 @@ func (s *respeecherTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) 
 func (s *respeecherTTSChunkedStream) Close() error {
 	s.closed = true
 	s.finalSent = true
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
 	return s.resp.Body.Close()
 }
 

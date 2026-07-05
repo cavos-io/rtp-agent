@@ -586,6 +586,44 @@ func TestResembleTTSStreamLogMessageDoesNotAbortReferenceStream(t *testing.T) {
 	}
 }
 
+func TestResembleTTSStreamIgnoresEarlyAudioEndUntilLastRequest(t *testing.T) {
+	conn := newResembleProviderMessagesWebsocketConn(t,
+		map[string]any{"type": "audio_end", "request_id": 1},
+		map[string]any{"type": "audio_end", "request_id": 2},
+	)
+	stream := &resembleTTSSynthesizeStream{
+		conn:    conn,
+		events:  make(chan *coretts.SynthesizedAudio, 2),
+		errCh:   make(chan error, 1),
+		flushed: true,
+		lastID:  2,
+	}
+	done := make(chan struct{})
+	go func() {
+		stream.readLoop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case err := <-stream.errCh:
+		t.Fatalf("readLoop error = %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for final audio_end")
+	}
+
+	var finals int
+	for event := range stream.events {
+		if event == nil || !event.IsFinal {
+			t.Fatalf("event = %+v, want final marker only", event)
+		}
+		finals++
+	}
+	if finals != 1 {
+		t.Fatalf("final markers = %d, want only last request audio_end to finalize", finals)
+	}
+}
+
 func TestResembleTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	conn, closed := newResembleClosingWebsocketConn(t)
 	ctx, cancel := context.WithCancel(context.Background())

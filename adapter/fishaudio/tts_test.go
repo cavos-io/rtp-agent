@@ -233,19 +233,52 @@ func TestFishAudioTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewFishAudioTTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
 	if body, ok := statusErr.Body.(string); !ok || !strings.Contains(body, "rate limited") {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestFishAudioTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	requests := 0
+	http.DefaultClient = &http.Client{Transport: fishAudioRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(fishAudioTestWAV([]byte{0x01, 0x00}, 24000, 1))),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	provider := NewFishAudioTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests after Synthesize = %d, want 0 before Next", requests)
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
 	}
 }
 
@@ -258,13 +291,14 @@ func TestFishAudioTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 
 	provider := NewFishAudioTTS("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -277,13 +311,14 @@ func TestFishAudioTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 
 	provider := NewFishAudioTTS("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want APITimeoutError")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -296,12 +331,13 @@ func TestFishAudioTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) 
 
 	provider := NewFishAudioTTS("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want context.Canceled")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
 	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Synthesize error = %T %v, want context.Canceled", err, err)
+		t.Fatalf("Next error = %T %v, want context.Canceled", err, err)
 	}
 }
 

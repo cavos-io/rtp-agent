@@ -211,20 +211,13 @@ func (t *MurfTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 	if err := validateMurfAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	req, err := buildMurfTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, murfTTSConnectionError("Murf TTS request failed", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Murf TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-	return &murfTTSChunkedStream{resp: resp, sampleRate: t.sampleRate}, nil
+	opts := *t
+	return &murfTTSChunkedStream{
+		ctx:        ctx,
+		text:       text,
+		opts:       opts,
+		sampleRate: t.sampleRate,
+	}, nil
 }
 
 func buildMurfTTSRequest(ctx context.Context, t *MurfTTS, text string) (*http.Request, error) {
@@ -374,7 +367,11 @@ func murfTTSWebsocketPacket(t *MurfTTS) map[string]interface{} {
 
 type murfTTSChunkedStream struct {
 	resp         *http.Response
+	ctx          context.Context
+	text         string
+	opts         MurfTTS
 	sampleRate   int
+	requested    bool
 	pendingFinal bool
 	finalSent    bool
 	closed       bool
@@ -382,6 +379,12 @@ type murfTTSChunkedStream struct {
 
 func (s *murfTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
@@ -409,6 +412,28 @@ func (s *murfTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			SamplesPerChannel: uint32(n / 2),
 		},
 	}, nil
+}
+
+func (s *murfTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.requested || s.text == "" {
+		return nil
+	}
+	s.requested = true
+	req, err := buildMurfTTSRequest(s.ctx, &s.opts, s.text)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return murfTTSConnectionError("Murf TTS request failed", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Murf TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
 }
 
 func (s *murfTTSChunkedStream) Close() error {

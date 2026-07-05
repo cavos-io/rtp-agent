@@ -174,16 +174,53 @@ func TestRespeecherTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "", WithRespeecherTTSBaseURL("https://respeecher.example/v1"))
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize returned error before stream consumption: %v", err)
 	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+}
+
+func TestRespeecherTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	var requests int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: respeecherRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(respeecherTestWAV([]byte{0x01, 0x02}, 24000, 1))),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewRespeecherTTS("test-key", "", WithRespeecherTTSBaseURL("https://respeecher.example/v1"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests before Next = %d, want 0", requests)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("Next audio = %#v, want first audio frame", audio)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
 	}
 }
 

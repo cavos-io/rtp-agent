@@ -577,11 +577,17 @@ func (s *resembleTTSSynthesizeStream) readLoop() {
 			s.errCh <- err
 			return
 		}
+		if done {
+			if s.shouldStopAfterAudioEnd(requestID) {
+				if audio != nil {
+					s.events <- audio
+				}
+				return
+			}
+			continue
+		}
 		if audio != nil {
 			s.events <- audio
-		}
-		if done && s.shouldStopAfterAudioEnd(requestID) {
-			return
 		}
 	}
 }

@@ -207,24 +207,10 @@ func (t *MinimaxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 		return nil, err
 	}
 
-	req, err := buildMinimaxTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("MiniMax TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &minimaxTTSChunkedStream{
-		resp:        resp,
+		ctx:         ctx,
+		provider:    t,
+		text:        text,
 		audioFormat: t.audioFormat,
 		sampleRate:  t.sampleRate,
 	}, nil
@@ -425,6 +411,9 @@ func validateMinimaxTTSOptions(t *MinimaxTTS) error {
 }
 
 type minimaxTTSChunkedStream struct {
+	ctx           context.Context
+	provider      *MinimaxTTS
+	text          string
 	resp          *http.Response
 	audioFormat   string
 	sampleRate    int
@@ -434,9 +423,16 @@ type minimaxTTSChunkedStream struct {
 	decodeStarted bool
 	hasAudio      bool
 	finalSent     bool
+	closed        bool
 }
 
 func (s *minimaxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if s.closed {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
@@ -522,6 +518,27 @@ func (s *minimaxTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error
 	return &tts.SynthesizedAudio{RequestID: s.requestID, Frame: frame}, nil
 }
 
+func (s *minimaxTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.provider == nil {
+		return nil
+	}
+	req, err := buildMinimaxTTSRequest(s.ctx, s.provider, s.text)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("MiniMax TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *minimaxTTSChunkedStream) collectSSEAudio() ([]byte, error) {
 	var audio bytes.Buffer
 	for s.scanner.Scan() {
@@ -545,6 +562,7 @@ func (s *minimaxTTSChunkedStream) collectSSEAudio() ([]byte, error) {
 }
 
 func (s *minimaxTTSChunkedStream) Close() error {
+	s.closed = true
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}
