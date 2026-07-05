@@ -393,7 +393,6 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		conn.Close()
 		return nil, io.ErrClosedPipe
 	}
-	go stream.readLoop()
 	return stream, nil
 }
 
@@ -714,6 +713,7 @@ type rimeTTSSynthesizeStream struct {
 	mu          sync.Mutex
 	closed      bool
 	started     bool
+	readStarted bool
 	pendingText string
 	emptyFinal  bool
 	inputEnded  bool
@@ -830,8 +830,20 @@ func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+		return err
+	}
 	s.started = true
-	return s.writeMessageData(websocket.TextMessage, message)
+	s.startReadLoopLocked()
+	return nil
+}
+
+func (s *rimeTTSSynthesizeStream) startReadLoopLocked() {
+	if s.readStarted || s.conn == nil || s.events == nil || s.errCh == nil {
+		return
+	}
+	s.readStarted = true
+	go s.readLoop()
 }
 
 func (s *rimeTTSSynthesizeStream) Close() error {

@@ -1046,6 +1046,60 @@ func TestRimeTTSStreamEmptyFlushEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamDoesNotReadProviderBeforeReferenceInput(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	serverClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+		close(serverClosed)
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	rimeStream := stream.(*rimeTTSSynthesizeStream)
+	select {
+	case <-serverClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for provider close")
+	}
+	select {
+	case err := <-rimeStream.errCh:
+		t.Fatalf("read error before input = %v, want receive delayed like reference", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("empty Flush error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want empty-turn final marker", err)
+	}
+	if audio == nil || !audio.IsFinal {
+		t.Fatalf("Next audio = %+v, want final marker", audio)
+	}
+}
+
 func TestRimeTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	stream := &rimeTTSSynthesizeStream{
 		ctx:    context.Background(),
@@ -1270,7 +1324,6 @@ func TestRimeTTSReadTimeoutReturnsAPITimeoutError(t *testing.T) {
 func TestRimeTTSStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	releaseServer := make(chan struct{})
-	defer close(releaseServer)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -1281,6 +1334,7 @@ func TestRimeTTSStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 		<-releaseServer
 	}))
 	defer server.Close()
+	defer close(releaseServer)
 
 	provider := NewRimeTTS(
 		"test-key",
@@ -1296,6 +1350,9 @@ func TestRimeTTSStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
 	defer stream.Close()
 	if err := stream.PushText("This sentence is definitely long enough."); err != nil {
 		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
 	}
 
 	audio, err := stream.Next()
