@@ -298,6 +298,7 @@ func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStrea
 		text:       text,
 		opts:       opts,
 		sampleRate: t.sampleRate,
+		requestID:  cavosmath.ShortUUID(""),
 	}, nil
 }
 
@@ -539,6 +540,7 @@ type rimeTTSChunkedStream struct {
 	text         string
 	opts         RimeTTS
 	sampleRate   int
+	requestID    string
 	requested    bool
 	pendingFinal bool
 	finalSent    bool
@@ -557,7 +559,7 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
-		return &tts.SynthesizedAudio{IsFinal: true}, nil
+		return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
 	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
@@ -565,33 +567,45 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			s.pendingFinal = true
 		}
-		return &tts.SynthesizedAudio{
+		return s.annotateAudio(&tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
 				Data:              buf[:n],
 				SampleRate:        uint32(s.sampleRate),
 				NumChannels:       1,
 				SamplesPerChannel: uint32(n / 2),
 			},
-		}, nil
+		}), nil
 	}
 	if err != nil {
 		if err == io.EOF {
 			if !s.finalSent {
 				s.finalSent = true
-				return &tts.SynthesizedAudio{IsFinal: true}, nil
+				return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
 			}
 			return nil, io.EOF
 		}
 		return nil, rimeTTSConnectionError("Rime TTS stream read failed", err)
 	}
-	return &tts.SynthesizedAudio{
+	return s.annotateAudio(&tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
 			Data:              buf[:n],
 			SampleRate:        uint32(s.sampleRate),
 			NumChannels:       1,
 			SamplesPerChannel: uint32(n / 2),
 		},
-	}, nil
+	}), nil
+}
+
+func (s *rimeTTSChunkedStream) annotateAudio(audio *tts.SynthesizedAudio) *tts.SynthesizedAudio {
+	if audio == nil {
+		return nil
+	}
+	if s.requestID == "" {
+		s.requestID = cavosmath.ShortUUID("")
+	}
+	audio.RequestID = s.requestID
+	audio.SegmentID = ""
+	return audio
 }
 
 func (s *rimeTTSChunkedStream) ensureResponse() error {

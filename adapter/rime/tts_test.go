@@ -500,6 +500,36 @@ func TestRimeTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamAnnotatesReferenceRequestID(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio.RequestID == "" {
+		t.Fatal("audio RequestID is empty, want reference request id")
+	}
+	if audio.SegmentID != "" {
+		t.Fatalf("audio SegmentID = %q, want empty chunked segment id", audio.SegmentID)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final.RequestID != audio.RequestID {
+		t.Fatalf("final RequestID = %q, want %q", final.RequestID, audio.RequestID)
+	}
+	if final.SegmentID != "" {
+		t.Fatalf("final SegmentID = %q, want empty chunked segment id", final.SegmentID)
+	}
+}
+
 func TestRimeTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte{0x01, 0x02})}
 	stream := &rimeTTSChunkedStream{
