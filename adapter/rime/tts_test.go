@@ -765,6 +765,50 @@ func TestRimeTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
 	assertRimePayload(t, writes[2], "contextId", "ctx-1")
 }
 
+func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+
+	if err := stream.PushText("Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("writes after EndInput = %d, want tail text and flush", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "Tail ")
+	assertRimePayload(t, writes[1], "operation", "flush")
+	assertRimePayload(t, writes[1], "contextId", "ctx-1")
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want nil", err)
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want nil", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("writes after closed input = %d, want no extra provider messages", len(writes))
+	}
+}
+
 func TestRimeTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
