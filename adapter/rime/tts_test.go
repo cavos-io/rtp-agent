@@ -1052,6 +1052,49 @@ func TestRimeTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeCallerCancelReturnsContextCanceled(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	provider := NewRimeTTS("test-key", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Synthesize did not start provider request")
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+		}
+		var connErr *llm.APIConnectionError
+		if errors.As(err, &connErr) {
+			t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next remained blocked after caller cancellation")
+	}
+}
+
 func TestRimeTTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -1480,6 +1523,23 @@ func TestRimeTTSChunkedStreamNetReadTimeoutReturnsAPITimeoutError(t *testing.T) 
 	}
 }
 
+func TestRimeTTSChunkedStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: rimeCanceledReader{}},
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connErr *llm.APIConnectionError
+	if errors.As(err, &connErr) {
+		t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
+	}
+}
+
 func TestRimeTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -1603,6 +1663,122 @@ func TestRimeTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
+func TestRimeTTSChunkedStreamCloseCancelsPendingReferenceRequest(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider := NewRimeTTS("test-key", "")
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start provider request")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel pending provider request like reference ChunkedStream.aclose")
+	}
+}
+
+func TestRimeTTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
+	body := &rimeBlockingCancelBody{
+		readStarted: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+	}
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start body read")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close during read error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not unblock body read")
+	}
+}
+
+func TestRimeTTSChunkedStreamCloseDuringAudioReadDropsLateFrame(t *testing.T) {
+	body := &rimeBlockingAudioCancelBody{
+		readStarted: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+		data:        []byte{0x01, 0x02},
+	}
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	nextDone := make(chan *tts.SynthesizedAudio, 1)
+	errDone := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		nextDone <- audio
+		errDone <- err
+	}()
+
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start body read")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case audio := <-nextDone:
+		err := <-errDone
+		if audio != nil {
+			t.Fatalf("Next after Close during audio read = %+v, want nil audio", audio)
+		}
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close during audio read error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not unblock body read")
 	}
 }
 
@@ -1809,6 +1985,52 @@ func TestRimeTTSPrewarmWarmsReferenceWebsocketConnection(t *testing.T) {
 	releaseOnce.Do(func() { close(release) })
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close prewarmed stream error = %v", err)
+	}
+}
+
+func TestRimeTTSProviderCloseCancelsReferencePrewarm(t *testing.T) {
+	dialStarted := make(chan struct{})
+	dialCanceled := make(chan struct{})
+	dialReturned := make(chan struct{})
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			close(dialStarted)
+			<-ctx.Done()
+			close(dialCanceled)
+			time.Sleep(50 * time.Millisecond)
+			close(dialReturned)
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+		WithRimeTTSStreamResponseTimeout(time.Minute),
+	)
+	tts.Prewarm(provider)
+	select {
+	case <-dialStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Prewarm did not start websocket dial")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-dialCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel in-flight prewarm dial like reference ConnectionPool.aclose")
+	}
+	select {
+	case <-dialReturned:
+	default:
+		t.Fatal("Close returned before in-flight prewarm dial finished like reference ConnectionPool.aclose")
 	}
 }
 
@@ -3034,6 +3256,51 @@ func TestRimeTTSStreamProviderErrorUnregistersLikeReference(t *testing.T) {
 	}
 }
 
+func TestRimeTTSReadLoopUnblocksWhenClosedWithFullEventQueue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	provider.streamResponseTimeout = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	readCalls := 0
+	releaseRead := make(chan struct{})
+	stream := &rimeTTSSynthesizeStream{
+		ctx:      ctx,
+		cancel:   cancel,
+		provider: provider,
+		events:   make(chan *tts.SynthesizedAudio, 1),
+		errCh:    make(chan error, 1),
+		readMessage: func() (int, []byte, error) {
+			readCalls++
+			if readCalls == 1 {
+				return websocket.TextMessage, []byte(`{"type":"chunk","data":"AQI="}`), nil
+			}
+			<-releaseRead
+			return 0, nil, io.EOF
+		},
+		closeConn: func() error { return nil },
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "queued"}
+	done := make(chan struct{})
+	go func() {
+		stream.readLoop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("readLoop returned before close; want blocked on full event queue")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(releaseRead)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not unblock after Close with full event queue")
+	}
+}
+
 func TestRimeTTSStreamAnnotatesReferenceRequestAndSegmentIDs(t *testing.T) {
 	stream := &rimeTTSSynthesizeStream{
 		requestID: "req-1",
@@ -3220,6 +3487,32 @@ func TestRimeTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for normal websocket close error")
+	}
+}
+
+func TestRimeTTSStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &rimeTTSSynthesizeStream{
+		ctx:       context.Background(),
+		requestID: "req-cancel",
+		events:    make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
+		readMessage: func() (int, []byte, error) {
+			return 0, nil, context.Canceled
+		},
+		closeConn: func() error { return nil },
+	}
+	go stream.readLoop()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connErr *llm.APIConnectionError
+	if errors.As(err, &connErr) {
+		t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
 	}
 }
 
@@ -3413,6 +3706,45 @@ func (b *rimeCloseCountBody) Close() error {
 	return nil
 }
 
+type rimeBlockingCancelBody struct {
+	readStarted chan struct{}
+	closeCalled chan struct{}
+	closeOnce   sync.Once
+}
+
+func (b *rimeBlockingCancelBody) Read([]byte) (int, error) {
+	close(b.readStarted)
+	<-b.closeCalled
+	return 0, context.Canceled
+}
+
+func (b *rimeBlockingCancelBody) Close() error {
+	b.closeOnce.Do(func() {
+		close(b.closeCalled)
+	})
+	return nil
+}
+
+type rimeBlockingAudioCancelBody struct {
+	readStarted chan struct{}
+	closeCalled chan struct{}
+	closeOnce   sync.Once
+	data        []byte
+}
+
+func (b *rimeBlockingAudioCancelBody) Read(p []byte) (int, error) {
+	close(b.readStarted)
+	<-b.closeCalled
+	return copy(p, b.data), context.Canceled
+}
+
+func (b *rimeBlockingAudioCancelBody) Close() error {
+	b.closeOnce.Do(func() {
+		close(b.closeCalled)
+	})
+	return nil
+}
+
 type rimeChunkedBody struct {
 	chunks [][]byte
 	index  int
@@ -3483,6 +3815,14 @@ func (rimeNetTimeoutReader) Read([]byte) (int, error) {
 }
 
 func (rimeNetTimeoutReader) Close() error { return nil }
+
+type rimeCanceledReader struct{}
+
+func (rimeCanceledReader) Read([]byte) (int, error) {
+	return 0, context.Canceled
+}
+
+func (rimeCanceledReader) Close() error { return nil }
 
 type rimeNetTimeoutError struct{}
 

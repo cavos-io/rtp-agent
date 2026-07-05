@@ -47,6 +47,9 @@ type RimeTTS struct {
 	prewarmURL               string
 	prewarmRefreshedAt       time.Time
 	prewarmInFlight          bool
+	prewarmCancel            context.CancelFunc
+	prewarmDone              chan struct{}
+	prewarmSeq               uint64
 	apiKey                   string
 	baseURL                  string
 	model                    string
@@ -832,19 +835,32 @@ func (t *RimeTTS) Prewarm() {
 	if t == nil || !t.useWebsocket || validateRimeAPIKey(t.apiKey) != nil || validateRimeTimeScaleFactor(t) != nil {
 		return
 	}
+	prewarmCtx, cancelPrewarm := context.WithCancel(context.Background())
 	t.mu.Lock()
 	if t.closed || t.prewarmConn != nil || t.prewarmInFlight {
 		t.mu.Unlock()
+		cancelPrewarm()
 		return
 	}
 	prewarmURL := buildRimeTTSWebsocketURL(t).String()
+	prewarmDone := make(chan struct{})
 	t.prewarmInFlight = true
+	t.prewarmCancel = cancelPrewarm
+	t.prewarmDone = prewarmDone
+	t.prewarmSeq++
+	prewarmSeq := t.prewarmSeq
 	t.mu.Unlock()
 
 	go func() {
-		conn, err := t.dialWebsocket(context.Background())
+		defer cancelPrewarm()
+		defer close(prewarmDone)
+		conn, err := t.dialWebsocket(prewarmCtx)
 		t.mu.Lock()
-		t.prewarmInFlight = false
+		if t.prewarmSeq == prewarmSeq {
+			t.prewarmInFlight = false
+			t.prewarmCancel = nil
+			t.prewarmDone = nil
+		}
 		var closeConn *websocket.Conn
 		if err != nil || t.closed || t.prewarmConn != nil {
 			closeConn = conn
@@ -925,14 +941,27 @@ func (t *RimeTTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	prewarmConn := t.prewarmConn
+	prewarmCancel := t.prewarmCancel
+	prewarmDone := t.prewarmDone
 	t.prewarmConn = nil
 	t.prewarmURL = ""
 	t.prewarmRefreshedAt = time.Time{}
+	t.prewarmInFlight = false
+	t.prewarmCancel = nil
+	t.prewarmDone = nil
+	t.prewarmSeq++
 	streams := make([]*rimeTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
 	}
 	t.mu.Unlock()
+
+	if prewarmCancel != nil {
+		prewarmCancel()
+	}
+	if prewarmDone != nil {
+		<-prewarmDone
+	}
 
 	var closeErr error
 	for _, stream := range streams {
@@ -1160,6 +1189,10 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
 		buf := make([]byte, 4096)
 		n, err := s.resp.Body.Read(buf)
+		if s.finalSent {
+			s.pendingPCM = nil
+			return nil, io.EOF
+		}
 		if n > 0 {
 			if err == io.EOF {
 				s.pendingFinal = true
@@ -1206,6 +1239,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				return nil, io.EOF
 			}
+			if s.finalSent {
+				return nil, io.EOF
+			}
 			return nil, rimeTTSReadBodyError(err)
 		}
 	}
@@ -1223,6 +1259,9 @@ func (s *rimeTTSChunkedStream) noAudioError() error {
 }
 
 func rimeTTSReadBodyError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(err.Error())
 	}
@@ -1314,13 +1353,25 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 		return err
 	}
 
+	s.cancel = cancel
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		cancel()
+		if s.finalSent {
+			return io.EOF
+		}
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
 		return rimeTTSConnectionError("Rime TTS request failed", err)
+	}
+	if s.finalSent {
+		resp.Body.Close()
+		cancel()
+		return io.EOF
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
@@ -1702,11 +1753,11 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *rimeTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
-		if s.provider != nil && s.provider.streamResponseTimeout > 0 {
+		if s.provider != nil && s.provider.streamResponseTimeout > 0 && s.conn != nil {
 			timeout := s.provider.streamResponseTimeout
 			_ = s.conn.SetReadDeadline(time.Now().Add(timeout))
 		}
-		msgType, payload, err := s.conn.ReadMessage()
+		msgType, payload, err := s.readMessageData()
 		if err != nil {
 			if !s.isClosed() {
 				s.dropConnectionAfterProviderError()
@@ -1763,17 +1814,37 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 				s.pendingTranscript = nil
 			}
 			s.annotateAudio(audio)
-			s.events <- audio
+			if !s.sendAudio(audio) {
+				return
+			}
 		}
 		if transcript != "" {
 			audio := &tts.SynthesizedAudio{DeltaText: transcript}
 			s.annotateAudio(audio)
-			s.events <- audio
+			if !s.sendAudio(audio) {
+				return
+			}
 		}
 		if done {
 			s.releaseConnectionAfterDone()
 			return
 		}
+	}
+}
+
+func (s *rimeTTSSynthesizeStream) sendAudio(audio *tts.SynthesizedAudio) bool {
+	if s.events == nil {
+		return false
+	}
+	if s.ctx == nil {
+		s.events <- audio
+		return true
+	}
+	select {
+	case s.events <- audio:
+		return true
+	case <-s.ctx.Done():
+		return false
 	}
 }
 
@@ -1820,6 +1891,9 @@ func rimeTTSReadError(err error) error {
 }
 
 func rimeTTSReadErrorWithRequestID(err error, requestID string) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(err.Error())
 	}
