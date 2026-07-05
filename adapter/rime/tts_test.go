@@ -241,6 +241,72 @@ func TestRimeTTSUpdateOptionsRejectsReferenceMistV2TimeScaleFactor(t *testing.T)
 	}
 }
 
+func TestRimeTTSModelSpecificOptionsMatchReferenceRequests(t *testing.T) {
+	arcana := NewRimeTTS("test-key", "",
+		WithRimeTTSRepetitionPenalty(1.2),
+		WithRimeTTSTemperature(0.7),
+		WithRimeTTSTopP(0.8),
+		WithRimeTTSMaxTokens(128),
+	)
+	req, err := buildRimeTTSRequest(context.Background(), arcana, "hello")
+	if err != nil {
+		t.Fatalf("build arcana request: %v", err)
+	}
+	var arcanaPayload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&arcanaPayload); err != nil {
+		t.Fatalf("decode arcana body: %v", err)
+	}
+	if got := arcanaPayload["repetition_penalty"]; got != 1.2 {
+		t.Fatalf("repetition_penalty = %#v, want 1.2", got)
+	}
+	if got := arcanaPayload["temperature"]; got != 0.7 {
+		t.Fatalf("temperature = %#v, want 0.7", got)
+	}
+	if got := arcanaPayload["top_p"]; got != 0.8 {
+		t.Fatalf("top_p = %#v, want 0.8", got)
+	}
+	if got := arcanaPayload["max_tokens"]; got != float64(128) {
+		t.Fatalf("max_tokens = %#v, want 128", got)
+	}
+
+	mist := NewRimeTTS("test-key", "",
+		WithRimeTTSModel("mistv2"),
+		WithRimeTTSSpeedAlpha(0.6),
+		WithRimeTTSReduceLatency(true),
+		WithRimeTTSPauseBetweenBrackets(true),
+		WithRimeTTSPhonemizeBetweenBrackets(false),
+	)
+	req, err = buildRimeTTSRequest(context.Background(), mist, "hello")
+	if err != nil {
+		t.Fatalf("build mist request: %v", err)
+	}
+	var mistPayload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&mistPayload); err != nil {
+		t.Fatalf("decode mist body: %v", err)
+	}
+	if got := mistPayload["speedAlpha"]; got != 0.6 {
+		t.Fatalf("speedAlpha = %#v, want 0.6", got)
+	}
+	if got := mistPayload["reduceLatency"]; got != true {
+		t.Fatalf("reduceLatency = %#v, want true", got)
+	}
+	if got := mistPayload["pauseBetweenBrackets"]; got != true {
+		t.Fatalf("pauseBetweenBrackets = %#v, want true", got)
+	}
+	if got := mistPayload["phonemizeBetweenBrackets"]; got != false {
+		t.Fatalf("phonemizeBetweenBrackets = %#v, want false", got)
+	}
+
+	mist.useWebsocket = true
+	query := buildRimeTTSWebsocketURL(mist).Query()
+	assertRimePayload(t, queryMap(query), "speedAlpha", "0.6")
+	assertRimePayload(t, queryMap(query), "pauseBetweenBrackets", "true")
+	assertRimePayload(t, queryMap(query), "phonemizeBetweenBrackets", "false")
+	if got := query.Get("reduceLatency"); got != "" {
+		t.Fatalf("websocket reduceLatency = %q, want omitted like reference", got)
+	}
+}
+
 func TestRimeTTSRejectsMistV2TimeScaleFactor(t *testing.T) {
 	provider := NewRimeTTS("test-key", "",
 		WithRimeTTSModel("mistv2"),

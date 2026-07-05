@@ -37,18 +37,26 @@ const (
 )
 
 type RimeTTS struct {
-	mu              sync.Mutex
-	streams         map[*rimeTTSSynthesizeStream]struct{}
-	apiKey          string
-	baseURL         string
-	model           string
-	voice           string
-	lang            string
-	sampleRate      int
-	timeScaleFactor *float64
-	useWebsocket    bool
-	segment         string
-	closed          bool
+	mu                       sync.Mutex
+	streams                  map[*rimeTTSSynthesizeStream]struct{}
+	apiKey                   string
+	baseURL                  string
+	model                    string
+	voice                    string
+	lang                     string
+	sampleRate               int
+	timeScaleFactor          *float64
+	repetitionPenalty        *float64
+	temperature              *float64
+	topP                     *float64
+	maxTokens                *int
+	speedAlpha               *float64
+	reduceLatency            *bool
+	pauseBetweenBrackets     *bool
+	phonemizeBetweenBrackets *bool
+	useWebsocket             bool
+	segment                  string
+	closed                   bool
 }
 
 type RimeTTSOption func(*RimeTTS)
@@ -102,6 +110,54 @@ func WithRimeTTSLang(lang string) RimeTTSOption {
 func WithRimeTTSTimeScaleFactor(timeScaleFactor float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.timeScaleFactor = &timeScaleFactor
+	}
+}
+
+func WithRimeTTSRepetitionPenalty(repetitionPenalty float64) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.repetitionPenalty = &repetitionPenalty
+	}
+}
+
+func WithRimeTTSTemperature(temperature float64) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.temperature = &temperature
+	}
+}
+
+func WithRimeTTSTopP(topP float64) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.topP = &topP
+	}
+}
+
+func WithRimeTTSMaxTokens(maxTokens int) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.maxTokens = &maxTokens
+	}
+}
+
+func WithRimeTTSSpeedAlpha(speedAlpha float64) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.speedAlpha = &speedAlpha
+	}
+}
+
+func WithRimeTTSReduceLatency(reduceLatency bool) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.reduceLatency = &reduceLatency
+	}
+}
+
+func WithRimeTTSPauseBetweenBrackets(pauseBetweenBrackets bool) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.pauseBetweenBrackets = &pauseBetweenBrackets
+	}
+}
+
+func WithRimeTTSPhonemizeBetweenBrackets(phonemizeBetweenBrackets bool) RimeTTSOption {
+	return func(t *RimeTTS) {
+		t.phonemizeBetweenBrackets = &phonemizeBetweenBrackets
 	}
 }
 
@@ -173,15 +229,23 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	}
 	t.mu.Lock()
 	candidate := &RimeTTS{
-		apiKey:          t.apiKey,
-		baseURL:         t.baseURL,
-		model:           t.model,
-		voice:           t.voice,
-		lang:            t.lang,
-		sampleRate:      t.sampleRate,
-		timeScaleFactor: t.timeScaleFactor,
-		useWebsocket:    t.useWebsocket,
-		segment:         t.segment,
+		apiKey:                   t.apiKey,
+		baseURL:                  t.baseURL,
+		model:                    t.model,
+		voice:                    t.voice,
+		lang:                     t.lang,
+		sampleRate:               t.sampleRate,
+		timeScaleFactor:          t.timeScaleFactor,
+		repetitionPenalty:        t.repetitionPenalty,
+		temperature:              t.temperature,
+		topP:                     t.topP,
+		maxTokens:                t.maxTokens,
+		speedAlpha:               t.speedAlpha,
+		reduceLatency:            t.reduceLatency,
+		pauseBetweenBrackets:     t.pauseBetweenBrackets,
+		phonemizeBetweenBrackets: t.phonemizeBetweenBrackets,
+		useWebsocket:             t.useWebsocket,
+		segment:                  t.segment,
 	}
 	t.mu.Unlock()
 
@@ -201,6 +265,14 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.lang = candidate.lang
 	t.sampleRate = candidate.sampleRate
 	t.timeScaleFactor = candidate.timeScaleFactor
+	t.repetitionPenalty = candidate.repetitionPenalty
+	t.temperature = candidate.temperature
+	t.topP = candidate.topP
+	t.maxTokens = candidate.maxTokens
+	t.speedAlpha = candidate.speedAlpha
+	t.reduceLatency = candidate.reduceLatency
+	t.pauseBetweenBrackets = candidate.pauseBetweenBrackets
+	t.phonemizeBetweenBrackets = candidate.phonemizeBetweenBrackets
 	t.useWebsocket = candidate.useWebsocket
 	t.segment = candidate.segment
 	return nil
@@ -243,6 +315,7 @@ func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Re
 	if t.timeScaleFactor != nil {
 		reqBody["timeScaleFactor"] = *t.timeScaleFactor
 	}
+	addRimeModelParams(reqBody, t, true)
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
@@ -389,8 +462,52 @@ func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
 	if t.timeScaleFactor != nil {
 		query.Set("timeScaleFactor", strconv.FormatFloat(*t.timeScaleFactor, 'f', -1, 64))
 	}
+	addRimeModelQueryParams(query, t)
 	wsURL.RawQuery = query.Encode()
 	return wsURL
+}
+
+func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOnly bool) {
+	switch {
+	case t.model == "arcana":
+		if t.repetitionPenalty != nil {
+			params["repetition_penalty"] = *t.repetitionPenalty
+		}
+		if t.temperature != nil {
+			params["temperature"] = *t.temperature
+		}
+		if t.topP != nil {
+			params["top_p"] = *t.topP
+		}
+		if t.maxTokens != nil {
+			params["max_tokens"] = *t.maxTokens
+		}
+	case t.model == "coda":
+		if t.maxTokens != nil {
+			params["max_tokens"] = *t.maxTokens
+		}
+	case strings.Contains(t.model, "mist"):
+		if t.speedAlpha != nil {
+			params["speedAlpha"] = *t.speedAlpha
+		}
+		if t.pauseBetweenBrackets != nil {
+			params["pauseBetweenBrackets"] = *t.pauseBetweenBrackets
+		}
+		if t.phonemizeBetweenBrackets != nil {
+			params["phonemizeBetweenBrackets"] = *t.phonemizeBetweenBrackets
+		}
+		if includeHTTPOnly && t.model == "mistv2" && t.reduceLatency != nil {
+			params["reduceLatency"] = *t.reduceLatency
+		}
+	}
+}
+
+func addRimeModelQueryParams(query url.Values, t *RimeTTS) {
+	params := map[string]interface{}{}
+	addRimeModelParams(params, t, false)
+	for key, value := range params {
+		query.Set(key, fmt.Sprint(value))
+	}
 }
 
 func buildRimeTTSWebsocketHeaders(t *RimeTTS) http.Header {
