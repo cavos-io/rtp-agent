@@ -3,6 +3,7 @@ package rime
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -159,6 +160,66 @@ func TestRimeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeStatus499EndsLikeReferenceClientClose(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte(`client closed`))}
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Body:       body,
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after 499 = (%#v, %v), want EOF like reference client close", audio, err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestRimeTTSSynthesizeAcceptsReferenceSuccessStatusClass(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := []byte{0x01, 0x02}
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusPartialContent,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v, want successful 2xx audio", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, body) {
+		t.Fatalf("Next audio = %+v, want body bytes %v", audio, body)
+	}
+}
+
 func TestRimeTTSOptionsMatchReferenceModels(t *testing.T) {
 	provider := NewRimeTTS("test-key", "",
 		WithRimeTTSModel("coda"),
@@ -238,6 +299,52 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	}
 	if got := payload["samplingRate"]; got != float64(24000) {
 		t.Fatalf("HTTP samplingRate = %#v, want updated request sample rate", got)
+	}
+}
+
+func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
+	provider := NewRimeTTS("test-key", "")
+	if provider.Capabilities().Streaming {
+		t.Fatal("initial streaming = true, want HTTP mode")
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSBaseURL("wss://rime.example")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	if provider.Capabilities().Streaming {
+		t.Fatal("streaming = true after base URL update, want transport unchanged")
+	}
+	if _, err := provider.Synthesize(context.Background(), "hello"); err != nil {
+		t.Fatalf("Synthesize after websocket-looking base URL update error = %v", err)
+	}
+}
+
+func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
+	provider := NewRimeTTS("test-key", "")
+
+	if err := provider.UpdateOptions(WithRimeTTSWebsocket(true)); err != nil {
+		t.Fatalf("UpdateOptions websocket true error = %v", err)
+	}
+	if provider.Capabilities().Streaming {
+		t.Fatal("streaming = true after update, want reference transport fixed after construction")
+	}
+	if _, err := provider.Synthesize(context.Background(), "hello"); err != nil {
+		t.Fatalf("Synthesize after websocket true update error = %v, want HTTP mode still usable", err)
+	}
+	if stream, err := provider.Stream(context.Background()); err == nil || stream != nil {
+		t.Fatalf("Stream after websocket true update = (%#v, %v), want streaming still rejected", stream, err)
+	}
+
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	if err := streaming.UpdateOptions(WithRimeTTSWebsocket(false)); err != nil {
+		t.Fatalf("UpdateOptions websocket false error = %v", err)
+	}
+	if !streaming.Capabilities().Streaming {
+		t.Fatal("streaming = false after update, want reference transport fixed after construction")
+	}
+	if _, err := streaming.Synthesize(context.Background(), "hello"); err == nil {
+		t.Fatal("Synthesize after websocket false update error = nil, want websocket mode still active")
 	}
 }
 
@@ -483,6 +590,55 @@ func TestRimeTTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) 
 	}
 }
 
+func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	var modelID string
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		hasDeadline = ok
+		if ok {
+			remaining = time.Until(deadline)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		modelID, _ = payload["modelId"].(string)
+		return &http.Response{
+			StatusCode: http.StatusTeapot,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":"stop"}`)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("arcana"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	if err := provider.UpdateOptions(WithRimeTTSModel("mistv3")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want provider error after request capture")
+	}
+	if modelID != "arcana" {
+		t.Fatalf("request modelId = %q, want stream snapshot model arcana", modelID)
+	}
+	if !hasDeadline {
+		t.Fatal("request context has no deadline, want reference total timeout")
+	}
+	if remaining <= 0 || remaining > 35*time.Second {
+		t.Fatalf("request context deadline remaining = %v, want updated mist timeout", remaining)
+	}
+}
+
 func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	requests := 0
 	originalClient := http.DefaultClient
@@ -515,6 +671,38 @@ func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+}
+
+func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceBaseURL(t *testing.T) {
+	var requestedURL string
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requestedURL = r.URL.String()
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/old"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := provider.UpdateOptions(WithRimeTTSBaseURL("https://rime.example/new")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if requestedURL != "https://rime.example/new" {
+		t.Fatalf("request URL = %q, want updated reference base URL", requestedURL)
 	}
 }
 
@@ -563,6 +751,46 @@ func TestRimeTTSStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
 		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestRimeTTSStreamDialUsesReferenceConnectTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			deadline, ok := ctx.Deadline()
+			hasDeadline = ok
+			if ok {
+				remaining = time.Until(deadline)
+			}
+			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSStreamResponseTimeout(25*time.Millisecond),
+	)
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+	if !hasDeadline {
+		t.Fatal("dial context has no deadline, want reference connect timeout")
+	}
+	if remaining <= 0 || remaining > 50*time.Millisecond {
+		t.Fatalf("dial context deadline remaining = %v, want bounded by connect timeout", remaining)
 	}
 }
 
@@ -672,6 +900,43 @@ func TestRimeTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
+	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	stream := &rimeTTSChunkedStream{
+		resp: &http.Response{Body: &rimeChunkedBody{chunks: [][]byte{
+			{0x11, 0x22, 0x33},
+			{0x44, 0x55, 0x66},
+		}}},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	var got []byte
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v", err)
+		}
+		if audio == nil || audio.Frame == nil {
+			continue
+		}
+		data := audio.Frame.Data
+		if len(data)%2 != 0 {
+			t.Fatalf("emitted odd PCM frame length %d bytes: %v", len(data), data)
+		}
+		if int(audio.Frame.SamplesPerChannel) != len(data)/2 {
+			t.Fatalf("SamplesPerChannel = %d, want %d", audio.Frame.SamplesPerChannel, len(data)/2)
+		}
+		got = append(got, data...)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("reassembled PCM = %v, want %v", got, want)
+	}
+}
+
 func TestRimeTTSChunkedStreamAnnotatesReferenceRequestID(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -770,6 +1035,32 @@ func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	audio, err = stream.Next()
 	if audio != nil || !errors.Is(err, io.EOF) {
 		t.Fatalf("Next after no-audio = (%+v, %v), want nil EOF", audio, err)
+	}
+}
+
+func TestRimeTTSWhitespaceNonAudioResponseEndsLikeReference(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/plain"}},
+			Body:       io.NopCloser(strings.NewReader("no audio")),
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "   ")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next = (%#v, %v), want EOF without no-audio error for whitespace input", audio, err)
 	}
 }
 
@@ -939,6 +1230,39 @@ func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v", err)
+	}
+
+	if len(writes) != 1 {
+		t.Fatalf("writes = %d (%#v), want first segment text only", len(writes), writes)
+	}
+	assertRimePayload(t, writes[0], "text", "first ")
+}
+
 func TestRimeTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -1007,6 +1331,57 @@ func TestRimeTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
 		t.Errorf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestRimeTTSProviderCloseSendsReferenceEOS(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() {},
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode provider close payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("provider close writes = %d, want reference eos message", len(writes))
+	}
+	assertRimePayload(t, writes[0], "operation", "eos")
+}
+
+func TestRimeTTSProviderCloseClosesAfterReferenceEOSFailure(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	writeErr := errors.New("eos write failed")
+	closeCalls := 0
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() {},
+		writeMessage: func(int, []byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	err := provider.Close()
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("Close error = %v, want eos write error", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after eos failure = %d, want 1", closeCalls)
 	}
 }
 
@@ -1221,6 +1596,169 @@ func TestRimeTTSStreamDoneWithoutAudioReportsReferenceNoAudio(t *testing.T) {
 	var apiErr *llm.APIError
 	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: Hello there.") {
 		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+}
+
+func TestRimeTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read text message: %v", err)
+			return
+		}
+		for _, data := range [][]byte{{0x11, 0x22, 0x33}, {0x44, 0x55, 0x66}} {
+			payload, err := json.Marshal(map[string]any{
+				"type": "chunk",
+				"data": base64.StdEncoding.EncodeToString(data),
+			})
+			if err != nil {
+				t.Errorf("marshal chunk: %v", err)
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Errorf("write chunk message: %v", err)
+				return
+			}
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	var got []byte
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v", err)
+		}
+		if audio == nil || audio.Frame == nil {
+			continue
+		}
+		data := audio.Frame.Data
+		if len(data)%2 != 0 {
+			t.Fatalf("emitted odd PCM frame length %d bytes: %v", len(data), data)
+		}
+		if int(audio.Frame.SamplesPerChannel) != len(data)/2 {
+			t.Fatalf("SamplesPerChannel = %d, want %d", audio.Frame.SamplesPerChannel, len(data)/2)
+		}
+		got = append(got, data...)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("reassembled PCM = %v, want %v", got, want)
+	}
+}
+
+func TestRimeTTSStreamBuffersTimedTranscriptUntilAudioLikeReference(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read text message: %v", err)
+			return
+		}
+		timestamps := `{"type":"timestamps","word_timestamps":{"words":["hello","world"],"start":[0.1,0.3],"end":[0.2,0.5]}}`
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(timestamps)); err != nil {
+			t.Errorf("write timestamps message: %v", err)
+			return
+		}
+		chunk, err := json.Marshal(map[string]any{
+			"type": "chunk",
+			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		})
+		if err != nil {
+			t.Errorf("marshal chunk: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, chunk); err != nil {
+			t.Errorf("write chunk message: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Hello world."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil {
+		t.Fatal("Next audio = nil")
+	}
+	if audio.Frame == nil {
+		t.Fatalf("metadata-only event = %#v, want transcript buffered until PCM audio", audio)
+	}
+	if audio.DeltaText != "hello world " {
+		t.Fatalf("DeltaText = %q, want hello world", audio.DeltaText)
+	}
+	if len(audio.TimedTranscript) != 2 {
+		t.Fatalf("TimedTranscript = %#v, want two timed words", audio.TimedTranscript)
+	}
+	if !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x02}) {
+		t.Fatalf("PCM frame = %#v, want provider audio", audio.Frame.Data)
 	}
 }
 
@@ -1620,6 +2158,22 @@ func (b *rimeCloseCountBody) Close() error {
 	}
 	return nil
 }
+
+type rimeChunkedBody struct {
+	chunks [][]byte
+	index  int
+}
+
+func (b *rimeChunkedBody) Read(p []byte) (int, error) {
+	if b.index >= len(b.chunks) {
+		return 0, io.EOF
+	}
+	chunk := b.chunks[b.index]
+	b.index++
+	return copy(p, chunk), nil
+}
+
+func (b *rimeChunkedBody) Close() error { return nil }
 
 type rimeFinalEOFReader struct {
 	data []byte
