@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,6 +13,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -840,7 +843,7 @@ func TestSarvamTTSChunkedStreamEmitsAllReferenceAudioChunks(t *testing.T) {
 			"audios":["AQI=","AwQ="]
 		}`))},
 		sampleRate:       22050,
-		outputAudioCodec: "mp3",
+		outputAudioCodec: "linear16",
 	}
 	defer stream.Close()
 
@@ -1290,7 +1293,7 @@ func decodeSarvamTTSMessage(t *testing.T, payload []byte) map[string]any {
 }
 
 func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
-	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050, "mp3")
+	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==","request_id":"req-1"}}`), 22050, "linear16")
 	if err != nil {
 		t.Fatalf("audio from stream message: %v", err)
 	}
@@ -1316,6 +1319,142 @@ func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	}
 	if finished.RequestID != "req-2" {
 		t.Fatalf("final marker request id = %q, want req-2", finished.RequestID)
+	}
+}
+
+func TestSarvamTTSAudioFromStreamMessageDecodesReferenceMP3(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"type": "audio",
+		"data": map[string]any{
+			"audio":      base64.StdEncoding.EncodeToString(mp3Data),
+			"request_id": "req-mp3",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal mp3 message: %v", err)
+	}
+
+	audio, done, err := sarvamTTSAudioFromStreamMessage(payload, 22050, "mp3")
+	if err != nil {
+		t.Fatalf("audio from mp3 stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for mp3 audio message")
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatal("audio frame = nil, want decoded mp3 PCM frame")
+	}
+	if audio.RequestID != "req-mp3" {
+		t.Fatalf("request id = %q, want req-mp3", audio.RequestID)
+	}
+	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 2 {
+		t.Fatalf("frame format = %d Hz/%d ch, want decoded mp3 native format", audio.Frame.SampleRate, audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame data empty")
+	}
+	prefixLen := len(audio.Frame.Data)
+	if prefixLen > len(mp3Data) {
+		prefixLen = len(mp3Data)
+	}
+	if bytes.Equal(audio.Frame.Data[:prefixLen], mp3Data[:prefixLen]) {
+		t.Fatal("frame data still contains compressed mp3 bytes")
+	}
+}
+
+func TestSarvamTTSAudioFromStreamMessageDecodesReferenceWAV(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x02, 0x00}
+	payload, err := json.Marshal(map[string]any{
+		"type": "audio",
+		"data": map[string]any{
+			"audio":      base64.StdEncoding.EncodeToString(sarvamTestWAV(pcm, 48000, 1)),
+			"request_id": "req-wav",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal wav message: %v", err)
+	}
+
+	audio, done, err := sarvamTTSAudioFromStreamMessage(payload, 22050, "wav")
+	if err != nil {
+		t.Fatalf("audio from wav stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for wav audio message")
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatal("audio frame = nil, want decoded wav PCM frame")
+	}
+	if audio.RequestID != "req-wav" {
+		t.Fatalf("request id = %q, want req-wav", audio.RequestID)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("audio data = %#v, want WAV PCM payload without RIFF header", audio.Frame.Data)
+	}
+	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("frame = %+v, want WAV metadata 48 kHz mono", audio.Frame)
+	}
+}
+
+func TestSarvamTTSAudioFromStreamMessageDecodesReferenceCompressedCodecs(t *testing.T) {
+	tests := []struct {
+		name       string
+		codec      string
+		fixtureB64 string
+	}{
+		{name: "opus", codec: "opus", fixtureB64: sarvamOpusOggFixtureBase64},
+		{name: "aac", codec: "aac", fixtureB64: sarvamAACADTSFixtureBase64},
+		{name: "flac", codec: "flac", fixtureB64: sarvamFLACFixtureBase64},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			compressed, err := base64.StdEncoding.DecodeString(tt.fixtureB64)
+			if err != nil {
+				t.Fatalf("decode %s fixture: %v", tt.codec, err)
+			}
+			payload, err := json.Marshal(map[string]any{
+				"type": "audio",
+				"data": map[string]any{
+					"audio":      base64.StdEncoding.EncodeToString(compressed),
+					"request_id": "req-" + tt.codec,
+				},
+			})
+			if err != nil {
+				t.Fatalf("marshal %s message: %v", tt.codec, err)
+			}
+
+			audio, done, err := sarvamTTSAudioFromStreamMessage(payload, 24000, tt.codec)
+			if err != nil {
+				t.Fatalf("audio from %s stream message: %v", tt.codec, err)
+			}
+			if done {
+				t.Fatalf("done = true for %s audio message", tt.codec)
+			}
+			if audio == nil || audio.Frame == nil {
+				t.Fatalf("%s audio frame = nil, want decoded PCM frame", tt.codec)
+			}
+			if audio.RequestID != "req-"+tt.codec {
+				t.Fatalf("request id = %q, want req-%s", audio.RequestID, tt.codec)
+			}
+			if len(audio.Frame.Data) == 0 {
+				t.Fatalf("%s decoded frame data empty", tt.codec)
+			}
+			prefixLen := len(audio.Frame.Data)
+			if prefixLen > len(compressed) {
+				prefixLen = len(compressed)
+			}
+			if bytes.Equal(audio.Frame.Data[:prefixLen], compressed[:prefixLen]) {
+				t.Fatalf("%s frame data still contains compressed bytes", tt.codec)
+			}
+			if got, want := len(audio.Frame.Data), int(audio.Frame.SamplesPerChannel*audio.Frame.NumChannels*2); got != want {
+				t.Fatalf("%s frame byte length = %d, want %d from samples/channels", tt.codec, got, want)
+			}
+		})
 	}
 }
 
@@ -1446,6 +1585,33 @@ func sarvamAudioMessageBytes(t *testing.T, message map[string]any) []byte {
 	}
 	return data
 }
+
+func sarvamTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	byteRate := sampleRate * uint32(channels) * 2
+	blockAlign := channels * 2
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
+}
+
+const sarvamOpusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
+
+const sarvamAACADTSFixtureBase64 = "//FYQCW//N4CAExhdmM1OS4zNy4xMDAAAkivW6qEHV2Era+88Zx+Lmqu6laZJJuSSdvOREkl//+xxdxr2VxbpLZtPUzbWI83eI1VlnJXPMf/z/t8jbtgVAi7i5pzVxrsrPuOsRwqmaa771bhdqxuKsNiynHYnHbTt2U5VYbFWZ7G2Kw1qNjo1+sOOsNirNirMdWY6NjlKpSqUqlKpSqUqlKpSqUqlKpSqUqlKpSqUqlKpSqUriSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSiSnBRJRJRLklyS5JKcFRRRRRRRRZ2hVDGydCyDBt6FdMLIULJr87Nyau3n5NeSIoiFRIosqnJDFdorqF/4/fvbfuXtv3LrXW2XaSo3JcM4P/xWEAv//wBTJ7Zu9tyGlF3I4RCrddMhL+P/4fGS7vTS1evPz8/v1AXq76/t/T/cXq7ulX+f9f9y7u7uKACEPCTwwZ2dnZ2dnYWdn79ra1ShMEvRxEo87yHMSqOqu7MBm3hsjdUTH5leOGyNhDr2FVOxysSf22tuaTBdtNotAHOZ+jamA1fKflIMDO4SEgwM7hISDAwM7uEhISDAwM7uEhIT/P3b94fy/lst7vcB/L1fyQ9pfVxGvDOIiNxJ3CuOGJu39ZDoCoTgRoMSkxIvLOB94REf6sQGPzuWoMsh3Dc1yRPaV68HbXFPnZuTVIJ20WpqkE50XJyqmqQTgTtps6bU1VTSghgXOmziamqo1UC4FzprTNTVUaVS0palqhnTZzJTP/G/q3ya7du6ZCQnUwMDA1269oSEhIT6PPpuNezge2oTGWYIvlErXOCc2FMRFBf133vVsTPYmess9Oz062nZ5q2nWzVtOyTVs1VNVTU0xNYY4YyUuzs7Ozhg1QO//FYQCV//AEin7bUJIPF/kPy/p/3tq5F3d3/29/v99LVABSncK/EKYrRESC9SpDC4T6d7Tx4FvvUy7s3w+7N8PuzfD7t2ab4eHzRf4/wHx0gf406QP8adIB8fl/jSAf4/x/j4gB/j/HxiuLOwQAAcc8gAB/V+ogAARhvItaAABGRFIw4YAAEYLyLnAAARixCMOEAABGDAIveRc0i1gAAAAARQgic5ExiJigAAAABFByJzkTGImMAAAAAESlIlKRIQiQhEYyIxgAAAAAAAERjIiEREIiIREQSIQgAAAAAAAEQhIhCRCAiABEACIAEQAIgAAAAAAAAAAABEAP/3/9//f/3/9//f/0AAAAAAAAAAP/3/9//f/3/9//f/3/9//f/0AAAAAAAAAAAAA4="
+
+const sarvamFLACFixtureBase64 = "ZkxhQwAAACIJAAkAAAFxAAFxBdwA8AAAA8DrQTcn425MUFIsj3pbRk7HhAAALg0AAABMYXZmNTkuMjcuMTAwAQAAABUAAABlbmNvZGVyPUxhdmY1OS4yNy4xMDD/+HcIAAO/OEIASwHH5r+TwAAqAAFAmabaVU3y9oypCEoUjaNIUjKQJCIFT08KaFJKEIgGGTMkyZkyUOcMpLCphEnDIhkzAKGTkNDCmQIJOBTh+SZwiQLAiHDhQhJQmcLDJz0KZQNJSckoFkKQlDmEJJhSUJSkp5cshJKSgZJyFDmThQhKEQ8OFKFJTKUMhmEySGQiBkycKTQMyJDykpgRmTJQgYYcOBlCFDkmc4GETJScoSyTCoZIEkk0JECk5KZNDkEmhyZoFQMoFCTMIGSUChTKGgXOUJYFClIaSFJhkkwkyQCzJQqTwsmcLJBJmYczMMoQ4cwIXKaeU5zCwlAIRAzMmQ5mHDSUgaUlCJlCISIQsyUDDDJmYUKHChECwKcPQwoU8JEOEpJwIJkw55DOU5TKBShzIgEQMocMkpIUCFDJKTzKcvlISZwyScKGGhSScCaSgXIWZlC8mTqYrIqoyeioyKjKtCSixgeAQAAkK1k="
 
 func assertSarvamQuery(t *testing.T, query url.Values, key string, want string) {
 	t.Helper()

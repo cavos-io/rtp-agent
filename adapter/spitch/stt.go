@@ -126,6 +126,9 @@ func buildSpitchSTTRecognizeRequest(ctx context.Context, s *SpitchSTT, frames []
 		return nil, err
 	}
 	writer.WriteField("language", language)
+	if language == "en" {
+		writer.WriteField("timestamp", "word")
+	}
 	if err := writer.Close(); err != nil {
 		return nil, err
 	}
