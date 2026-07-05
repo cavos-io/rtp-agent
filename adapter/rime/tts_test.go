@@ -1213,6 +1213,32 @@ func TestRimeTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestRimeTTSProviderCloseSendsReferenceEOS(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() {},
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode provider close payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+		closeConn: func() error { return nil },
+	}
+	provider.registerStream(stream)
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("provider close writes = %d, want reference eos message", len(writes))
+	}
+	assertRimePayload(t, writes[0], "operation", "eos")
+}
+
 func TestRimeTTSStreamCloseDoesNotSendReferenceEOS(t *testing.T) {
 	cancelled := false
 	writeCalls := 0

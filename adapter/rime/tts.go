@@ -421,7 +421,7 @@ func (t *RimeTTS) Close() error {
 
 	var closeErr error
 	for _, stream := range streams {
-		if err := stream.Close(); err != nil && closeErr == nil {
+		if err := stream.closeFromProvider(); err != nil && closeErr == nil {
 			closeErr = err
 		}
 	}
@@ -562,6 +562,12 @@ func buildRimeTTSFlushMessage(contextID string) ([]byte, error) {
 	return json.Marshal(map[string]interface{}{
 		"operation": "flush",
 		"contextId": contextID,
+	})
+}
+
+func buildRimeTTSEOSMessage() ([]byte, error) {
+	return json.Marshal(map[string]interface{}{
+		"operation": "eos",
 	})
 }
 
@@ -920,6 +926,14 @@ func (s *rimeTTSSynthesizeStream) startReadLoopLocked() {
 }
 
 func (s *rimeTTSSynthesizeStream) Close() error {
+	return s.close(false)
+}
+
+func (s *rimeTTSSynthesizeStream) closeFromProvider() error {
+	return s.close(true)
+}
+
+func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -932,6 +946,15 @@ func (s *rimeTTSSynthesizeStream) Close() error {
 			s.provider.unregisterStream(s)
 		}
 	}()
+	if sendEOS {
+		message, err := buildRimeTTSEOSMessage()
+		if err != nil {
+			return err
+		}
+		if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+			return err
+		}
+	}
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}
