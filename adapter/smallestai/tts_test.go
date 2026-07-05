@@ -150,19 +150,57 @@ func TestSmallestAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	provider := NewSmallestAITTS("test-key", "")
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
-	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want APIStatusError")
+	if err != nil {
+		t.Fatalf("Synthesize returned error before stream consumption: %v", err)
 	}
+	defer stream.Close()
+
+	_, err = stream.Next()
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
 	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
 		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	}
+}
+
+func TestSmallestAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	var requests int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: smallestAITTSRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSmallestAITTS("test-key", "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize returned error: %v", err)
+	}
+	defer stream.Close()
+	if requests != 0 {
+		t.Fatalf("requests before Next = %d, want 0", requests)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("Next audio = %#v, want first audio frame", audio)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
 	}
 }
 
@@ -507,7 +545,9 @@ func TestSmallestAITTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 func TestSmallestAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	oldClient := http.DefaultClient
 	body := &smallestAICloseCountBody{reader: bytes.NewReader([]byte{0x01, 0x02})}
+	var requests int
 	http.DefaultClient = &http.Client{Transport: smallestAITTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       body,
@@ -536,8 +576,11 @@ func TestSmallestAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
-	if got, want := body.closeCount, 1; got != want {
-		t.Fatalf("active stream close count = %d, want %d", got, want)
+	if requests != 0 {
+		t.Fatalf("requests before stream consumption = %d, want 0", requests)
+	}
+	if got, want := body.closeCount, 0; got != want {
+		t.Fatalf("active unconsumed stream close count = %d, want %d", got, want)
 	}
 	select {
 	case <-streamCtx.Done():
@@ -553,7 +596,7 @@ func TestSmallestAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("second Close error = %v", err)
 	}
-	if got, want := body.closeCount, 1; got != want {
+	if got, want := body.closeCount, 0; got != want {
 		t.Fatalf("second provider Close close count = %d, want %d", got, want)
 	}
 }
