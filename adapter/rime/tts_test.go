@@ -754,6 +754,46 @@ func TestRimeTTSStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamDialUsesReferenceConnectTimeout(t *testing.T) {
+	var hasDeadline bool
+	var remaining time.Duration
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			deadline, ok := ctx.Deadline()
+			hasDeadline = ok
+			if ok {
+				remaining = time.Until(deadline)
+			}
+			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSStreamResponseTimeout(25*time.Millisecond),
+	)
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+	if !hasDeadline {
+		t.Fatal("dial context has no deadline, want reference connect timeout")
+	}
+	if remaining <= 0 || remaining > 50*time.Millisecond {
+		t.Fatalf("dial context deadline remaining = %v, want bounded by connect timeout", remaining)
+	}
+}
+
 func TestRimeTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: rimeErrorReader{}},

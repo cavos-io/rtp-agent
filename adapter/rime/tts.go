@@ -376,7 +376,13 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateRimeTimeScaleFactor(t); err != nil {
 		return nil, err
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
+	dialCtx := ctx
+	var cancelDial context.CancelFunc
+	if t.streamResponseTimeout > 0 {
+		dialCtx, cancelDial = context.WithTimeout(ctx, t.streamResponseTimeout)
+		defer cancelDial()
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
