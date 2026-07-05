@@ -479,6 +479,30 @@ func TestRimeTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestRimeTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: rimeErrorReader{}},
@@ -1075,6 +1099,14 @@ func TestRimeTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for normal websocket close error")
+	}
+}
+
+func TestRimeTTSReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	err := rimeTTSReadError(context.DeadlineExceeded)
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("read error = %T %v, want APITimeoutError", err, err)
 	}
 }
 

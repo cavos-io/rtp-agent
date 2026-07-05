@@ -351,6 +351,9 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial rime tts websocket: %v", err))
 	}
 	if t.isClosed() {
@@ -905,6 +908,9 @@ func (s *rimeTTSSynthesizeStream) annotateAudio(audio *tts.SynthesizedAudio) {
 }
 
 func rimeTTSReadError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
 		return llm.NewAPIStatusError("Rime ws closed unexpectedly", closeErr.Code, "", err.Error())
