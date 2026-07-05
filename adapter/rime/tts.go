@@ -42,6 +42,9 @@ const (
 type RimeTTS struct {
 	mu                       sync.Mutex
 	streams                  map[*rimeTTSSynthesizeStream]struct{}
+	prewarmConn              *websocket.Conn
+	prewarmURL               string
+	prewarmInFlight          bool
 	apiKey                   string
 	baseURL                  string
 	model                    string
@@ -667,7 +670,12 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	candidate.useWebsocket = currentUseWebsocket
 
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	var stalePrewarm *websocket.Conn
+	if currentUseWebsocket && buildRimeTTSWebsocketURL(t).String() != buildRimeTTSWebsocketURL(candidate).String() {
+		stalePrewarm = t.prewarmConn
+		t.prewarmConn = nil
+		t.prewarmURL = ""
+	}
 	t.apiKey = candidate.apiKey
 	t.baseURL = candidate.baseURL
 	t.model = candidate.model
@@ -700,6 +708,11 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.useWebsocket = candidate.useWebsocket
 	t.segment = candidate.segment
 	t.streamResponseTimeout = candidate.streamResponseTimeout
+	t.mu.Unlock()
+
+	if stalePrewarm != nil {
+		_ = closeRimePrewarmedConn(stalePrewarm)
+	}
 	return nil
 }
 
@@ -777,21 +790,13 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateRimeTimeScaleFactor(t); err != nil {
 		return nil, err
 	}
-	dialCtx := ctx
-	var cancelDial context.CancelFunc
-	if t.streamResponseTimeout > 0 {
-		dialCtx, cancelDial = context.WithTimeout(ctx, t.streamResponseTimeout)
-		defer cancelDial()
-	}
-	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
+	conn := t.takePrewarmedConn()
+	if conn == nil {
+		var err error
+		conn, err = t.dialWebsocket(ctx)
+		if err != nil {
+			return nil, err
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial rime tts websocket: %v", err))
 	}
 	if t.isClosed() {
 		conn.Close()
@@ -818,9 +823,84 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	return stream, nil
 }
 
+func (t *RimeTTS) Prewarm() {
+	if t == nil || !t.useWebsocket || validateRimeAPIKey(t.apiKey) != nil || validateRimeTimeScaleFactor(t) != nil {
+		return
+	}
+	t.mu.Lock()
+	if t.closed || t.prewarmConn != nil || t.prewarmInFlight {
+		t.mu.Unlock()
+		return
+	}
+	prewarmURL := buildRimeTTSWebsocketURL(t).String()
+	t.prewarmInFlight = true
+	t.mu.Unlock()
+
+	go func() {
+		conn, err := t.dialWebsocket(context.Background())
+		t.mu.Lock()
+		t.prewarmInFlight = false
+		var closeConn *websocket.Conn
+		if err != nil || t.closed || t.prewarmConn != nil {
+			closeConn = conn
+		} else if buildRimeTTSWebsocketURL(t).String() != prewarmURL {
+			closeConn = conn
+		} else {
+			t.prewarmConn = conn
+			t.prewarmURL = prewarmURL
+		}
+		t.mu.Unlock()
+		if closeConn != nil {
+			_ = closeRimePrewarmedConn(closeConn)
+		}
+	}()
+}
+
+func (t *RimeTTS) takePrewarmedConn() *websocket.Conn {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	conn := t.prewarmConn
+	if conn != nil && t.prewarmURL != buildRimeTTSWebsocketURL(t).String() {
+		t.prewarmConn = nil
+		t.prewarmURL = ""
+		t.mu.Unlock()
+		_ = closeRimePrewarmedConn(conn)
+		return nil
+	}
+	t.prewarmConn = nil
+	t.prewarmURL = ""
+	t.mu.Unlock()
+	return conn
+}
+
+func (t *RimeTTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
+	dialCtx := ctx
+	var cancelDial context.CancelFunc
+	if t.streamResponseTimeout > 0 {
+		dialCtx, cancelDial = context.WithTimeout(ctx, t.streamResponseTimeout)
+		defer cancelDial()
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(dialCtx, buildRimeTTSWebsocketURL(t).String(), buildRimeTTSWebsocketHeaders(t))
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial rime tts websocket: %v", err))
+	}
+	return conn, nil
+}
+
 func (t *RimeTTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
+	prewarmConn := t.prewarmConn
+	t.prewarmConn = nil
+	t.prewarmURL = ""
 	streams := make([]*rimeTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
@@ -833,7 +913,32 @@ func (t *RimeTTS) Close() error {
 			closeErr = err
 		}
 	}
+	if prewarmConn != nil {
+		if err := closeRimePrewarmedConn(prewarmConn); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
 	return closeErr
+}
+
+func closeRimePrewarmedConn(conn *websocket.Conn) error {
+	if conn == nil {
+		return nil
+	}
+	stream := &rimeTTSSynthesizeStream{
+		conn:   conn,
+		cancel: func() {},
+		writeMessage: func(messageType int, data []byte) error {
+			return conn.WriteMessage(messageType, data)
+		},
+		readMessage: func() (int, []byte, error) {
+			return conn.ReadMessage()
+		},
+		closeConn: func() error {
+			return conn.Close()
+		},
+	}
+	return stream.closeFromProvider()
 }
 
 func (t *RimeTTS) isClosed() bool {

@@ -1,8 +1,10 @@
 package rime
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +13,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1734,6 +1738,107 @@ func TestRimeTTSInfersWebsocketModeFromBaseURL(t *testing.T) {
 	if !provider.Capabilities().Streaming {
 		t.Fatal("streaming = false after explicit false option, want ws base URL to match reference")
 	}
+}
+
+func TestRimeTTSPrewarmWarmsReferenceWebsocketConnection(t *testing.T) {
+	accepted := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	var connections atomic.Int32
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go func() {
+				defer server.Close()
+				if err := rimeTestWebsocketHandshake(server); err != nil {
+					t.Errorf("websocket handshake: %v", err)
+					return
+				}
+				connections.Add(1)
+				accepted <- struct{}{}
+				<-release
+			}()
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+		releaseOnce.Do(func() { close(release) })
+	})
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+		WithRimeTTSStreamResponseTimeout(time.Second),
+	)
+	tts.Prewarm(provider)
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("Prewarm did not open reference websocket connection")
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		provider.mu.Lock()
+		warmed := provider.prewarmConn != nil
+		provider.mu.Unlock()
+		if warmed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Prewarm did not cache reference websocket connection")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream after Prewarm error = %v", err)
+	}
+	select {
+	case <-accepted:
+		t.Fatal("Stream opened a second websocket, want prewarmed connection reused")
+	case <-time.After(25 * time.Millisecond):
+	}
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("websocket connections = %d, want one prewarmed connection reused", got)
+	}
+	releaseOnce.Do(func() { close(release) })
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close prewarmed stream error = %v", err)
+	}
+}
+
+func rimeTestWebsocketHandshake(conn net.Conn) error {
+	reader := bufio.NewReader(conn)
+	var key string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		if line == "\r\n" {
+			break
+		}
+		if strings.HasPrefix(strings.ToLower(line), "sec-websocket-key:") {
+			parts := strings.SplitN(line, ":", 2)
+			if len(parts) == 2 {
+				key = strings.TrimSpace(parts[1])
+			}
+		}
+	}
+	if key == "" {
+		return errors.New("missing websocket key")
+	}
+	sum := sha1.Sum([]byte(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	accept := base64.StdEncoding.EncodeToString(sum[:])
+	_, err := conn.Write([]byte("HTTP/1.1 101 Switching Protocols\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Accept: " + accept + "\r\n\r\n"))
+	return err
 }
 
 func TestRimeTTSWebsocketURLAndHeadersMatchReference(t *testing.T) {
