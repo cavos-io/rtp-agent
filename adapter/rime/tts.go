@@ -576,9 +576,6 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if err := s.ensureResponse(); err != nil {
 		return nil, err
 	}
-	if s.resp == nil || s.resp.Body == nil {
-		return nil, io.EOF
-	}
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
@@ -588,6 +585,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		err := s.pendingErr
 		s.pendingErr = nil
 		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
+		return nil, io.EOF
 	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
@@ -679,8 +679,8 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
 		resp.Body.Close()
 		cancel()
-		s.finalSent = true
-		return io.EOF
+		s.pendingErr = llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+		return nil
 	}
 
 	s.resp = resp

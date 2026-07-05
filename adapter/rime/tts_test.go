@@ -734,7 +734,7 @@ func TestRimeTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
-func TestRimeTTSNonAudioResponseEndsLikeReference(t *testing.T) {
+func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
 	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte(`{"error":"not audio"}`))}
@@ -756,12 +756,20 @@ func TestRimeTTSNonAudioResponseEndsLikeReference(t *testing.T) {
 		t.Fatalf("Synthesize() error = %v", err)
 	}
 	defer stream.Close()
-	_, err = stream.Next()
-	if !errors.Is(err, io.EOF) {
-		t.Fatalf("Next error = %T %v, want EOF", err, err)
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
 	}
 	if body.closeCount != 1 {
 		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+	audio, err = stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio = (%+v, %v), want nil EOF", audio, err)
 	}
 }
 
