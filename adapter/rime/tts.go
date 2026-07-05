@@ -775,7 +775,6 @@ func (s *rimeTTSSynthesizeStream) Close() error {
 			s.provider.unregisterStream(s)
 		}
 	}()
-	_ = s.writeMessageData(websocket.TextMessage, []byte(`{"operation":"eos"}`))
 	if s.conn != nil {
 		_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	}

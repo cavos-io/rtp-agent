@@ -836,6 +836,36 @@ func TestRimeTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamCloseDoesNotSendReferenceEOS(t *testing.T) {
+	cancelled := false
+	writeCalls := 0
+	closeCalls := 0
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() { cancelled = true },
+		writeMessage: func(int, []byte) error {
+			writeCalls++
+			return nil
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	if !cancelled {
+		t.Fatal("cancel not called on Close")
+	}
+	if writeCalls != 0 {
+		t.Fatalf("write calls = %d, want 0 reference eos messages", writeCalls)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls = %d, want 1", closeCalls)
+	}
+}
+
 func TestRimeTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &rimeTTSSynthesizeStream{
