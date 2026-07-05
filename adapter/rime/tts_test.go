@@ -1906,10 +1906,11 @@ func TestRimeTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	defer conn.Close()
 
 	stream := &rimeTTSSynthesizeStream{
-		provider: NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
-		conn:     conn,
-		events:   make(chan *tts.SynthesizedAudio, 1),
-		errCh:    make(chan error, 1),
+		provider:  NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
+		conn:      conn,
+		requestID: "req-close",
+		events:    make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
 	}
 	go stream.readLoop()
 
@@ -1924,6 +1925,9 @@ func TestRimeTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 		}
 		if statusErr.Body != nil {
 			t.Fatalf("Body = %#v, want nil like reference", statusErr.Body)
+		}
+		if statusErr.RequestID != "req-close" {
+			t.Fatalf("RequestID = %q, want stream request ID", statusErr.RequestID)
 		}
 		if !strings.Contains(err.Error(), "Rime ws closed unexpectedly") {
 			t.Fatalf("readLoop error = %q, want Rime close context", err)
@@ -1957,10 +1961,11 @@ func TestRimeTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 	defer conn.Close()
 
 	stream := &rimeTTSSynthesizeStream{
-		provider: NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
-		conn:     conn,
-		events:   make(chan *tts.SynthesizedAudio, 1),
-		errCh:    make(chan error, 1),
+		provider:  NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
+		conn:      conn,
+		requestID: "req-normal-close",
+		events:    make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
 	}
 	go stream.readLoop()
 
@@ -1975,6 +1980,9 @@ func TestRimeTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 		}
 		if statusErr.Body != nil {
 			t.Fatalf("Body = %#v, want nil like reference", statusErr.Body)
+		}
+		if statusErr.RequestID != "req-normal-close" {
+			t.Fatalf("RequestID = %q, want stream request ID", statusErr.RequestID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for normal websocket close error")

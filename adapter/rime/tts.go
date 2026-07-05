@@ -1078,7 +1078,7 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
-				s.errCh <- rimeTTSReadError(err)
+				s.errCh <- rimeTTSReadErrorWithRequestID(err, s.requestID)
 			}
 			return
 		}
@@ -1151,6 +1151,10 @@ func (s *rimeTTSSynthesizeStream) annotateAudio(audio *tts.SynthesizedAudio) {
 }
 
 func rimeTTSReadError(err error) error {
+	return rimeTTSReadErrorWithRequestID(err, "")
+}
+
+func rimeTTSReadErrorWithRequestID(err error, requestID string) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(err.Error())
 	}
@@ -1160,7 +1164,7 @@ func rimeTTSReadError(err error) error {
 	}
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("Rime ws closed unexpectedly", 0, "", nil)
+		return llm.NewAPIStatusError("Rime ws closed unexpectedly", 0, requestID, nil)
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Rime WS error: %v", err))
 }
