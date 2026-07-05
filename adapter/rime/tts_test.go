@@ -3,6 +3,7 @@ package rime
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1291,6 +1292,89 @@ func TestRimeTTSStreamDoneWithoutAudioReportsReferenceNoAudio(t *testing.T) {
 	var apiErr *llm.APIError
 	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: Hello there.") {
 		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+}
+
+func TestRimeTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read text message: %v", err)
+			return
+		}
+		for _, data := range [][]byte{{0x11, 0x22, 0x33}, {0x44, 0x55, 0x66}} {
+			payload, err := json.Marshal(map[string]any{
+				"type": "chunk",
+				"data": base64.StdEncoding.EncodeToString(data),
+			})
+			if err != nil {
+				t.Errorf("marshal chunk: %v", err)
+				return
+			}
+			if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+				t.Errorf("write chunk message: %v", err)
+				return
+			}
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	var got []byte
+	for {
+		audio, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v", err)
+		}
+		if audio == nil || audio.Frame == nil {
+			continue
+		}
+		data := audio.Frame.Data
+		if len(data)%2 != 0 {
+			t.Fatalf("emitted odd PCM frame length %d bytes: %v", len(data), data)
+		}
+		if int(audio.Frame.SamplesPerChannel) != len(data)/2 {
+			t.Fatalf("SamplesPerChannel = %d, want %d", audio.Frame.SamplesPerChannel, len(data)/2)
+		}
+		got = append(got, data...)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("reassembled PCM = %v, want %v", got, want)
 	}
 }
 

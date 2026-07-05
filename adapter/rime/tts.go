@@ -754,6 +754,7 @@ type rimeTTSSynthesizeStream struct {
 	pendingText string
 	pushedText  string
 	audioSeen   bool
+	pendingPCM  []byte
 	segmentDone bool
 	inputEnded  bool
 
@@ -1023,6 +1024,18 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		if err != nil {
 			s.errCh <- err
 			return
+		}
+		if audio != nil && audio.Frame != nil {
+			frameData := rimeTTSPCMFrameData(&s.pendingPCM, audio.Frame.Data)
+			if len(frameData) == 0 {
+				audio = nil
+			} else {
+				audio.Frame.Data = frameData
+				audio.Frame.SamplesPerChannel = uint32(len(frameData) / 2)
+			}
+		}
+		if done {
+			s.pendingPCM = nil
 		}
 		hasAudio := audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0
 		s.mu.Lock()
