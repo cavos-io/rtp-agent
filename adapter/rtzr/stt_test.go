@@ -443,11 +443,9 @@ func TestRtzrSTTClosedStreamNextReturnsEOF(t *testing.T) {
 }
 
 func TestRtzrSTTStreamNonNormalCloseReturnsEOF(t *testing.T) {
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Errorf("upgrade websocket: %v", err)
+	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read audio before close: %v", err)
 			return
 		}
 		_ = conn.WriteControl(
@@ -455,27 +453,19 @@ func TestRtzrSTTStreamNonNormalCloseReturnsEOF(t *testing.T) {
 			websocket.FormatCloseMessage(websocket.CloseUnsupportedData, "bad speech stream"),
 			time.Now().Add(time.Second),
 		)
-		_ = conn.Close()
-	}))
-	defer server.Close()
-
-	conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	})
+	provider := NewRtzrSTT("client-id",
+		WithRtzrAccessToken("access-token"),
+		WithRtzrWSBase("ws://rtzr.test"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
-		t.Fatalf("dial websocket: %v", err)
+		t.Fatalf("Stream returned error: %v", err)
 	}
-	defer conn.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	stream := &rtzrStream{
-		conn:   conn,
-		events: make(chan *stt.SpeechEvent, 1),
-		errCh:  make(chan error, 1),
-		ctx:    ctx,
-		cancel: cancel,
-		state:  &rtzrTranscriptState{language: "ko"},
+	if err := stream.PushFrame(&model.AudioFrame{Data: bytes.Repeat([]byte{0x01}, 1600)}); err != nil {
+		t.Fatalf("PushFrame returned error: %v", err)
 	}
-	go stream.readLoop(conn)
 
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %T %v, want EOF", err, err)
@@ -559,6 +549,7 @@ func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 				audioCh <- append([]byte(nil), payload...)
 			case websocket.TextMessage:
 				textCh <- string(payload)
+				return
 			}
 		}
 	})
@@ -629,8 +620,88 @@ func TestRtzrSTTStreamSendsAudioFlushAndCloseMessages(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close returned error: %v", err)
 	}
-	if got := receiveRtzrString(t, textCh, "close"); got != "EOS" {
-		t.Fatalf("close = %q, want EOS", got)
+}
+
+func TestRtzrSTTFlushEndsSegmentBeforeNextAudioLikeReference(t *testing.T) {
+	var mu sync.Mutex
+	dialCount := 0
+	audioCh := make(chan []byte, 2)
+	textCh := make(chan string, 2)
+	closedCh := make(chan int, 2)
+	dialer := newRtzrTestWebsocketDialer(t, func(conn *websocket.Conn, r *http.Request) {
+		mu.Lock()
+		dialCount++
+		index := dialCount
+		mu.Unlock()
+		defer func() { closedCh <- index }()
+
+		msgType, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read audio on dial %d: %v", index, err)
+			return
+		}
+		if msgType != websocket.BinaryMessage {
+			t.Errorf("message type on dial %d = %d, want binary audio", index, msgType)
+			return
+		}
+		audioCh <- append([]byte(nil), payload...)
+
+		msgType, payload, err = conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read EOS on dial %d: %v", index, err)
+			return
+		}
+		if msgType != websocket.TextMessage {
+			t.Errorf("message type on dial %d = %d, want text EOS", index, msgType)
+			return
+		}
+		textCh <- string(payload)
+	})
+
+	provider := NewRtzrSTT("client-id",
+		WithRtzrAccessToken("access-token"),
+		WithRtzrWSBase("ws://rtzr.test"),
+		dialer,
+	)
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream returned error: %v", err)
+	}
+	frame := &model.AudioFrame{Data: bytes.Repeat([]byte{0x01}, 1600)}
+
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("first PushFrame returned error: %v", err)
+	}
+	if got := receiveRtzrBytes(t, audioCh); len(got) != len(frame.Data) {
+		t.Fatalf("first audio length = %d, want %d", len(got), len(frame.Data))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("first Flush returned error: %v", err)
+	}
+	if got := receiveRtzrString(t, textCh, "first flush"); got != "EOS" {
+		t.Fatalf("first flush = %q, want EOS", got)
+	}
+	if got := receiveRtzrCloseIndex(t, closedCh); got != 1 {
+		t.Fatalf("first closed dial = %d, want 1", got)
+	}
+
+	if err := stream.PushFrame(frame); err != nil {
+		t.Fatalf("second PushFrame returned error: %v", err)
+	}
+	if got := receiveRtzrBytes(t, audioCh); len(got) != len(frame.Data) {
+		t.Fatalf("second audio length = %d, want %d", len(got), len(frame.Data))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("second Flush returned error: %v", err)
+	}
+	if got := receiveRtzrString(t, textCh, "second flush"); got != "EOS" {
+		t.Fatalf("second flush = %q, want EOS", got)
+	}
+	if got := receiveRtzrCloseIndex(t, closedCh); got != 2 {
+		t.Fatalf("second closed dial = %d, want 2", got)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
 	}
 }
 
@@ -739,6 +810,17 @@ func receiveRtzrString(t *testing.T, ch <-chan string, label string) string {
 	case <-time.After(time.Second):
 		t.Fatalf("timed out waiting for %s", label)
 		return ""
+	}
+}
+
+func receiveRtzrCloseIndex(t *testing.T, ch <-chan int) int {
+	t.Helper()
+	select {
+	case index := <-ch:
+		return index
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for websocket close")
+		return 0
 	}
 }
 

@@ -33,6 +33,7 @@ const (
 	defaultNoiseThreshold  = 0.60
 	defaultActiveThreshold = 0.80
 	defaultChunkMS         = 100
+	recvCompletionTimeout  = 5 * time.Second
 	rtzrClientIDEnv        = "RTZR_CLIENT_ID"
 	rtzrClientSecretEnv    = "RTZR_CLIENT_SECRET"
 )
@@ -324,6 +325,8 @@ func buildRtzrStreamURL(s *RtzrSTT, config map[string]string) string {
 
 type rtzrStream struct {
 	conn            *websocket.Conn
+	readDone        map[*websocket.Conn]chan struct{}
+	endingSegments  map[*websocket.Conn]bool
 	events          chan *stt.SpeechEvent
 	errCh           chan error
 	mu              sync.Mutex
@@ -340,7 +343,29 @@ type rtzrStream struct {
 }
 
 func (s *rtzrStream) readLoop(conn *websocket.Conn) {
-	defer close(s.events)
+	defer func() {
+		s.mu.Lock()
+		segmentEnding := s.endingSegments != nil && s.endingSegments[conn]
+		if segmentEnding {
+			delete(s.endingSegments, conn)
+		}
+		var done chan struct{}
+		if s.readDone != nil {
+			done = s.readDone[conn]
+			delete(s.readDone, conn)
+		}
+		if s.conn == conn {
+			s.conn = nil
+		}
+		closed := s.closed
+		s.mu.Unlock()
+		if done != nil {
+			close(done)
+		}
+		if closed || !segmentEnding {
+			close(s.events)
+		}
+	}()
 	for {
 		msgType, message, err := conn.ReadMessage()
 		if err != nil {
@@ -385,20 +410,38 @@ func (s *rtzrStream) PushFrame(frame *model.AudioFrame) error {
 
 func (s *rtzrStream) Flush() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return io.ErrClosedPipe
 	}
 	if s.audioBStream != nil {
 		frames := s.audioBStream.Flush()
 		if err := s.writeAudioFramesLocked(frames); err != nil {
+			s.mu.Unlock()
 			return err
 		}
 	}
 	if s.conn == nil {
+		s.mu.Unlock()
 		return nil
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, []byte("EOS"))
+	conn := s.conn
+	var done <-chan struct{}
+	if s.readDone != nil {
+		done = s.readDone[conn]
+	}
+	if s.endingSegments == nil {
+		s.endingSegments = make(map[*websocket.Conn]bool)
+	}
+	s.endingSegments[conn] = true
+	err := conn.WriteMessage(websocket.TextMessage, []byte("EOS"))
+	s.mu.Unlock()
+	if err != nil {
+		_ = s.Close()
+		return err
+	}
+	s.awaitSegmentCompletion(conn, done)
+	return nil
 }
 
 func (s *rtzrStream) writeAudioFramesLocked(frames []*model.AudioFrame) error {
@@ -434,9 +477,30 @@ func (s *rtzrStream) ensureConnectedLocked() error {
 	if err != nil {
 		return fmt.Errorf("failed to dial rtzr websocket: %w", err)
 	}
+	done := make(chan struct{})
+	if s.readDone == nil {
+		s.readDone = make(map[*websocket.Conn]chan struct{})
+	}
 	s.conn = conn
+	s.readDone[conn] = done
 	go s.readLoop(conn)
 	return nil
+}
+
+func (s *rtzrStream) awaitSegmentCompletion(conn *websocket.Conn, done <-chan struct{}) {
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(recvCompletionTimeout):
+			_ = conn.Close()
+			<-done
+		}
+	}
+	s.mu.Lock()
+	if s.conn == conn {
+		s.conn = nil
+	}
+	s.mu.Unlock()
 }
 
 func (s *rtzrStream) StartTimeOffset() float64 {
