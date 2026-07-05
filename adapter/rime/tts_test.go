@@ -320,26 +320,31 @@ func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
 	}
 }
 
-func TestRimeTTSUpdateOptionsNormalizesReferenceDefaultBaseURLOnTransportChange(t *testing.T) {
+func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 
 	if err := provider.UpdateOptions(WithRimeTTSWebsocket(true)); err != nil {
 		t.Fatalf("UpdateOptions websocket true error = %v", err)
 	}
-	u := buildRimeTTSWebsocketURL(provider)
-	if got := u.Scheme + "://" + u.Host + u.Path; got != "wss://users-ws.rime.ai/ws3" {
-		t.Fatalf("websocket URL after update = %q, want reference default websocket endpoint", got)
+	if provider.Capabilities().Streaming {
+		t.Fatal("streaming = true after update, want reference transport fixed after construction")
+	}
+	if _, err := provider.Synthesize(context.Background(), "hello"); err != nil {
+		t.Fatalf("Synthesize after websocket true update error = %v, want HTTP mode still usable", err)
+	}
+	if stream, err := provider.Stream(context.Background()); err == nil || stream != nil {
+		t.Fatalf("Stream after websocket true update = (%#v, %v), want streaming still rejected", stream, err)
 	}
 
-	if err := provider.UpdateOptions(WithRimeTTSWebsocket(false)); err != nil {
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	if err := streaming.UpdateOptions(WithRimeTTSWebsocket(false)); err != nil {
 		t.Fatalf("UpdateOptions websocket false error = %v", err)
 	}
-	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
-	if err != nil {
-		t.Fatalf("build request after websocket false update: %v", err)
+	if !streaming.Capabilities().Streaming {
+		t.Fatal("streaming = false after update, want reference transport fixed after construction")
 	}
-	if got := req.URL.String(); got != "https://users.rime.ai/v1/rime-tts" {
-		t.Fatalf("HTTP URL after update = %q, want reference default HTTP endpoint", got)
+	if _, err := streaming.Synthesize(context.Background(), "hello"); err == nil {
+		t.Fatal("Synthesize after websocket false update error = nil, want websocket mode still active")
 	}
 }
 

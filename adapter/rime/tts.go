@@ -62,7 +62,6 @@ type RimeTTS struct {
 	segment                  string
 	streamResponseTimeout    time.Duration
 	closed                   bool
-	websocketOptionSet       bool
 }
 
 type RimeTTSOption func(*RimeTTS)
@@ -170,7 +169,6 @@ func WithRimeTTSPhonemizeBetweenBrackets(phonemizeBetweenBrackets bool) RimeTTSO
 func WithRimeTTSWebsocket(useWebsocket bool) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.useWebsocket = useWebsocket
-		t.websocketOptionSet = true
 	}
 }
 
@@ -274,11 +272,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	if err := validateRimeTimeScaleFactor(candidate); err != nil {
 		return err
 	}
-	if !candidate.websocketOptionSet {
-		candidate.useWebsocket = currentUseWebsocket
-	} else {
-		normalizeRimeTransportBaseURL(candidate)
-	}
+	candidate.useWebsocket = currentUseWebsocket
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
