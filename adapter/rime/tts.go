@@ -48,6 +48,7 @@ type RimeTTS struct {
 	voice                    string
 	voiceSet                 bool
 	lang                     string
+	langSet                  bool
 	sampleRate               int
 	requestSampleRate        int
 	timeScaleFactor          *float64
@@ -106,9 +107,8 @@ func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 
 func WithRimeTTSLang(lang string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if lang != "" {
-			t.lang = lang
-		}
+		t.lang = lang
+		t.langSet = true
 	}
 }
 
@@ -257,6 +257,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		voice:                    t.voice,
 		voiceSet:                 t.voiceSet,
 		lang:                     t.lang,
+		langSet:                  t.langSet,
 		sampleRate:               t.sampleRate,
 		requestSampleRate:        t.requestSampleRate,
 		timeScaleFactor:          t.timeScaleFactor,
@@ -290,6 +291,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.voice = candidate.voice
 	t.voiceSet = candidate.voiceSet
 	t.lang = candidate.lang
+	t.langSet = candidate.langSet
 	t.requestSampleRate = candidate.requestSampleRate
 	t.timeScaleFactor = candidate.timeScaleFactor
 	t.repetitionPenalty = candidate.repetitionPenalty
@@ -504,7 +506,7 @@ func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
 	query.Set("audioFormat", "pcm")
 	query.Set("samplingRate", strconv.Itoa(t.sampleRate))
 	query.Set("segment", t.segment)
-	if t.lang != "" {
+	if t.lang != "" || t.langSet {
 		query.Set("lang", t.lang)
 	}
 	if t.timeScaleFactor != nil {
@@ -734,6 +736,7 @@ func rimeTTSApplyLazyHTTPOptionUpdates(opts *RimeTTS, provider *RimeTTS) {
 		return
 	}
 	opts.lang = provider.lang
+	opts.langSet = provider.langSet
 	opts.requestSampleRate = provider.requestSampleRate
 	opts.timeScaleFactor = provider.timeScaleFactor
 

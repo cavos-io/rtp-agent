@@ -344,6 +344,38 @@ func TestRimeTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
 	assertRimePayload(t, payload, "speaker", "")
 }
 
+func TestRimeTTSLanguageOptionsAllowReferenceEmptyValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSLang(""))
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build constructor request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode constructor body: %v", err)
+	}
+	assertRimePayload(t, payload, "lang", "")
+
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSLang(""))
+	query := buildRimeTTSWebsocketURL(streaming).Query()
+	if got, ok := query["lang"]; !ok || len(got) != 1 || got[0] != "" {
+		t.Fatalf("constructor websocket lang query = %#v, want explicit empty value", query["lang"])
+	}
+
+	updatable := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSLang("spa"),
+	)
+	if err := updatable.UpdateOptions(WithRimeTTSLang("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	query = buildRimeTTSWebsocketURL(updatable).Query()
+	if got, ok := query["lang"]; !ok || len(got) != 1 || got[0] != "" {
+		t.Fatalf("updated websocket lang query = %#v, want explicit empty value", query["lang"])
+	}
+}
+
 func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 	if provider.Capabilities().Streaming {
