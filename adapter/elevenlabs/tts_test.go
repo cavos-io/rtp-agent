@@ -305,20 +305,24 @@ func TestElevenLabsTTSRejectsNonAudioResponse(t *testing.T) {
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize returned nil error, want non-audio response error")
+		t.Fatal("Next error = nil, want non-audio response error")
 	}
 	if !strings.Contains(err.Error(), "non-audio") {
-		t.Fatalf("Synthesize error = %q, want non-audio guidance", err)
+		t.Fatalf("Next error = %q, want non-audio guidance", err)
 	}
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 	var statusErr *llm.APIStatusError
 	if errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want no APIStatusError for malformed provider body", err, err)
+		t.Fatalf("Next error = %T %v, want no APIStatusError for malformed provider body", err, err)
 	}
 }
 
@@ -342,13 +346,17 @@ func TestElevenLabsTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want APIStatusError")
+		t.Fatal("Next error = nil, want APIStatusError")
 	}
 	var statusErr *llm.APIStatusError
 	if !errors.As(err, &statusErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIStatusError", err, err)
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
 	}
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
@@ -376,13 +384,17 @@ func TestElevenLabsTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want APITimeoutError")
+		t.Fatal("Next error = nil, want APITimeoutError")
 	}
 	var timeoutErr *llm.APITimeoutError
 	if !errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -401,13 +413,68 @@ func TestElevenLabsTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
 	if err == nil {
-		defer stream.Close()
-		t.Fatal("Synthesize error = nil, want APIConnectionError")
+		t.Fatal("Next error = nil, want APIConnectionError")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestElevenLabsTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
+	requests := 0
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: elevenLabsRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(strings.NewReader("audio")),
+			Request:    r,
+		}, nil
+	})}
+
+	provider, err := NewElevenLabsTTS("test-key", "voice-1", "",
+		WithElevenLabsBaseURL("https://eleven.example/v1"),
+		WithElevenLabsEncoding("pcm_16000"),
+	)
+	if err != nil {
+		t.Fatalf("NewElevenLabsTTS() error = %v", err)
+	}
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests before Next = %d, want 0", requests)
+	}
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("Next = (%#v, %v), want provider audio", audio, err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after Next = %d, want 1", requests)
+	}
+
+	closedStream, err := provider.Synthesize(context.Background(), "cancelled")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	if err := closedStream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if audio, err := closedStream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after close = (%#v, %v), want nil EOF", audio, err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests after close-before-Next = %d, want 1", requests)
 	}
 }
 
