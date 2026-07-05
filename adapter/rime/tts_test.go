@@ -273,6 +273,24 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	}
 }
 
+func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
+	provider := NewRimeTTS("test-key", "")
+	if provider.Capabilities().Streaming {
+		t.Fatal("initial streaming = true, want HTTP mode")
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSBaseURL("wss://rime.example")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	if provider.Capabilities().Streaming {
+		t.Fatal("streaming = true after base URL update, want transport unchanged")
+	}
+	if _, err := provider.Synthesize(context.Background(), "hello"); err != nil {
+		t.Fatalf("Synthesize after websocket-looking base URL update error = %v", err)
+	}
+}
+
 func TestRimeTTSUpdateOptionsRejectsReferenceMistV2TimeScaleFactor(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"), WithRimeTTSTimeScaleFactor(1.1))
 
