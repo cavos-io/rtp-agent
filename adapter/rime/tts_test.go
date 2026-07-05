@@ -2423,6 +2423,76 @@ func TestRimeTTSActiveWebsocketInvalidatedByReferenceUpdateIsNotReused(t *testin
 	_ = provider.Close()
 }
 
+func TestRimeTTSInflightPrewarmInvalidatedByReferenceUpdateIsNotReused(t *testing.T) {
+	var dials atomic.Int32
+	dialStarted := make(chan struct{})
+	releaseDial := make(chan struct{})
+	var releaseOnce sync.Once
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials.Add(1)
+			if dials.Load() == 1 {
+				close(dialStarted)
+				<-releaseDial
+			}
+			client, server := net.Pipe()
+			go rimeTestServeReusableWebsocket(t, server, nil)
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+		releaseOnce.Do(func() { close(releaseDial) })
+	})
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+	)
+	tts.Prewarm(provider)
+	select {
+	case <-dialStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Prewarm did not start websocket dial")
+	}
+	if err := provider.UpdateOptions(WithRimeTTSVoice("lyra")); err != nil {
+		t.Fatalf("UpdateOptions lyra error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSVoice(defaultRimeArcanaVoice)); err != nil {
+		t.Fatalf("UpdateOptions astra error = %v", err)
+	}
+	releaseOnce.Do(func() { close(releaseDial) })
+	deadline := time.Now().Add(time.Second)
+	for {
+		provider.mu.Lock()
+		inFlight := provider.prewarmInFlight
+		provider.mu.Unlock()
+		if !inFlight {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Prewarm did not finish after release")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream after invalidated prewarm error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close stream error = %v", err)
+	}
+	if got := dials.Load(); got != 2 {
+		t.Fatalf("websocket dials = %d, want stale in-flight prewarm discarded and redialed", got)
+	}
+	_ = provider.Close()
+}
+
 func rimeTestServeReusableWebsocket(t *testing.T, conn net.Conn, connections *atomic.Int32) {
 	t.Helper()
 	defer conn.Close()
@@ -2430,7 +2500,9 @@ func rimeTestServeReusableWebsocket(t *testing.T, conn net.Conn, connections *at
 		t.Errorf("websocket handshake: %v", err)
 		return
 	}
-	connections.Add(1)
+	if connections != nil {
+		connections.Add(1)
+	}
 	for {
 		payload, err := rimeTestReadClientTextFrame(conn)
 		if err != nil {

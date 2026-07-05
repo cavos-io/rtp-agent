@@ -854,6 +854,7 @@ func (t *RimeTTS) Prewarm() {
 	t.prewarmDone = prewarmDone
 	t.prewarmSeq++
 	prewarmSeq := t.prewarmSeq
+	poolGeneration := t.poolGeneration
 	t.mu.Unlock()
 
 	go func() {
@@ -869,7 +870,7 @@ func (t *RimeTTS) Prewarm() {
 		var closeConn *websocket.Conn
 		if err != nil || t.closed || t.prewarmConn != nil {
 			closeConn = conn
-		} else if buildRimeTTSWebsocketURL(t).String() != prewarmURL {
+		} else if t.poolGeneration != poolGeneration || buildRimeTTSWebsocketURL(t).String() != prewarmURL {
 			closeConn = conn
 		} else {
 			t.prewarmConn = conn
