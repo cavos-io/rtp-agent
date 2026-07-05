@@ -397,6 +397,29 @@ func TestRimeTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+
+	provider := NewRimeTTS("test-key", "")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	requests := 0
 	originalClient := http.DefaultClient
@@ -470,6 +493,23 @@ func TestRimeTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) 
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestRimeTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: rimeTimeoutReader{}},
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
@@ -1192,3 +1232,11 @@ func (rimeErrorReader) Read([]byte) (int, error) {
 }
 
 func (rimeErrorReader) Close() error { return nil }
+
+type rimeTimeoutReader struct{}
+
+func (rimeTimeoutReader) Read([]byte) (int, error) {
+	return 0, context.DeadlineExceeded
+}
+
+func (rimeTimeoutReader) Close() error { return nil }

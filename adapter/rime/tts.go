@@ -584,6 +584,9 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			return nil, io.EOF
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, rimeTTSConnectionError("Rime TTS stream read failed", err)
 	}
 	return s.annotateAudio(&tts.SynthesizedAudio{
@@ -620,6 +623,9 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return rimeTTSConnectionError("Rime TTS request failed", err)
 	}
 
