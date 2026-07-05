@@ -450,6 +450,34 @@ func TestRimeTTSBaseURLOptionsAllowReferenceEmptyValue(t *testing.T) {
 	}
 }
 
+func TestRimeTTSModelOptionsAllowReferenceEmptyValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel(""))
+	if provider.Model() != "" {
+		t.Fatalf("constructor model = %q, want explicit empty value", provider.Model())
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	assertRimePayload(t, payload, "modelId", "")
+	assertRimePayload(t, payload, "speaker", "astra")
+
+	updatable := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"))
+	if err := updatable.UpdateOptions(WithRimeTTSModel("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if updatable.Model() != "" {
+		t.Fatalf("updated model = %q, want explicit empty value", updatable.Model())
+	}
+	u := buildRimeTTSWebsocketURL(updatable)
+	assertRimePayload(t, queryMap(u.Query()), "modelId", "")
+	assertRimePayload(t, queryMap(u.Query()), "speaker", "lyra")
+}
+
 func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 

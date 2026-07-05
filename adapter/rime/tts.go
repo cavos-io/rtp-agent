@@ -79,11 +79,9 @@ func WithRimeTTSBaseURL(baseURL string) RimeTTSOption {
 
 func WithRimeTTSModel(model string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if model != "" {
-			t.model = model
-			if !t.voiceSet && t.voice == "" {
-				t.voice = defaultRimeVoice(model)
-			}
+		t.model = model
+		if !t.voiceSet && t.voice == "" {
+			t.voice = defaultRimeVoice(model)
 		}
 	}
 }
