@@ -1189,6 +1189,10 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
 		buf := make([]byte, 4096)
 		n, err := s.resp.Body.Read(buf)
+		if s.finalSent {
+			s.pendingPCM = nil
+			return nil, io.EOF
+		}
 		if n > 0 {
 			if err == io.EOF {
 				s.pendingFinal = true

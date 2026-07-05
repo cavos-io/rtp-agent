@@ -1741,6 +1741,47 @@ func TestRimeTTSChunkedStreamCloseDuringReadReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamCloseDuringAudioReadDropsLateFrame(t *testing.T) {
+	body := &rimeBlockingAudioCancelBody{
+		readStarted: make(chan struct{}),
+		closeCalled: make(chan struct{}),
+		data:        []byte{0x01, 0x02},
+	}
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	nextDone := make(chan *tts.SynthesizedAudio, 1)
+	errDone := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		nextDone <- audio
+		errDone <- err
+	}()
+
+	select {
+	case <-body.readStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start body read")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case audio := <-nextDone:
+		err := <-errDone
+		if audio != nil {
+			t.Fatalf("Next after Close during audio read = %+v, want nil audio", audio)
+		}
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close during audio read error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not unblock body read")
+	}
+}
+
 func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -3678,6 +3719,26 @@ func (b *rimeBlockingCancelBody) Read([]byte) (int, error) {
 }
 
 func (b *rimeBlockingCancelBody) Close() error {
+	b.closeOnce.Do(func() {
+		close(b.closeCalled)
+	})
+	return nil
+}
+
+type rimeBlockingAudioCancelBody struct {
+	readStarted chan struct{}
+	closeCalled chan struct{}
+	closeOnce   sync.Once
+	data        []byte
+}
+
+func (b *rimeBlockingAudioCancelBody) Read(p []byte) (int, error) {
+	close(b.readStarted)
+	<-b.closeCalled
+	return copy(p, b.data), context.Canceled
+}
+
+func (b *rimeBlockingAudioCancelBody) Close() error {
 	b.closeOnce.Do(func() {
 		close(b.closeCalled)
 	})
