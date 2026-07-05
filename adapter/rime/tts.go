@@ -57,8 +57,11 @@ type RimeTTS struct {
 	timeScaleFactor          *float64
 	timeScaleFactors         map[string]*float64
 	repetitionPenalty        *float64
+	arcanaRepetitionPenalty  *float64
 	temperature              *float64
+	arcanaTemperature        *float64
 	topP                     *float64
+	arcanaTopP               *float64
 	maxTokens                *int
 	maxTokensByModel         map[string]*int
 	speedAlpha               *float64
@@ -73,6 +76,9 @@ type RimeTTS struct {
 	langTouched              bool
 	requestSampleRateTouched bool
 	timeScaleFactorTouched   bool
+	repetitionPenaltyTouched bool
+	temperatureTouched       bool
+	topPTouched              bool
 	maxTokensTouched         bool
 }
 
@@ -98,6 +104,7 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 		t.modelTouched = true
 		t.restoreCommonParamsForModel()
 		t.restoreTimeScaleFactorForModel()
+		t.restoreArcanaParamsForModel()
 		t.restoreMaxTokensForModel()
 		if !t.voiceSet && t.voice == "" {
 			t.voice = defaultRimeVoice(model)
@@ -141,18 +148,21 @@ func WithRimeTTSTimeScaleFactor(timeScaleFactor float64) RimeTTSOption {
 func WithRimeTTSRepetitionPenalty(repetitionPenalty float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.repetitionPenalty = &repetitionPenalty
+		t.repetitionPenaltyTouched = true
 	}
 }
 
 func WithRimeTTSTemperature(temperature float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.temperature = &temperature
+		t.temperatureTouched = true
 	}
 }
 
 func WithRimeTTSTopP(topP float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.topP = &topP
+		t.topPTouched = true
 	}
 }
 
@@ -230,6 +240,7 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		opt(provider)
 	}
 	provider.storeCommonParamsForModel()
+	provider.storeArcanaParamsForModel()
 	provider.storeTouchedMaxTokensForModel()
 	provider.sampleRate = provider.requestSampleRate
 	if strings.HasPrefix(provider.baseURL, "ws://") || strings.HasPrefix(provider.baseURL, "wss://") {
@@ -382,6 +393,45 @@ func rimeCommonParamsBucket(model string) string {
 	}
 }
 
+func (t *RimeTTS) storeArcanaParamsForModel() {
+	if t.model != "arcana" {
+		return
+	}
+	t.arcanaRepetitionPenalty = cloneFloat64Ptr(t.repetitionPenalty)
+	t.arcanaTemperature = cloneFloat64Ptr(t.temperature)
+	t.arcanaTopP = cloneFloat64Ptr(t.topP)
+}
+
+func (t *RimeTTS) storeTouchedArcanaParamsForModel() {
+	if t.model != "arcana" {
+		return
+	}
+	if t.repetitionPenaltyTouched {
+		t.arcanaRepetitionPenalty = cloneFloat64Ptr(t.repetitionPenalty)
+	}
+	if t.temperatureTouched {
+		t.arcanaTemperature = cloneFloat64Ptr(t.temperature)
+	}
+	if t.topPTouched {
+		t.arcanaTopP = cloneFloat64Ptr(t.topP)
+	}
+}
+
+func (t *RimeTTS) restoreArcanaParamsForModel() {
+	if t.model != "arcana" {
+		return
+	}
+	if !t.repetitionPenaltyTouched {
+		t.repetitionPenalty = cloneFloat64Ptr(t.arcanaRepetitionPenalty)
+	}
+	if !t.temperatureTouched {
+		t.temperature = cloneFloat64Ptr(t.arcanaTemperature)
+	}
+	if !t.topPTouched {
+		t.topP = cloneFloat64Ptr(t.arcanaTopP)
+	}
+}
+
 func (t *RimeTTS) storeTouchedMaxTokensForModel() {
 	if !t.maxTokensTouched {
 		return
@@ -515,8 +565,11 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		timeScaleFactor:          t.timeScaleFactor,
 		timeScaleFactors:         cloneRimeTimeScaleFactors(t.timeScaleFactors),
 		repetitionPenalty:        t.repetitionPenalty,
+		arcanaRepetitionPenalty:  cloneFloat64Ptr(t.arcanaRepetitionPenalty),
 		temperature:              t.temperature,
+		arcanaTemperature:        cloneFloat64Ptr(t.arcanaTemperature),
 		topP:                     t.topP,
+		arcanaTopP:               cloneFloat64Ptr(t.arcanaTopP),
 		maxTokens:                cloneIntPtr(t.maxTokens),
 		maxTokensByModel:         cloneRimeMaxTokensByModel(t.maxTokensByModel),
 		speedAlpha:               t.speedAlpha,
@@ -533,6 +586,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		opt(candidate)
 	}
 	candidate.storeTouchedCommonParamsForModel()
+	candidate.storeTouchedArcanaParamsForModel()
 	candidate.storeTouchedMaxTokensForModel()
 	if err := validateRimeTimeScaleFactor(candidate); err != nil {
 		return err
@@ -555,8 +609,11 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.timeScaleFactor = candidate.timeScaleFactor
 	t.timeScaleFactors = candidate.timeScaleFactors
 	t.repetitionPenalty = candidate.repetitionPenalty
+	t.arcanaRepetitionPenalty = candidate.arcanaRepetitionPenalty
 	t.temperature = candidate.temperature
+	t.arcanaTemperature = candidate.arcanaTemperature
 	t.topP = candidate.topP
+	t.arcanaTopP = candidate.arcanaTopP
 	t.maxTokens = candidate.maxTokens
 	t.maxTokensByModel = candidate.maxTokensByModel
 	t.speedAlpha = candidate.speedAlpha

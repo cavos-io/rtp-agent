@@ -704,6 +704,65 @@ func TestRimeTTSUpdateOptionsKeepsReferenceCommonParamsModelSpecific(t *testing.
 	}
 }
 
+func TestRimeTTSUpdateOptionsKeepsReferenceArcanaParamsModelSpecific(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"))
+	if err := provider.UpdateOptions(
+		WithRimeTTSRepetitionPenalty(1.2),
+		WithRimeTTSTemperature(0.7),
+		WithRimeTTSTopP(0.8),
+	); err != nil {
+		t.Fatalf("UpdateOptions coda arcana-only params error = %v", err)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana")); err != nil {
+		t.Fatalf("UpdateOptions arcana error = %v", err)
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build arcana request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode arcana request: %v", err)
+	}
+	for _, key := range []string{"repetition_penalty", "temperature", "top_p"} {
+		if _, ok := payload[key]; ok {
+			t.Fatalf("arcana %s = %#v, want omitted value ignored while model was coda", key, payload[key])
+		}
+	}
+
+	if err := provider.UpdateOptions(
+		WithRimeTTSRepetitionPenalty(1.3),
+		WithRimeTTSTemperature(0.6),
+		WithRimeTTSTopP(0.9),
+	); err != nil {
+		t.Fatalf("UpdateOptions explicit arcana params error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions coda error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana")); err != nil {
+		t.Fatalf("UpdateOptions back to arcana error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build restored arcana request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode restored arcana request: %v", err)
+	}
+	if got := payload["repetition_penalty"]; got != 1.3 {
+		t.Fatalf("restored repetition_penalty = %#v, want 1.3", got)
+	}
+	if got := payload["temperature"]; got != 0.6 {
+		t.Fatalf("restored temperature = %#v, want 0.6", got)
+	}
+	if got := payload["top_p"]; got != 0.9 {
+		t.Fatalf("restored top_p = %#v, want 0.9", got)
+	}
+}
+
 func TestRimeTTSModelSpecificOptionsMatchReferenceRequests(t *testing.T) {
 	arcana := NewRimeTTS("test-key", "",
 		WithRimeTTSRepetitionPenalty(1.2),
