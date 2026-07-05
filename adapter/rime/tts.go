@@ -1417,7 +1417,7 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 		}
 		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
-	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(contentType), "audio") {
 		resp.Body.Close()
 		cancel()
 		if strings.TrimSpace(s.text) != "" {

@@ -228,6 +228,37 @@ func TestRimeTTSSynthesizeAcceptsReferenceSuccessStatusClass(t *testing.T) {
 	}
 }
 
+func TestRimeTTSAcceptsReferenceAudioContentTypeCase(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := []byte{0x01, 0x02}
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"Audio/PCM"}},
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v, want successful audio despite content-type case", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, body) {
+		t.Fatalf("Next audio = %+v, want body bytes %v", audio, body)
+	}
+}
+
 func TestRimeTTSOptionsMatchReferenceModels(t *testing.T) {
 	provider := NewRimeTTS("test-key", "",
 		WithRimeTTSModel("coda"),
