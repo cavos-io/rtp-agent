@@ -3374,6 +3374,32 @@ func TestRimeTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamReadCancelReturnsContextCanceled(t *testing.T) {
+	stream := &rimeTTSSynthesizeStream{
+		ctx:       context.Background(),
+		requestID: "req-cancel",
+		events:    make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
+		readMessage: func() (int, []byte, error) {
+			return 0, nil, context.Canceled
+		},
+		closeConn: func() error { return nil },
+	}
+	go stream.readLoop()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next canceled error = %T %v, want context.Canceled", err, err)
+	}
+	var connErr *llm.APIConnectionError
+	if errors.As(err, &connErr) {
+		t.Fatalf("Next canceled error = %T, want raw context cancellation", err)
+	}
+}
+
 func TestRimeTTSReadTimeoutReturnsAPITimeoutError(t *testing.T) {
 	err := rimeTTSReadError(context.DeadlineExceeded)
 	var timeoutErr *llm.APITimeoutError

@@ -1875,6 +1875,9 @@ func rimeTTSReadError(err error) error {
 }
 
 func rimeTTSReadErrorWithRequestID(err error, requestID string) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(err.Error())
 	}
