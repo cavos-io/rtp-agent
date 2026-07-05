@@ -1666,6 +1666,47 @@ func TestRimeTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamCloseCancelsPendingReferenceRequest(t *testing.T) {
+	originalClient := http.DefaultClient
+	requests := make(chan *http.Request, 1)
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		requests <- r
+		<-r.Context().Done()
+		return nil, r.Context().Err()
+	})}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider := NewRimeTTS("test-key", "")
+	stream, err := provider.Synthesize(ctx, "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	nextDone := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextDone <- err
+	}()
+
+	select {
+	case <-requests:
+	case <-time.After(time.Second):
+		t.Fatal("Next did not start provider request")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case err := <-nextDone:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after Close error = %T %v, want EOF", err, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel pending provider request like reference ChunkedStream.aclose")
+	}
+}
+
 func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })

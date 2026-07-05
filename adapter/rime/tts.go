@@ -1346,9 +1346,13 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 		return err
 	}
 
+	s.cancel = cancel
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		cancel()
+		if s.finalSent {
+			return io.EOF
+		}
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
@@ -1356,6 +1360,11 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 			return llm.NewAPITimeoutError(err.Error())
 		}
 		return rimeTTSConnectionError("Rime TTS request failed", err)
+	}
+	if s.finalSent {
+		resp.Body.Close()
+		cancel()
+		return io.EOF
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
