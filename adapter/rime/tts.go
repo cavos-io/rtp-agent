@@ -46,6 +46,7 @@ type RimeTTS struct {
 	baseURL                  string
 	model                    string
 	voice                    string
+	voiceSet                 bool
 	lang                     string
 	sampleRate               int
 	requestSampleRate        int
@@ -81,7 +82,7 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if model != "" {
 			t.model = model
-			if t.voice == "" {
+			if !t.voiceSet && t.voice == "" {
 				t.voice = defaultRimeVoice(model)
 			}
 		}
@@ -91,6 +92,7 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 func WithRimeTTSVoice(voice string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.voice = voice
+		t.voiceSet = true
 	}
 }
 
@@ -210,8 +212,9 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 	normalizeRimeTransportBaseURL(provider)
 	if voice != "" {
 		provider.voice = voice
+		provider.voiceSet = true
 	}
-	if provider.voice == "" {
+	if !provider.voiceSet && provider.voice == "" {
 		voice = defaultRimeVoice(provider.model)
 		provider.voice = voice
 	}
@@ -252,6 +255,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		baseURL:                  t.baseURL,
 		model:                    t.model,
 		voice:                    t.voice,
+		voiceSet:                 t.voiceSet,
 		lang:                     t.lang,
 		sampleRate:               t.sampleRate,
 		requestSampleRate:        t.requestSampleRate,
@@ -284,6 +288,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.baseURL = candidate.baseURL
 	t.model = candidate.model
 	t.voice = candidate.voice
+	t.voiceSet = candidate.voiceSet
 	t.lang = candidate.lang
 	t.requestSampleRate = candidate.requestSampleRate
 	t.timeScaleFactor = candidate.timeScaleFactor

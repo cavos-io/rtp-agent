@@ -268,6 +268,16 @@ func TestRimeTTSOptionsMatchReferenceModels(t *testing.T) {
 		t.Fatalf("decode custom voice body: %v", err)
 	}
 	assertRimePayload(t, payload, "speaker", "ember")
+
+	emptyVoice := NewRimeTTS("test-key", "", WithRimeTTSVoice(""))
+	req, err = buildRimeTTSRequest(context.Background(), emptyVoice, "hello")
+	if err != nil {
+		t.Fatalf("build empty voice request: %v", err)
+	}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode empty voice body: %v", err)
+	}
+	assertRimePayload(t, payload, "speaker", "")
 }
 
 func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
