@@ -756,7 +756,7 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 	if s.inputEnded {
 		return nil
 	}
-	return s.flushLocked()
+	return s.flushLocked(false)
 }
 
 func (s *rimeTTSSynthesizeStream) EndInput() error {
@@ -768,14 +768,14 @@ func (s *rimeTTSSynthesizeStream) EndInput() error {
 	if s.inputEnded {
 		return nil
 	}
-	if err := s.flushLocked(); err != nil {
+	if err := s.flushLocked(true); err != nil {
 		return err
 	}
 	s.inputEnded = true
 	return nil
 }
 
-func (s *rimeTTSSynthesizeStream) flushLocked() error {
+func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
@@ -792,6 +792,9 @@ func (s *rimeTTSSynthesizeStream) flushLocked() error {
 			s.events <- audio
 			s.emptyFinal = true
 		}
+		return nil
+	}
+	if !sendProviderFlush {
 		return nil
 	}
 	message, err := buildRimeTTSFlushMessage(s.contextID)

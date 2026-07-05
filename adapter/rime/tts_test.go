@@ -828,7 +828,7 @@ func TestRimeTTSWebsocketMessagesMatchReference(t *testing.T) {
 	assertRimePayload(t, flushPayload, "contextId", "ctx-1")
 }
 
-func TestRimeTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
+func TestRimeTTSStreamSendsSentencesAndDrainsTailLikeReference(t *testing.T) {
 	var writes []map[string]any
 	stream := &rimeTTSSynthesizeStream{
 		contextID: "ctx-1",
@@ -853,10 +853,24 @@ func TestRimeTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
-	if len(writes) != 3 {
-		t.Fatalf("writes after Flush = %d, want tail text and flush", len(writes))
+	if len(writes) != 2 {
+		t.Fatalf("writes after Flush = %d, want completed sentence and tail text only", len(writes))
 	}
 	assertRimePayload(t, writes[1], "text", "Tail ")
+	if _, ok := writes[1]["operation"]; ok {
+		t.Fatalf("tail write operation = %#v, want text packet without provider flush", writes[1])
+	}
+
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if len(writes) != 3 {
+		t.Fatalf("writes after EndInput = %d, want provider flush", len(writes))
+	}
 	assertRimePayload(t, writes[2], "operation", "flush")
 	assertRimePayload(t, writes[2], "contextId", "ctx-1")
 }
