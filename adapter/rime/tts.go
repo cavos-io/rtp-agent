@@ -25,17 +25,18 @@ import (
 )
 
 const (
-	defaultRimeHTTPBaseURL = "https://users.rime.ai/v1/rime-tts"
-	defaultRimeWSBaseURL   = "wss://users-ws.rime.ai"
-	defaultRimeModel       = "arcana"
-	defaultRimeArcanaVoice = "astra"
-	defaultRimeMistVoice   = "cove"
-	defaultRimeCodaVoice   = "lyra"
-	defaultRimeLang        = "eng"
-	defaultRimeSampleRate  = 22050
-	defaultRimeSegment     = "bySentence"
-	rimeArcanaModelTimeout = 240 * time.Second
-	rimeMistModelTimeout   = 30 * time.Second
+	defaultRimeHTTPBaseURL   = "https://users.rime.ai/v1/rime-tts"
+	defaultRimeWSBaseURL     = "wss://users-ws.rime.ai"
+	defaultRimeModel         = "arcana"
+	defaultRimeArcanaVoice   = "astra"
+	defaultRimeMistVoice     = "cove"
+	defaultRimeCodaVoice     = "lyra"
+	defaultRimeLang          = "eng"
+	defaultRimeSampleRate    = 22050
+	defaultRimeSegment       = "bySentence"
+	defaultRimeStreamTimeout = 10 * time.Second
+	rimeArcanaModelTimeout   = 240 * time.Second
+	rimeMistModelTimeout     = 30 * time.Second
 )
 
 type RimeTTS struct {
@@ -58,6 +59,7 @@ type RimeTTS struct {
 	phonemizeBetweenBrackets *bool
 	useWebsocket             bool
 	segment                  string
+	streamResponseTimeout    time.Duration
 	closed                   bool
 }
 
@@ -177,17 +179,26 @@ func WithRimeTTSSegment(segment string) RimeTTSOption {
 	}
 }
 
+func WithRimeTTSStreamResponseTimeout(timeout time.Duration) RimeTTSOption {
+	return func(t *RimeTTS) {
+		if timeout >= 0 {
+			t.streamResponseTimeout = timeout
+		}
+	}
+}
+
 func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("RIME_API_KEY")
 	}
 	provider := &RimeTTS{
-		apiKey:     apiKey,
-		baseURL:    defaultRimeHTTPBaseURL,
-		model:      defaultRimeModel,
-		lang:       defaultRimeLang,
-		sampleRate: defaultRimeSampleRate,
-		segment:    defaultRimeSegment,
+		apiKey:                apiKey,
+		baseURL:               defaultRimeHTTPBaseURL,
+		model:                 defaultRimeModel,
+		lang:                  defaultRimeLang,
+		sampleRate:            defaultRimeSampleRate,
+		segment:               defaultRimeSegment,
+		streamResponseTimeout: defaultRimeStreamTimeout,
 	}
 	for _, opt := range opts {
 		opt(provider)
@@ -248,6 +259,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		phonemizeBetweenBrackets: t.phonemizeBetweenBrackets,
 		useWebsocket:             t.useWebsocket,
 		segment:                  t.segment,
+		streamResponseTimeout:    t.streamResponseTimeout,
 	}
 	t.mu.Unlock()
 
@@ -277,6 +289,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.phonemizeBetweenBrackets = candidate.phonemizeBetweenBrackets
 	t.useWebsocket = candidate.useWebsocket
 	t.segment = candidate.segment
+	t.streamResponseTimeout = candidate.streamResponseTimeout
 	return nil
 }
 
@@ -927,6 +940,10 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *rimeTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
+		if s.provider != nil && s.provider.streamResponseTimeout > 0 {
+			timeout := s.provider.streamResponseTimeout
+			_ = s.conn.SetReadDeadline(time.Now().Add(timeout))
+		}
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
@@ -967,6 +984,10 @@ func (s *rimeTTSSynthesizeStream) annotateAudio(audio *tts.SynthesizedAudio) {
 
 func rimeTTSReadError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
 		return llm.NewAPITimeoutError(err.Error())
 	}
 	var closeErr *websocket.CloseError

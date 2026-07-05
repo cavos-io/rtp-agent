@@ -1267,6 +1267,47 @@ func TestRimeTTSReadTimeoutReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	releaseServer := make(chan struct{})
+	defer close(releaseServer)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		<-releaseServer
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+		WithRimeTTSStreamResponseTimeout(20*time.Millisecond),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("This sentence is definitely long enough."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 	audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"chunk","data":"AQIDBA=="}`), 24000)
 	if err != nil {
