@@ -70,11 +70,9 @@ type RimeTTSOption func(*RimeTTS)
 
 func WithRimeTTSBaseURL(baseURL string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if baseURL != "" {
-			t.baseURL = strings.TrimRight(baseURL, "/")
-			if strings.HasPrefix(baseURL, "ws://") || strings.HasPrefix(baseURL, "wss://") {
-				t.useWebsocket = true
-			}
+		t.baseURL = strings.TrimRight(baseURL, "/")
+		if strings.HasPrefix(baseURL, "ws://") || strings.HasPrefix(baseURL, "wss://") {
+			t.useWebsocket = true
 		}
 	}
 }

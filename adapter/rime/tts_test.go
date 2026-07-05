@@ -417,6 +417,39 @@ func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
 	}
 }
 
+func TestRimeTTSBaseURLOptionsAllowReferenceEmptyValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSBaseURL(""))
+	if provider.baseURL != "" {
+		t.Fatalf("constructor base URL = %q, want explicit empty value", provider.baseURL)
+	}
+	if provider.Capabilities().Streaming {
+		t.Fatal("constructor streaming = true, want false for empty HTTP base URL")
+	}
+
+	streaming := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL(""),
+	)
+	if streaming.baseURL != "" {
+		t.Fatalf("constructor websocket base URL = %q, want explicit empty value", streaming.baseURL)
+	}
+	u := buildRimeTTSWebsocketURL(streaming)
+	if got := u.Scheme + "://" + u.Host + u.Path; got != ":///ws3" {
+		t.Fatalf("constructor websocket URL base = %q, want empty reference base plus /ws3", got)
+	}
+
+	updatable := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/old"))
+	if err := updatable.UpdateOptions(WithRimeTTSBaseURL("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if updatable.baseURL != "" {
+		t.Fatalf("updated base URL = %q, want explicit empty value", updatable.baseURL)
+	}
+	if updatable.Capabilities().Streaming {
+		t.Fatal("updated streaming = true, want transport mode unchanged")
+	}
+}
+
 func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 
