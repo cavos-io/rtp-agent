@@ -160,6 +160,35 @@ func TestRimeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeStatus499EndsLikeReferenceClientClose(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte(`client closed`))}
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: 499,
+			Body:       body,
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "")
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after 499 = (%#v, %v), want EOF like reference client close", audio, err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close calls = %d, want 1", body.closeCount)
+	}
+}
+
 func TestRimeTTSSynthesizeAcceptsReferenceSuccessStatusClass(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })

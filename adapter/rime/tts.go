@@ -716,6 +716,11 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if resp.StatusCode == 499 {
+			resp.Body.Close()
+			cancel()
+			return nil
+		}
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
