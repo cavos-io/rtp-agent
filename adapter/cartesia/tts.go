@@ -222,32 +222,11 @@ func (t *CartesiaTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", t.apiKey)
-	req.Header.Set("Cartesia-Version", defaultCartesiaTTSAPIVersion)
-	req.Header.Set("User-Agent", cartesiaTTSUserAgent)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Cartesia TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &cartesiaTTSChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		apiURL:     apiURL,
+		jsonBody:   append([]byte(nil), jsonBody...),
+		apiKey:     t.apiKey,
 		sampleRate: t.sampleRate,
 	}, nil
 }
@@ -317,6 +296,10 @@ func buildCartesiaOptions(t *CartesiaTTS, streaming bool) map[string]interface{}
 }
 
 type cartesiaTTSChunkedStream struct {
+	ctx          context.Context
+	apiURL       string
+	jsonBody     []byte
+	apiKey       string
 	resp         *http.Response
 	sampleRate   int
 	pendingFinal bool
@@ -327,7 +310,13 @@ type cartesiaTTSChunkedStream struct {
 func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.resp == nil || s.resp.Body == nil || s.finalSent {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
@@ -366,6 +355,35 @@ func (s *cartesiaTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *cartesiaTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(s.ctx, "POST", s.apiURL, bytes.NewBuffer(s.jsonBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", s.apiKey)
+	req.Header.Set("Cartesia-Version", defaultCartesiaTTSAPIVersion)
+	req.Header.Set("User-Agent", cartesiaTTSUserAgent)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Cartesia TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *cartesiaTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -376,13 +394,13 @@ func (s *cartesiaTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 
 func (s *cartesiaTTSChunkedStream) Close() error {
 	s.mu.Lock()
+	s.finalSent = true
 	if s.resp == nil || s.resp.Body == nil {
 		s.mu.Unlock()
 		return nil
 	}
 	body := s.resp.Body
 	s.resp = nil
-	s.finalSent = true
 	s.mu.Unlock()
 	return body.Close()
 }

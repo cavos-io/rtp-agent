@@ -115,21 +115,13 @@ func (t *XaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream
 		return nil, err
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildXaiTTSStreamURL(t), buildXaiTTSHeaders(t))
-	if err != nil {
-		return nil, llm.NewAPIConnectionError("failed to connect to xAI")
-	}
-	if t.isClosed() {
-		conn.Close()
-		return nil, io.ErrClosedPipe
-	}
-	if err := writeXaiTTSTokenizedText(func(message map[string]any) error {
-		return writeXaiTTSMessage(conn, message)
-	}, text, t.language); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	return &xaiTTSWebsocketChunkedStream{conn: conn}, nil
+	return &xaiTTSWebsocketChunkedStream{
+		ctx:           ctx,
+		streamURL:     buildXaiTTSStreamURL(t),
+		headers:       buildXaiTTSHeaders(t),
+		text:          text,
+		tokenLanguage: t.language,
+	}, nil
 }
 
 func (t *XaiTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -266,11 +258,24 @@ func writeXaiTTSTokenizedText(write func(map[string]any) error, text string, lan
 }
 
 type xaiTTSWebsocketChunkedStream struct {
-	conn *websocket.Conn
+	ctx           context.Context
+	streamURL     string
+	headers       http.Header
+	text          string
+	tokenLanguage string
+	conn          *websocket.Conn
+	started       bool
+	closed        bool
 }
 
 func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	for {
+		if s.closed {
+			return nil, io.EOF
+		}
+		if err := s.ensureConnected(); err != nil {
+			return nil, err
+		}
 		if s.conn == nil {
 			return nil, io.EOF
 		}
@@ -288,6 +293,7 @@ func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if done {
 			_ = s.conn.Close()
 			s.conn = nil
+			s.closed = true
 			return xaiTTSFinalAudioDone(), nil
 		}
 		if audio != nil {
@@ -296,7 +302,29 @@ func (s *xaiTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
+func (s *xaiTTSWebsocketChunkedStream) ensureConnected() error {
+	if s.started {
+		return nil
+	}
+	s.started = true
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.streamURL, s.headers)
+	if err != nil {
+		s.closed = true
+		return llm.NewAPIConnectionError("failed to connect to xAI")
+	}
+	if err := writeXaiTTSTokenizedText(func(message map[string]any) error {
+		return writeXaiTTSMessage(conn, message)
+	}, s.text, s.tokenLanguage); err != nil {
+		_ = conn.Close()
+		s.closed = true
+		return err
+	}
+	s.conn = conn
+	return nil
+}
+
 func (s *xaiTTSWebsocketChunkedStream) Close() error {
+	s.closed = true
 	if s.conn == nil {
 		return nil
 	}

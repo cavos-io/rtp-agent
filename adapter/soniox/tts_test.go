@@ -105,6 +105,55 @@ func TestSonioxTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSSynthesizeDefersReferenceConnectUntilNext(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	dialCalls := 0
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dialCalls++
+			return nil, errors.New("soniox tts dial failed")
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSonioxTTS("test-key")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want nil before first audio read", err)
+	}
+	if dialCalls != 0 {
+		t.Fatalf("websocket dials during Synthesize = %d, want 0", dialCalls)
+	}
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil after dial failure", audio)
+	}
+	var apiErr *llm.APIConnectionError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if dialCalls != 1 {
+		t.Fatalf("websocket dials after first Next = %d, want 1", dialCalls)
+	}
+
+	closedStream, err := provider.Synthesize(context.Background(), "cancelled")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v, want nil", err)
+	}
+	if err := closedStream.Close(); err != nil {
+		t.Fatalf("Close before Next: %v", err)
+	}
+	audio, err = closedStream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after close-before-read = (%#v, %v), want nil EOF", audio, err)
+	}
+	if dialCalls != 1 {
+		t.Fatalf("websocket dials after close-before-read = %d, want 1", dialCalls)
+	}
+}
+
 func TestSonioxTTSOptionsBuildReferenceStartConfig(t *testing.T) {
 	bitrate := 64000
 	provider := NewSonioxTTS("test-key",

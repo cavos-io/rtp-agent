@@ -160,16 +160,7 @@ func (t *TTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, e
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Gnani TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-	return &ttsChunkedStream{resp: resp, sampleRate: t.sampleRate, numChannels: t.numChannels}, nil
+	return &ttsChunkedStream{req: req, sampleRate: t.sampleRate, numChannels: t.numChannels}, nil
 }
 
 func validateGnaniTTSAPIKey(apiKey string) error {
@@ -219,6 +210,7 @@ func (t *TTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type ttsChunkedStream struct {
+	req         *http.Request
 	resp        *http.Response
 	sampleRate  int
 	numChannels int
@@ -228,6 +220,12 @@ type ttsChunkedStream struct {
 
 func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	buf := make([]byte, 4096)
@@ -249,6 +247,27 @@ func (s *ttsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *ttsChunkedStream) ensureResponse() error {
+	if s.resp != nil {
+		return nil
+	}
+	resp, err := http.DefaultClient.Do(s.req)
+	if err != nil {
+		s.closed = true
+		s.finalSent = true
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		s.closed = true
+		s.finalSent = true
+		return llm.NewAPIStatusError("Gnani TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *ttsChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -260,6 +279,9 @@ func (s *ttsChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 func (s *ttsChunkedStream) Close() error {
 	s.closed = true
 	s.finalSent = true
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
 	return s.resp.Body.Close()
 }
 

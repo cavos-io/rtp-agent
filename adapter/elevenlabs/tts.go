@@ -447,7 +447,7 @@ func (t *ElevenLabsTTS) ListVoices(ctx context.Context) ([]ElevenLabsVoice, erro
 	return voices, nil
 }
 
-// Synthesize performs a full HTTP POST for non-streaming scenarios.
+// Synthesize creates a chunked stream for non-streaming scenarios.
 func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
@@ -458,38 +458,11 @@ func (t *ElevenLabsTTS) Synthesize(ctx context.Context, text string) (tts.Chunke
 
 	apiURL, jsonBody := buildElevenLabsSynthesizeRequest(t, text)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("xi-api-key", t.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(err.Error())
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		message := http.StatusText(resp.StatusCode)
-		if message == "" {
-			message = resp.Status
-		}
-		return nil, llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
-	}
-	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
-	}
-
 	return &elevenLabsChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		apiURL:     apiURL,
+		jsonBody:   append([]byte(nil), jsonBody...),
+		apiKey:     t.apiKey,
 		encoding:   t.encoding,
 		sampleRate: t.sampleRate,
 	}, nil
@@ -513,6 +486,10 @@ func buildElevenLabsSynthesizeRequest(t *ElevenLabsTTS, text string) (string, []
 }
 
 type elevenLabsChunkedStream struct {
+	ctx        context.Context
+	apiURL     string
+	jsonBody   []byte
+	apiKey     string
 	resp       *http.Response
 	encoding   string
 	sampleRate int
@@ -527,6 +504,14 @@ type elevenLabsChunkedStream struct {
 
 func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	s.mu.Lock()
+	if s.finalSent {
+		s.mu.Unlock()
+		return nil, io.EOF
+	}
+	if err := s.ensureResponseLocked(); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		s.mu.Unlock()
 		return nil, io.EOF
@@ -577,6 +562,45 @@ func (s *elevenLabsChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			SamplesPerChannel: uint32(n / 2),
 		},
 	}, nil
+}
+
+func (s *elevenLabsChunkedStream) ensureResponseLocked() error {
+	if s.resp != nil {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(s.ctx, "POST", s.apiURL, bytes.NewBuffer(s.jsonBody))
+	if err != nil {
+		s.finalSent = true
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("xi-api-key", s.apiKey)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		s.finalSent = true
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		s.finalSent = true
+		message := http.StatusText(resp.StatusCode)
+		if message == "" {
+			message = resp.Status
+		}
+		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
+	}
+	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		s.finalSent = true
+		return llm.NewAPIConnectionError(fmt.Sprintf("elevenlabs returned non-audio data: %s", string(respBody)))
+	}
+	s.resp = resp
+	return nil
 }
 
 func (s *elevenLabsChunkedStream) nextDecodedCompressed() (*tts.SynthesizedAudio, error) {
@@ -683,6 +707,7 @@ func (s *elevenLabsChunkedStream) audioByteState() string {
 
 func (s *elevenLabsChunkedStream) Close() error {
 	s.mu.Lock()
+	s.finalSent = true
 	if s.resp == nil || s.resp.Body == nil {
 		s.mu.Unlock()
 		return nil

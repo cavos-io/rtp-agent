@@ -145,17 +145,66 @@ func TestXaiTTSSynthesizeReturnsAPIConnectionErrorOnDialTimeout(t *testing.T) {
 
 	provider := NewXaiTTS("test-key", "", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
 
-	_, err := provider.Synthesize(context.Background(), "hello")
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	_, err = stream.Next()
 	if err == nil {
-		t.Fatal("Synthesize error = nil, want APIConnectionError")
+		t.Fatal("Next error = nil, want APIConnectionError")
 	}
 	var connectionErr *llm.APIConnectionError
 	if !errors.As(err, &connectionErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
 	}
 	var timeoutErr *llm.APITimeoutError
 	if errors.As(err, &timeoutErr) {
-		t.Fatalf("Synthesize error = %T %v, want APIConnectionError but not APITimeoutError", err, err)
+		t.Fatalf("Next error = %T %v, want APIConnectionError but not APITimeoutError", err, err)
+	}
+}
+
+func TestXaiTTSSynthesizeDefersReferenceConnectUntilNext(t *testing.T) {
+	dials := 0
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			dials++
+			return nil, context.DeadlineExceeded
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewXaiTTS("test-key", "", WithXaiTTSWebsocketURL("ws://xai.test/v1/tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	if dials != 0 {
+		t.Fatalf("dials before Next = %d, want 0", dials)
+	}
+
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if dials != 1 {
+		t.Fatalf("dials after Next = %d, want 1", dials)
+	}
+
+	closedStream, err := provider.Synthesize(context.Background(), "cancelled")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	if err := closedStream.Close(); err != nil {
+		t.Fatalf("Close before Next error = %v", err)
+	}
+	if audio, err := closedStream.Next(); audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after close = (%#v, %v), want nil EOF", audio, err)
+	}
+	if dials != 1 {
+		t.Fatalf("dials after close-before-Next = %d, want 1", dials)
 	}
 }
 
@@ -401,6 +450,9 @@ func TestXaiTTSSynthesizeTokenizesTextBeforeDone(t *testing.T) {
 			}
 			messages <- message
 		}
+		if err := conn.WriteJSON(map[string]any{"type": "audio.done"}); err != nil {
+			handlerErr <- err
+		}
 	}, handlerErr)
 	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
 
@@ -410,6 +462,13 @@ func TestXaiTTSSynthesizeTokenizesTextBeforeDone(t *testing.T) {
 		t.Fatalf("Synthesize() error = %v", err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("Next() = %#v, want final marker", final)
+	}
 
 	assertXaiTTSMessage(t, readXaiTTSMessage(t, messages, handlerErr), "text.delta", "hello")
 	assertXaiTTSMessage(t, readXaiTTSMessage(t, messages, handlerErr), "text.delta", "world")

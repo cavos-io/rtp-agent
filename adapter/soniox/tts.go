@@ -187,19 +187,13 @@ func (t *SonioxTTS) unregisterStream(stream *sonioxTTSSynthesizeStream) {
 }
 
 func (t *SonioxTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
-	stream, err := t.Stream(ctx)
-	if err != nil {
+	if t.isClosed() {
+		return nil, io.ErrClosedPipe
+	}
+	if err := validateSonioxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	if err := stream.PushText(text); err != nil {
-		stream.Close()
-		return nil, err
-	}
-	if err := stream.Flush(); err != nil {
-		stream.Close()
-		return nil, err
-	}
-	return &sonioxTTSChunkedStream{stream: stream}, nil
+	return &sonioxTTSChunkedStream{provider: t, ctx: ctx, text: text}, nil
 }
 
 func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
@@ -246,15 +240,74 @@ func (t *SonioxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 }
 
 type sonioxTTSChunkedStream struct {
-	stream tts.SynthesizeStream
+	provider *SonioxTTS
+	ctx      context.Context
+	text     string
+	stream   tts.SynthesizeStream
+	closed   bool
+	mu       sync.Mutex
 }
 
 func (s *sonioxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
+	if err := s.ensureStream(); err != nil {
+		return nil, err
+	}
 	return s.stream.Next()
 }
 
 func (s *sonioxTTSChunkedStream) Close() error {
-	return s.stream.Close()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	stream := s.stream
+	s.mu.Unlock()
+
+	if stream == nil {
+		return nil
+	}
+	return stream.Close()
+}
+
+func (s *sonioxTTSChunkedStream) ensureStream() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.EOF
+	}
+	if s.stream != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	provider := s.provider
+	ctx := s.ctx
+	text := s.text
+	s.mu.Unlock()
+
+	stream, err := provider.Stream(ctx)
+	if err != nil {
+		return err
+	}
+	if err := stream.PushText(text); err != nil {
+		stream.Close()
+		return err
+	}
+	if err := stream.Flush(); err != nil {
+		stream.Close()
+		return err
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		stream.Close()
+		return io.EOF
+	}
+	s.stream = stream
+	s.mu.Unlock()
+	return nil
 }
 
 type sonioxTTSSynthesizeStream struct {
