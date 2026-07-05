@@ -814,16 +814,16 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rimeTTSSynthesizeStream{
-		conn:         conn,
-		ctx:          streamCtx,
-		cancel:       cancel,
-		provider:     t,
-		requestID:    cavosmath.ShortUUID(""),
-		contextID:    cavosmath.ShortUUID(""),
-		websocketURL: websocketURL,
+		conn:           conn,
+		ctx:            streamCtx,
+		cancel:         cancel,
+		provider:       t,
+		requestID:      cavosmath.ShortUUID(""),
+		contextID:      cavosmath.ShortUUID(""),
+		websocketURL:   websocketURL,
 		poolGeneration: poolGeneration,
-		events:       make(chan *tts.SynthesizedAudio, 100),
-		errCh:        make(chan error, 1),
+		events:         make(chan *tts.SynthesizedAudio, 100),
+		errCh:          make(chan error, 1),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -1460,7 +1460,7 @@ type rimeTTSSynthesizeStream struct {
 	requestID             string
 	contextID             string
 	websocketURL          string
-	poolGeneration       uint64
+	poolGeneration        uint64
 	events                chan *tts.SynthesizedAudio
 	errCh                 chan error
 	mu                    sync.Mutex
@@ -1946,9 +1946,9 @@ func rimeTTSReadErrorWithRequestID(err error, requestID string) error {
 
 func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, string, error) {
 	var message struct {
-		Type           string `json:"type"`
-		Data           string `json:"data"`
-		Message        string `json:"message"`
+		Type           string  `json:"type"`
+		Data           *string `json:"data"`
+		Message        string  `json:"message"`
 		WordTimestamps struct {
 			Words []string  `json:"words"`
 			Start []float64 `json:"start"`
@@ -1960,10 +1960,13 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 	}
 	switch message.Type {
 	case "chunk":
-		if message.Data == "" {
+		if message.Data == nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket chunk missing data", nil)
+		}
+		if *message.Data == "" {
 			return nil, false, "", nil
 		}
-		audio, err := base64.StdEncoding.DecodeString(message.Data)
+		audio, err := base64.StdEncoding.DecodeString(*message.Data)
 		if err != nil {
 			return nil, false, "", rimeTTSConnectionError("Rime websocket audio decode failed", err)
 		}

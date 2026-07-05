@@ -3910,6 +3910,10 @@ func TestRimeTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *t
 			name:    "malformed audio",
 			payload: []byte(`{"type":"chunk","data":"not-base64"}`),
 		},
+		{
+			name:    "missing audio data",
+			payload: []byte(`{"type":"chunk"}`),
+		},
 	}
 
 	for _, tc := range cases {
