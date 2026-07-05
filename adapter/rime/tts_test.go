@@ -1812,6 +1812,52 @@ func TestRimeTTSPrewarmWarmsReferenceWebsocketConnection(t *testing.T) {
 	}
 }
 
+func TestRimeTTSProviderCloseCancelsReferencePrewarm(t *testing.T) {
+	dialStarted := make(chan struct{})
+	dialCanceled := make(chan struct{})
+	dialReturned := make(chan struct{})
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			close(dialStarted)
+			<-ctx.Done()
+			close(dialCanceled)
+			time.Sleep(50 * time.Millisecond)
+			close(dialReturned)
+			return nil, ctx.Err()
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+		WithRimeTTSStreamResponseTimeout(time.Minute),
+	)
+	tts.Prewarm(provider)
+	select {
+	case <-dialStarted:
+	case <-time.After(time.Second):
+		t.Fatal("Prewarm did not start websocket dial")
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-dialCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel in-flight prewarm dial like reference ConnectionPool.aclose")
+	}
+	select {
+	case <-dialReturned:
+	default:
+		t.Fatal("Close returned before in-flight prewarm dial finished like reference ConnectionPool.aclose")
+	}
+}
+
 func TestRimeTTSStreamsReuseReferenceWebsocketConnection(t *testing.T) {
 	var connections atomic.Int32
 	oldDialer := websocket.DefaultDialer

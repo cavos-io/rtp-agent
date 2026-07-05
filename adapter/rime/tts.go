@@ -47,6 +47,9 @@ type RimeTTS struct {
 	prewarmURL               string
 	prewarmRefreshedAt       time.Time
 	prewarmInFlight          bool
+	prewarmCancel            context.CancelFunc
+	prewarmDone              chan struct{}
+	prewarmSeq               uint64
 	apiKey                   string
 	baseURL                  string
 	model                    string
@@ -832,19 +835,32 @@ func (t *RimeTTS) Prewarm() {
 	if t == nil || !t.useWebsocket || validateRimeAPIKey(t.apiKey) != nil || validateRimeTimeScaleFactor(t) != nil {
 		return
 	}
+	prewarmCtx, cancelPrewarm := context.WithCancel(context.Background())
 	t.mu.Lock()
 	if t.closed || t.prewarmConn != nil || t.prewarmInFlight {
 		t.mu.Unlock()
+		cancelPrewarm()
 		return
 	}
 	prewarmURL := buildRimeTTSWebsocketURL(t).String()
+	prewarmDone := make(chan struct{})
 	t.prewarmInFlight = true
+	t.prewarmCancel = cancelPrewarm
+	t.prewarmDone = prewarmDone
+	t.prewarmSeq++
+	prewarmSeq := t.prewarmSeq
 	t.mu.Unlock()
 
 	go func() {
-		conn, err := t.dialWebsocket(context.Background())
+		defer cancelPrewarm()
+		defer close(prewarmDone)
+		conn, err := t.dialWebsocket(prewarmCtx)
 		t.mu.Lock()
-		t.prewarmInFlight = false
+		if t.prewarmSeq == prewarmSeq {
+			t.prewarmInFlight = false
+			t.prewarmCancel = nil
+			t.prewarmDone = nil
+		}
 		var closeConn *websocket.Conn
 		if err != nil || t.closed || t.prewarmConn != nil {
 			closeConn = conn
@@ -925,14 +941,27 @@ func (t *RimeTTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
 	prewarmConn := t.prewarmConn
+	prewarmCancel := t.prewarmCancel
+	prewarmDone := t.prewarmDone
 	t.prewarmConn = nil
 	t.prewarmURL = ""
 	t.prewarmRefreshedAt = time.Time{}
+	t.prewarmInFlight = false
+	t.prewarmCancel = nil
+	t.prewarmDone = nil
+	t.prewarmSeq++
 	streams := make([]*rimeTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
 	}
 	t.mu.Unlock()
+
+	if prewarmCancel != nil {
+		prewarmCancel()
+	}
+	if prewarmDone != nil {
+		<-prewarmDone
+	}
 
 	var closeErr error
 	for _, stream := range streams {
