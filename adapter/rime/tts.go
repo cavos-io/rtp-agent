@@ -790,6 +790,7 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateRimeTimeScaleFactor(t); err != nil {
 		return nil, err
 	}
+	websocketURL := buildRimeTTSWebsocketURL(t).String()
 	conn := t.takePrewarmedConn()
 	if conn == nil {
 		var err error
@@ -804,14 +805,15 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rimeTTSSynthesizeStream{
-		conn:      conn,
-		ctx:       streamCtx,
-		cancel:    cancel,
-		provider:  t,
-		requestID: cavosmath.ShortUUID(""),
-		contextID: cavosmath.ShortUUID(""),
-		events:    make(chan *tts.SynthesizedAudio, 100),
-		errCh:     make(chan error, 1),
+		conn:         conn,
+		ctx:          streamCtx,
+		cancel:       cancel,
+		provider:     t,
+		requestID:    cavosmath.ShortUUID(""),
+		contextID:    cavosmath.ShortUUID(""),
+		websocketURL: websocketURL,
+		events:       make(chan *tts.SynthesizedAudio, 100),
+		errCh:        make(chan error, 1),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -873,6 +875,22 @@ func (t *RimeTTS) takePrewarmedConn() *websocket.Conn {
 	t.prewarmURL = ""
 	t.mu.Unlock()
 	return conn
+}
+
+func (t *RimeTTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string) {
+	if t == nil || conn == nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	t.mu.Lock()
+	if t.closed || !t.useWebsocket || t.prewarmConn != nil || buildRimeTTSWebsocketURL(t).String() != websocketURL {
+		t.mu.Unlock()
+		_ = closeRimePrewarmedConn(conn)
+		return
+	}
+	t.prewarmConn = conn
+	t.prewarmURL = websocketURL
+	t.mu.Unlock()
 }
 
 func (t *RimeTTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
@@ -1352,6 +1370,7 @@ type rimeTTSSynthesizeStream struct {
 	provider              *RimeTTS
 	requestID             string
 	contextID             string
+	websocketURL          string
 	events                chan *tts.SynthesizedAudio
 	errCh                 chan error
 	mu                    sync.Mutex
@@ -1727,9 +1746,27 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 			s.events <- audio
 		}
 		if done {
+			s.releaseConnectionAfterDone()
 			return
 		}
 	}
+}
+
+func (s *rimeTTSSynthesizeStream) releaseConnectionAfterDone() {
+	if s.provider == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	conn := s.conn
+	s.conn = nil
+	websocketURL := s.websocketURL
+	s.mu.Unlock()
+	s.provider.cachePrewarmedConn(conn, websocketURL)
+	s.provider.unregisterStream(s)
 }
 
 func (s *rimeTTSSynthesizeStream) annotateAudio(audio *tts.SynthesizedAudio) {

@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -1809,6 +1810,178 @@ func TestRimeTTSPrewarmWarmsReferenceWebsocketConnection(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close prewarmed stream error = %v", err)
 	}
+}
+
+func TestRimeTTSStreamsReuseReferenceWebsocketConnection(t *testing.T) {
+	var connections atomic.Int32
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go rimeTestServeReusableWebsocket(t, server, &connections)
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+	)
+	for i := 0; i < 2; i++ {
+		stream, err := provider.Stream(context.Background())
+		if err != nil {
+			t.Fatalf("Stream %d error = %v", i+1, err)
+		}
+		if err := stream.PushText("Hello there."); err != nil {
+			t.Fatalf("PushText %d error = %v", i+1, err)
+		}
+		ending, ok := any(stream).(interface{ EndInput() error })
+		if !ok {
+			t.Fatal("Rime stream does not implement EndInput")
+		}
+		if err := ending.EndInput(); err != nil {
+			t.Fatalf("EndInput %d error = %v", i+1, err)
+		}
+		for {
+			audio, err := stream.Next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Next %d error = %v", i+1, err)
+			}
+			if audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0 {
+				continue
+			}
+		}
+	}
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("websocket connections = %d, want one pooled reference connection reused", got)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close after pooled reuse error = %v", err)
+	}
+}
+
+func rimeTestServeReusableWebsocket(t *testing.T, conn net.Conn, connections *atomic.Int32) {
+	t.Helper()
+	defer conn.Close()
+	if err := rimeTestWebsocketHandshake(conn); err != nil {
+		t.Errorf("websocket handshake: %v", err)
+		return
+	}
+	connections.Add(1)
+	for {
+		payload, err := rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode text message: %v", err)
+			return
+		}
+		if message["operation"] == "eos" {
+			return
+		}
+		if _, ok := message["text"]; !ok {
+			t.Errorf("first stream message = %v, want text", message)
+			return
+		}
+		payload, err = rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			t.Errorf("read flush message: %v", err)
+			return
+		}
+		message = map[string]any{}
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode flush message: %v", err)
+			return
+		}
+		if message["operation"] != "flush" {
+			t.Errorf("second stream message = %v, want flush", message)
+			return
+		}
+		chunk, err := json.Marshal(map[string]any{
+			"type": "chunk",
+			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		})
+		if err != nil {
+			t.Errorf("marshal chunk: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, chunk); err != nil {
+			t.Errorf("write chunk message: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+			return
+		}
+	}
+}
+
+func rimeTestReadClientTextFrame(conn net.Conn) ([]byte, error) {
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return nil, err
+	}
+	if header[0]&0x0f == websocket.CloseMessage {
+		return nil, io.EOF
+	}
+	if header[0]&0x0f != websocket.TextMessage {
+		return nil, fmt.Errorf("websocket opcode = %d, want text", header[0]&0x0f)
+	}
+	masked := header[1]&0x80 != 0
+	length := int(header[1] & 0x7f)
+	switch length {
+	case 126:
+		extended := make([]byte, 2)
+		if _, err := io.ReadFull(conn, extended); err != nil {
+			return nil, err
+		}
+		length = int(extended[0])<<8 | int(extended[1])
+	case 127:
+		return nil, errors.New("large websocket test frame unsupported")
+	}
+	if !masked {
+		return nil, errors.New("client websocket frame missing mask")
+	}
+	mask := make([]byte, 4)
+	if _, err := io.ReadFull(conn, mask); err != nil {
+		return nil, err
+	}
+	payload := make([]byte, length)
+	if _, err := io.ReadFull(conn, payload); err != nil {
+		return nil, err
+	}
+	for i := range payload {
+		payload[i] ^= mask[i%4]
+	}
+	return payload, nil
+}
+
+func rimeTestWriteServerTextFrame(conn net.Conn, payload []byte) error {
+	header := []byte{0x80 | byte(websocket.TextMessage)}
+	switch {
+	case len(payload) < 126:
+		header = append(header, byte(len(payload)))
+	case len(payload) <= 65535:
+		header = append(header, 126, byte(len(payload)>>8), byte(len(payload)))
+	default:
+		return errors.New("large websocket test frame unsupported")
+	}
+	if _, err := conn.Write(header); err != nil {
+		return err
+	}
+	_, err := conn.Write(payload)
+	return err
 }
 
 func rimeTestWebsocketHandshake(conn net.Conn) error {
