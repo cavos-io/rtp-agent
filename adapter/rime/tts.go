@@ -626,6 +626,10 @@ func rimeTTSReadBodyError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(err.Error())
 	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
 	return rimeTTSConnectionError("Rime TTS stream read failed", err)
 }
 

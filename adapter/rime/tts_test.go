@@ -616,6 +616,23 @@ func TestRimeTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamNetReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: rimeNetTimeoutReader{}},
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestRimeTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -1543,3 +1560,17 @@ func (rimeTimeoutReader) Read([]byte) (int, error) {
 }
 
 func (rimeTimeoutReader) Close() error { return nil }
+
+type rimeNetTimeoutReader struct{}
+
+func (rimeNetTimeoutReader) Read([]byte) (int, error) {
+	return 0, rimeNetTimeoutError{}
+}
+
+func (rimeNetTimeoutReader) Close() error { return nil }
+
+type rimeNetTimeoutError struct{}
+
+func (rimeNetTimeoutError) Error() string   { return "i/o timeout" }
+func (rimeNetTimeoutError) Timeout() bool   { return true }
+func (rimeNetTimeoutError) Temporary() bool { return true }
