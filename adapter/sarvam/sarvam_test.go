@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -1365,6 +1366,40 @@ func TestSarvamTTSAudioFromStreamMessageDecodesReferenceMP3(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSAudioFromStreamMessageDecodesReferenceWAV(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x02, 0x00}
+	payload, err := json.Marshal(map[string]any{
+		"type": "audio",
+		"data": map[string]any{
+			"audio":      base64.StdEncoding.EncodeToString(sarvamTestWAV(pcm, 48000, 1)),
+			"request_id": "req-wav",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal wav message: %v", err)
+	}
+
+	audio, done, err := sarvamTTSAudioFromStreamMessage(payload, 22050, "wav")
+	if err != nil {
+		t.Fatalf("audio from wav stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for wav audio message")
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatal("audio frame = nil, want decoded wav PCM frame")
+	}
+	if audio.RequestID != "req-wav" {
+		t.Fatalf("request id = %q, want req-wav", audio.RequestID)
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("audio data = %#v, want WAV PCM payload without RIFF header", audio.Frame.Data)
+	}
+	if audio.Frame.SampleRate != 48000 || audio.Frame.NumChannels != 1 || audio.Frame.SamplesPerChannel != 2 {
+		t.Fatalf("frame = %+v, want WAV metadata 48 kHz mono", audio.Frame)
+	}
+}
+
 func TestSarvamTTSAudioFromStreamMessageReturnsTypedErrors(t *testing.T) {
 	_, _, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"error","data":{"message":"bad voice","code":"invalid_voice"}}`), 22050, "mp3")
 	if err == nil {
@@ -1491,6 +1526,27 @@ func sarvamAudioMessageBytes(t *testing.T, message map[string]any) []byte {
 		t.Fatalf("decode audio data: %v", err)
 	}
 	return data
+}
+
+func sarvamTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	byteRate := sampleRate * uint32(channels) * 2
+	blockAlign := channels * 2
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }
 
 func assertSarvamQuery(t *testing.T, query url.Values, key string, want string) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1930,6 +1931,13 @@ func sarvamTTSAudioFrame(data []byte, sampleRate int, requestID string, outputAu
 	if outputAudioCodec == "mp3" {
 		return sarvamTTSDecodeMP3AudioFrame(data, requestID)
 	}
+	if outputAudioCodec == "wav" {
+		frame, err := sarvamTTSDecodeWAVPCM16(data)
+		if err != nil {
+			return nil, err
+		}
+		return &tts.SynthesizedAudio{RequestID: requestID, Frame: frame}, nil
+	}
 	frameData := sarvamTTSDecodeTelephony(outputAudioCodec, data)
 	return &tts.SynthesizedAudio{
 		RequestID: requestID,
@@ -1954,6 +1962,57 @@ func sarvamTTSDecodeMP3AudioFrame(data []byte, requestID string) (*tts.Synthesiz
 		return nil, err
 	}
 	return &tts.SynthesizedAudio{RequestID: requestID, Frame: frame}, nil
+}
+
+func sarvamTTSDecodeWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid sarvam wav data")
+	}
+	var audioFormat uint16
+	var numChannels uint16
+	var sampleRate uint32
+	var bitsPerSample uint16
+	var pcmData []byte
+	for offset := 12; offset+8 <= len(data); {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if chunkSize < 0 || offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid sarvam wav chunk size")
+		}
+		chunk := data[offset : offset+chunkSize]
+		switch chunkID {
+		case "fmt ":
+			if len(chunk) < 16 {
+				return nil, fmt.Errorf("invalid sarvam wav fmt chunk")
+			}
+			audioFormat = binary.LittleEndian.Uint16(chunk[0:2])
+			numChannels = binary.LittleEndian.Uint16(chunk[2:4])
+			sampleRate = binary.LittleEndian.Uint32(chunk[4:8])
+			bitsPerSample = binary.LittleEndian.Uint16(chunk[14:16])
+		case "data":
+			pcmData = append([]byte(nil), chunk...)
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if audioFormat != 1 || bitsPerSample != 16 {
+		return nil, fmt.Errorf("unsupported sarvam wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+	}
+	if sampleRate == 0 || numChannels == 0 {
+		return nil, fmt.Errorf("missing sarvam wav format metadata")
+	}
+	if pcmData == nil {
+		return nil, fmt.Errorf("missing sarvam wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcmData,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(numChannels),
+		SamplesPerChannel: uint32(len(pcmData)) / (uint32(numChannels) * 2),
+	}, nil
 }
 
 func sarvamTTSDecodeTelephony(codec string, data []byte) []byte {
