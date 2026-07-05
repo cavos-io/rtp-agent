@@ -650,6 +650,60 @@ func TestRimeTTSUpdateOptionsKeepsReferenceMaxTokensModelSpecific(t *testing.T) 
 	}
 }
 
+func TestRimeTTSUpdateOptionsKeepsReferenceCommonParamsModelSpecific(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"))
+	if err := provider.UpdateOptions(WithRimeTTSLang("spa"), WithRimeTTSSampleRate(24000)); err != nil {
+		t.Fatalf("UpdateOptions coda common params error = %v", err)
+	}
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build updated coda request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated coda request: %v", err)
+	}
+	assertRimePayload(t, payload, "lang", "spa")
+	if got := payload["samplingRate"]; got != float64(24000) {
+		t.Fatalf("updated coda samplingRate = %#v, want 24000", got)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("arcana")); err != nil {
+		t.Fatalf("UpdateOptions arcana error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build arcana request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode arcana request: %v", err)
+	}
+	if _, ok := payload["lang"]; ok {
+		t.Fatalf("arcana lang = %#v, want omitted stale coda value", payload["lang"])
+	}
+	if _, ok := payload["samplingRate"]; ok {
+		t.Fatalf("arcana samplingRate = %#v, want omitted stale coda value", payload["samplingRate"])
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions back to coda error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build restored coda request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode restored coda request: %v", err)
+	}
+	assertRimePayload(t, payload, "lang", "spa")
+	if got := payload["samplingRate"]; got != float64(24000) {
+		t.Fatalf("restored coda samplingRate = %#v, want 24000", got)
+	}
+}
+
 func TestRimeTTSModelSpecificOptionsMatchReferenceRequests(t *testing.T) {
 	arcana := NewRimeTTS("test-key", "",
 		WithRimeTTSRepetitionPenalty(1.2),

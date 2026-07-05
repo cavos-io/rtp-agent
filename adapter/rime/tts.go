@@ -49,8 +49,11 @@ type RimeTTS struct {
 	voiceSet                 bool
 	lang                     string
 	langSet                  bool
+	langByModel              map[string]rimeStringOption
 	sampleRate               int
 	requestSampleRate        int
+	requestSampleRateSet     bool
+	requestSampleRates       map[string]*int
 	timeScaleFactor          *float64
 	timeScaleFactors         map[string]*float64
 	repetitionPenalty        *float64
@@ -67,8 +70,15 @@ type RimeTTS struct {
 	streamResponseTimeout    time.Duration
 	closed                   bool
 	modelTouched             bool
+	langTouched              bool
+	requestSampleRateTouched bool
 	timeScaleFactorTouched   bool
 	maxTokensTouched         bool
+}
+
+type rimeStringOption struct {
+	value string
+	set   bool
 }
 
 type RimeTTSOption func(*RimeTTS)
@@ -86,6 +96,7 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.model = model
 		t.modelTouched = true
+		t.restoreCommonParamsForModel()
 		t.restoreTimeScaleFactorForModel()
 		t.restoreMaxTokensForModel()
 		if !t.voiceSet && t.voice == "" {
@@ -105,6 +116,8 @@ func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if sampleRate >= 0 {
 			t.requestSampleRate = sampleRate
+			t.requestSampleRateSet = true
+			t.requestSampleRateTouched = true
 		}
 	}
 }
@@ -113,6 +126,7 @@ func WithRimeTTSLang(lang string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.lang = lang
 		t.langSet = true
+		t.langTouched = true
 	}
 }
 
@@ -202,8 +216,11 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		baseURL:               defaultRimeHTTPBaseURL,
 		model:                 defaultRimeModel,
 		lang:                  defaultRimeLang,
+		langByModel:           make(map[string]rimeStringOption),
 		sampleRate:            defaultRimeSampleRate,
 		requestSampleRate:     defaultRimeSampleRate,
+		requestSampleRateSet:  true,
+		requestSampleRates:    make(map[string]*int),
 		timeScaleFactors:      make(map[string]*float64),
 		maxTokensByModel:      make(map[string]*int),
 		segment:               defaultRimeSegment,
@@ -212,6 +229,7 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 	for _, opt := range opts {
 		opt(provider)
 	}
+	provider.storeCommonParamsForModel()
 	provider.storeTouchedMaxTokensForModel()
 	provider.sampleRate = provider.requestSampleRate
 	if strings.HasPrefix(provider.baseURL, "ws://") || strings.HasPrefix(provider.baseURL, "wss://") {
@@ -269,6 +287,89 @@ func (t *RimeTTS) restoreTimeScaleFactorForModel() {
 }
 
 func rimeTimeScaleFactorBucket(model string) string {
+	switch {
+	case model == "arcana":
+		return "arcana"
+	case model == "coda":
+		return "coda"
+	case strings.Contains(model, "mist"):
+		return "mist"
+	default:
+		return ""
+	}
+}
+
+func (t *RimeTTS) storeCommonParamsForModel() {
+	bucket := rimeCommonParamsBucket(t.model)
+	if bucket == "" {
+		return
+	}
+	if t.langByModel == nil {
+		t.langByModel = make(map[string]rimeStringOption)
+	}
+	t.langByModel[bucket] = rimeStringOption{value: t.lang, set: t.langSet || t.lang != ""}
+	if t.requestSampleRates == nil {
+		t.requestSampleRates = make(map[string]*int)
+	}
+	if t.requestSampleRateSet {
+		t.requestSampleRates[bucket] = cloneIntPtr(&t.requestSampleRate)
+	} else {
+		t.requestSampleRates[bucket] = nil
+	}
+}
+
+func (t *RimeTTS) storeTouchedCommonParamsForModel() {
+	if !t.langTouched && !t.requestSampleRateTouched {
+		return
+	}
+	bucket := rimeCommonParamsBucket(t.model)
+	if bucket == "" {
+		return
+	}
+	if t.langTouched {
+		if t.langByModel == nil {
+			t.langByModel = make(map[string]rimeStringOption)
+		}
+		t.langByModel[bucket] = rimeStringOption{value: t.lang, set: true}
+	}
+	if t.requestSampleRateTouched {
+		if t.requestSampleRates == nil {
+			t.requestSampleRates = make(map[string]*int)
+		}
+		t.requestSampleRates[bucket] = cloneIntPtr(&t.requestSampleRate)
+	}
+}
+
+func (t *RimeTTS) restoreCommonParamsForModel() {
+	if !t.langTouched {
+		bucket := rimeCommonParamsBucket(t.model)
+		if bucket == "" {
+			t.lang = ""
+			t.langSet = false
+		} else if opt, ok := t.langByModel[bucket]; ok {
+			t.lang = opt.value
+			t.langSet = opt.set
+		} else {
+			t.lang = ""
+			t.langSet = false
+		}
+	}
+	if !t.requestSampleRateTouched {
+		bucket := rimeCommonParamsBucket(t.model)
+		if bucket == "" {
+			t.requestSampleRate = 0
+			t.requestSampleRateSet = false
+		} else if value, ok := t.requestSampleRates[bucket]; ok && value != nil {
+			t.requestSampleRate = *value
+			t.requestSampleRateSet = true
+		} else {
+			t.requestSampleRate = 0
+			t.requestSampleRateSet = false
+		}
+	}
+}
+
+func rimeCommonParamsBucket(model string) string {
 	switch {
 	case model == "arcana":
 		return "arcana"
@@ -342,6 +443,28 @@ func cloneRimeMaxTokensByModel(src map[string]*int) map[string]*int {
 	return dst
 }
 
+func cloneRimeStringOptions(src map[string]rimeStringOption) map[string]rimeStringOption {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]rimeStringOption, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func cloneRimeIntPtrs(src map[string]*int) map[string]*int {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]*int, len(src))
+	for key, value := range src {
+		dst[key] = cloneIntPtr(value)
+	}
+	return dst
+}
+
 func cloneFloat64Ptr(value *float64) *float64 {
 	if value == nil {
 		return nil
@@ -384,8 +507,11 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		voiceSet:                 t.voiceSet,
 		lang:                     t.lang,
 		langSet:                  t.langSet,
+		langByModel:              cloneRimeStringOptions(t.langByModel),
 		sampleRate:               t.sampleRate,
 		requestSampleRate:        t.requestSampleRate,
+		requestSampleRateSet:     t.requestSampleRateSet,
+		requestSampleRates:       cloneRimeIntPtrs(t.requestSampleRates),
 		timeScaleFactor:          t.timeScaleFactor,
 		timeScaleFactors:         cloneRimeTimeScaleFactors(t.timeScaleFactors),
 		repetitionPenalty:        t.repetitionPenalty,
@@ -406,6 +532,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	for _, opt := range opts {
 		opt(candidate)
 	}
+	candidate.storeTouchedCommonParamsForModel()
 	candidate.storeTouchedMaxTokensForModel()
 	if err := validateRimeTimeScaleFactor(candidate); err != nil {
 		return err
@@ -421,7 +548,10 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.voiceSet = candidate.voiceSet
 	t.lang = candidate.lang
 	t.langSet = candidate.langSet
+	t.langByModel = candidate.langByModel
 	t.requestSampleRate = candidate.requestSampleRate
+	t.requestSampleRateSet = candidate.requestSampleRateSet
+	t.requestSampleRates = candidate.requestSampleRates
 	t.timeScaleFactor = candidate.timeScaleFactor
 	t.timeScaleFactors = candidate.timeScaleFactors
 	t.repetitionPenalty = candidate.repetitionPenalty
@@ -679,7 +809,7 @@ func addRimeCommonModelParams(params map[string]interface{}, t *RimeTTS, include
 	if t.lang != "" || t.langSet {
 		params["lang"] = t.lang
 	}
-	if includeHTTPOnly {
+	if includeHTTPOnly && t.requestSampleRateSet {
 		params["samplingRate"] = t.requestSampleRate
 	}
 	if t.timeScaleFactor != nil {
@@ -892,6 +1022,7 @@ func rimeTTSApplyLazyHTTPOptionUpdates(opts *RimeTTS, provider *RimeTTS) {
 	opts.lang = provider.lang
 	opts.langSet = provider.langSet
 	opts.requestSampleRate = provider.requestSampleRate
+	opts.requestSampleRateSet = provider.requestSampleRateSet
 	opts.timeScaleFactor = provider.timeScaleFactor
 
 	switch {
