@@ -342,14 +342,9 @@ func buildRimeTTSRequest(ctx context.Context, t *RimeTTS, text string) (*http.Re
 		return nil, err
 	}
 	reqBody := map[string]interface{}{
-		"speaker":      t.voice,
-		"text":         text,
-		"modelId":      t.model,
-		"lang":         t.lang,
-		"samplingRate": t.requestSampleRate,
-	}
-	if t.timeScaleFactor != nil {
-		reqBody["timeScaleFactor"] = *t.timeScaleFactor
+		"speaker": t.voice,
+		"text":    text,
+		"modelId": t.model,
 	}
 	addRimeModelParams(reqBody, t, true)
 
@@ -500,12 +495,6 @@ func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
 	query.Set("audioFormat", "pcm")
 	query.Set("samplingRate", strconv.Itoa(t.sampleRate))
 	query.Set("segment", t.segment)
-	if t.lang != "" || t.langSet {
-		query.Set("lang", t.lang)
-	}
-	if t.timeScaleFactor != nil {
-		query.Set("timeScaleFactor", strconv.FormatFloat(*t.timeScaleFactor, 'f', -1, 64))
-	}
 	addRimeModelQueryParams(query, t)
 	wsURL.RawQuery = query.Encode()
 	return wsURL
@@ -514,6 +503,7 @@ func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
 func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOnly bool) {
 	switch {
 	case t.model == "arcana":
+		addRimeCommonModelParams(params, t, includeHTTPOnly)
 		if t.repetitionPenalty != nil {
 			params["repetition_penalty"] = *t.repetitionPenalty
 		}
@@ -527,10 +517,12 @@ func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOn
 			params["max_tokens"] = *t.maxTokens
 		}
 	case t.model == "coda":
+		addRimeCommonModelParams(params, t, includeHTTPOnly)
 		if t.maxTokens != nil {
 			params["max_tokens"] = *t.maxTokens
 		}
 	case strings.Contains(t.model, "mist"):
+		addRimeCommonModelParams(params, t, includeHTTPOnly)
 		if t.speedAlpha != nil {
 			params["speedAlpha"] = *t.speedAlpha
 		}
@@ -543,6 +535,18 @@ func addRimeModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOn
 		if includeHTTPOnly && t.model == "mistv2" && t.reduceLatency != nil {
 			params["reduceLatency"] = *t.reduceLatency
 		}
+	}
+}
+
+func addRimeCommonModelParams(params map[string]interface{}, t *RimeTTS, includeHTTPOnly bool) {
+	if t.lang != "" || t.langSet {
+		params["lang"] = t.lang
+	}
+	if includeHTTPOnly {
+		params["samplingRate"] = t.requestSampleRate
+	}
+	if t.timeScaleFactor != nil {
+		params["timeScaleFactor"] = *t.timeScaleFactor
 	}
 }
 

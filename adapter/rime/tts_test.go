@@ -496,6 +496,12 @@ func TestRimeTTSModelOptionsAllowReferenceEmptyValue(t *testing.T) {
 	}
 	assertRimePayload(t, payload, "modelId", "")
 	assertRimePayload(t, payload, "speaker", "astra")
+	if _, ok := payload["lang"]; ok {
+		t.Fatalf("empty model lang = %#v, want omitted like reference", payload["lang"])
+	}
+	if _, ok := payload["samplingRate"]; ok {
+		t.Fatalf("empty model samplingRate = %#v, want omitted like reference", payload["samplingRate"])
+	}
 
 	updatable := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"))
 	if err := updatable.UpdateOptions(WithRimeTTSModel("")); err != nil {
@@ -505,8 +511,12 @@ func TestRimeTTSModelOptionsAllowReferenceEmptyValue(t *testing.T) {
 		t.Fatalf("updated model = %q, want explicit empty value", updatable.Model())
 	}
 	u := buildRimeTTSWebsocketURL(updatable)
-	assertRimePayload(t, queryMap(u.Query()), "modelId", "")
-	assertRimePayload(t, queryMap(u.Query()), "speaker", "lyra")
+	query := queryMap(u.Query())
+	assertRimePayload(t, query, "modelId", "")
+	assertRimePayload(t, query, "speaker", "lyra")
+	if _, ok := query["lang"]; ok {
+		t.Fatalf("empty model websocket lang = %#v, want omitted like reference", query["lang"])
+	}
 }
 
 func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
