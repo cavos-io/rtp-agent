@@ -37,6 +37,7 @@ const (
 	defaultRimeStreamTimeout = 10 * time.Second
 	rimeArcanaModelTimeout   = 240 * time.Second
 	rimeMistModelTimeout     = 30 * time.Second
+	rimeWebsocketMaxAge      = 300 * time.Second
 )
 
 type RimeTTS struct {
@@ -44,6 +45,7 @@ type RimeTTS struct {
 	streams                  map[*rimeTTSSynthesizeStream]struct{}
 	prewarmConn              *websocket.Conn
 	prewarmURL               string
+	prewarmRefreshedAt       time.Time
 	prewarmInFlight          bool
 	apiKey                   string
 	baseURL                  string
@@ -675,6 +677,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		stalePrewarm = t.prewarmConn
 		t.prewarmConn = nil
 		t.prewarmURL = ""
+		t.prewarmRefreshedAt = time.Time{}
 	}
 	t.apiKey = candidate.apiKey
 	t.baseURL = candidate.baseURL
@@ -850,6 +853,7 @@ func (t *RimeTTS) Prewarm() {
 		} else {
 			t.prewarmConn = conn
 			t.prewarmURL = prewarmURL
+			t.prewarmRefreshedAt = time.Now()
 		}
 		t.mu.Unlock()
 		if closeConn != nil {
@@ -864,15 +868,18 @@ func (t *RimeTTS) takePrewarmedConn() *websocket.Conn {
 	}
 	t.mu.Lock()
 	conn := t.prewarmConn
-	if conn != nil && t.prewarmURL != buildRimeTTSWebsocketURL(t).String() {
+	expired := conn != nil && time.Since(t.prewarmRefreshedAt) > rimeWebsocketMaxAge
+	if conn != nil && (expired || t.prewarmURL != buildRimeTTSWebsocketURL(t).String()) {
 		t.prewarmConn = nil
 		t.prewarmURL = ""
+		t.prewarmRefreshedAt = time.Time{}
 		t.mu.Unlock()
 		_ = closeRimePrewarmedConn(conn)
 		return nil
 	}
 	t.prewarmConn = nil
 	t.prewarmURL = ""
+	t.prewarmRefreshedAt = time.Time{}
 	t.mu.Unlock()
 	return conn
 }
@@ -890,6 +897,7 @@ func (t *RimeTTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string) 
 	}
 	t.prewarmConn = conn
 	t.prewarmURL = websocketURL
+	t.prewarmRefreshedAt = time.Now()
 	t.mu.Unlock()
 }
 
@@ -919,6 +927,7 @@ func (t *RimeTTS) Close() error {
 	prewarmConn := t.prewarmConn
 	t.prewarmConn = nil
 	t.prewarmURL = ""
+	t.prewarmRefreshedAt = time.Time{}
 	streams := make([]*rimeTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
