@@ -165,30 +165,10 @@ func (t *SimplismartTTS) Synthesize(ctx context.Context, text string) (tts.Chunk
 		return nil, fmt.Errorf("%s is not set", simplismartAPIKeyEnv)
 	}
 
-	req, err := buildSimplismartTTSRequest(ctx, t, text)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Simplismart TTS request failed: %v", err))
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("Simplismart TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	return &simplismartTTSChunkedStream{
-		resp:       resp,
+		ctx:        ctx,
+		provider:   t,
+		text:       text,
 		sampleRate: t.sampleRate,
 	}, nil
 }
@@ -255,6 +235,9 @@ func isSimplismartQwenModel(model string) bool {
 }
 
 type simplismartTTSChunkedStream struct {
+	ctx          context.Context
+	provider     *SimplismartTTS
+	text         string
 	resp         *http.Response
 	sampleRate   int
 	pendingFinal bool
@@ -264,6 +247,12 @@ type simplismartTTSChunkedStream struct {
 
 func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
@@ -301,6 +290,33 @@ func (s *simplismartTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}, nil
 }
 
+func (s *simplismartTTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.provider == nil {
+		return nil
+	}
+	req, err := buildSimplismartTTSRequest(s.ctx, s.provider, s.text)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("Simplismart TTS request failed: %v", err))
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("Simplismart TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *simplismartTTSChunkedStream) emitFinal() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -315,5 +331,8 @@ func (s *simplismartTTSChunkedStream) Close() error {
 	}
 	s.closed = true
 	s.finalSent = true
+	if s.resp == nil || s.resp.Body == nil {
+		return nil
+	}
 	return s.resp.Body.Close()
 }
