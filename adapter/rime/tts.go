@@ -699,7 +699,7 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 		return rimeTTSConnectionError("Rime TTS request failed", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
