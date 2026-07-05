@@ -46,7 +46,9 @@ type RimeTTS struct {
 	baseURL                  string
 	model                    string
 	voice                    string
+	voiceSet                 bool
 	lang                     string
+	langSet                  bool
 	sampleRate               int
 	requestSampleRate        int
 	timeScaleFactor          *float64
@@ -68,37 +70,32 @@ type RimeTTSOption func(*RimeTTS)
 
 func WithRimeTTSBaseURL(baseURL string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if baseURL != "" {
-			t.baseURL = strings.TrimRight(baseURL, "/")
-			if strings.HasPrefix(baseURL, "ws://") || strings.HasPrefix(baseURL, "wss://") {
-				t.useWebsocket = true
-			}
+		t.baseURL = baseURL
+		if strings.HasPrefix(baseURL, "ws://") || strings.HasPrefix(baseURL, "wss://") {
+			t.useWebsocket = true
 		}
 	}
 }
 
 func WithRimeTTSModel(model string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if model != "" {
-			t.model = model
-			if t.voice == "" {
-				t.voice = defaultRimeVoice(model)
-			}
+		t.model = model
+		if !t.voiceSet && t.voice == "" {
+			t.voice = defaultRimeVoice(model)
 		}
 	}
 }
 
 func WithRimeTTSVoice(voice string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if voice != "" {
-			t.voice = voice
-		}
+		t.voice = voice
+		t.voiceSet = true
 	}
 }
 
 func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			t.requestSampleRate = sampleRate
 		}
 	}
@@ -106,9 +103,8 @@ func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 
 func WithRimeTTSLang(lang string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if lang != "" {
-			t.lang = lang
-		}
+		t.lang = lang
+		t.langSet = true
 	}
 }
 
@@ -174,9 +170,7 @@ func WithRimeTTSWebsocket(useWebsocket bool) RimeTTSOption {
 
 func WithRimeTTSSegment(segment string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if segment != "" {
-			t.segment = segment
-		}
+		t.segment = segment
 	}
 }
 
@@ -206,11 +200,18 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		opt(provider)
 	}
 	provider.sampleRate = provider.requestSampleRate
-	normalizeRimeTransportBaseURL(provider)
-	if voice == "" {
-		voice = defaultRimeVoice(provider.model)
+	if strings.HasPrefix(provider.baseURL, "ws://") || strings.HasPrefix(provider.baseURL, "wss://") {
+		provider.useWebsocket = true
 	}
-	provider.voice = voice
+	normalizeRimeTransportBaseURL(provider)
+	if voice != "" {
+		provider.voice = voice
+		provider.voiceSet = true
+	}
+	if !provider.voiceSet && provider.voice == "" {
+		voice = defaultRimeVoice(provider.model)
+		provider.voice = voice
+	}
 	return provider
 }
 
@@ -248,7 +249,9 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		baseURL:                  t.baseURL,
 		model:                    t.model,
 		voice:                    t.voice,
+		voiceSet:                 t.voiceSet,
 		lang:                     t.lang,
+		langSet:                  t.langSet,
 		sampleRate:               t.sampleRate,
 		requestSampleRate:        t.requestSampleRate,
 		timeScaleFactor:          t.timeScaleFactor,
@@ -280,7 +283,9 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.baseURL = candidate.baseURL
 	t.model = candidate.model
 	t.voice = candidate.voice
+	t.voiceSet = candidate.voiceSet
 	t.lang = candidate.lang
+	t.langSet = candidate.langSet
 	t.requestSampleRate = candidate.requestSampleRate
 	t.timeScaleFactor = candidate.timeScaleFactor
 	t.repetitionPenalty = candidate.repetitionPenalty
@@ -485,7 +490,7 @@ func validateRimeTimeScaleFactor(t *RimeTTS) error {
 }
 
 func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
-	wsURL, err := url.Parse(strings.TrimRight(t.baseURL, "/") + "/ws3")
+	wsURL, err := url.Parse(t.baseURL + "/ws3")
 	if err != nil {
 		wsURL = &url.URL{Scheme: "wss", Host: strings.TrimPrefix(t.baseURL, "wss://"), Path: "/ws3"}
 	}
@@ -495,7 +500,7 @@ func buildRimeTTSWebsocketURL(t *RimeTTS) *url.URL {
 	query.Set("audioFormat", "pcm")
 	query.Set("samplingRate", strconv.Itoa(t.sampleRate))
 	query.Set("segment", t.segment)
-	if t.lang != "" {
+	if t.lang != "" || t.langSet {
 		query.Set("lang", t.lang)
 	}
 	if t.timeScaleFactor != nil {
@@ -710,6 +715,7 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	if s.provider != nil {
 		s.provider.mu.Lock()
 		s.opts.baseURL = s.provider.baseURL
+		rimeTTSApplyLazyHTTPOptionUpdates(&s.opts, s.provider)
 		timeout := rimeTTSTotalTimeout(s.provider.model)
 		s.provider.mu.Unlock()
 		requestCtx, cancel := context.WithTimeout(s.ctx, timeout)
@@ -717,6 +723,31 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	}
 	requestCtx, cancel := context.WithTimeout(s.ctx, rimeTTSTotalTimeout(s.opts.model))
 	return s.openResponse(requestCtx, cancel)
+}
+
+func rimeTTSApplyLazyHTTPOptionUpdates(opts *RimeTTS, provider *RimeTTS) {
+	if opts == nil || provider == nil || opts.model != provider.model {
+		return
+	}
+	opts.lang = provider.lang
+	opts.langSet = provider.langSet
+	opts.requestSampleRate = provider.requestSampleRate
+	opts.timeScaleFactor = provider.timeScaleFactor
+
+	switch {
+	case opts.model == "arcana":
+		opts.repetitionPenalty = provider.repetitionPenalty
+		opts.temperature = provider.temperature
+		opts.topP = provider.topP
+		opts.maxTokens = provider.maxTokens
+	case opts.model == "coda":
+		opts.maxTokens = provider.maxTokens
+	case strings.Contains(opts.model, "mist"):
+		opts.speedAlpha = provider.speedAlpha
+		opts.reduceLatency = provider.reduceLatency
+		opts.pauseBetweenBrackets = provider.pauseBetweenBrackets
+		opts.phonemizeBetweenBrackets = provider.phonemizeBetweenBrackets
+	}
 }
 
 func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel context.CancelFunc) error {
@@ -741,10 +772,13 @@ func (s *rimeTTSChunkedStream) openResponse(requestCtx context.Context, cancel c
 			cancel()
 			return nil
 		}
-		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		cancel()
-		return llm.NewAPIStatusError("Rime TTS request failed", resp.StatusCode, "", string(respBody))
+		message := http.StatusText(resp.StatusCode)
+		if message == "" {
+			message = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return llm.NewAPIStatusError(message, resp.StatusCode, "", nil)
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
 		resp.Body.Close()
@@ -1078,7 +1112,7 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if !s.isClosed() {
-				s.errCh <- rimeTTSReadError(err)
+				s.errCh <- rimeTTSReadErrorWithRequestID(err, s.requestID)
 			}
 			return
 		}
@@ -1151,6 +1185,10 @@ func (s *rimeTTSSynthesizeStream) annotateAudio(audio *tts.SynthesizedAudio) {
 }
 
 func rimeTTSReadError(err error) error {
+	return rimeTTSReadErrorWithRequestID(err, "")
+}
+
+func rimeTTSReadErrorWithRequestID(err error, requestID string) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(err.Error())
 	}
@@ -1160,7 +1198,7 @@ func rimeTTSReadError(err error) error {
 	}
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("Rime ws closed unexpectedly", closeErr.Code, "", err.Error())
+		return llm.NewAPIStatusError("Rime ws closed unexpectedly", 0, requestID, nil)
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Rime WS error: %v", err))
 }
@@ -1205,7 +1243,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		return &tts.SynthesizedAudio{IsFinal: true}, true, "", nil
 	case "error":
 		if message.Message == "" {
-			message.Message = string(payload)
+			message.Message = "(no message)"
 		}
 		return nil, false, "", llm.NewAPIError("Rime ws error: "+message.Message, nil, true)
 	default:

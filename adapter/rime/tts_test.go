@@ -155,8 +155,11 @@ func TestRimeTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	if statusErr.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
 	}
-	if body, ok := statusErr.Body.(string); !ok || body != `{"error":"rate limited"}` {
-		t.Fatalf("body = %#v, want provider response body", statusErr.Body)
+	if statusErr.Message != "Too Many Requests" {
+		t.Fatalf("message = %q, want reference reason phrase", statusErr.Message)
+	}
+	if statusErr.Body != nil {
+		t.Fatalf("body = %#v, want nil like reference ClientResponseError", statusErr.Body)
 	}
 }
 
@@ -254,6 +257,27 @@ func TestRimeTTSOptionsMatchReferenceModels(t *testing.T) {
 	if got := payload["timeScaleFactor"]; got != 1.1 {
 		t.Fatalf("timeScaleFactor = %#v, want 1.1", got)
 	}
+
+	customVoice := NewRimeTTS("test-key", "", WithRimeTTSVoice("ember"))
+	req, err = buildRimeTTSRequest(context.Background(), customVoice, "hello")
+	if err != nil {
+		t.Fatalf("build custom voice request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode custom voice body: %v", err)
+	}
+	assertRimePayload(t, payload, "speaker", "ember")
+
+	emptyVoice := NewRimeTTS("test-key", "", WithRimeTTSVoice(""))
+	req, err = buildRimeTTSRequest(context.Background(), emptyVoice, "hello")
+	if err != nil {
+		t.Fatalf("build empty voice request: %v", err)
+	}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode empty voice body: %v", err)
+	}
+	assertRimePayload(t, payload, "speaker", "")
 }
 
 func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
@@ -302,6 +326,79 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSegmentOptionsAllowReferenceEmptyValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSSegment(""),
+	)
+	query := buildRimeTTSWebsocketURL(provider).Query()
+	if got, ok := query["segment"]; !ok || len(got) != 1 || got[0] != "" {
+		t.Fatalf("constructor segment query = %#v, want explicit empty value", query["segment"])
+	}
+
+	updatable := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSSegment("immediate"),
+	)
+	if err := updatable.UpdateOptions(WithRimeTTSSegment("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	query = buildRimeTTSWebsocketURL(updatable).Query()
+	if got, ok := query["segment"]; !ok || len(got) != 1 || got[0] != "" {
+		t.Fatalf("updated segment query = %#v, want explicit empty value", query["segment"])
+	}
+}
+
+func TestRimeTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
+	provider := NewRimeTTS("test-key", "")
+
+	if err := provider.UpdateOptions(WithRimeTTSVoice("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertRimePayload(t, payload, "speaker", "")
+}
+
+func TestRimeTTSLanguageOptionsAllowReferenceEmptyValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSLang(""))
+
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build constructor request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode constructor body: %v", err)
+	}
+	assertRimePayload(t, payload, "lang", "")
+
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSLang(""))
+	query := buildRimeTTSWebsocketURL(streaming).Query()
+	if got, ok := query["lang"]; !ok || len(got) != 1 || got[0] != "" {
+		t.Fatalf("constructor websocket lang query = %#v, want explicit empty value", query["lang"])
+	}
+
+	updatable := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSLang("spa"),
+	)
+	if err := updatable.UpdateOptions(WithRimeTTSLang("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	query = buildRimeTTSWebsocketURL(updatable).Query()
+	if got, ok := query["lang"]; !ok || len(got) != 1 || got[0] != "" {
+		t.Fatalf("updated websocket lang query = %#v, want explicit empty value", query["lang"])
+	}
+}
+
 func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 	if provider.Capabilities().Streaming {
@@ -318,6 +415,98 @@ func TestRimeTTSUpdateOptionsPreservesReferenceTransportMode(t *testing.T) {
 	if _, err := provider.Synthesize(context.Background(), "hello"); err != nil {
 		t.Fatalf("Synthesize after websocket-looking base URL update error = %v", err)
 	}
+}
+
+func TestRimeTTSBaseURLOptionsAllowReferenceEmptyValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSBaseURL(""))
+	if provider.baseURL != "" {
+		t.Fatalf("constructor base URL = %q, want explicit empty value", provider.baseURL)
+	}
+	if provider.Capabilities().Streaming {
+		t.Fatal("constructor streaming = true, want false for empty HTTP base URL")
+	}
+
+	streaming := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL(""),
+	)
+	if streaming.baseURL != "" {
+		t.Fatalf("constructor websocket base URL = %q, want explicit empty value", streaming.baseURL)
+	}
+	u := buildRimeTTSWebsocketURL(streaming)
+	if got := u.Scheme + "://" + u.Host + u.Path; got != ":///ws3" {
+		t.Fatalf("constructor websocket URL base = %q, want empty reference base plus /ws3", got)
+	}
+
+	updatable := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/old"))
+	if err := updatable.UpdateOptions(WithRimeTTSBaseURL("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if updatable.baseURL != "" {
+		t.Fatalf("updated base URL = %q, want explicit empty value", updatable.baseURL)
+	}
+	if updatable.Capabilities().Streaming {
+		t.Fatal("updated streaming = true, want transport mode unchanged")
+	}
+}
+
+func TestRimeTTSBaseURLOptionsPreserveReferenceTrailingSlash(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/"))
+	if provider.baseURL != "https://rime.example/" {
+		t.Fatalf("constructor base URL = %q, want trailing slash preserved", provider.baseURL)
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.String() != "https://rime.example/" {
+		t.Fatalf("request URL = %q, want trailing slash preserved", req.URL.String())
+	}
+
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("wss://rime.example/"))
+	if !streaming.Capabilities().Streaming {
+		t.Fatal("streaming = false, want websocket inferred from base URL")
+	}
+	u := buildRimeTTSWebsocketURL(streaming)
+	if got := u.Scheme + "://" + u.Host + u.Path; got != "wss://rime.example//ws3" {
+		t.Fatalf("websocket URL base = %q, want trailing slash preserved before /ws3", got)
+	}
+
+	updatable := NewRimeTTS("test-key", "", WithRimeTTSBaseURL("https://rime.example/old"))
+	if err := updatable.UpdateOptions(WithRimeTTSBaseURL("https://rime.example/new/")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if updatable.baseURL != "https://rime.example/new/" {
+		t.Fatalf("updated base URL = %q, want trailing slash preserved", updatable.baseURL)
+	}
+}
+
+func TestRimeTTSModelOptionsAllowReferenceEmptyValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel(""))
+	if provider.Model() != "" {
+		t.Fatalf("constructor model = %q, want explicit empty value", provider.Model())
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	assertRimePayload(t, payload, "modelId", "")
+	assertRimePayload(t, payload, "speaker", "astra")
+
+	updatable := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"))
+	if err := updatable.UpdateOptions(WithRimeTTSModel("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if updatable.Model() != "" {
+		t.Fatalf("updated model = %q, want explicit empty value", updatable.Model())
+	}
+	u := buildRimeTTSWebsocketURL(updatable)
+	assertRimePayload(t, queryMap(u.Query()), "modelId", "")
+	assertRimePayload(t, queryMap(u.Query()), "speaker", "lyra")
 }
 
 func TestRimeTTSUpdateOptionsIgnoresReferenceTransportChanges(t *testing.T) {
@@ -460,6 +649,47 @@ func TestRimeTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 	if audio.Frame.SampleRate != 24000 {
 		t.Fatalf("sample rate = %d, want 24000", audio.Frame.SampleRate)
+	}
+}
+
+func TestRimeTTSSampleRateOptionsAllowReferenceZeroValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSampleRate(0))
+
+	if provider.SampleRate() != 0 {
+		t.Fatalf("sample rate = %d, want explicit zero like reference", provider.SampleRate())
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build constructor request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode constructor body: %v", err)
+	}
+	if got := payload["samplingRate"]; got != float64(0) {
+		t.Fatalf("constructor samplingRate = %#v, want 0", got)
+	}
+
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSSampleRate(0))
+	query := buildRimeTTSWebsocketURL(streaming).Query()
+	assertRimePayload(t, queryMap(query), "samplingRate", "0")
+
+	updatable := NewRimeTTS("test-key", "")
+	if err := updatable.UpdateOptions(WithRimeTTSSampleRate(0)); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), updatable, "hello")
+	if err != nil {
+		t.Fatalf("build updated request: %v", err)
+	}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated body: %v", err)
+	}
+	if got := payload["samplingRate"]; got != float64(0) {
+		t.Fatalf("updated samplingRate = %#v, want 0", got)
+	}
+	if updatable.SampleRate() != defaultRimeSampleRate {
+		t.Fatalf("updated output sample rate = %d, want constructor sample rate unchanged", updatable.SampleRate())
 	}
 }
 
@@ -703,6 +933,58 @@ func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceBaseURL(t *testing.T) {
 	}
 	if requestedURL != "https://rime.example/new" {
 		t.Fatalf("request URL = %q, want updated reference base URL", requestedURL)
+	}
+}
+
+func TestRimeTTSSynthesizeLazyRequestUsesUpdatedReferenceModelOptions(t *testing.T) {
+	var payload map[string]any
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"audio/pcm"}},
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSModel("coda"),
+		WithRimeTTSBaseURL("https://rime.example/v1/rime-tts"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize() error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := provider.UpdateOptions(
+		WithRimeTTSLang("spa"),
+		WithRimeTTSSampleRate(24000),
+		WithRimeTTSTimeScaleFactor(1.2),
+		WithRimeTTSMaxTokens(64),
+	); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+
+	assertRimePayload(t, payload, "modelId", "coda")
+	assertRimePayload(t, payload, "speaker", "lyra")
+	assertRimePayload(t, payload, "lang", "spa")
+	if got := payload["samplingRate"]; got != float64(24000) {
+		t.Fatalf("samplingRate = %#v, want updated reference value 24000", got)
+	}
+	if got := payload["timeScaleFactor"]; got != 1.2 {
+		t.Fatalf("timeScaleFactor = %#v, want updated reference value 1.2", got)
+	}
+	if got := payload["max_tokens"]; got != float64(64) {
+		t.Fatalf("max_tokens = %#v, want updated reference value 64", got)
 	}
 }
 
@@ -1083,6 +1365,15 @@ func TestRimeTTSInfersWebsocketModeFromBaseURL(t *testing.T) {
 
 	if !provider.Capabilities().Streaming {
 		t.Fatal("streaming = false, want true for ws base URL")
+	}
+
+	provider = NewRimeTTS("test-key", "",
+		WithRimeTTSBaseURL("wss://rime.example"),
+		WithRimeTTSWebsocket(false),
+	)
+
+	if !provider.Capabilities().Streaming {
+		t.Fatal("streaming = false after explicit false option, want ws base URL to match reference")
 	}
 }
 
@@ -1906,10 +2197,11 @@ func TestRimeTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 	defer conn.Close()
 
 	stream := &rimeTTSSynthesizeStream{
-		provider: NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
-		conn:     conn,
-		events:   make(chan *tts.SynthesizedAudio, 1),
-		errCh:    make(chan error, 1),
+		provider:  NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
+		conn:      conn,
+		requestID: "req-close",
+		events:    make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
 	}
 	go stream.readLoop()
 
@@ -1919,8 +2211,14 @@ func TestRimeTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 		if !errors.As(err, &statusErr) {
 			t.Fatalf("readLoop error = %T %v, want APIStatusError", err, err)
 		}
-		if statusErr.StatusCode != websocket.CloseUnsupportedData {
-			t.Fatalf("StatusCode = %d, want close code", statusErr.StatusCode)
+		if statusErr.StatusCode != 0 {
+			t.Fatalf("StatusCode = %d, want unset like reference", statusErr.StatusCode)
+		}
+		if statusErr.Body != nil {
+			t.Fatalf("Body = %#v, want nil like reference", statusErr.Body)
+		}
+		if statusErr.RequestID != "req-close" {
+			t.Fatalf("RequestID = %q, want stream request ID", statusErr.RequestID)
 		}
 		if !strings.Contains(err.Error(), "Rime ws closed unexpectedly") {
 			t.Fatalf("readLoop error = %q, want Rime close context", err)
@@ -1954,10 +2252,11 @@ func TestRimeTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 	defer conn.Close()
 
 	stream := &rimeTTSSynthesizeStream{
-		provider: NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
-		conn:     conn,
-		events:   make(chan *tts.SynthesizedAudio, 1),
-		errCh:    make(chan error, 1),
+		provider:  NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
+		conn:      conn,
+		requestID: "req-normal-close",
+		events:    make(chan *tts.SynthesizedAudio, 1),
+		errCh:     make(chan error, 1),
 	}
 	go stream.readLoop()
 
@@ -1967,8 +2266,14 @@ func TestRimeTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 		if !errors.As(err, &statusErr) {
 			t.Fatalf("readLoop error = %T %v, want APIStatusError", err, err)
 		}
-		if statusErr.StatusCode != websocket.CloseNormalClosure {
-			t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
+		if statusErr.StatusCode != 0 {
+			t.Fatalf("StatusCode = %d, want unset like reference", statusErr.StatusCode)
+		}
+		if statusErr.Body != nil {
+			t.Fatalf("Body = %#v, want nil like reference", statusErr.Body)
+		}
+		if statusErr.RequestID != "req-normal-close" {
+			t.Fatalf("RequestID = %q, want stream request ID", statusErr.RequestID)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for normal websocket close error")
@@ -2091,6 +2396,12 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 		if apiErr.Message != "Rime ws error: bad text" {
 			t.Fatalf("APIError message = %q, want reference message", apiErr.Message)
 		}
+	}
+
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error"}`), 24000); err == nil {
+		t.Fatal("empty error message returned nil error, want stream error")
+	} else if err.Error() != "Rime ws error: (no message)" {
+		t.Fatalf("empty error message = %q, want reference fallback", err)
 	}
 }
 
