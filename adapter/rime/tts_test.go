@@ -1919,8 +1919,11 @@ func TestRimeTTSStreamUnexpectedCloseReturnsAPIStatusError(t *testing.T) {
 		if !errors.As(err, &statusErr) {
 			t.Fatalf("readLoop error = %T %v, want APIStatusError", err, err)
 		}
-		if statusErr.StatusCode != websocket.CloseUnsupportedData {
-			t.Fatalf("StatusCode = %d, want close code", statusErr.StatusCode)
+		if statusErr.StatusCode != 0 {
+			t.Fatalf("StatusCode = %d, want unset like reference", statusErr.StatusCode)
+		}
+		if statusErr.Body != nil {
+			t.Fatalf("Body = %#v, want nil like reference", statusErr.Body)
 		}
 		if !strings.Contains(err.Error(), "Rime ws closed unexpectedly") {
 			t.Fatalf("readLoop error = %q, want Rime close context", err)
@@ -1967,8 +1970,11 @@ func TestRimeTTSStreamNormalCloseBeforeDoneReturnsAPIStatusError(t *testing.T) {
 		if !errors.As(err, &statusErr) {
 			t.Fatalf("readLoop error = %T %v, want APIStatusError", err, err)
 		}
-		if statusErr.StatusCode != websocket.CloseNormalClosure {
-			t.Fatalf("StatusCode = %d, want normal close code", statusErr.StatusCode)
+		if statusErr.StatusCode != 0 {
+			t.Fatalf("StatusCode = %d, want unset like reference", statusErr.StatusCode)
+		}
+		if statusErr.Body != nil {
+			t.Fatalf("Body = %#v, want nil like reference", statusErr.Body)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for normal websocket close error")

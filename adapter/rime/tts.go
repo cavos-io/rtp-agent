@@ -1160,7 +1160,7 @@ func rimeTTSReadError(err error) error {
 	}
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return llm.NewAPIStatusError("Rime ws closed unexpectedly", closeErr.Code, "", err.Error())
+		return llm.NewAPIStatusError("Rime ws closed unexpectedly", 0, "", nil)
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Rime WS error: %v", err))
 }
