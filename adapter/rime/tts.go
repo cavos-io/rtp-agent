@@ -174,9 +174,7 @@ func WithRimeTTSWebsocket(useWebsocket bool) RimeTTSOption {
 
 func WithRimeTTSSegment(segment string) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if segment != "" {
-			t.segment = segment
-		}
+		t.segment = segment
 	}
 }
 

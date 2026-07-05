@@ -326,6 +326,29 @@ func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSegmentOptionsAllowReferenceEmptyValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSSegment(""),
+	)
+	query := buildRimeTTSWebsocketURL(provider).Query()
+	if got, ok := query["segment"]; !ok || len(got) != 1 || got[0] != "" {
+		t.Fatalf("constructor segment query = %#v, want explicit empty value", query["segment"])
+	}
+
+	updatable := NewRimeTTS("test-key", "",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSSegment("immediate"),
+	)
+	if err := updatable.UpdateOptions(WithRimeTTSSegment("")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	query = buildRimeTTSWebsocketURL(updatable).Query()
+	if got, ok := query["segment"]; !ok || len(got) != 1 || got[0] != "" {
+		t.Fatalf("updated segment query = %#v, want explicit empty value", query["segment"])
+	}
+}
+
 func TestRimeTTSUpdateOptionsAllowsReferenceEmptyVoice(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 
