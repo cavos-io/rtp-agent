@@ -57,36 +57,10 @@ func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 		return nil, fmt.Errorf("API key is required, either as argument or set UPLIFTAI_API_KEY environment variable")
 	}
 
-	url := "https://api.upliftai.org/v1/tts"
-
-	reqBody := map[string]interface{}{
-		"text":  text,
-		"voice": t.voice,
-	}
-
-	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonBody))
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+t.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, llm.NewAPIStatusError("UpliftAI TTS request failed", resp.StatusCode, "", string(respBody))
-	}
-
 	stream := &upliftAITTSChunkedStream{
 		owner: t,
-		resp:  resp,
+		ctx:   ctx,
+		text:  text,
 	}
 	if !t.registerStream(stream) {
 		_ = stream.Close()
@@ -149,6 +123,8 @@ func (t *UpliftAITTS) unregisterStream(stream *upliftAITTSChunkedStream) {
 
 type upliftAITTSChunkedStream struct {
 	owner        *UpliftAITTS
+	ctx          context.Context
+	text         string
 	resp         *http.Response
 	once         sync.Once
 	err          error
@@ -159,6 +135,12 @@ type upliftAITTSChunkedStream struct {
 
 func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.closed || s.finalSent {
+		return nil, io.EOF
+	}
+	if err := s.ensureResponse(); err != nil {
+		return nil, err
+	}
+	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
 	if s.pendingFinal {
@@ -195,13 +177,43 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 }
 
+func (s *upliftAITTSChunkedStream) ensureResponse() error {
+	if s.resp != nil || s.owner == nil {
+		return nil
+	}
+	reqBody := map[string]interface{}{
+		"text":  s.text,
+		"voice": s.owner.voice,
+	}
+	jsonBody, _ := json.Marshal(reqBody)
+	req, err := http.NewRequestWithContext(s.ctx, "POST", "https://api.upliftai.org/v1/tts", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+s.owner.apiKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return llm.NewAPIStatusError("UpliftAI TTS request failed", resp.StatusCode, "", string(respBody))
+	}
+	s.resp = resp
+	return nil
+}
+
 func (s *upliftAITTSChunkedStream) Close() error {
 	s.once.Do(func() {
 		s.closed = true
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}
-		s.err = s.resp.Body.Close()
+		if s.resp != nil && s.resp.Body != nil {
+			s.err = s.resp.Body.Close()
+		}
 	})
 	return s.err
 }
