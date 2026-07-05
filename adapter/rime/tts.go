@@ -1259,6 +1259,10 @@ func (s *rimeTTSChunkedStream) noAudioError() error {
 }
 
 func (s *rimeTTSChunkedStream) closeResponseBody() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		return
 	}

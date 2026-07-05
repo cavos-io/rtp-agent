@@ -1814,6 +1814,37 @@ func TestRimeTTSChunkedStreamClosesReferenceBodyAfterFinal(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamCancelsReferenceRequestAfterFinal(t *testing.T) {
+	cancelCalls := 0
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
+		sampleRate: 24000,
+		cancel: func() {
+			cancelCalls++
+		},
+	}
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("Next final = %+v, want final marker", final)
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("cancel calls after final = %d, want 1", cancelCalls)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after final error = %v", err)
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("cancel calls after final Close = %d, want still 1", cancelCalls)
+	}
+}
+
 func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
