@@ -1702,11 +1702,11 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 func (s *rimeTTSSynthesizeStream) readLoop() {
 	defer close(s.events)
 	for {
-		if s.provider != nil && s.provider.streamResponseTimeout > 0 {
+		if s.provider != nil && s.provider.streamResponseTimeout > 0 && s.conn != nil {
 			timeout := s.provider.streamResponseTimeout
 			_ = s.conn.SetReadDeadline(time.Now().Add(timeout))
 		}
-		msgType, payload, err := s.conn.ReadMessage()
+		msgType, payload, err := s.readMessageData()
 		if err != nil {
 			if !s.isClosed() {
 				s.dropConnectionAfterProviderError()
@@ -1763,17 +1763,37 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 				s.pendingTranscript = nil
 			}
 			s.annotateAudio(audio)
-			s.events <- audio
+			if !s.sendAudio(audio) {
+				return
+			}
 		}
 		if transcript != "" {
 			audio := &tts.SynthesizedAudio{DeltaText: transcript}
 			s.annotateAudio(audio)
-			s.events <- audio
+			if !s.sendAudio(audio) {
+				return
+			}
 		}
 		if done {
 			s.releaseConnectionAfterDone()
 			return
 		}
+	}
+}
+
+func (s *rimeTTSSynthesizeStream) sendAudio(audio *tts.SynthesizedAudio) bool {
+	if s.events == nil {
+		return false
+	}
+	if s.ctx == nil {
+		s.events <- audio
+		return true
+	}
+	select {
+	case s.events <- audio:
+		return true
+	case <-s.ctx.Done():
+		return false
 	}
 }
 

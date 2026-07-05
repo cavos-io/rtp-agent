@@ -3034,6 +3034,51 @@ func TestRimeTTSStreamProviderErrorUnregistersLikeReference(t *testing.T) {
 	}
 }
 
+func TestRimeTTSReadLoopUnblocksWhenClosedWithFullEventQueue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	provider.streamResponseTimeout = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	readCalls := 0
+	releaseRead := make(chan struct{})
+	stream := &rimeTTSSynthesizeStream{
+		ctx:      ctx,
+		cancel:   cancel,
+		provider: provider,
+		events:   make(chan *tts.SynthesizedAudio, 1),
+		errCh:    make(chan error, 1),
+		readMessage: func() (int, []byte, error) {
+			readCalls++
+			if readCalls == 1 {
+				return websocket.TextMessage, []byte(`{"type":"chunk","data":"AQI="}`), nil
+			}
+			<-releaseRead
+			return 0, nil, io.EOF
+		},
+		closeConn: func() error { return nil },
+	}
+	stream.events <- &tts.SynthesizedAudio{RequestID: "queued"}
+	done := make(chan struct{})
+	go func() {
+		stream.readLoop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("readLoop returned before close; want blocked on full event queue")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	close(releaseRead)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("readLoop did not unblock after Close with full event queue")
+	}
+}
+
 func TestRimeTTSStreamAnnotatesReferenceRequestAndSegmentIDs(t *testing.T) {
 	stream := &rimeTTSSynthesizeStream{
 		requestID: "req-1",
