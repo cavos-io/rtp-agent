@@ -195,6 +195,52 @@ func TestRimeTTSOptionsMatchReferenceModels(t *testing.T) {
 	}
 }
 
+func TestRimeTTSUpdateOptionsMatchesReferenceFutureRequests(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+
+	if err := provider.UpdateOptions(
+		WithRimeTTSBaseURL("wss://rime.example"),
+		WithRimeTTSModel("coda"),
+		WithRimeTTSVoice("ember"),
+		WithRimeTTSLang("spa"),
+		WithRimeTTSSampleRate(24000),
+		WithRimeTTSTimeScaleFactor(1.2),
+		WithRimeTTSSegment("immediate"),
+	); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+
+	if provider.Model() != "coda" {
+		t.Fatalf("model = %q, want coda", provider.Model())
+	}
+	if provider.SampleRate() != 24000 {
+		t.Fatalf("sample rate = %d, want 24000", provider.SampleRate())
+	}
+	u := buildRimeTTSWebsocketURL(provider)
+	if got := u.Scheme + "://" + u.Host + u.Path; got != "wss://rime.example/ws3" {
+		t.Fatalf("websocket URL base = %q, want updated base URL", got)
+	}
+	query := u.Query()
+	assertRimePayload(t, queryMap(query), "speaker", "ember")
+	assertRimePayload(t, queryMap(query), "modelId", "coda")
+	assertRimePayload(t, queryMap(query), "lang", "spa")
+	assertRimePayload(t, queryMap(query), "samplingRate", "24000")
+	assertRimePayload(t, queryMap(query), "timeScaleFactor", "1.2")
+	assertRimePayload(t, queryMap(query), "segment", "immediate")
+}
+
+func TestRimeTTSUpdateOptionsRejectsReferenceMistV2TimeScaleFactor(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("coda"), WithRimeTTSTimeScaleFactor(1.1))
+
+	err := provider.UpdateOptions(WithRimeTTSModel("mistv2"))
+	if err == nil || !strings.Contains(err.Error(), "time_scale_factor is not supported by the mistv2 model") {
+		t.Fatalf("UpdateOptions error = %v, want reference mistv2 time_scale_factor error", err)
+	}
+	if provider.Model() != "coda" {
+		t.Fatalf("model after rejected update = %q, want unchanged coda", provider.Model())
+	}
+}
+
 func TestRimeTTSRejectsMistV2TimeScaleFactor(t *testing.T) {
 	provider := NewRimeTTS("test-key", "",
 		WithRimeTTSModel("mistv2"),

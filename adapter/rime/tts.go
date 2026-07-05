@@ -75,6 +75,14 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 	}
 }
 
+func WithRimeTTSVoice(voice string) RimeTTSOption {
+	return func(t *RimeTTS) {
+		if voice != "" {
+			t.voice = voice
+		}
+	}
+}
+
 func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if sampleRate > 0 {
@@ -158,6 +166,45 @@ func (t *RimeTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *RimeTTS) SampleRate() int  { return t.sampleRate }
 func (t *RimeTTS) NumChannels() int { return 1 }
+
+func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
+	if t == nil {
+		return io.ErrClosedPipe
+	}
+	t.mu.Lock()
+	candidate := &RimeTTS{
+		apiKey:          t.apiKey,
+		baseURL:         t.baseURL,
+		model:           t.model,
+		voice:           t.voice,
+		lang:            t.lang,
+		sampleRate:      t.sampleRate,
+		timeScaleFactor: t.timeScaleFactor,
+		useWebsocket:    t.useWebsocket,
+		segment:         t.segment,
+	}
+	t.mu.Unlock()
+
+	for _, opt := range opts {
+		opt(candidate)
+	}
+	if err := validateRimeTimeScaleFactor(candidate); err != nil {
+		return err
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.apiKey = candidate.apiKey
+	t.baseURL = candidate.baseURL
+	t.model = candidate.model
+	t.voice = candidate.voice
+	t.lang = candidate.lang
+	t.sampleRate = candidate.sampleRate
+	t.timeScaleFactor = candidate.timeScaleFactor
+	t.useWebsocket = candidate.useWebsocket
+	t.segment = candidate.segment
+	return nil
+}
 
 func (t *RimeTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
