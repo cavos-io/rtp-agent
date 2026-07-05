@@ -537,6 +537,47 @@ func TestRimeTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSampleRateOptionsAllowReferenceZeroValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSampleRate(0))
+
+	if provider.SampleRate() != 0 {
+		t.Fatalf("sample rate = %d, want explicit zero like reference", provider.SampleRate())
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build constructor request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode constructor body: %v", err)
+	}
+	if got := payload["samplingRate"]; got != float64(0) {
+		t.Fatalf("constructor samplingRate = %#v, want 0", got)
+	}
+
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSSampleRate(0))
+	query := buildRimeTTSWebsocketURL(streaming).Query()
+	assertRimePayload(t, queryMap(query), "samplingRate", "0")
+
+	updatable := NewRimeTTS("test-key", "")
+	if err := updatable.UpdateOptions(WithRimeTTSSampleRate(0)); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), updatable, "hello")
+	if err != nil {
+		t.Fatalf("build updated request: %v", err)
+	}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated body: %v", err)
+	}
+	if got := payload["samplingRate"]; got != float64(0) {
+		t.Fatalf("updated samplingRate = %#v, want 0", got)
+	}
+	if updatable.SampleRate() != defaultRimeSampleRate {
+		t.Fatalf("updated output sample rate = %d, want constructor sample rate unchanged", updatable.SampleRate())
+	}
+}
+
 func TestRimeTTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: &rimeFinalEOFReader{data: []byte{0x01, 0x02}}},

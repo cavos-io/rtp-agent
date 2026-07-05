@@ -99,7 +99,7 @@ func WithRimeTTSVoice(voice string) RimeTTSOption {
 
 func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if sampleRate > 0 {
+		if sampleRate >= 0 {
 			t.requestSampleRate = sampleRate
 		}
 	}
