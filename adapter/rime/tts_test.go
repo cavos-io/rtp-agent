@@ -1172,6 +1172,58 @@ func TestRimeTTSStreamDoesNotReadProviderBeforeReferenceInput(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamDoneWithoutAudioReportsReferenceNoAudio(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		defer conn.Close()
+		_, _, err = conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read text message: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws"+strings.TrimPrefix(server.URL, "http")),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: Hello there.") {
+		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+}
+
 func TestRimeTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	stream := &rimeTTSSynthesizeStream{
 		ctx:    context.Background(),

@@ -723,6 +723,8 @@ type rimeTTSSynthesizeStream struct {
 	started     bool
 	readStarted bool
 	pendingText string
+	pushedText  string
+	audioSeen   bool
 	inputEnded  bool
 
 	writeMessage func(int, []byte) error
@@ -846,6 +848,10 @@ func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
 	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
 		return err
 	}
+	if s.pushedText != "" {
+		s.pushedText += " "
+	}
+	s.pushedText += text
 	s.started = true
 	s.startReadLoopLocked()
 	return nil
@@ -982,6 +988,18 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 		audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage(payload, s.provider.sampleRate)
 		if err != nil {
 			s.errCh <- err
+			return
+		}
+		hasAudio := audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0
+		s.mu.Lock()
+		if hasAudio {
+			s.audioSeen = true
+		}
+		audioSeen := s.audioSeen
+		pushedText := s.pushedText
+		s.mu.Unlock()
+		if done && !audioSeen && strings.TrimSpace(pushedText) != "" {
+			s.errCh <- llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", pushedText), nil, true)
 			return
 		}
 		if audio != nil {
