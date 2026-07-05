@@ -50,6 +50,7 @@ type RimeTTS struct {
 	prewarmCancel            context.CancelFunc
 	prewarmDone              chan struct{}
 	prewarmSeq               uint64
+	poolGeneration           uint64
 	apiKey                   string
 	baseURL                  string
 	model                    string
@@ -681,6 +682,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		t.prewarmConn = nil
 		t.prewarmURL = ""
 		t.prewarmRefreshedAt = time.Time{}
+		t.poolGeneration++
 	}
 	t.apiKey = candidate.apiKey
 	t.baseURL = candidate.baseURL
@@ -797,6 +799,7 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		return nil, err
 	}
 	websocketURL := buildRimeTTSWebsocketURL(t).String()
+	poolGeneration := t.currentPoolGeneration()
 	conn := t.takePrewarmedConn()
 	if conn == nil {
 		var err error
@@ -818,6 +821,7 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		requestID:    cavosmath.ShortUUID(""),
 		contextID:    cavosmath.ShortUUID(""),
 		websocketURL: websocketURL,
+		poolGeneration: poolGeneration,
 		events:       make(chan *tts.SynthesizedAudio, 100),
 		errCh:        make(chan error, 1),
 	}
@@ -900,13 +904,22 @@ func (t *RimeTTS) takePrewarmedConn() *websocket.Conn {
 	return conn
 }
 
-func (t *RimeTTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string) {
+func (t *RimeTTS) currentPoolGeneration() uint64 {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.poolGeneration
+}
+
+func (t *RimeTTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string, poolGeneration uint64) {
 	if t == nil || conn == nil {
 		return
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	t.mu.Lock()
-	if t.closed || !t.useWebsocket || t.prewarmConn != nil || buildRimeTTSWebsocketURL(t).String() != websocketURL {
+	if t.closed || !t.useWebsocket || t.prewarmConn != nil || t.poolGeneration != poolGeneration || buildRimeTTSWebsocketURL(t).String() != websocketURL {
 		t.mu.Unlock()
 		_ = closeRimePrewarmedConn(conn)
 		return
@@ -1447,6 +1460,7 @@ type rimeTTSSynthesizeStream struct {
 	requestID             string
 	contextID             string
 	websocketURL          string
+	poolGeneration       uint64
 	events                chan *tts.SynthesizedAudio
 	errCh                 chan error
 	mu                    sync.Mutex
@@ -1530,8 +1544,9 @@ func (s *rimeTTSSynthesizeStream) EndInput() error {
 			conn := s.conn
 			s.conn = nil
 			websocketURL := s.websocketURL
+			poolGeneration := s.poolGeneration
 			s.mu.Unlock()
-			s.provider.cachePrewarmedConn(conn, websocketURL)
+			s.provider.cachePrewarmedConn(conn, websocketURL, poolGeneration)
 			return nil
 		}
 		err := s.closeConnection()
@@ -1889,8 +1904,9 @@ func (s *rimeTTSSynthesizeStream) releaseConnectionAfterDone() {
 	conn := s.conn
 	s.conn = nil
 	websocketURL := s.websocketURL
+	poolGeneration := s.poolGeneration
 	s.mu.Unlock()
-	s.provider.cachePrewarmedConn(conn, websocketURL)
+	s.provider.cachePrewarmedConn(conn, websocketURL, poolGeneration)
 	s.provider.unregisterStream(s)
 }
 

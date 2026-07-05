@@ -2325,6 +2325,73 @@ func TestRimeTTSEmptyStreamReturnsWebsocketToPoolLikeReference(t *testing.T) {
 	_ = provider.Close()
 }
 
+func TestRimeTTSActiveWebsocketInvalidatedByReferenceUpdateIsNotReused(t *testing.T) {
+	var connections atomic.Int32
+	releaseFirst := make(chan struct{})
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go rimeTestServeReusableWebsocketWithFirstRelease(t, server, &connections, releaseFirst)
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("first Stream error = %v", err)
+	}
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("first PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("first EndInput error = %v", err)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSVoice("lyra")); err != nil {
+		t.Fatalf("UpdateOptions lyra error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSVoice(defaultRimeArcanaVoice)); err != nil {
+		t.Fatalf("UpdateOptions astra error = %v", err)
+	}
+	close(releaseFirst)
+	for {
+		_, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("first Next error = %v", err)
+		}
+	}
+
+	stream, err = provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("second Stream error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close error = %v", err)
+	}
+	if got := connections.Load(); got != 2 {
+		t.Fatalf("websocket connections = %d, want stale checked-out connection discarded after URL invalidation", got)
+	}
+	_ = provider.Close()
+}
+
 func rimeTestServeReusableWebsocket(t *testing.T, conn net.Conn, connections *atomic.Int32) {
 	t.Helper()
 	defer conn.Close()
@@ -2363,6 +2430,67 @@ func rimeTestServeReusableWebsocket(t *testing.T, conn net.Conn, connections *at
 		if message["operation"] != "flush" {
 			t.Errorf("second stream message = %v, want flush", message)
 			return
+		}
+		chunk, err := json.Marshal(map[string]any{
+			"type": "chunk",
+			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		})
+		if err != nil {
+			t.Errorf("marshal chunk: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, chunk); err != nil {
+			t.Errorf("write chunk message: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+			return
+		}
+	}
+}
+
+func rimeTestServeReusableWebsocketWithFirstRelease(t *testing.T, conn net.Conn, connections *atomic.Int32, releaseFirst <-chan struct{}) {
+	t.Helper()
+	defer conn.Close()
+	if err := rimeTestWebsocketHandshake(conn); err != nil {
+		t.Errorf("websocket handshake: %v", err)
+		return
+	}
+	connections.Add(1)
+	for request := 0; ; request++ {
+		payload, err := rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode text message: %v", err)
+			return
+		}
+		if message["operation"] == "eos" {
+			return
+		}
+		if _, ok := message["text"]; !ok {
+			t.Errorf("first stream message = %v, want text", message)
+			return
+		}
+		payload, err = rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			t.Errorf("read flush message: %v", err)
+			return
+		}
+		message = map[string]any{}
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode flush message: %v", err)
+			return
+		}
+		if message["operation"] != "flush" {
+			t.Errorf("second stream message = %v, want flush", message)
+			return
+		}
+		if request == 0 {
+			<-releaseFirst
 		}
 		chunk, err := json.Marshal(map[string]any{
 			"type": "chunk",
