@@ -1301,13 +1301,15 @@ func TestGoogleSTTStreamPreservesReferenceEmptyProviderLanguage(t *testing.T) {
 }
 
 func TestGoogleSTTStreamPushFrameClonesReferenceAudio(t *testing.T) {
-	streamClient := &fakeGoogleStreamingRecognizeClient{}
+	recvBlock := make(chan struct{})
+	streamClient := &fakeGoogleStreamingRecognizeClient{recvBlock: recvBlock}
 	provider := newGoogleSTTWithClient(&fakeGoogleSpeechClient{stream: streamClient})
 
 	stream, err := provider.Stream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Stream returned error: %v", err)
 	}
+	defer close(recvBlock)
 	defer stream.Close()
 	audio := []byte{1, 2, 3, 4}
 	if err := stream.PushFrame(&model.AudioFrame{Data: audio, SampleRate: 16000, NumChannels: 1, SamplesPerChannel: 2}); err != nil {
