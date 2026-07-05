@@ -1836,6 +1836,35 @@ func TestRimeTTSStreamSendsSentencesAndDrainsTailLikeReference(t *testing.T) {
 	assertRimePayload(t, writes[2], "contextId", "ctx-1")
 }
 
+func TestRimeTTSStreamBuffersShortReferenceSentenceBeforeBoundary(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("Dr. Smith is here. Next sentence is long enough."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after short first sentence = %d, want buffered like reference min_sentence_len", len(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want buffered text drained", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "Dr. Smith is here. Next sentence is long enough. ")
+}
+
 func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
 	var writes []map[string]any
 	stream := &rimeTTSSynthesizeStream{
