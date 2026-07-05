@@ -420,6 +420,57 @@ func TestRimeTTSSynthesizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSSynthesizeAppliesReferenceTotalTimeoutOnFirstNext(t *testing.T) {
+	cases := []struct {
+		name      string
+		model     string
+		wantLimit time.Duration
+	}{
+		{name: "arcana", model: "arcana", wantLimit: 240 * time.Second},
+		{name: "coda", model: "coda", wantLimit: 240 * time.Second},
+		{name: "mist", model: "mistv3", wantLimit: 30 * time.Second},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var hasDeadline bool
+			var remaining time.Duration
+			originalClient := http.DefaultClient
+			t.Cleanup(func() { http.DefaultClient = originalClient })
+			http.DefaultClient = &http.Client{Transport: rimeRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				deadline, ok := r.Context().Deadline()
+				hasDeadline = ok
+				if ok {
+					remaining = time.Until(deadline)
+				}
+				return &http.Response{
+					StatusCode: http.StatusTeapot,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"error":"stop"}`)),
+					Request:    r,
+				}, nil
+			})}
+
+			provider := NewRimeTTS("test-key", "", WithRimeTTSModel(tc.model))
+			stream, err := provider.Synthesize(context.Background(), "hello")
+			if err != nil {
+				t.Fatalf("Synthesize() error = %v", err)
+			}
+			defer stream.Close()
+			_, err = stream.Next()
+			if err == nil {
+				t.Fatal("Next error = nil, want provider error after request capture")
+			}
+			if !hasDeadline {
+				t.Fatal("request context has no deadline, want reference total timeout")
+			}
+			if remaining <= 0 || remaining > tc.wantLimit {
+				t.Fatalf("request context deadline remaining = %v, want bounded by %s total timeout", remaining, tc.wantLimit)
+			}
+		})
+	}
+}
+
 func TestRimeTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	requests := 0
 	originalClient := http.DefaultClient

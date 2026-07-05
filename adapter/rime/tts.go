@@ -34,6 +34,8 @@ const (
 	defaultRimeLang        = "eng"
 	defaultRimeSampleRate  = 22050
 	defaultRimeSegment     = "bySentence"
+	rimeArcanaModelTimeout = 240 * time.Second
+	rimeMistModelTimeout   = 30 * time.Second
 )
 
 type RimeTTS struct {
@@ -540,6 +542,7 @@ func buildRimeTTSFlushMessage(contextID string) ([]byte, error) {
 type rimeTTSChunkedStream struct {
 	resp         *http.Response
 	ctx          context.Context
+	cancel       context.CancelFunc
 	text         string
 	opts         RimeTTS
 	sampleRate   int
@@ -619,13 +622,16 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 		return nil
 	}
 	s.requested = true
-	req, err := buildRimeTTSRequest(s.ctx, &s.opts, s.text)
+	requestCtx, cancel := context.WithTimeout(s.ctx, rimeTTSTotalTimeout(s.opts.model))
+	req, err := buildRimeTTSRequest(requestCtx, &s.opts, s.text)
 	if err != nil {
+		cancel()
 		return err
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		cancel()
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
@@ -635,26 +641,40 @@ func (s *rimeTTSChunkedStream) ensureResponse() error {
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		cancel()
 		return llm.NewAPIStatusError("Rime TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio") {
 		resp.Body.Close()
+		cancel()
 		s.finalSent = true
 		return io.EOF
 	}
 
 	s.resp = resp
+	s.cancel = cancel
 	return nil
 }
 
 func (s *rimeTTSChunkedStream) Close() error {
 	s.finalSent = true
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil
 	}
 	body := s.resp.Body
 	s.resp = nil
 	return body.Close()
+}
+
+func rimeTTSTotalTimeout(model string) time.Duration {
+	if model == "arcana" || model == "coda" {
+		return rimeArcanaModelTimeout
+	}
+	return rimeMistModelTimeout
 }
 
 type rimeTTSSynthesizeStream struct {
