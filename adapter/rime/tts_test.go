@@ -1239,6 +1239,31 @@ func TestRimeTTSProviderCloseSendsReferenceEOS(t *testing.T) {
 	assertRimePayload(t, writes[0], "operation", "eos")
 }
 
+func TestRimeTTSProviderCloseClosesAfterReferenceEOSFailure(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true))
+	writeErr := errors.New("eos write failed")
+	closeCalls := 0
+	stream := &rimeTTSSynthesizeStream{
+		cancel: func() {},
+		writeMessage: func(int, []byte) error {
+			return writeErr
+		},
+		closeConn: func() error {
+			closeCalls++
+			return nil
+		},
+	}
+	provider.registerStream(stream)
+
+	err := provider.Close()
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("Close error = %v, want eos write error", err)
+	}
+	if closeCalls != 1 {
+		t.Fatalf("close calls after eos failure = %d, want 1", closeCalls)
+	}
+}
+
 func TestRimeTTSStreamCloseDoesNotSendReferenceEOS(t *testing.T) {
 	cancelled := false
 	writeCalls := 0

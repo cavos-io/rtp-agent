@@ -952,6 +952,9 @@ func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 			return err
 		}
 		if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
+			if closeErr := s.closeConnection(); closeErr != nil {
+				return closeErr
+			}
 			return err
 		}
 	}
