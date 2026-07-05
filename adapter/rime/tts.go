@@ -52,6 +52,7 @@ type RimeTTS struct {
 	sampleRate               int
 	requestSampleRate        int
 	timeScaleFactor          *float64
+	timeScaleFactors         map[string]*float64
 	repetitionPenalty        *float64
 	temperature              *float64
 	topP                     *float64
@@ -83,6 +84,7 @@ func WithRimeTTSModel(model string) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.model = model
 		t.modelTouched = true
+		t.restoreTimeScaleFactorForModel()
 		if !t.voiceSet && t.voice == "" {
 			t.voice = defaultRimeVoice(model)
 		}
@@ -115,6 +117,7 @@ func WithRimeTTSTimeScaleFactor(timeScaleFactor float64) RimeTTSOption {
 	return func(t *RimeTTS) {
 		t.timeScaleFactor = &timeScaleFactor
 		t.timeScaleFactorTouched = true
+		t.storeTimeScaleFactorForModel()
 	}
 }
 
@@ -197,6 +200,7 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		lang:                  defaultRimeLang,
 		sampleRate:            defaultRimeSampleRate,
 		requestSampleRate:     defaultRimeSampleRate,
+		timeScaleFactors:      make(map[string]*float64),
 		segment:               defaultRimeSegment,
 		streamResponseTimeout: defaultRimeStreamTimeout,
 	}
@@ -230,6 +234,66 @@ func defaultRimeVoice(model string) string {
 	}
 }
 
+func (t *RimeTTS) storeTimeScaleFactorForModel() {
+	bucket := rimeTimeScaleFactorBucket(t.model)
+	if bucket == "" {
+		return
+	}
+	if t.timeScaleFactors == nil {
+		t.timeScaleFactors = make(map[string]*float64)
+	}
+	t.timeScaleFactors[bucket] = cloneFloat64Ptr(t.timeScaleFactor)
+}
+
+func (t *RimeTTS) restoreTimeScaleFactorForModel() {
+	if t.timeScaleFactorTouched {
+		t.storeTimeScaleFactorForModel()
+		return
+	}
+	if t.model == "mistv2" && !t.timeScaleFactorTouched {
+		t.timeScaleFactor = nil
+		return
+	}
+	bucket := rimeTimeScaleFactorBucket(t.model)
+	if bucket == "" {
+		t.timeScaleFactor = nil
+		return
+	}
+	t.timeScaleFactor = cloneFloat64Ptr(t.timeScaleFactors[bucket])
+}
+
+func rimeTimeScaleFactorBucket(model string) string {
+	switch {
+	case model == "arcana":
+		return "arcana"
+	case model == "coda":
+		return "coda"
+	case strings.Contains(model, "mist"):
+		return "mist"
+	default:
+		return ""
+	}
+}
+
+func cloneRimeTimeScaleFactors(src map[string]*float64) map[string]*float64 {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]*float64, len(src))
+	for key, value := range src {
+		dst[key] = cloneFloat64Ptr(value)
+	}
+	return dst
+}
+
+func cloneFloat64Ptr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 func (t *RimeTTS) Label() string { return "rime.TTS" }
 func (t *RimeTTS) Model() string { return t.model }
 func (t *RimeTTS) Provider() string {
@@ -248,7 +312,6 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	}
 	t.mu.Lock()
 	currentUseWebsocket := t.useWebsocket
-	currentModel := t.model
 	candidate := &RimeTTS{
 		apiKey:                   t.apiKey,
 		baseURL:                  t.baseURL,
@@ -260,6 +323,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		sampleRate:               t.sampleRate,
 		requestSampleRate:        t.requestSampleRate,
 		timeScaleFactor:          t.timeScaleFactor,
+		timeScaleFactors:         cloneRimeTimeScaleFactors(t.timeScaleFactors),
 		repetitionPenalty:        t.repetitionPenalty,
 		temperature:              t.temperature,
 		topP:                     t.topP,
@@ -277,9 +341,6 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	for _, opt := range opts {
 		opt(candidate)
 	}
-	if candidate.modelTouched && candidate.model != currentModel && !candidate.timeScaleFactorTouched {
-		candidate.timeScaleFactor = nil
-	}
 	if err := validateRimeTimeScaleFactor(candidate); err != nil {
 		return err
 	}
@@ -296,6 +357,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.langSet = candidate.langSet
 	t.requestSampleRate = candidate.requestSampleRate
 	t.timeScaleFactor = candidate.timeScaleFactor
+	t.timeScaleFactors = candidate.timeScaleFactors
 	t.repetitionPenalty = candidate.repetitionPenalty
 	t.temperature = candidate.temperature
 	t.topP = candidate.topP

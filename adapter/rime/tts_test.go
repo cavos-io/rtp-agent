@@ -572,6 +572,21 @@ func TestRimeTTSUpdateOptionsDropsReferenceTimeScaleOnModelChange(t *testing.T) 
 	if err == nil || !strings.Contains(err.Error(), "time_scale_factor is not supported by the mistv2 model") {
 		t.Fatalf("UpdateOptions explicit timeScaleFactor error = %v, want reference mistv2 rejection", err)
 	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions back to coda error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build coda request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode coda request: %v", err)
+	}
+	if got := payload["timeScaleFactor"]; got != 1.1 {
+		t.Fatalf("restored coda timeScaleFactor = %#v, want previous reference value 1.1", got)
+	}
 }
 
 func TestRimeTTSModelSpecificOptionsMatchReferenceRequests(t *testing.T) {
