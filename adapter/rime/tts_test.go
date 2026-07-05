@@ -763,6 +763,70 @@ func TestRimeTTSUpdateOptionsKeepsReferenceArcanaParamsModelSpecific(t *testing.
 	}
 }
 
+func TestRimeTTSUpdateOptionsKeepsReferenceMistParamsModelSpecific(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSModel("arcana"))
+	if err := provider.UpdateOptions(
+		WithRimeTTSSpeedAlpha(0.6),
+		WithRimeTTSReduceLatency(true),
+		WithRimeTTSPauseBetweenBrackets(true),
+		WithRimeTTSPhonemizeBetweenBrackets(false),
+	); err != nil {
+		t.Fatalf("UpdateOptions arcana mist-only params error = %v", err)
+	}
+
+	if err := provider.UpdateOptions(WithRimeTTSModel("mistv2")); err != nil {
+		t.Fatalf("UpdateOptions mistv2 error = %v", err)
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build mistv2 request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode mistv2 request: %v", err)
+	}
+	for _, key := range []string{"speedAlpha", "reduceLatency", "pauseBetweenBrackets", "phonemizeBetweenBrackets"} {
+		if _, ok := payload[key]; ok {
+			t.Fatalf("mistv2 %s = %#v, want omitted value ignored while model was arcana", key, payload[key])
+		}
+	}
+
+	if err := provider.UpdateOptions(
+		WithRimeTTSSpeedAlpha(0.7),
+		WithRimeTTSReduceLatency(true),
+		WithRimeTTSPauseBetweenBrackets(true),
+		WithRimeTTSPhonemizeBetweenBrackets(false),
+	); err != nil {
+		t.Fatalf("UpdateOptions explicit mist params error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSModel("coda")); err != nil {
+		t.Fatalf("UpdateOptions coda error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSModel("mistv2")); err != nil {
+		t.Fatalf("UpdateOptions back to mistv2 error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build restored mistv2 request: %v", err)
+	}
+	payload = map[string]any{}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode restored mistv2 request: %v", err)
+	}
+	if got := payload["speedAlpha"]; got != 0.7 {
+		t.Fatalf("restored speedAlpha = %#v, want 0.7", got)
+	}
+	if got := payload["reduceLatency"]; got != true {
+		t.Fatalf("restored reduceLatency = %#v, want true", got)
+	}
+	if got := payload["pauseBetweenBrackets"]; got != true {
+		t.Fatalf("restored pauseBetweenBrackets = %#v, want true", got)
+	}
+	if got := payload["phonemizeBetweenBrackets"]; got != false {
+		t.Fatalf("restored phonemizeBetweenBrackets = %#v, want false", got)
+	}
+}
+
 func TestRimeTTSModelSpecificOptionsMatchReferenceRequests(t *testing.T) {
 	arcana := NewRimeTTS("test-key", "",
 		WithRimeTTSRepetitionPenalty(1.2),
