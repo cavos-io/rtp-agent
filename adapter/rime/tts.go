@@ -549,6 +549,7 @@ type rimeTTSChunkedStream struct {
 	requestID    string
 	requested    bool
 	pendingFinal bool
+	pendingErr   error
 	finalSent    bool
 }
 
@@ -567,11 +568,18 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.finalSent = true
 		return s.annotateAudio(&tts.SynthesizedAudio{IsFinal: true}), nil
 	}
+	if s.pendingErr != nil {
+		err := s.pendingErr
+		s.pendingErr = nil
+		return nil, err
+	}
 	buf := make([]byte, 4096)
 	n, err := s.resp.Body.Read(buf)
 	if n > 0 {
 		if err == io.EOF {
 			s.pendingFinal = true
+		} else if err != nil {
+			s.pendingErr = rimeTTSReadBodyError(err)
 		}
 		return s.annotateAudio(&tts.SynthesizedAudio{
 			Frame: &model.AudioFrame{
@@ -590,10 +598,7 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			}
 			return nil, io.EOF
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, rimeTTSConnectionError("Rime TTS stream read failed", err)
+		return nil, rimeTTSReadBodyError(err)
 	}
 	return s.annotateAudio(&tts.SynthesizedAudio{
 		Frame: &model.AudioFrame{
@@ -603,6 +608,13 @@ func (s *rimeTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			SamplesPerChannel: uint32(n / 2),
 		},
 	}), nil
+}
+
+func rimeTTSReadBodyError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return rimeTTSConnectionError("Rime TTS stream read failed", err)
 }
 
 func (s *rimeTTSChunkedStream) annotateAudio(audio *tts.SynthesizedAudio) *tts.SynthesizedAudio {

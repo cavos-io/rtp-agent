@@ -571,6 +571,34 @@ func TestRimeTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.T) 
 	}
 }
 
+func TestRimeTTSChunkedStreamKeepsAudioBeforeReferenceReadFailure(t *testing.T) {
+	readErr := errors.New("rime response broke after audio")
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: &rimeAudioThenErrorReader{data: []byte{0x01, 0x00}, err: readErr}},
+		sampleRate: 22050,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want audio before read error", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{0x01, 0x00}) {
+		t.Fatalf("first Next audio = %+v, want provider audio bytes", audio)
+	}
+	audio, err = stream.Next()
+	if err == nil {
+		t.Fatal("second Next error = nil, want APIConnectionError")
+	}
+	if audio != nil {
+		t.Fatalf("second Next audio = %+v, want nil with read error", audio)
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
 func TestRimeTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: rimeTimeoutReader{}},
@@ -1385,6 +1413,22 @@ func (r *rimeFinalEOFReader) Read(p []byte) (int, error) {
 }
 
 func (r *rimeFinalEOFReader) Close() error { return nil }
+
+type rimeAudioThenErrorReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *rimeAudioThenErrorReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, io.EOF
+	}
+	r.done = true
+	return copy(p, r.data), r.err
+}
+
+func (r *rimeAudioThenErrorReader) Close() error { return nil }
 
 type rimeErrorReader struct{}
 
