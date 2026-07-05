@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/gorilla/websocket"
@@ -716,6 +717,29 @@ func TestRimeTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 		}
 		if audio != want {
 			t.Fatalf("trial %d Next audio = %#v, want queued audio %#v", i, audio, want)
+		}
+	}
+}
+
+func TestRimeTTSStreamAnnotatesReferenceRequestAndSegmentIDs(t *testing.T) {
+	stream := &rimeTTSSynthesizeStream{
+		requestID: "req-1",
+		contextID: "ctx-1",
+	}
+
+	events := []*tts.SynthesizedAudio{
+		{Frame: &model.AudioFrame{Data: []byte{1}, SampleRate: 24000, NumChannels: 1, SamplesPerChannel: 1}},
+		{DeltaText: "hello ", TimedTranscript: []tts.TimedString{{Text: "hello ", StartTime: 0.1, EndTime: 0.2}}},
+		{IsFinal: true},
+	}
+
+	for i, audio := range events {
+		stream.annotateAudio(audio)
+		if audio.RequestID != "req-1" {
+			t.Fatalf("event %d RequestID = %q, want req-1", i, audio.RequestID)
+		}
+		if audio.SegmentID != "ctx-1" {
+			t.Fatalf("event %d SegmentID = %q, want ctx-1", i, audio.SegmentID)
 		}
 	}
 }

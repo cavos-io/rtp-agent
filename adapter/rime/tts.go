@@ -242,6 +242,7 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		ctx:       streamCtx,
 		cancel:    cancel,
 		provider:  t,
+		requestID: cavosmath.ShortUUID(""),
 		contextID: cavosmath.ShortUUID(""),
 		events:    make(chan *tts.SynthesizedAudio, 100),
 		errCh:     make(chan error, 1),
@@ -474,6 +475,7 @@ type rimeTTSSynthesizeStream struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	provider    *RimeTTS
+	requestID   string
 	contextID   string
 	events      chan *tts.SynthesizedAudio
 	errCh       chan error
@@ -522,7 +524,9 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 	}
 	if !s.started {
 		if !s.emptyFinal {
-			s.events <- &tts.SynthesizedAudio{IsFinal: true}
+			audio := &tts.SynthesizedAudio{IsFinal: true}
+			s.annotateAudio(audio)
+			s.events <- audio
 			s.emptyFinal = true
 		}
 		return nil
@@ -694,15 +698,26 @@ func (s *rimeTTSSynthesizeStream) readLoop() {
 			return
 		}
 		if audio != nil {
+			s.annotateAudio(audio)
 			s.events <- audio
 		}
 		if transcript != "" {
-			s.events <- &tts.SynthesizedAudio{DeltaText: transcript}
+			audio := &tts.SynthesizedAudio{DeltaText: transcript}
+			s.annotateAudio(audio)
+			s.events <- audio
 		}
 		if done {
 			return
 		}
 	}
+}
+
+func (s *rimeTTSSynthesizeStream) annotateAudio(audio *tts.SynthesizedAudio) {
+	if audio == nil {
+		return
+	}
+	audio.RequestID = s.requestID
+	audio.SegmentID = s.contextID
 }
 
 func rimeTTSReadError(err error) error {
