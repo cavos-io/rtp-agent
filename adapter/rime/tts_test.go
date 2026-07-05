@@ -1782,6 +1782,38 @@ func TestRimeTTSChunkedStreamCloseDuringAudioReadDropsLateFrame(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamClosesReferenceBodyAfterFinal(t *testing.T) {
+	body := &rimeCloseCountBody{Reader: bytes.NewReader([]byte{0x01, 0x02})}
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next audio error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("Next audio = %+v, want frame", audio)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("Next final = %+v, want final marker", final)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close calls after final = %d, want 1", body.closeCount)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after final error = %v", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close calls after final Close = %d, want still 1", body.closeCount)
+	}
+}
+
 func TestRimeTTSNonAudioResponseReportsReferenceNoAudio(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
