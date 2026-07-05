@@ -725,6 +725,7 @@ type rimeTTSSynthesizeStream struct {
 	pendingText string
 	pushedText  string
 	audioSeen   bool
+	segmentDone bool
 	inputEnded  bool
 
 	writeMessage func(int, []byte) error
@@ -742,6 +743,9 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	}
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.segmentDone {
+		return nil
 	}
 	s.pendingText += text
 	if err := s.sendCompleteSentencesLocked(); err != nil {
@@ -803,6 +807,7 @@ func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 		return nil
 	}
 	if !sendProviderFlush {
+		s.segmentDone = true
 		return nil
 	}
 	message, err := buildRimeTTSFlushMessage(s.contextID)

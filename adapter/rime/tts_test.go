@@ -939,6 +939,39 @@ func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v", err)
+	}
+
+	if len(writes) != 1 {
+		t.Fatalf("writes = %d (%#v), want first segment text only", len(writes), writes)
+	}
+	assertRimePayload(t, writes[0], "text", "first ")
+}
+
 func TestRimeTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
