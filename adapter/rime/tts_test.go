@@ -2106,6 +2106,12 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 			t.Fatalf("APIError message = %q, want reference message", apiErr.Message)
 		}
 	}
+
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error"}`), 24000); err == nil {
+		t.Fatal("empty error message returned nil error, want stream error")
+	} else if err.Error() != "Rime ws error: (no message)" {
+		t.Fatalf("empty error message = %q, want reference fallback", err)
+	}
 }
 
 func TestRimeTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing.T) {

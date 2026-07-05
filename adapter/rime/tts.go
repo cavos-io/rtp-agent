@@ -1209,7 +1209,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		return &tts.SynthesizedAudio{IsFinal: true}, true, "", nil
 	case "error":
 		if message.Message == "" {
-			message.Message = string(payload)
+			message.Message = "(no message)"
 		}
 		return nil, false, "", llm.NewAPIError("Rime ws error: "+message.Message, nil, true)
 	default:
