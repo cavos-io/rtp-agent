@@ -652,6 +652,36 @@ func TestRimeTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamEmptyFlushEmitsReferenceFinalMarker(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stream := &rimeTTSSynthesizeStream{
+		ctx:    ctx,
+		cancel: cancel,
+		events: make(chan *tts.SynthesizedAudio, 1),
+		errCh:  make(chan error, 1),
+		writeMessage: func(int, []byte) error {
+			t.Fatal("empty Flush wrote provider message, want local final marker only")
+			return nil
+		},
+		closeConn: func() error {
+			t.Fatal("empty Flush closed connection, want stream remain open")
+			return nil
+		},
+	}
+
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want final marker", err)
+	}
+	if audio == nil || !audio.IsFinal || audio.Frame != nil {
+		t.Fatalf("Next = %#v, want boundary-only final marker", audio)
+	}
+}
+
 func TestRimeTTSClosedStreamNextIgnoresQueuedAudio(t *testing.T) {
 	stream := &rimeTTSSynthesizeStream{
 		ctx:    context.Background(),

@@ -481,6 +481,7 @@ type rimeTTSSynthesizeStream struct {
 	closed      bool
 	started     bool
 	pendingText string
+	emptyFinal  bool
 
 	writeMessage func(int, []byte) error
 	closeConn    func() error
@@ -495,6 +496,7 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	s.emptyFinal = false
 	s.pendingText += text
 	if err := s.sendCompleteSentencesLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
@@ -512,12 +514,17 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 	if s.pendingText != "" {
 		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
+		s.emptyFinal = false
 		if err := s.sendSentenceLocked(text); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
 	}
 	if !s.started {
+		if !s.emptyFinal {
+			s.events <- &tts.SynthesizedAudio{IsFinal: true}
+			s.emptyFinal = true
+		}
 		return nil
 	}
 	message, err := buildRimeTTSFlushMessage(s.contextID)
