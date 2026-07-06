@@ -343,6 +343,7 @@ type upliftAITTSSynthesizeStream struct {
 	active    tts.ChunkedStream
 	closed    bool
 	inputDone bool
+	segmented bool
 	once      sync.Once
 }
 
@@ -376,6 +377,15 @@ func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
 	}
 	if s.inputDone {
 		return io.ErrClosedPipe
+	}
+	if text == "" {
+		return nil
+	}
+	if s.buf.Len() == 0 {
+		if s.segmented {
+			return nil
+		}
+		s.segmented = true
 	}
 	s.buf.WriteString(text)
 	return nil

@@ -867,7 +867,7 @@ func TestUpliftAITTSStreamStopsAfterReferenceSegmentError(t *testing.T) {
 	}
 }
 
-func TestUpliftAITTSStreamReusesReferenceSocketIOClientAcrossFlushes(t *testing.T) {
+func TestUpliftAITTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
 	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
@@ -877,7 +877,7 @@ func TestUpliftAITTSStreamReusesReferenceSocketIOClientAcrossFlushes(t *testing.
 	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
 		dials++
 		if dials > 1 {
-			return nil, fmt.Errorf("socket.io dial count = %d, want reference client reuse", dials)
+			return nil, fmt.Errorf("socket.io dial count = %d, want one connection for one accepted stream segment", dials)
 		}
 		return conn, nil
 	}
@@ -910,23 +910,26 @@ func TestUpliftAITTSStreamReusesReferenceSocketIOClientAcrossFlushes(t *testing.
 		t.Fatalf("first segment Next = (%#v, %v), want final marker", final, err)
 	}
 
+	// Reference SynthesizeStream.push_text logs and returns after the first segment in one stream.
 	if err := stream.PushText("second segment"); err != nil {
-		t.Fatalf("PushText(second) error = %v", err)
+		t.Fatalf("PushText(second) error = %v, want ignored text without caller error", err)
 	}
 	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush(second) error = %v", err)
+		t.Fatalf("Flush(second) error = %v, want ignored text without caller error", err)
 	}
-	secondSynthesize := receiveUpliftAITestString(t, conn.writes, "second synthesize packet")
-	secondRequestID := upliftAITestSocketIORequestID(t, secondSynthesize)
-	if secondRequestID == firstRequestID {
-		t.Fatalf("second requestID = %q, want new segment request id", secondRequestID)
+	select {
+	case packet := <-conn.writes:
+		t.Fatalf("unexpected second socket.io packet after ignored reference segment: %s", packet)
+	case <-time.After(200 * time.Millisecond):
 	}
-	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + secondRequestID + `"}]`
-	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
-		t.Fatalf("second segment Next = (%#v, %v), want final marker", final, err)
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close after ignored second segment error = %v", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after ignored second segment = (%#v, %v), want EOF after stream close", audio, err)
 	}
 	if got, want := dials, 1; got != want {
-		t.Fatalf("socket.io dial count = %d, want reference client reuse across stream flushes", got)
+		t.Fatalf("socket.io dial count = %d, want no reconnect for ignored second segment", got)
 	}
 }
 
