@@ -2189,6 +2189,36 @@ func TestAnthropicChatOmitsParallelToolChoiceFlagWhenUnset(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatUsesConfiguredParallelToolCallsLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicParallelToolCalls(false))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+		llm.WithToolChoice("required"),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	choice, ok := transport.body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want map", transport.body["tool_choice"])
+	}
+	if choice["disable_parallel_tool_use"] != true {
+		t.Fatalf("disable_parallel_tool_use = %#v, want true from configured parallel_tool_calls=false", choice["disable_parallel_tool_use"])
+	}
+}
+
 func TestAnthropicChatUnknownStringToolChoiceFallsBackToAuto(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

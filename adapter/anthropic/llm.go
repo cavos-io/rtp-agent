@@ -33,6 +33,8 @@ type AnthropicLLM struct {
 	topKSet      bool
 	caching      string
 	cachingSet   bool
+	parallelToolCalls    bool
+	parallelToolCallsSet bool
 }
 
 type anthropicToolSpecProvider interface {
@@ -96,6 +98,13 @@ func WithAnthropicCaching(caching string) AnthropicOption {
 	return func(l *AnthropicLLM) {
 		l.caching = caching
 		l.cachingSet = true
+	}
+}
+
+func WithAnthropicParallelToolCalls(parallel bool) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.parallelToolCalls = parallel
+		l.parallelToolCallsSet = true
 	}
 }
 
@@ -228,7 +237,13 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		if anthropicToolChoiceNone(options.ToolChoice) {
 			body["tools"] = []map[string]interface{}{}
 		}
-		if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls, options.ParallelToolCallsSet); toolChoice != nil {
+		parallelToolCalls := options.ParallelToolCalls
+		parallelToolCallsSet := options.ParallelToolCallsSet
+		if !parallelToolCallsSet && l.parallelToolCallsSet {
+			parallelToolCalls = l.parallelToolCalls
+			parallelToolCallsSet = true
+		}
+		if toolChoice := buildAnthropicToolChoice(options.ToolChoice, parallelToolCalls, parallelToolCallsSet); toolChoice != nil {
 			body["tool_choice"] = toolChoice
 		}
 	}
