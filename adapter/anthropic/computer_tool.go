@@ -34,6 +34,10 @@ func (c *ComputerTool) Tools() []llm.Tool {
 	return []llm.Tool{c.tool}
 }
 
+func (c *ComputerTool) Close() {
+	c.actions.Close()
+}
+
 func (c *ComputerTool) Execute(ctx context.Context, action string, args map[string]interface{}) ([]map[string]interface{}, error) {
 	switch action {
 	case "screenshot":
