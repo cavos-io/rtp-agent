@@ -99,6 +99,24 @@ func (b *anthropicCloseErrorBody) Close() error {
 	return nil
 }
 
+type anthropicReadErrorBody struct {
+	payload string
+	err     error
+}
+
+func (b *anthropicReadErrorBody) Read(p []byte) (int, error) {
+	if b.payload != "" {
+		n := copy(p, b.payload)
+		b.payload = b.payload[n:]
+		return n, nil
+	}
+	return 0, b.err
+}
+
+func (b *anthropicReadErrorBody) Close() error {
+	return nil
+}
+
 func TestAnthropicLLMMetadataMatchesReference(t *testing.T) {
 	model, err := NewAnthropicLLM("test-key", "")
 	if err != nil {
@@ -526,6 +544,30 @@ func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}
 	if !apiErr.Retryable {
 		t.Fatal("Retryable = false, want stream API errors retryable")
+	}
+}
+
+func TestAnthropicStreamReadErrorBeforeChunkReturnsAPIConnectionError(t *testing.T) {
+	body := &anthropicReadErrorBody{
+		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",
+		err:     errors.New("stream reset"),
+	}
+	stream := &anthropicStream{
+		resp:   &http.Response{Body: body},
+		reader: bufio.NewReader(body),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "stream reset" {
+		t.Fatalf("Message = %q, want stream reset", connectionErr.Message)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false, want read errors before output retryable")
 	}
 }
 

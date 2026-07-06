@@ -411,6 +411,7 @@ type anthropicStream struct {
 	cacheReadTokens     int
 	hasTools            bool
 	ignoringCoT         bool
+	emittedChunk        bool
 }
 
 func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
@@ -663,7 +664,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			if err == io.EOF || s.closed {
 				return nil, io.EOF
 			}
-			return nil, err
+			return nil, s.wrapReadError(err)
 		}
 
 		line = strings.TrimSpace(line)
@@ -732,13 +733,13 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				if text == "" {
 					continue
 				}
-				return &llm.ChatChunk{
+				return markAnthropicStreamChunk(s, &llm.ChatChunk{
 					ID: s.requestID,
 					Delta: &llm.ChoiceDelta{
 						Role:    llm.ChatRoleAssistant,
 						Content: text,
 					},
-				}, nil
+				}), nil
 			} else if event.Delta.Type == "input_json_delta" {
 				s.toolArgs += event.Delta.PartialJson
 			}
@@ -762,7 +763,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				s.toolCallID = ""
 				s.toolName = ""
 				s.toolArgs = ""
-				return chunk, nil
+				return markAnthropicStreamChunk(s, chunk), nil
 			}
 
 		case "message_delta":
@@ -770,7 +771,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "message_stop":
 			promptTokens := s.inputTokens + s.cacheCreationTokens + s.cacheReadTokens
-			return &llm.ChatChunk{
+			return markAnthropicStreamChunk(s, &llm.ChatChunk{
 				ID: s.requestID,
 				Usage: &llm.CompletionUsage{
 					PromptTokens:        promptTokens,
@@ -780,13 +781,26 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					CacheCreationTokens: s.cacheCreationTokens,
 					CacheReadTokens:     s.cacheReadTokens,
 				},
-			}, nil
+			}), nil
 
 		case "error":
 			message, body := parseAnthropicErrorBody([]byte(data))
 			return nil, llm.NewAPIError(message, body, true)
 		}
 	}
+}
+
+func markAnthropicStreamChunk(s *anthropicStream, chunk *llm.ChatChunk) *llm.ChatChunk {
+	s.emittedChunk = true
+	return chunk
+}
+
+func (s *anthropicStream) wrapReadError(err error) error {
+	retryable := !s.emittedChunk
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutErrorWithRetryable("", retryable)
+	}
+	return llm.NewAPIConnectionErrorWithRetryable(err.Error(), retryable)
 }
 
 func (s *anthropicStream) visibleAnthropicTextDelta(text string) string {
