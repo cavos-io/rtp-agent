@@ -2501,6 +2501,31 @@ func TestAnthropicChatUsesConfiguredTemperatureLikeReference(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatUsesConfiguredTopKLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicTopK(12))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"top_k": 40}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["top_k"] != float64(12) {
+		t.Fatalf("top_k = %#v, want configured top_k over extra param", transport.body["top_k"])
+	}
+}
+
 func TestAnthropicChatKeepsReferenceMaxTokensOverExtraParam(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
