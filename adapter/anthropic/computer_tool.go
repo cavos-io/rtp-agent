@@ -182,7 +182,7 @@ func requireCoordinate(args map[string]interface{}, key string) (int, int, error
 	if !ok {
 		return 0, 0, fmt.Errorf("Missing required argument: '%s'", key)
 	}
-	coords, ok := val.([]interface{})
+	coords, ok := coordinateValues(val)
 	if !ok || len(coords) < 2 {
 		return 0, 0, fmt.Errorf("invalid coordinate format")
 	}
@@ -194,6 +194,33 @@ func requireCoordinate(args map[string]interface{}, key string) (int, int, error
 	}
 
 	return x, y, nil
+}
+
+func coordinateValues(val interface{}) ([]interface{}, bool) {
+	switch v := val.(type) {
+	case []interface{}:
+		return v, true
+	case []float64:
+		coords := make([]interface{}, len(v))
+		for i, coord := range v {
+			coords[i] = coord
+		}
+		return coords, true
+	case []int:
+		coords := make([]interface{}, len(v))
+		for i, coord := range v {
+			coords[i] = coord
+		}
+		return coords, true
+	case []string:
+		coords := make([]interface{}, len(v))
+		for i, coord := range v {
+			coords[i] = coord
+		}
+		return coords, true
+	default:
+		return nil, false
+	}
 }
 
 func coordinateNumber(val interface{}) (int, bool) {

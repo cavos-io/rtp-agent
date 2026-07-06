@@ -191,6 +191,35 @@ func TestComputerToolAcceptsReferenceNumericStrings(t *testing.T) {
 	}
 }
 
+func TestComputerToolAcceptsReferenceTypedCoordinateSlices(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "mouse_move", map[string]interface{}{
+		"coordinate": []float64{10, 20},
+	})
+	if err != nil {
+		t.Fatalf("float coordinate Execute error = %v, want nil", err)
+	}
+	_, err = toolset.Execute(context.Background(), "mouse_move", map[string]interface{}{
+		"coordinate": []string{"30", "40"},
+	})
+	if err != nil {
+		t.Fatalf("string coordinate Execute error = %v, want nil", err)
+	}
+
+	events := actions.Events()
+	if len(events) < 2 {
+		t.Fatalf("events = %#v, want two mouse moves", events)
+	}
+	if events[0].X != 10 || events[0].Y != 20 {
+		t.Fatalf("event[0] = %#v, want 10,20", events[0])
+	}
+	if events[1].X != 30 || events[1].Y != 40 {
+		t.Fatalf("event[1] = %#v, want 30,40", events[1])
+	}
+}
+
 func TestComputerToolPostActionDelayHonorsContextCancel(t *testing.T) {
 	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
 	ctx, cancel := context.WithCancel(context.Background())
