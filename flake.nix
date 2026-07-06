@@ -14,6 +14,7 @@
         pkgs = import nixpkgs {inherit system;};
 
         libraryDependencies = with pkgs; [
+          libogg
           libopus
           onnxruntime
           opusfile

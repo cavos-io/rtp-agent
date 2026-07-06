@@ -940,7 +940,7 @@ func TestApplyWorkerArgsUsesDevDefaultLogLevel(t *testing.T) {
 }
 
 func TestCLIProtocolLoggerConfigUsesReferenceProductionJSON(t *testing.T) {
-	cfg := cliProtocolLoggerConfig("WARN", false)
+	cfg := cliProtocolLoggerConfig(&runOptions{logLevel: "WARN"})
 
 	if cfg.Level != "warn" {
 		t.Fatalf("Level = %q, want warn", cfg.Level)
@@ -951,7 +951,7 @@ func TestCLIProtocolLoggerConfigUsesReferenceProductionJSON(t *testing.T) {
 }
 
 func TestCLIProtocolLoggerConfigUsesReferenceColoredLogFormat(t *testing.T) {
-	cfg := cliProtocolLoggerConfig("WARN", false, "colored")
+	cfg := cliProtocolLoggerConfig(&runOptions{logLevel: "WARN", logFormat: "colored"})
 
 	if cfg.Level != "warn" {
 		t.Fatalf("Level = %q, want warn", cfg.Level)
@@ -962,7 +962,7 @@ func TestCLIProtocolLoggerConfigUsesReferenceColoredLogFormat(t *testing.T) {
 }
 
 func TestCLIProtocolLoggerConfigUsesReferenceDevText(t *testing.T) {
-	cfg := cliProtocolLoggerConfig("DEBUG", true)
+	cfg := cliProtocolLoggerConfig(&runOptions{logLevel: "DEBUG", devMode: true})
 
 	if cfg.Level != "debug" {
 		t.Fatalf("Level = %q, want debug", cfg.Level)
