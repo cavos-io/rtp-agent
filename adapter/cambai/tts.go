@@ -47,6 +47,8 @@ type CambaiTTS struct {
 
 type CambaiTTSOption func(*CambaiTTS)
 
+type CambaiTTSUpdateOption func(*CambaiTTS)
+
 func WithCambaiTTSBaseURL(baseURL string) CambaiTTSOption {
 	return func(t *CambaiTTS) {
 		if baseURL != "" {
@@ -100,6 +102,37 @@ func WithCambaiTTSEnhanceNamedEntities(enabled bool) CambaiTTSOption {
 	}
 }
 
+func WithCambaiTTSUpdateVoiceID(voiceID int) CambaiTTSUpdateOption {
+	return func(t *CambaiTTS) {
+		if voiceID > 0 {
+			t.voiceID = voiceID
+		}
+	}
+}
+
+func WithCambaiTTSUpdateLanguage(language string) CambaiTTSUpdateOption {
+	return func(t *CambaiTTS) {
+		if language != "" {
+			t.language = language
+		}
+	}
+}
+
+func WithCambaiTTSUpdateModel(model string) CambaiTTSUpdateOption {
+	return func(t *CambaiTTS) {
+		if model != "" {
+			t.model = model
+			t.sampleRate = cambaiSampleRateForModel(model)
+		}
+	}
+}
+
+func WithCambaiTTSUpdateUserInstructions(userInstructions string) CambaiTTSUpdateOption {
+	return func(t *CambaiTTS) {
+		t.userInstructions = userInstructions
+	}
+}
+
 func NewCambaiTTS(apiKey string, voice string, opts ...CambaiTTSOption) (*CambaiTTS, error) {
 	if apiKey == "" {
 		apiKey = os.Getenv(cambaiAPIKeyEnv)
@@ -138,6 +171,12 @@ func (t *CambaiTTS) Capabilities() tts.TTSCapabilities {
 }
 func (t *CambaiTTS) SampleRate() int  { return t.sampleRate }
 func (t *CambaiTTS) NumChannels() int { return 1 }
+
+func (t *CambaiTTS) UpdateOptions(opts ...CambaiTTSUpdateOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
+}
 
 func (t *CambaiTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	client := t.httpClient
