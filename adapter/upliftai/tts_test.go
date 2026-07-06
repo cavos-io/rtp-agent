@@ -685,6 +685,55 @@ func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSStreamContinuesAfterReferenceSegmentError(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		if httpCalls == 1 {
+			return nil, errors.New("first segment failed")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("\x01\x02\x03\x04")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("broken"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) error = %v", err)
+	}
+	upliftAIWaitForCondition(t, func() bool { return httpCalls == 1 }, "first failed segment request")
+
+	if err := stream.PushText("still speaks"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want later segment audio after reference-swallowed segment error", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("audio = %#v, want later segment frame after first segment failure", audio)
+	}
+	if got, want := httpCalls, 2; got != want {
+		t.Fatalf("HTTP calls = %d, want second segment request after first failure", got)
+	}
+}
+
 func TestUpliftAITTSStreamReusesReferenceSocketIOClientAcrossFlushes(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`

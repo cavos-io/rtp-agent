@@ -439,8 +439,7 @@ func (s *upliftAITTSSynthesizeStream) run() {
 				return
 			}
 			if err := s.runSegment(text); err != nil {
-				s.sendResult(nil, err)
-				return
+				continue
 			}
 		}
 	}
