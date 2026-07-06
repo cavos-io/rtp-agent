@@ -864,7 +864,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			} `json:"usage"`
 
 			// content_block_start fields
-			ContentBlock struct {
+			ContentBlock *struct {
 				Type string `json:"type"`
 				ID   string `json:"id"`
 				Name string `json:"name"`
@@ -906,6 +906,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			s.cacheReadTokens = event.Message.Usage.CacheReadInputTokens
 
 		case "content_block_start":
+			if event.ContentBlock == nil {
+				wrappedErr := s.wrapReadError(errors.New("content_block_start missing content_block"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
 			if event.ContentBlock.Type == "tool_use" {
 				s.toolCallActive = true
 				s.toolCallID = event.ContentBlock.ID
