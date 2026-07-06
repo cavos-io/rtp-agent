@@ -519,6 +519,23 @@ func TestBuildAnthropicMessagesGroupsToolCallsWithResults(t *testing.T) {
 	assertAnthropicToolResultBlock(t, messages[2].Content, 1, "call_weather", "sunny", false)
 }
 
+func TestBuildAnthropicMessagesRejectsDuplicateGroupedAssistantMessages(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-turn/first", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "first"}}},
+		&llm.ChatMessage{ID: "assistant-turn/second", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "second"}}},
+	}
+
+	_, _, err := buildAnthropicMessagesE(ctx)
+
+	if err == nil {
+		t.Fatal("buildAnthropicMessagesE() error = nil, want duplicate grouped assistant message error")
+	}
+	if !strings.Contains(err.Error(), "only one message is allowed in a group") {
+		t.Fatalf("error = %v, want duplicate grouped assistant message error", err)
+	}
+}
+
 func TestBuildAnthropicMessagesKeepsDuplicateMatchingToolOutputs(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

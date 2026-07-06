@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -453,7 +454,11 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, []st
 		content = append(content, blocks...)
 	}
 
-	for _, group := range groupAnthropicChatItems(chatCtx.Items) {
+	groups, err := groupAnthropicChatItems(chatCtx.Items)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, group := range groups {
 		for _, item := range group.flatten() {
 			switch msg := item.(type) {
 			case *llm.ChatMessage:
@@ -605,31 +610,37 @@ type anthropicChatItemGroup struct {
 	toolOutputs []*llm.FunctionCallOutput
 }
 
-func groupAnthropicChatItems(items []llm.ChatItem) []*anthropicChatItemGroup {
+func groupAnthropicChatItems(items []llm.ChatItem) ([]*anthropicChatItemGroup, error) {
 	groups := make([]*anthropicChatItemGroup, 0)
 	groupsByID := make(map[string]*anthropicChatItemGroup)
 	toolOutputs := make([]*llm.FunctionCallOutput, 0)
 
-	addToGroup := func(groupID string, item llm.ChatItem) {
+	addToGroup := func(groupID string, item llm.ChatItem) error {
 		group := groupsByID[groupID]
 		if group == nil {
 			group = &anthropicChatItemGroup{}
 			groupsByID[groupID] = group
 			groups = append(groups, group)
 		}
-		group.add(item)
+		return group.add(item)
 	}
 
 	for _, item := range items {
 		switch it := item.(type) {
 		case *llm.ChatMessage:
 			if it.Role == llm.ChatRoleAssistant {
-				addToGroup(anthropicGroupID(it.ID, nil), it)
+				if err := addToGroup(anthropicGroupID(it.ID, nil), it); err != nil {
+					return nil, err
+				}
 			} else {
-				addToGroup(it.ID, it)
+				if err := addToGroup(it.ID, it); err != nil {
+					return nil, err
+				}
 			}
 		case *llm.FunctionCall:
-			addToGroup(anthropicGroupID(it.ID, it.GroupID), it)
+			if err := addToGroup(anthropicGroupID(it.ID, it.GroupID), it); err != nil {
+				return nil, err
+			}
 		case *llm.FunctionCallOutput:
 			toolOutputs = append(toolOutputs, it)
 		}
@@ -643,24 +654,30 @@ func groupAnthropicChatItems(items []llm.ChatItem) []*anthropicChatItemGroup {
 	}
 	for _, toolOutput := range toolOutputs {
 		if group := groupsByCallID[toolOutput.CallID]; group != nil {
-			group.add(toolOutput)
+			if err := group.add(toolOutput); err != nil {
+				return nil, err
+			}
 		}
 	}
 	for _, group := range groups {
 		group.removeInvalidToolItems()
 	}
-	return groups
+	return groups, nil
 }
 
-func (g *anthropicChatItemGroup) add(item llm.ChatItem) {
+func (g *anthropicChatItemGroup) add(item llm.ChatItem) error {
 	switch it := item.(type) {
 	case *llm.ChatMessage:
+		if g.message != nil {
+			return fmt.Errorf("only one message is allowed in a group")
+		}
 		g.message = it
 	case *llm.FunctionCall:
 		g.toolCalls = append(g.toolCalls, it)
 	case *llm.FunctionCallOutput:
 		g.toolOutputs = append(g.toolOutputs, it)
 	}
+	return nil
 }
 
 func (g *anthropicChatItemGroup) flatten() []llm.ChatItem {
