@@ -151,12 +151,9 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateTelnyxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxTTSStreamURL(t), buildTelnyxTTSHeaders(t))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxTTSStreamURL(t), buildTelnyxTTSHeaders(t))
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx tts websocket: %v", err))
+		return nil, telnyxTTSDialError(err, resp)
 	}
 	if t.isClosed() {
 		_ = conn.Close()
@@ -206,6 +203,19 @@ func buildTelnyxTTSHeaders(t *TelnyxTTS) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+t.apiKey)
 	return headers
+}
+
+func telnyxTTSDialError(err error, resp *http.Response) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError("Telnyx TTS websocket connect timed out")
+	}
+	if resp != nil && resp.StatusCode > 0 {
+		return llm.NewAPIStatusError("Telnyx TTS websocket handshake failed", resp.StatusCode, "", nil)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx tts websocket: %v", err))
 }
 
 func buildTelnyxTTSTextMessage(text string) map[string]string {

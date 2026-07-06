@@ -96,6 +96,18 @@ func TestTelnyxTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamDialHTTPStatusReturnsAPIStatusError(t *testing.T) {
+	err := telnyxTTSDialError(errors.New("websocket: bad handshake"), &http.Response{StatusCode: http.StatusTooManyRequests})
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("dial error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
 func TestTelnyxTTSSynthesizeDefersReferenceConnectUntilNext(t *testing.T) {
 	dials := 0
 	oldDialer := websocket.DefaultDialer
