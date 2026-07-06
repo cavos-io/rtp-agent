@@ -494,13 +494,20 @@ func (s *telnyxTTSStream) flushPendingTextLocked() error {
 	s.pendingText = ""
 	if err := s.writeMessageData(buildTelnyxTTSTextMessage(text)); err != nil {
 		s.closeAfterWriteFailureLocked()
-		return err
+		return telnyxTTSWriteError(err)
 	}
 	if err := s.writeMessageData(buildTelnyxTTSTextMessage("")); err != nil {
 		s.closeAfterWriteFailureLocked()
-		return err
+		return telnyxTTSWriteError(err)
 	}
 	return nil
+}
+
+func telnyxTTSWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS websocket write failed: %v", err))
 }
 
 func (s *telnyxTTSStream) Close() error {

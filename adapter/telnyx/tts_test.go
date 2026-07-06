@@ -309,7 +309,7 @@ func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	}
 }
 
-func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+func TestTelnyxTTSStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
 	closeCalls := 0
@@ -327,8 +327,13 @@ func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	if err := stream.PushText("hello"); err != nil {
 		t.Fatalf("PushText error = %v, want buffered text accepted", err)
 	}
-	if err := stream.Flush(); !errors.Is(err, writeErr) {
-		t.Fatalf("Flush error = %v, want write error", err)
+	err := stream.Flush()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx TTS websocket write failed") || !strings.Contains(err.Error(), writeErr.Error()) {
+		t.Fatalf("Flush error = %q, want Telnyx write context", err)
 	}
 	if !cancelled {
 		t.Fatal("cancel not called after write failure")
