@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -196,9 +197,15 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag)
 		if err == nil {
 			return &anthropicStream{
-				resp:   resp,
-				reader: bufio.NewReader(resp.Body),
-				cancel: cancel,
+				llm:            l,
+				ctx:            ctx,
+				jsonBody:       jsonBody,
+				betaFlag:       betaFlag,
+				connectOptions: connectOptions,
+				retryAttempt:   attempt,
+				resp:           resp,
+				reader:         bufio.NewReader(resp.Body),
+				cancel:         cancel,
 			}, nil
 		}
 		lastErr = err
@@ -212,6 +219,11 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		if attempt == connectOptions.MaxRetry || !anthropicShouldRetryError(lastErr) {
 			if cancel != nil {
 				cancel()
+			}
+			if connectOptions.MaxRetry > 0 && attempt == connectOptions.MaxRetry && anthropicShouldRetryError(lastErr) {
+				return nil, llm.NewAPIConnectionError(
+					fmt.Sprintf("failed to generate LLM completion after %d attempts", connectOptions.MaxRetry+1),
+				)
 			}
 			return nil, lastErr
 		}
@@ -255,6 +267,10 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError("")
+		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
 			return nil, llm.NewAPITimeoutError("")
 		}
 		return nil, llm.NewAPIConnectionError(anthropicConnectionErrorMessage(err))
@@ -438,6 +454,13 @@ func applyAnthropicMessageCacheControl(messages []anthropicMessage, cacheControl
 }
 
 type anthropicStream struct {
+	llm            *AnthropicLLM
+	ctx            context.Context
+	jsonBody       []byte
+	betaFlag       string
+	connectOptions llm.APIConnectOptions
+	retryAttempt   int
+
 	resp   *http.Response
 	reader *bufio.Reader
 	cancel context.CancelFunc
@@ -788,7 +811,13 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			if s.closed {
 				return nil, io.EOF
 			}
-			return nil, s.wrapReadError(err)
+			wrappedErr := s.wrapReadError(err)
+			if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+				continue
+			} else if retryErr != wrappedErr {
+				return nil, retryErr
+			}
+			return nil, wrappedErr
 		}
 
 		line = strings.TrimSpace(line)
@@ -833,7 +862,13 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			return nil, s.wrapReadError(err)
+			wrappedErr := s.wrapReadError(err)
+			if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+				continue
+			} else if retryErr != wrappedErr {
+				return nil, retryErr
+			}
+			return nil, wrappedErr
 		}
 
 		switch event.Type {
@@ -867,7 +902,13 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				}), nil
 			} else if event.Delta.Type == "input_json_delta" {
 				if !s.toolCallActive {
-					return nil, s.wrapReadError(errors.New("input_json_delta without tool_use content block"))
+					wrappedErr := s.wrapReadError(errors.New("input_json_delta without tool_use content block"))
+					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+						continue
+					} else if retryErr != wrappedErr {
+						return nil, retryErr
+					}
+					return nil, wrappedErr
 				}
 				s.toolArgs += event.Delta.PartialJson
 			}
@@ -905,9 +946,81 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "error":
 			message, body := parseAnthropicErrorBody([]byte(data))
-			return nil, llm.NewAPIError(message, body, !s.emittedChunk)
+			apiErr := llm.NewAPIError(message, body, !s.emittedChunk)
+			if retryErr := s.retryBeforeOutput(apiErr); retryErr == nil {
+				continue
+			} else if retryErr != apiErr {
+				return nil, retryErr
+			}
+			return nil, apiErr
 		}
 	}
+}
+
+func (s *anthropicStream) retryBeforeOutput(err error) error {
+	if s.emittedChunk || s.llm == nil || s.retryAttempt >= s.connectOptions.MaxRetry {
+		if !s.emittedChunk && s.connectOptions.MaxRetry > 0 && s.retryAttempt >= s.connectOptions.MaxRetry && anthropicShouldRetryError(err) {
+			return llm.NewAPIConnectionError(
+				fmt.Sprintf("failed to generate LLM completion after %d attempts", s.connectOptions.MaxRetry+1),
+			)
+		}
+		return err
+	}
+	if s.resp != nil && s.resp.Body != nil {
+		_ = s.resp.Body.Close()
+	}
+	if waitErr := waitAnthropicRetryInterval(s.ctx, s.connectOptions.IntervalForRetry(s.retryAttempt)); waitErr != nil {
+		if s.closed {
+			return io.EOF
+		}
+		return waitErr
+	}
+	for s.retryAttempt < s.connectOptions.MaxRetry {
+		s.retryAttempt++
+		resp, startErr := s.llm.startAnthropicStream(s.ctx, s.jsonBody, s.betaFlag)
+		if startErr == nil {
+			s.resetAttempt(resp)
+			return nil
+		}
+		var statusErr *llm.APIStatusError
+		if errors.As(startErr, &statusErr) && statusErr.StatusCode == 499 {
+			s.closed = true
+			return io.EOF
+		}
+		if s.retryAttempt == s.connectOptions.MaxRetry || !anthropicShouldRetryError(startErr) {
+			if s.connectOptions.MaxRetry > 0 && s.retryAttempt == s.connectOptions.MaxRetry && anthropicShouldRetryError(startErr) {
+				return llm.NewAPIConnectionError(
+					fmt.Sprintf("failed to generate LLM completion after %d attempts", s.connectOptions.MaxRetry+1),
+				)
+			}
+			return startErr
+		}
+		if waitErr := waitAnthropicRetryInterval(s.ctx, s.connectOptions.IntervalForRetry(s.retryAttempt)); waitErr != nil {
+			if s.closed {
+				return io.EOF
+			}
+			return waitErr
+		}
+	}
+	return llm.NewAPIConnectionError(
+		fmt.Sprintf("failed to generate LLM completion after %d attempts", s.connectOptions.MaxRetry+1),
+	)
+}
+
+func (s *anthropicStream) resetAttempt(resp *http.Response) {
+	s.resp = resp
+	s.reader = bufio.NewReader(resp.Body)
+	s.toolCallActive = false
+	s.toolCallID = ""
+	s.toolName = ""
+	s.toolArgs = ""
+	s.requestID = ""
+	s.inputTokens = 0
+	s.outputTokens = 0
+	s.cacheCreationTokens = 0
+	s.cacheReadTokens = 0
+	s.ignoringCoT = false
+	s.emittedFinalUsage = false
 }
 
 func (s *anthropicStream) finalUsageChunk() *llm.ChatChunk {
@@ -937,6 +1050,10 @@ func markAnthropicStreamChunk(s *anthropicStream, chunk *llm.ChatChunk) *llm.Cha
 func (s *anthropicStream) wrapReadError(err error) error {
 	retryable := !s.emittedChunk
 	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutErrorWithRetryable("", retryable)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return llm.NewAPITimeoutErrorWithRetryable("", retryable)
 	}
 	return llm.NewAPIConnectionErrorWithRetryable(err.Error(), retryable)

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,9 +119,42 @@ func (b *anthropicReadErrorBody) Close() error {
 	return nil
 }
 
+type anthropicSignalCloseErrorBody struct {
+	err       error
+	closeCh   chan struct{}
+	closeOnce sync.Once
+}
+
+func (b *anthropicSignalCloseErrorBody) Read(_ []byte) (int, error) {
+	return 0, b.err
+}
+
+func (b *anthropicSignalCloseErrorBody) Close() error {
+	b.closeOnce.Do(func() {
+		close(b.closeCh)
+	})
+	return nil
+}
+
+type anthropicTimeoutError struct{}
+
+func (anthropicTimeoutError) Error() string {
+	return "read timeout"
+}
+
+func (anthropicTimeoutError) Timeout() bool {
+	return true
+}
+
+func (anthropicTimeoutError) Temporary() bool {
+	return false
+}
+
 type anthropicSingleCloseBody struct {
 	closed bool
 }
+
+var _ net.Error = anthropicTimeoutError{}
 
 func (b *anthropicSingleCloseBody) Read(_ []byte) (int, error) {
 	return 0, io.EOF
@@ -156,6 +191,34 @@ func TestAnthropicLLMMetadataMatchesReference(t *testing.T) {
 
 func TestAnthropicChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	transport := &captureRoundTripper{err: context.DeadlineExceeded}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Chat error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("Message = %q, want default timeout message", timeoutErr.Message)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("Retryable = false, want timeout errors retryable")
+	}
+}
+
+func TestAnthropicChatReturnsAPITimeoutErrorOnTransportTimeout(t *testing.T) {
+	transport := &captureRoundTripper{err: anthropicTimeoutError{}}
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = transport
 	t.Cleanup(func() { http.DefaultTransport = originalTransport })
@@ -440,6 +503,37 @@ func TestAnthropicChatRetriesRetryableSetupAPIError(t *testing.T) {
 	_ = stream.Close()
 	if transport.calls != 2 {
 		t.Fatalf("HTTP calls = %d, want initial failure plus retry", transport.calls)
+	}
+}
+
+func TestAnthropicChatReportsExhaustedRetryAsConnectionErrorLikeReference(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusTooManyRequests, "rate limit"),
+		anthropicTestResponse(http.StatusTooManyRequests, "still limited"),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "failed to generate LLM completion after 2 attempts" {
+		t.Fatalf("Message = %q, want exhausted retry message", connectionErr.Message)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial failure plus final retry", transport.calls)
 	}
 }
 
@@ -854,6 +948,46 @@ func TestAnthropicStreamErrorAfterChunkIsNotRetryable(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatRetriesErrorEventBeforeChunkLikeReference(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusOK, `data: {"type":"error","error":{"type":"overloaded_error","message":"server overloaded"}}`+"\n\n"),
+		anthropicTestResponse(http.StatusOK, strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"retry ok"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n")),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want retry success", err)
+	}
+	if chunk.Delta == nil || chunk.Delta.Content != "retry ok" {
+		t.Fatalf("chunk = %#v, want retried visible text", chunk)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial stream plus retry", transport.calls)
+	}
+}
+
 func TestAnthropicStreamMalformedEventReturnsConnectionError(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
@@ -871,6 +1005,50 @@ func TestAnthropicStreamMalformedEventReturnsConnectionError(t *testing.T) {
 	}
 	if !connectionErr.Retryable {
 		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicChatRetriesMalformedEventBeforeChunkLikeReference(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusOK, strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":`,
+			``,
+		}, "\n")),
+		anthropicTestResponse(http.StatusOK, strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"retry ok"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n")),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want retry success", err)
+	}
+	if chunk.Delta == nil || chunk.Delta.Content != "retry ok" {
+		t.Fatalf("chunk = %#v, want retried visible text", chunk)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial stream plus retry", transport.calls)
 	}
 }
 
@@ -892,6 +1070,51 @@ func TestAnthropicStreamInputDeltaWithoutToolStartReturnsConnectionError(t *test
 	}
 	if !connectionErr.Retryable {
 		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicChatRetriesInputDeltaWithoutToolStartLikeReference(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusOK, strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"city\""}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n")),
+		anthropicTestResponse(http.StatusOK, strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"retry ok"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n")),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want retry success", err)
+	}
+	if chunk.Delta == nil || chunk.Delta.Content != "retry ok" {
+		t.Fatalf("chunk = %#v, want retried visible text", chunk)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial stream plus retry", transport.calls)
 	}
 }
 
@@ -940,6 +1163,119 @@ func TestAnthropicStreamReadErrorBeforeChunkReturnsAPIConnectionError(t *testing
 	}
 	if !connectionErr.Retryable {
 		t.Fatal("Retryable = false, want read errors before output retryable")
+	}
+}
+
+func TestAnthropicStreamReadTimeoutReturnsAPITimeoutErrorLikeReference(t *testing.T) {
+	body := &anthropicReadErrorBody{
+		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",
+		err:     anthropicTimeoutError{},
+	}
+	stream := &anthropicStream{
+		resp:   &http.Response{Body: body},
+		reader: bufio.NewReader(body),
+	}
+
+	_, err := stream.Next()
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("Message = %q, want default timeout message", timeoutErr.Message)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("Retryable = false, want timeout before output retryable")
+	}
+}
+
+func TestAnthropicChatRetriesStreamReadErrorBeforeChunkLikeReference(t *testing.T) {
+	firstBody := &anthropicReadErrorBody{
+		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",
+		err:     errors.New("stream reset"),
+	}
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Body: firstBody, Header: make(http.Header)},
+		anthropicTestResponse(http.StatusOK, strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"retry ok"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n")),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want retry success", err)
+	}
+	if chunk.Delta == nil || chunk.Delta.Content != "retry ok" {
+		t.Fatalf("chunk = %#v, want retried visible text", chunk)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial stream plus retry", transport.calls)
+	}
+}
+
+func TestAnthropicChatReportsExhaustedStreamRetryAsConnectionErrorLikeReference(t *testing.T) {
+	firstBody := &anthropicReadErrorBody{
+		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",
+		err:     errors.New("stream reset"),
+	}
+	secondBody := &anthropicReadErrorBody{
+		payload: `data: {"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3}}}` + "\n",
+		err:     errors.New("stream reset again"),
+	}
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Body: firstBody, Header: make(http.Header)},
+		{StatusCode: http.StatusOK, Body: secondBody, Header: make(http.Header)},
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "failed to generate LLM completion after 2 attempts" {
+		t.Fatalf("Message = %q, want exhausted retry message", connectionErr.Message)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial stream plus final retry", transport.calls)
 	}
 }
 
@@ -1105,6 +1441,50 @@ func TestAnthropicStreamCloseIsIdempotent(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+}
+
+func TestAnthropicStreamCloseDuringRetryWaitReturnsEOF(t *testing.T) {
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	body := &anthropicSignalCloseErrorBody{
+		err:     errors.New("stream reset"),
+		closeCh: make(chan struct{}),
+	}
+	stream := &anthropicStream{
+		llm:            model,
+		ctx:            ctx,
+		connectOptions: llm.APIConnectOptions{MaxRetry: 2, RetryInterval: time.Hour},
+		retryAttempt:   1,
+		resp:           &http.Response{Body: body},
+		reader:         bufio.NewReader(body),
+		cancel:         cancel,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case <-body.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not enter retry wait")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next() error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next() did not return after Close")
 	}
 }
 
