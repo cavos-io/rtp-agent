@@ -276,6 +276,61 @@ func TestSpeechifyTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestSpeechifyTTSUpdateOptionsAffectsFutureRequestsLikeReference(t *testing.T) {
+	provider := NewSpeechifyTTS("test-key", "",
+		WithSpeechifyTTSBaseURL("https://speechify.example/v1"),
+		WithSpeechifyTTSEncoding("wav_48000"),
+	)
+
+	beforeUpdate, err := provider.Synthesize(context.Background(), "old")
+	if err != nil {
+		t.Fatalf("Synthesize before update error = %v", err)
+	}
+	oldStream, ok := beforeUpdate.(*speechifyTTSChunkedStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *speechifyTTSChunkedStream", beforeUpdate)
+	}
+	defer oldStream.Close()
+
+	provider.UpdateOptions(
+		WithSpeechifyTTSUpdateVoice("simba"),
+		WithSpeechifyTTSUpdateModel("simba-english"),
+		WithSpeechifyTTSUpdateLanguage("en-US"),
+		WithSpeechifyTTSUpdateLoudnessNormalization(true),
+		WithSpeechifyTTSUpdateTextNormalization(false),
+	)
+
+	if oldStream.voice != "jack" || oldStream.model != "" || oldStream.language != "" || oldStream.loudnessNormalization != nil || oldStream.textNormalization != nil {
+		t.Fatalf("pre-update stream options = voice=%q model=%q language=%q loudness=%v text=%v, want original snapshot", oldStream.voice, oldStream.model, oldStream.language, oldStream.loudnessNormalization, oldStream.textNormalization)
+	}
+
+	req, err := buildSpeechifyTTSRequest(context.Background(), provider, "new")
+	if err != nil {
+		t.Fatalf("build request after update: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated body: %v", err)
+	}
+	assertSpeechifyPayload(t, payload, "voice_id", "simba")
+	assertSpeechifyPayload(t, payload, "language", "en-US")
+	assertSpeechifyPayload(t, payload, "model", "simba-english")
+	assertSpeechifyPayload(t, payload, "audio_format", "wav")
+	options, ok := payload["options"].(map[string]any)
+	if !ok {
+		t.Fatalf("options = %#v, want object", payload["options"])
+	}
+	if options["loudness_normalization"] != true {
+		t.Fatalf("loudness_normalization = %#v, want true", options["loudness_normalization"])
+	}
+	if options["text_normalization"] != false {
+		t.Fatalf("text_normalization = %#v, want false", options["text_normalization"])
+	}
+	if req.URL.String() != "https://speechify.example/v1/audio/stream" {
+		t.Fatalf("updated request URL = %q, want base URL unchanged", req.URL.String())
+	}
+}
+
 func TestSpeechifyTTSChunkedStreamUsesConfiguredSampleRate(t *testing.T) {
 	stream := &speechifyTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader(speechifyTestWAV([]byte{0x01, 0x02}, 48000, 1)))},
