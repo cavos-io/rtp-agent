@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -245,13 +246,18 @@ type gradiumSTTStream struct {
 	state  *gradiumSTTMessageState
 
 	audioBStream *audio.AudioByteStream
+	readMessage  func() (int, []byte, error)
 }
 
 func (s *gradiumSTTStream) readLoop() {
 	defer close(s.events)
 	for {
-		msgType, message, err := s.conn.ReadMessage()
+		msgType, message, err := s.readMessageData()
 		if err != nil {
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() && !s.isClosed() {
+				continue
+			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
 				if !s.isClosed() {
 					s.errCh <- llm.NewAPIStatusError("Gradium connection closed unexpectedly", gradiumSTTCloseStatusCode(err), "", err.Error())
@@ -279,6 +285,13 @@ func (s *gradiumSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func (s *gradiumSTTStream) readMessageData() (int, []byte, error) {
+	if s.readMessage != nil {
+		return s.readMessage()
+	}
+	return s.conn.ReadMessage()
 }
 
 func gradiumSTTCloseStatusCode(err error) int {
