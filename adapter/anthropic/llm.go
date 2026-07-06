@@ -20,9 +20,24 @@ import (
 )
 
 type AnthropicLLM struct {
-	apiKey  string
-	model   string
-	baseURL string
+	apiKey               string
+	model                string
+	baseURL              string
+	user                 string
+	userSet              bool
+	maxTokens            int
+	maxTokensSet         bool
+	temperature          float64
+	tempSet              bool
+	topK                 int
+	topKSet              bool
+	caching              string
+	cachingSet           bool
+	toolChoice           llm.ToolChoice
+	toolChoiceSet        bool
+	strictToolSchema     bool
+	parallelToolCalls    bool
+	parallelToolCallsSet bool
 }
 
 type anthropicToolSpecProvider interface {
@@ -54,6 +69,61 @@ func WithAnthropicBaseURL(baseURL string) AnthropicOption {
 	}
 }
 
+func WithAnthropicUser(user string) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.user = user
+		l.userSet = true
+	}
+}
+
+func WithAnthropicMaxTokens(maxTokens int) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.maxTokens = maxTokens
+		l.maxTokensSet = true
+	}
+}
+
+func WithAnthropicTemperature(temperature float64) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.temperature = temperature
+		l.tempSet = true
+	}
+}
+
+func WithAnthropicTopK(topK int) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.topK = topK
+		l.topKSet = true
+	}
+}
+
+func WithAnthropicCaching(caching string) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.caching = caching
+		l.cachingSet = true
+	}
+}
+
+func WithAnthropicToolChoice(choice llm.ToolChoice) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.toolChoice = choice
+		l.toolChoiceSet = true
+	}
+}
+
+func WithAnthropicStrictToolSchema(strict bool) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.strictToolSchema = strict
+	}
+}
+
+func WithAnthropicParallelToolCalls(parallel bool) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.parallelToolCalls = parallel
+		l.parallelToolCallsSet = true
+	}
+}
+
 func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*AnthropicLLM, error) {
 	if model == "" {
 		model = defaultAnthropicMode
@@ -65,9 +135,10 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 		return nil, errors.New("anthropic API key is required, either as argument or set ANTHROPIC_API_KEY environment variable")
 	}
 	llm := &AnthropicLLM{
-		apiKey:  apiKey,
-		model:   model,
-		baseURL: defaultAnthropicURL,
+		apiKey:           apiKey,
+		model:            model,
+		baseURL:          defaultAnthropicURL,
+		strictToolSchema: true,
 	}
 	for _, opt := range opts {
 		opt(llm)
@@ -123,7 +194,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if anthropicModelDisablesPrefill(l.model) {
 		messages = appendAnthropicTrailingUserMessage(messages)
 	}
-	cacheControl := anthropicEphemeralCacheControl(options.ExtraParams)
+	cacheControl := l.anthropicEphemeralCacheControl(options.ExtraParams)
 	if cacheControl != nil {
 		applyAnthropicMessageCacheControl(messages, cacheControl)
 	}
@@ -131,16 +202,29 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		return nil, err
 	}
 
+	maxTokens := 1024
+	if l.maxTokensSet {
+		maxTokens = l.maxTokens
+	}
 	body := map[string]interface{}{
 		"model":      l.model,
 		"messages":   messages,
-		"max_tokens": 1024,
+		"max_tokens": maxTokens,
 		"stream":     true,
 	}
+	applyAnthropicExtraParams(body, options.ExtraParams)
 	if len(systemMessages) > 0 {
 		body["system"] = anthropicSystemBlocks(systemMessages, cacheControl)
 	}
-	applyAnthropicExtraParams(body, options.ExtraParams)
+	if l.userSet {
+		body["user"] = l.user
+	}
+	if l.tempSet {
+		body["temperature"] = l.temperature
+	}
+	if l.topKSet {
+		body["top_k"] = l.topK
+	}
 
 	var betaFlag string
 	// Tool support
@@ -155,23 +239,36 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 					}
 				}
 			} else {
-				tools = append(tools, map[string]interface{}{
+				toolSpec := map[string]interface{}{
 					"name":         tool.Name(),
 					"description":  tool.Description(),
 					"input_schema": llm.ToolParameters(tool),
-					"strict":       true,
-				})
+				}
+				if l.strictToolSchema {
+					toolSpec["strict"] = true
+				}
+				tools = append(tools, toolSpec)
 			}
 		}
 		if cacheControl != nil && len(tools) > 0 {
 			tools[len(tools)-1]["cache_control"] = cacheControl
 		}
 		body["tools"] = tools
-		if anthropicToolChoiceNone(options.ToolChoice) {
+		toolChoice := options.ToolChoice
+		if toolChoice == nil && l.toolChoiceSet {
+			toolChoice = l.toolChoice
+		}
+		if anthropicToolChoiceNone(toolChoice) {
 			body["tools"] = []map[string]interface{}{}
 		}
-		if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls, options.ParallelToolCallsSet); toolChoice != nil {
-			body["tool_choice"] = toolChoice
+		parallelToolCalls := options.ParallelToolCalls
+		parallelToolCallsSet := options.ParallelToolCallsSet
+		if !parallelToolCallsSet && l.parallelToolCallsSet {
+			parallelToolCalls = l.parallelToolCalls
+			parallelToolCallsSet = true
+		}
+		if providerToolChoice := buildAnthropicToolChoice(toolChoice, parallelToolCalls, parallelToolCallsSet); providerToolChoice != nil {
+			body["tool_choice"] = providerToolChoice
 		}
 	}
 
@@ -323,7 +420,10 @@ func validateAnthropicExtraParams(params map[string]any) error {
 	return nil
 }
 
-func anthropicEphemeralCacheControl(params map[string]any) map[string]any {
+func (l *AnthropicLLM) anthropicEphemeralCacheControl(params map[string]any) map[string]any {
+	if l.cachingSet && l.caching == "ephemeral" {
+		return map[string]any{"type": "ephemeral"}
+	}
 	if params["caching"] != "ephemeral" {
 		return nil
 	}
@@ -849,30 +949,30 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 			// message_start fields
 			Message *struct {
-				ID    string `json:"id"`
+				ID    *string `json:"id"`
 				Usage *struct {
-					InputTokens              int `json:"input_tokens"`
-					OutputTokens             int `json:"output_tokens"`
-					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+					InputTokens              *int `json:"input_tokens"`
+					OutputTokens             int  `json:"output_tokens"`
+					CacheCreationInputTokens int  `json:"cache_creation_input_tokens"`
+					CacheReadInputTokens     int  `json:"cache_read_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 
 			// message_delta fields
 			Usage *struct {
-				OutputTokens int `json:"output_tokens"`
+				OutputTokens *int `json:"output_tokens"`
 			} `json:"usage"`
 
 			// content_block_start fields
 			ContentBlock *struct {
 				Type *string `json:"type"`
-				ID   string `json:"id"`
-				Name string `json:"name"`
+				ID   *string `json:"id"`
+				Name *string `json:"name"`
 			} `json:"content_block"`
 
 			// content_block_delta fields
 			Delta *struct {
-				Type        string `json:"type"`
+				Type        *string `json:"type"`
 				Text        *string `json:"text"`
 				PartialJson *string `json:"partial_json"`
 			} `json:"delta"`
@@ -899,8 +999,26 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, wrappedErr
 			}
-			s.requestID = event.Message.ID
-			s.inputTokens = event.Message.Usage.InputTokens
+			if event.Message.ID == nil {
+				wrappedErr := s.wrapReadError(errors.New("message_start missing message id"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
+			if event.Message.Usage.InputTokens == nil {
+				wrappedErr := s.wrapReadError(errors.New("message_start missing input_tokens"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
+			s.requestID = *event.Message.ID
+			s.inputTokens = *event.Message.Usage.InputTokens
 			s.outputTokens = event.Message.Usage.OutputTokens
 			s.cacheCreationTokens = event.Message.Usage.CacheCreationInputTokens
 			s.cacheReadTokens = event.Message.Usage.CacheReadInputTokens
@@ -925,9 +1043,27 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				return nil, wrappedErr
 			}
 			if *event.ContentBlock.Type == "tool_use" {
+				if event.ContentBlock.ID == nil {
+					wrappedErr := s.wrapReadError(errors.New("tool_use content_block missing id"))
+					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+						continue
+					} else if retryErr != wrappedErr {
+						return nil, retryErr
+					}
+					return nil, wrappedErr
+				}
+				if event.ContentBlock.Name == nil {
+					wrappedErr := s.wrapReadError(errors.New("tool_use content_block missing name"))
+					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+						continue
+					} else if retryErr != wrappedErr {
+						return nil, retryErr
+					}
+					return nil, wrappedErr
+				}
 				s.toolCallActive = true
-				s.toolCallID = event.ContentBlock.ID
-				s.toolName = event.ContentBlock.Name
+				s.toolCallID = *event.ContentBlock.ID
+				s.toolName = *event.ContentBlock.Name
 				s.toolArgs = ""
 			}
 
@@ -941,7 +1077,16 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, wrappedErr
 			}
-			if event.Delta.Type == "text_delta" {
+			if event.Delta.Type == nil {
+				wrappedErr := s.wrapReadError(errors.New("content_block_delta missing delta type"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
+			if *event.Delta.Type == "text_delta" {
 				if event.Delta.Text == nil {
 					wrappedErr := s.wrapReadError(errors.New("text_delta missing text"))
 					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
@@ -962,7 +1107,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 						Content: text,
 					},
 				}), nil
-			} else if event.Delta.Type == "input_json_delta" {
+			} else if *event.Delta.Type == "input_json_delta" {
 				if !s.toolCallActive {
 					wrappedErr := s.wrapReadError(errors.New("input_json_delta without tool_use content block"))
 					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
@@ -1017,7 +1162,16 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, wrappedErr
 			}
-			s.outputTokens += event.Usage.OutputTokens
+			if event.Usage.OutputTokens == nil {
+				wrappedErr := s.wrapReadError(errors.New("message_delta missing output_tokens"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
+			s.outputTokens += *event.Usage.OutputTokens
 
 		case "message_stop":
 			if chunk := s.finalUsageChunk(); chunk != nil {

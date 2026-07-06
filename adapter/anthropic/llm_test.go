@@ -1254,11 +1254,72 @@ func TestAnthropicStreamMessageDeltaMissingUsageReturnsConnectionError(t *testin
 	}
 }
 
+func TestAnthropicStreamMessageDeltaMissingOutputTokensReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"message_delta","usage":{}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
 func TestAnthropicStreamMessageStartMissingMessageReturnsConnectionError(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
 			`data: {"type":"message_start"}`,
 			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamMessageStartMissingIDReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamMessageStartMissingInputTokensReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"output_tokens":0}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
 			``,
 		}, "\n"))),
 	}
@@ -1316,11 +1377,76 @@ func TestAnthropicStreamContentBlockStartMissingTypeReturnsConnectionError(t *te
 	}
 }
 
+func TestAnthropicStreamToolUseMissingNameReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_1"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+			`data: {"type":"content_block_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamToolUseMissingIDReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"lookup"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+			`data: {"type":"content_block_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
 func TestAnthropicStreamContentBlockDeltaMissingDeltaReturnsConnectionError(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
 			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
 			`data: {"type":"content_block_delta"}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamContentBlockDeltaMissingTypeReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"text":"hello"}}`,
 			`data: {"type":"message_stop"}`,
 			``,
 		}, "\n"))),
@@ -1909,6 +2035,35 @@ func TestAnthropicChatUsesStrictToolInputSchema(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatCanDisableStrictToolSchemaLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicStrictToolSchema(false))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", transport.body["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want map", tools[0])
+	}
+	if _, ok := tool["strict"]; ok {
+		t.Fatalf("tool strict = %#v, want omitted", tool["strict"])
+	}
+}
+
 func TestAnthropicChatUsesProviderComputerToolSpec(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
@@ -2060,6 +2215,65 @@ func TestAnthropicChatOmitsParallelToolChoiceFlagWhenUnset(t *testing.T) {
 	}
 	if _, ok := choice["disable_parallel_tool_use"]; ok {
 		t.Fatalf("disable_parallel_tool_use = %#v, want omitted when parallel_tool_calls is unset", choice["disable_parallel_tool_use"])
+	}
+}
+
+func TestAnthropicChatUsesConfiguredParallelToolCallsLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicParallelToolCalls(false))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+		llm.WithToolChoice("required"),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	choice, ok := transport.body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want map", transport.body["tool_choice"])
+	}
+	if choice["disable_parallel_tool_use"] != true {
+		t.Fatalf("disable_parallel_tool_use = %#v, want true from configured parallel_tool_calls=false", choice["disable_parallel_tool_use"])
+	}
+}
+
+func TestAnthropicChatUsesConfiguredToolChoiceLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicToolChoice("required"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	choice, ok := transport.body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want map", transport.body["tool_choice"])
+	}
+	if choice["type"] != "any" {
+		t.Fatalf("tool_choice = %#v, want configured required mapped to any", choice)
 	}
 }
 
@@ -2300,6 +2514,106 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatForwardsConfiguredUserLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicUser("caller-7"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["user"] != "caller-7" {
+		t.Fatalf("user = %#v, want configured caller id", transport.body["user"])
+	}
+}
+
+func TestAnthropicChatConfiguredUserOverridesExtraParamLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicUser("constructor-user"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"user": "extra-user"}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["user"] != "constructor-user" {
+		t.Fatalf("user = %#v, want configured user over extra param", transport.body["user"])
+	}
+}
+
+func TestAnthropicChatUsesConfiguredTemperatureLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicTemperature(0.2))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"temperature": 0.9}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["temperature"] != 0.2 {
+		t.Fatalf("temperature = %#v, want configured temperature over extra param", transport.body["temperature"])
+	}
+}
+
+func TestAnthropicChatUsesConfiguredTopKLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicTopK(12))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"top_k": 40}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["top_k"] != float64(12) {
+		t.Fatalf("top_k = %#v, want configured top_k over extra param", transport.body["top_k"])
+	}
+}
+
 func TestAnthropicChatKeepsReferenceMaxTokensOverExtraParam(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
@@ -2322,6 +2636,27 @@ func TestAnthropicChatKeepsReferenceMaxTokensOverExtraParam(t *testing.T) {
 
 	if transport.body["max_tokens"] != float64(1024) {
 		t.Fatalf("max_tokens = %#v, want reference default 1024 over extra param", transport.body["max_tokens"])
+	}
+}
+
+func TestAnthropicChatUsesConfiguredMaxTokensLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicMaxTokens(256))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["max_tokens"] != float64(256) {
+		t.Fatalf("max_tokens = %#v, want configured max_tokens", transport.body["max_tokens"])
 	}
 }
 
@@ -2455,6 +2790,40 @@ func TestAnthropicChatSendsSystemMessagesAsTextBlocks(t *testing.T) {
 	assertAnthropicRequestTextBlock(t, content[1], "hello")
 }
 
+func TestAnthropicChatSystemMessagesOverrideExtraSystemLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "base"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		ctx,
+		llm.WithExtraParams(map[string]any{
+			"system": []map[string]any{{"type": "text", "text": "extra"}},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	system, ok := transport.body["system"].([]any)
+	if !ok || len(system) != 1 {
+		t.Fatalf("system = %#v, want one system text block", transport.body["system"])
+	}
+	assertAnthropicRequestTextBlock(t, system[0], "base")
+}
+
 func TestBuildAnthropicMessagesKeepsLeadingDeveloperAsUserMessage(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
@@ -2519,6 +2888,36 @@ func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
 	assistant := messages[1].(map[string]any)
 	assertCacheControlBlock(t, user["content"], "user content")
 	assertCacheControlBlock(t, assistant["content"], "assistant content")
+}
+
+func TestAnthropicChatUsesConfiguredEphemeralCachingLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "be fast"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicCaching("ephemeral"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	assertCacheControlBlock(t, transport.body["system"], "system")
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", transport.body["tools"])
+	}
+	assertCacheControlMap(t, tools[0], "tool")
 }
 
 func TestBuildAnthropicMessagesCollectsSystemText(t *testing.T) {
