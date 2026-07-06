@@ -1053,6 +1053,19 @@ func TestNeuphonicTTSAudioFromStreamMessage(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSAudioFromStreamMessageDecodesReferenceNoisyBase64(t *testing.T) {
+	audio, done, err := neuphonicAudioFromStreamMessage([]byte(`{"data":{"audio":"AQIDBA==!!!!","context_id":"segment-1"}}`), "segment-1", 22050)
+	if err != nil {
+		t.Fatalf("audio from stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for audio message")
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded frame", audio)
+	}
+}
+
 func TestNeuphonicTTSAudioFromStreamMessageIgnoresMalformedReferencePayloads(t *testing.T) {
 	for _, payload := range [][]byte{
 		[]byte(`not-json`),

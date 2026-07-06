@@ -783,7 +783,7 @@ func neuphonicAudioFromStreamMessage(payload []byte, contextID string, sampleRat
 		return nil, false, nil
 	}
 	if message.Data.Audio != "" {
-		audio, err := base64.StdEncoding.DecodeString(message.Data.Audio)
+		audio, err := neuphonicDecodeBase64Audio(message.Data.Audio)
 		if err != nil {
 			return nil, false, nil
 		}
