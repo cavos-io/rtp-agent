@@ -348,7 +348,6 @@ type upliftAITTSSynthesizeStream struct {
 	active    tts.ChunkedStream
 	closed    bool
 	inputDone bool
-	segmented bool
 	once      sync.Once
 }
 
@@ -385,12 +384,6 @@ func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
 	}
 	if text == "" {
 		return nil
-	}
-	if s.buf.Len() == 0 {
-		if s.segmented {
-			return nil
-		}
-		s.segmented = true
 	}
 	s.buf.WriteString(text)
 	return nil
@@ -517,6 +510,10 @@ func (s *upliftAITTSSynthesizeStream) run() {
 				return
 			}
 			if err := s.runSegment(text); err != nil {
+				if errors.Is(err, context.Canceled) {
+					_ = s.sendResult(nil, context.Canceled)
+					return
+				}
 				_ = s.sendResult(nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS segment synthesis failed: %v", err)))
 				return
 			}
@@ -597,23 +594,26 @@ func (s *upliftAITTSSynthesizeStream) Close() error {
 }
 
 type upliftAITTSChunkedStream struct {
-	owner         *UpliftAITTS
-	ctx           context.Context
-	cancel        context.CancelFunc
-	text          string
-	resp          *http.Response
-	once          sync.Once
-	err           error
-	decoder       codecs.AudioStreamDecoder
-	decodeMu      sync.Mutex
-	decodeReadErr error
-	wav           *upliftAIWAVStream
-	outputFormat  string
-	started       bool
-	hasAudio      bool
-	pendingFinal  bool
-	finalSent     bool
-	closed        bool
+	owner          *UpliftAITTS
+	ctx            context.Context
+	cancel         context.CancelFunc
+	text           string
+	resp           *http.Response
+	once           sync.Once
+	err            error
+	decoder        codecs.AudioStreamDecoder
+	decodeMu       sync.Mutex
+	decodeReadErr  error
+	wav            *upliftAIWAVStream
+	pcm            *coreaudio.AudioByteStream
+	pcmFrames      []*model.AudioFrame
+	pendingReadErr error
+	outputFormat   string
+	started        bool
+	hasAudio       bool
+	pendingFinal   bool
+	finalSent      bool
+	closed         bool
 }
 
 func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -639,41 +639,9 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return s.nextDecodedOGG()
 	}
 	if s.currentOutputFormat() == "ULAW_8000_8" {
-		return s.nextDecodedULaw()
+		return s.nextBufferedULaw()
 	}
-	if s.pendingFinal {
-		s.pendingFinal = false
-		s.finalSent = true
-		return &tts.SynthesizedAudio{IsFinal: true}, nil
-	}
-	buf := make([]byte, 4096)
-	for {
-		n, err := s.resp.Body.Read(buf)
-		if n > 0 {
-			if err == io.EOF {
-				s.pendingFinal = true
-			}
-			numChannels := s.currentNumChannels()
-			return &tts.SynthesizedAudio{
-				Frame: &model.AudioFrame{
-					Data:              buf[:n],
-					SampleRate:        defaultUpliftAISampleRate,
-					NumChannels:       uint32(numChannels),
-					SamplesPerChannel: uint32(n / 2 / numChannels),
-				},
-			}, nil
-		}
-		if err != nil {
-			if err == io.EOF {
-				if !s.finalSent {
-					s.finalSent = true
-					return &tts.SynthesizedAudio{IsFinal: true}, nil
-				}
-				return nil, io.EOF
-			}
-			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
-		}
-	}
+	return s.nextRawPCM()
 }
 
 func (s *upliftAITTSChunkedStream) ensureResponse() error {
@@ -717,6 +685,12 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	req.Header.Set("Authorization", "Bearer "+s.owner.apiKey)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS request failed: %v", err))
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -741,6 +715,7 @@ type upliftAISocketIOClient struct {
 	apiKey  string
 
 	mu       sync.Mutex
+	writeMu  sync.Mutex
 	conn     upliftAISocketIOConn
 	closed   bool
 	requests map[string]*upliftAISocketIORequest
@@ -768,7 +743,13 @@ func newUpliftAISocketIOClient(baseURL string, apiKey string) *upliftAISocketIOC
 }
 
 func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := c.ensureConnected(ctx); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	requestID := fmt.Sprintf("upliftai-%p-%d", c, c.seq.Add(1))
@@ -788,7 +769,10 @@ func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, vo
 	}
 	c.mu.Unlock()
 
-	if err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID); err != nil {
+	c.writeMu.Lock()
+	err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID)
+	c.writeMu.Unlock()
+	if err != nil {
 		c.finishRequest(requestID, err)
 		c.closeConn(conn, nil)
 		_ = pr.Close()
@@ -802,6 +786,10 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 	if c.closed {
 		c.mu.Unlock()
 		return io.ErrClosedPipe
+	}
+	if err := ctx.Err(); err != nil {
+		c.mu.Unlock()
+		return err
 	}
 	if c.conn != nil {
 		c.mu.Unlock()
@@ -821,9 +809,17 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 	for attempt := 1; attempt <= upliftAISocketIOAttempts; attempt++ {
 		conn, err := upliftAISocketIODialContext(ctx, socketURL)
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				c.mu.Unlock()
+				return context.Canceled
+			}
 			lastErr = llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
 		} else if err := upliftAISocketIOConnect(ctx, conn, c.apiKey); err != nil {
 			_ = conn.Close()
+			if errors.Is(err, context.Canceled) {
+				c.mu.Unlock()
+				return context.Canceled
+			}
 			lastErr = err
 		} else {
 			if c.closed {
@@ -842,6 +838,10 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				timer.Stop()
+				if errors.Is(ctx.Err(), context.Canceled) {
+					c.mu.Unlock()
+					return context.Canceled
+				}
 				c.mu.Unlock()
 				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io reconnect failed: %v", ctx.Err()))
 			case <-timer.C:
@@ -864,7 +864,10 @@ func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
 		}
 		packet := string(msg)
 		if packet == "2" {
-			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
+			c.writeMu.Lock()
+			err := conn.WriteMessage(websocket.TextMessage, []byte("3"))
+			c.writeMu.Unlock()
+			if err != nil {
 				c.closeConn(conn, nil)
 				return
 			}
@@ -897,7 +900,6 @@ func (c *upliftAISocketIOClient) handleEvent(event upliftAISocketIOEvent) {
 	case "audio":
 		audio, err := decodeUpliftAIBase64Audio(event.Audio)
 		if err != nil {
-			c.finishRequest(event.RequestID, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io audio decode failed: %v", err)))
 			return
 		}
 		if len(audio) > 0 {
@@ -1041,6 +1043,9 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 		packet := string(msg)
 		if packet == "2" {
 			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return context.Canceled
+				}
 				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io ping failed: %v", err))
 			}
 			continue
@@ -1048,6 +1053,9 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 		if strings.HasPrefix(packet, "0") {
 			payload, _ := json.Marshal(map[string]string{"token": apiKey})
 			if err := conn.WriteMessage(websocket.TextMessage, []byte("40"+upliftAISocketIONamespace+","+string(payload))); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return context.Canceled
+				}
 				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io auth failed: %v", err))
 			}
 			continue
@@ -1111,6 +1119,9 @@ func writeUpliftAISocketIOSynthesize(conn upliftAISocketIOConn, requestID string
 		return err
 	}
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("42"+upliftAISocketIONamespace+","+string(event))); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
 		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io synthesize failed: %v", err))
 	}
 	return nil
@@ -1231,7 +1242,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 	}
 	if !s.started {
 		s.started = true
-		decoder := codecs.NewOpusAudioStreamDecoder(defaultUpliftAISampleRate, 1)
+		decoder := codecs.NewOpusAudioStreamDecoder(defaultUpliftAISampleRate, s.currentNumChannels())
 		s.decoder = decoder
 		if audio, done, err := s.startCompressedDecoder(decoder, "UpliftAI TTS OGG read failed"); done {
 			return audio, err
@@ -1516,36 +1527,130 @@ func discardUpliftAIWAVBytes(r io.Reader, n int64) error {
 	return nil
 }
 
-func (s *upliftAITTSChunkedStream) nextDecodedULaw() (*tts.SynthesizedAudio, error) {
+func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
 		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
+	if len(s.pcmFrames) > 0 {
+		frame := s.pcmFrames[0]
+		s.pcmFrames = s.pcmFrames[1:]
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
+	if s.pendingReadErr != nil {
+		err := s.pendingReadErr
+		s.pendingReadErr = nil
+		s.finalSent = true
+		return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
+	}
+	if s.pcm == nil {
+		numChannels := uint32(s.currentNumChannels())
+		s.pcm = coreaudio.NewAudioByteStreamWithOptions(
+			defaultUpliftAISampleRate,
+			numChannels,
+			defaultUpliftAISampleRate*200/1000,
+			coreaudio.AudioByteStreamOptions{Progressive: true},
+		)
+	}
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.resp.Body.Read(buf)
 		if n > 0 {
-			if err == io.EOF {
-				s.pendingFinal = true
-			}
-			data := decodeUpliftAIMuLaw(buf[:n])
-			return &tts.SynthesizedAudio{
-				Frame: &model.AudioFrame{
-					Data:              data,
-					SampleRate:        8000,
-					NumChannels:       1,
-					SamplesPerChannel: uint32(len(data) / 2),
-				},
-			}, nil
+			s.pcmFrames = append(s.pcmFrames, s.pcm.Push(buf[:n])...)
 		}
 		if err != nil {
 			if err == io.EOF {
+				s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
+				if len(s.pcmFrames) > 0 {
+					frame := s.pcmFrames[0]
+					s.pcmFrames = s.pcmFrames[1:]
+					s.pendingFinal = true
+					return &tts.SynthesizedAudio{Frame: frame}, nil
+				}
 				if !s.finalSent {
 					s.finalSent = true
 					return &tts.SynthesizedAudio{IsFinal: true}, nil
 				}
 				return nil, io.EOF
+			}
+			s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
+			if len(s.pcmFrames) > 0 {
+				frame := s.pcmFrames[0]
+				s.pcmFrames = s.pcmFrames[1:]
+				s.pendingReadErr = err
+				return &tts.SynthesizedAudio{Frame: frame}, nil
+			}
+			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
+		}
+		if len(s.pcmFrames) > 0 {
+			frame := s.pcmFrames[0]
+			s.pcmFrames = s.pcmFrames[1:]
+			return &tts.SynthesizedAudio{Frame: frame}, nil
+		}
+	}
+}
+
+func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, error) {
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	if len(s.pcmFrames) > 0 {
+		frame := s.pcmFrames[0]
+		s.pcmFrames = s.pcmFrames[1:]
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
+	if s.pendingReadErr != nil {
+		err := s.pendingReadErr
+		s.pendingReadErr = nil
+		s.finalSent = true
+		return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
+	}
+	if s.pcm == nil {
+		numChannels := uint32(s.currentNumChannels())
+		s.pcm = coreaudio.NewAudioByteStreamWithOptions(
+			8000,
+			numChannels,
+			8000*200/1000,
+			coreaudio.AudioByteStreamOptions{Progressive: true},
+		)
+	}
+	buf := make([]byte, 4096)
+	for {
+		n, err := s.resp.Body.Read(buf)
+		if n > 0 {
+			decoded := decodeUpliftAIMuLaw(buf[:n])
+			decoded = upliftAIExpandPCM16Channels(decoded, s.currentNumChannels())
+			s.pcmFrames = append(s.pcmFrames, s.pcm.Push(decoded)...)
+			if len(s.pcmFrames) > 0 {
+				frame := s.pcmFrames[0]
+				s.pcmFrames = s.pcmFrames[1:]
+				return &tts.SynthesizedAudio{Frame: frame}, nil
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
+				if len(s.pcmFrames) > 0 {
+					frame := s.pcmFrames[0]
+					s.pcmFrames = s.pcmFrames[1:]
+					s.pendingFinal = true
+					return &tts.SynthesizedAudio{Frame: frame}, nil
+				}
+				if !s.finalSent {
+					s.finalSent = true
+					return &tts.SynthesizedAudio{IsFinal: true}, nil
+				}
+				return nil, io.EOF
+			}
+			s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
+			if len(s.pcmFrames) > 0 {
+				frame := s.pcmFrames[0]
+				s.pcmFrames = s.pcmFrames[1:]
+				s.pendingReadErr = err
+				return &tts.SynthesizedAudio{Frame: frame}, nil
 			}
 			return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
 		}
@@ -1553,6 +1658,9 @@ func (s *upliftAITTSChunkedStream) nextDecodedULaw() (*tts.SynthesizedAudio, err
 }
 
 func upliftAITTSReadError(prefix string, err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return llm.NewAPITimeoutError(fmt.Sprintf("%s: %v", prefix, err))
 	}
@@ -1575,6 +1683,25 @@ func decodeUpliftAIMuLaw(data []byte) []byte {
 		pcm[i*2+1] = byte(value >> 8)
 	}
 	return pcm
+}
+
+func upliftAIExpandPCM16Channels(mono []byte, numChannels int) []byte {
+	if numChannels <= 1 || len(mono) == 0 {
+		return mono
+	}
+	if len(mono)%2 != 0 {
+		return mono
+	}
+	expanded := make([]byte, len(mono)*numChannels)
+	out := 0
+	for in := 0; in+1 < len(mono); in += 2 {
+		for ch := 0; ch < numChannels; ch++ {
+			expanded[out] = mono[in]
+			expanded[out+1] = mono[in+1]
+			out += 2
+		}
+	}
+	return expanded
 }
 
 func upliftAINormalizeChannels(frame *model.AudioFrame, numChannels int) *model.AudioFrame {
