@@ -856,9 +856,12 @@ func inworldTTSAudioFromResponseLine(payload []byte, sampleRate int) (*tts.Synth
 	if message.Result.AudioContent == "" {
 		return nil, false, nil
 	}
-	audio, err := base64.StdEncoding.DecodeString(message.Result.AudioContent)
+	audio, err := inworldDecodeBase64Audio(message.Result.AudioContent)
 	if err != nil {
 		return nil, false, err
+	}
+	if len(audio) == 0 {
+		return nil, false, nil
 	}
 	frame := inworldTTSAudioFrame(audio, sampleRate)
 	frame.TimedTranscript = inworldTTSTimedTranscript(message.Result.TimestampInfo.WordAlignment.Words, message.Result.TimestampInfo.WordAlignment.WordStartTimeSeconds, message.Result.TimestampInfo.WordAlignment.WordEndTimeSeconds, 0)
@@ -917,14 +920,40 @@ func inworldTTSAudioFromWebsocketMessageWithOffset(payload []byte, contextID str
 	if message.Result.AudioChunk == nil || message.Result.AudioChunk.AudioContent == "" {
 		return nil, false, false, 0, nil
 	}
-	audio, err := base64.StdEncoding.DecodeString(message.Result.AudioChunk.AudioContent)
+	audio, err := inworldDecodeBase64Audio(message.Result.AudioChunk.AudioContent)
 	if err != nil {
 		return nil, false, false, 0, err
+	}
+	if len(audio) == 0 {
+		return nil, false, false, 0, nil
 	}
 	frame := inworldTTSAudioFrame(audio, sampleRate)
 	frame.SegmentID = message.Result.ContextID
 	frame.TimedTranscript = inworldTTSTimedTranscript(message.Result.AudioChunk.TimestampInfo.WordAlignment.Words, message.Result.AudioChunk.TimestampInfo.WordAlignment.WordStartTimeSeconds, message.Result.AudioChunk.TimestampInfo.WordAlignment.WordEndTimeSeconds, cumulativeTime)
 	return frame, false, false, inworldTTSGenerationEndTime(frame.TimedTranscript), nil
+}
+
+func inworldDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func inworldTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {

@@ -533,6 +533,41 @@ func TestInworldTTSAudioFromReferenceResponses(t *testing.T) {
 	}
 }
 
+func TestInworldTTSAudioIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"result":{"audioContent":"!!!!"}}`),
+		[]byte(`{"result":{"audioContent":"==="}}`),
+	} {
+		audio, done, err := inworldTTSAudioFromResponseLine(payload, 24000)
+		if err != nil {
+			t.Fatalf("audio from response noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("response noise %s = audio:%+v done:%v, want ignored empty chunk", payload, audio, done)
+		}
+	}
+
+	for _, payload := range [][]byte{
+		[]byte(`{"result":{"contextId":"ctx-1","audioChunk":{"audioContent":"!!!!"}}}`),
+		[]byte(`{"result":{"contextId":"ctx-1","audioChunk":{"audioContent":"==="}}}`),
+	} {
+		audio, done, err := inworldTTSAudioFromWebsocketMessage(payload, "ctx-1", 24000)
+		if err != nil {
+			t.Fatalf("audio from websocket noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("websocket noise %s = audio:%+v done:%v, want ignored empty chunk", payload, audio, done)
+		}
+	}
+
+	if _, _, err := inworldTTSAudioFromResponseLine([]byte(`{"result":{"audioContent":"not-base64"}}`), 24000); err == nil {
+		t.Fatal("malformed response audio error = nil, want decode error")
+	}
+	if _, _, err := inworldTTSAudioFromWebsocketMessage([]byte(`{"result":{"contextId":"ctx-1","audioChunk":{"audioContent":"not-base64"}}}`), "ctx-1", 24000); err == nil {
+		t.Fatal("malformed websocket audio error = nil, want decode error")
+	}
+}
+
 func TestInworldTTSAudioFromWebsocketMessageIncludesReferenceWordAlignment(t *testing.T) {
 	audio, done, err := inworldTTSAudioFromWebsocketMessage([]byte(`{
 		"result": {
