@@ -3525,8 +3525,15 @@ func TestDefaultConfigFromEnvSelectsUpliftAITTSProvider(t *testing.T) {
 	if caps := app.Session.TTS.Capabilities(); !caps.Streaming || caps.AlignedTranscript {
 		t.Fatalf("TTS capabilities = %+v, want reference streaming without aligned transcript", caps)
 	}
-	if _, err := app.Session.TTS.Stream(context.Background()); err == nil || !strings.Contains(err.Error(), "streaming tts not natively supported") {
-		t.Fatalf("TTS Stream() error = %v, want explicit unsupported streaming error", err)
+	stream, err := app.Session.TTS.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("TTS Stream() error = %v, want stream", err)
+	}
+	if stream == nil {
+		t.Fatal("TTS Stream() = nil, want stream")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("TTS Stream Close() error = %v", err)
 	}
 }
 
