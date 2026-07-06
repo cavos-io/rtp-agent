@@ -236,6 +236,33 @@ func TestTelnyxSTTStreamChunksWithConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamRejectsMixedInputSampleRates(t *testing.T) {
+	stream := &telnyxSTTStream{
+		writeBinary: func([]byte) error { return nil },
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame first error = %v", err)
+	}
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	})
+	if err == nil {
+		t.Fatal("PushFrame mixed sample rate error = nil, want reference mismatch error")
+	}
+	if !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("PushFrame mixed sample rate error = %q, want reference mismatch message", err)
+	}
+}
+
 func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false

@@ -339,6 +339,7 @@ type telnyxSTTStream struct {
 	state      *telnyxSTTStreamState
 
 	audioBStream *audio.AudioByteStream
+	pushedRate   uint32
 	writeBinary  func([]byte) error
 	closeConn    func() error
 }
@@ -354,6 +355,12 @@ func (s *telnyxSTTStream) PushFrame(frame *model.AudioFrame) error {
 	}
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
+	}
+	if s.pushedRate != 0 && frame.SampleRate != 0 && s.pushedRate != frame.SampleRate {
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	if frame.SampleRate != 0 {
+		s.pushedRate = frame.SampleRate
 	}
 	if s.audioBStream == nil {
 		s.audioBStream = s.newAudioByteStream()
