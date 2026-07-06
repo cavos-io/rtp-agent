@@ -84,6 +84,10 @@ func TestSpeechifyTTSRejectsNonAudioResponse(t *testing.T) {
 	}
 	defer stream.Close()
 	_, err = stream.Next()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
 	if !strings.Contains(err.Error(), "non-audio") {
 		t.Fatalf("Next error = %q, want non-audio guidance", err)
 	}

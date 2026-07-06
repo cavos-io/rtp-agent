@@ -296,7 +296,7 @@ func (s *speechifyTTSChunkedStream) ensureResponse() error {
 	if contentType := resp.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "audio/") {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return fmt.Errorf("speechify tts returned non-audio data: %s", string(respBody))
+		return llm.NewAPIConnectionError(fmt.Sprintf("speechify tts returned non-audio data: %s", string(respBody)))
 	}
 	s.resp = resp
 	return nil
