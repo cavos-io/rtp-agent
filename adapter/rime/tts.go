@@ -2104,6 +2104,16 @@ func rimeTTSWebsocketErrorMessage(raw json.RawMessage) string {
 	}
 	var value any
 	if err := json.Unmarshal(raw, &value); err == nil {
+		switch typed := value.(type) {
+		case map[string]any:
+			if len(typed) == 0 {
+				return "{}"
+			}
+		case []any:
+			if len(typed) == 0 {
+				return "[]"
+			}
+		}
 		return fmt.Sprint(value)
 	}
 	return string(raw)
