@@ -2476,6 +2476,27 @@ func TestAnthropicChatKeepsReferenceMaxTokensOverExtraParam(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatUsesConfiguredMaxTokensLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicMaxTokens(256))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["max_tokens"] != float64(256) {
+		t.Fatalf("max_tokens = %#v, want configured max_tokens", transport.body["max_tokens"])
+	}
+}
+
 func TestAnthropicChatForwardsReferenceExtraParams(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

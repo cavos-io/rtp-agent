@@ -20,11 +20,13 @@ import (
 )
 
 type AnthropicLLM struct {
-	apiKey  string
-	model   string
-	baseURL string
-	user    string
-	userSet bool
+	apiKey       string
+	model        string
+	baseURL      string
+	user         string
+	userSet      bool
+	maxTokens    int
+	maxTokensSet bool
 }
 
 type anthropicToolSpecProvider interface {
@@ -60,6 +62,13 @@ func WithAnthropicUser(user string) AnthropicOption {
 	return func(l *AnthropicLLM) {
 		l.user = user
 		l.userSet = true
+	}
+}
+
+func WithAnthropicMaxTokens(maxTokens int) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.maxTokens = maxTokens
+		l.maxTokensSet = true
 	}
 }
 
@@ -140,10 +149,14 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		return nil, err
 	}
 
+	maxTokens := 1024
+	if l.maxTokensSet {
+		maxTokens = l.maxTokens
+	}
 	body := map[string]interface{}{
 		"model":      l.model,
 		"messages":   messages,
-		"max_tokens": 1024,
+		"max_tokens": maxTokens,
 		"stream":     true,
 	}
 	if l.userSet {
