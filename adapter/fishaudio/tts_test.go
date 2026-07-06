@@ -42,6 +42,14 @@ func (fishAudioErrorReader) Read([]byte) (int, error) {
 
 func (fishAudioErrorReader) Close() error { return nil }
 
+type fishAudioTimeoutReader struct{}
+
+func (fishAudioTimeoutReader) Read([]byte) (int, error) {
+	return 0, fishAudioTTSTimeoutError{}
+}
+
+func (fishAudioTimeoutReader) Close() error { return nil }
+
 type fishAudioTTSTimeoutError struct{}
 
 func (fishAudioTTSTimeoutError) Error() string   { return "fishaudio tts timeout" }
@@ -606,6 +614,24 @@ func TestFishAudioTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testin
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestFishAudioTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &fishaudioTTSChunkedStream{
+		resp:       &http.Response{Body: fishAudioTimeoutReader{}},
+		sampleRate: 24000,
+		format:     "pcm",
+	}
+	defer stream.Close()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 

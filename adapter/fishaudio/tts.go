@@ -412,7 +412,7 @@ func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.format == "wav" {
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, fishAudioTTSConnectionError("Fish Audio TTS stream read failed", err)
+			return nil, fishAudioTTSReadBodyError(err)
 		}
 		if len(data) == 0 {
 			return s.emitFinal()
@@ -440,7 +440,7 @@ func (s *fishaudioTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return s.emitFinal()
 		}
-		return nil, fishAudioTTSConnectionError("Fish Audio TTS stream read failed", err)
+		return nil, fishAudioTTSReadBodyError(err)
 	}
 	audio, err := fishAudioDecodeTTSFrame(buf[:n], s.sampleRate, s.format)
 	if err != nil {
@@ -795,6 +795,17 @@ func fishAudioTTSConnectionError(message string, err error) *llm.APIConnectionEr
 		return llm.NewAPIConnectionError(message)
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+}
+
+func fishAudioTTSReadBodyError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return fishAudioTTSConnectionError("Fish Audio TTS stream read failed", err)
 }
 
 func fishAudioBytes(value interface{}) ([]byte, bool) {
