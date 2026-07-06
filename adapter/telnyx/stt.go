@@ -356,7 +356,7 @@ func (s *telnyxSTTStream) PushFrame(frame *model.AudioFrame) error {
 		return fmt.Errorf("stream input ended")
 	}
 	if s.audioBStream == nil {
-		s.audioBStream = newTelnyxSTTAudioByteStream(frame)
+		s.audioBStream = s.newAudioByteStream()
 	}
 	for _, chunk := range s.audioBStream.Write(frame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
@@ -436,16 +436,15 @@ func (s *telnyxSTTStream) Close() error {
 	return s.closeConnection()
 }
 
-func newTelnyxSTTAudioByteStream(frame *model.AudioFrame) *audio.AudioByteStream {
-	sampleRate := frame.SampleRate
-	if sampleRate == 0 {
+func (s *telnyxSTTStream) newAudioByteStream() *audio.AudioByteStream {
+	sampleRate := defaultTelnyxSTTSampleRate
+	if s != nil && s.provider != nil && s.provider.sampleRate > 0 {
+		sampleRate = s.provider.sampleRate
+	}
+	if sampleRate <= 0 {
 		sampleRate = defaultTelnyxSTTSampleRate
 	}
-	numChannels := frame.NumChannels
-	if numChannels == 0 {
-		numChannels = telnyxSTTNumChannels
-	}
-	return audio.NewAudioByteStream(sampleRate, numChannels, sampleRate/20)
+	return audio.NewAudioByteStream(uint32(sampleRate), telnyxSTTNumChannels, uint32(sampleRate/20))
 }
 
 func (s *telnyxSTTStream) writeBinaryData(data []byte) error {

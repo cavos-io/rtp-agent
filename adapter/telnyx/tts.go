@@ -30,13 +30,14 @@ const (
 )
 
 type TelnyxTTS struct {
-	mu         sync.Mutex
-	streams    map[*telnyxTTSStream]struct{}
-	apiKey     string
-	baseURL    string
-	voice      string
-	sampleRate int
-	closed     bool
+	mu          sync.Mutex
+	streams     map[tts.SynthesizeStream]struct{}
+	apiKey      string
+	baseURL     string
+	voice       string
+	sampleRate  int
+	closed      bool
+	openSegment func(context.Context) (tts.SynthesizeStream, error)
 }
 
 type TelnyxTTSOption func(*TelnyxTTS)
@@ -57,7 +58,7 @@ func NewTelnyxTTS(apiKey string, voice string, opts ...TelnyxTTSOption) *TelnyxT
 		voice = defaultTelnyxTTSVoice
 	}
 	provider := &TelnyxTTS{
-		streams:    make(map[*telnyxTTSStream]struct{}),
+		streams:    make(map[tts.SynthesizeStream]struct{}),
 		apiKey:     apiKey,
 		baseURL:    defaultTelnyxTTSBaseURL,
 		voice:      voice,
@@ -81,11 +82,11 @@ func (t *TelnyxTTS) Provider() string { return "telnyx" }
 func (t *TelnyxTTS) Close() error {
 	t.mu.Lock()
 	t.closed = true
-	streams := make([]*telnyxTTSStream, 0, len(t.streams))
+	streams := make([]tts.SynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
 	}
-	t.streams = make(map[*telnyxTTSStream]struct{})
+	t.streams = make(map[tts.SynthesizeStream]struct{})
 	t.mu.Unlock()
 
 	var closeErr error
@@ -106,7 +107,7 @@ func (t *TelnyxTTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *TelnyxTTS) registerStream(stream *telnyxTTSStream) bool {
+func (t *TelnyxTTS) registerStream(stream tts.SynthesizeStream) bool {
 	if t == nil || stream == nil {
 		return false
 	}
@@ -117,15 +118,17 @@ func (t *TelnyxTTS) registerStream(stream *telnyxTTSStream) bool {
 		return false
 	}
 	if t.streams == nil {
-		t.streams = make(map[*telnyxTTSStream]struct{})
+		t.streams = make(map[tts.SynthesizeStream]struct{})
 	}
 	t.streams[stream] = struct{}{}
-	stream.owner = t
+	if segment, ok := stream.(*telnyxTTSStream); ok {
+		segment.owner = t
+	}
 	t.mu.Unlock()
 	return true
 }
 
-func (t *TelnyxTTS) unregisterStream(stream *telnyxTTSStream) {
+func (t *TelnyxTTS) unregisterStream(stream tts.SynthesizeStream) {
 	if t == nil || stream == nil {
 		return
 	}
@@ -151,6 +154,21 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateTelnyxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
+	stream := &telnyxTTSSegmentedStream{
+		provider: t,
+		ctx:      ctx,
+		segments: make(chan tts.SynthesizeStream, 100),
+	}
+	if !t.registerStream(stream) {
+		return nil, io.ErrClosedPipe
+	}
+	return stream, nil
+}
+
+func (t *TelnyxTTS) openSegmentStream(ctx context.Context) (tts.SynthesizeStream, error) {
+	if t.openSegment != nil {
+		return t.openSegment(ctx)
+	}
 	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxTTSStreamURL(t), buildTelnyxTTSHeaders(t))
 	if err != nil {
 		return nil, telnyxTTSDialError(err, resp)
@@ -168,7 +186,6 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
-	stream.startDecoder()
 	if err := writeTelnyxTTSMessage(conn, buildTelnyxTTSTextMessage(" ")); err != nil {
 		conn.Close()
 		cancel()
@@ -181,9 +198,6 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	stream.writeMessage = stream.writeTTSMessage
 	stream.closeConn = stream.closeWebsocketConn
-	if !t.registerStream(stream) {
-		return nil, io.ErrClosedPipe
-	}
 	go stream.readLoop()
 	return stream, nil
 }
@@ -286,6 +300,132 @@ func (s *telnyxTTSChunkedStream) Close() error {
 	return s.stream.Close()
 }
 
+type telnyxTTSSegmentedStream struct {
+	provider    *TelnyxTTS
+	ctx         context.Context
+	segments    chan tts.SynthesizeStream
+	current     tts.SynthesizeStream
+	mu          sync.Mutex
+	closed      bool
+	inputEnded  bool
+	pendingText string
+	closeOnce   sync.Once
+}
+
+func (s *telnyxTTSSegmentedStream) PushText(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
+	}
+	s.pendingText += text
+	return nil
+}
+
+func (s *telnyxTTSSegmentedStream) Flush() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded || s.pendingText == "" {
+		s.mu.Unlock()
+		return nil
+	}
+	text := s.pendingText
+	s.pendingText = ""
+	s.mu.Unlock()
+
+	segment, err := s.provider.openSegmentStream(s.ctx)
+	if err != nil {
+		return err
+	}
+	if err := segment.PushText(text); err != nil {
+		_ = segment.Close()
+		return err
+	}
+	if err := tts.EndSynthesizeStreamInput(segment); err != nil {
+		_ = segment.Close()
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputEnded {
+		_ = segment.Close()
+		if s.closed {
+			return io.ErrClosedPipe
+		}
+		return nil
+	}
+	s.segments <- segment
+	return nil
+}
+
+func (s *telnyxTTSSegmentedStream) EndInput() error {
+	if err := s.Flush(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputEnded {
+		return nil
+	}
+	s.inputEnded = true
+	s.closeSegments()
+	return nil
+}
+
+func (s *telnyxTTSSegmentedStream) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.inputEnded = true
+	current := s.current
+	s.closeSegments()
+	s.mu.Unlock()
+	if current != nil {
+		_ = current.Close()
+	}
+	for segment := range s.segments {
+		_ = segment.Close()
+	}
+	if s.provider != nil {
+		s.provider.unregisterStream(s)
+	}
+	return nil
+}
+
+func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
+	for {
+		if s.current == nil {
+			segment, ok := <-s.segments
+			if !ok {
+				return nil, io.EOF
+			}
+			s.current = segment
+		}
+		audio, err := s.current.Next()
+		if errors.Is(err, io.EOF) {
+			_ = s.current.Close()
+			s.current = nil
+			continue
+		}
+		return audio, err
+	}
+}
+
+func (s *telnyxTTSSegmentedStream) closeSegments() {
+	s.closeOnce.Do(func() {
+		close(s.segments)
+	})
+}
+
 type telnyxTTSStream struct {
 	owner       *TelnyxTTS
 	conn        *websocket.Conn
@@ -295,6 +435,7 @@ type telnyxTTSStream struct {
 	events      chan *tts.SynthesizedAudio
 	errCh       chan error
 	decoder     codecs.AudioStreamDecoder
+	eventsOnce  sync.Once
 	mu          sync.Mutex
 	closed      bool
 	inputEnded  bool
@@ -353,13 +494,20 @@ func (s *telnyxTTSStream) flushPendingTextLocked() error {
 	s.pendingText = ""
 	if err := s.writeMessageData(buildTelnyxTTSTextMessage(text)); err != nil {
 		s.closeAfterWriteFailureLocked()
-		return err
+		return telnyxTTSWriteError(err)
 	}
 	if err := s.writeMessageData(buildTelnyxTTSTextMessage("")); err != nil {
 		s.closeAfterWriteFailureLocked()
-		return err
+		return telnyxTTSWriteError(err)
 	}
 	return nil
+}
+
+func telnyxTTSWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS websocket write failed: %v", err))
 }
 
 func (s *telnyxTTSStream) Close() error {
@@ -503,7 +651,7 @@ func (s *telnyxTTSStream) startDecoder() {
 	if s.decoder != nil {
 		return
 	}
-	s.decoder = codecs.NewMP3AudioStreamDecoder()
+	s.decoder = codecs.NewFFmpegAudioStreamDecoder("mp3", defaultTelnyxTTSSampleRate, telnyxTTSNumChannels)
 	go s.decodeLoop()
 }
 
@@ -515,11 +663,13 @@ func (s *telnyxTTSStream) pushAudioData(audio []byte) {
 func (s *telnyxTTSStream) endAudioInput() {
 	if s.decoder != nil {
 		s.decoder.EndInput()
+		return
 	}
+	s.closeEvents()
 }
 
 func (s *telnyxTTSStream) decodeLoop() {
-	defer close(s.events)
+	defer s.closeEvents()
 	for {
 		frame, err := s.decoder.Next()
 		if err != nil {
@@ -532,6 +682,12 @@ func (s *telnyxTTSStream) decodeLoop() {
 		}
 		s.events <- &tts.SynthesizedAudio{Frame: frame}
 	}
+}
+
+func (s *telnyxTTSStream) closeEvents() {
+	s.eventsOnce.Do(func() {
+		close(s.events)
+	})
 }
 
 func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {

@@ -72,7 +72,7 @@ func TestTelnyxTTSStreamRequiresAPIKeyBeforeDial(t *testing.T) {
 	}
 }
 
-func TestTelnyxTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
+func TestTelnyxTTSStreamFlushDialFailureReturnsAPIConnectionError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
 		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
@@ -84,15 +84,19 @@ func TestTelnyxTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 
 	provider := NewTelnyxTTS("test-key", "")
 	stream, err := provider.Stream(context.Background())
-	if stream != nil {
-		t.Fatalf("Stream = %#v, want nil", stream)
+	if err != nil {
+		t.Fatalf("Stream error = %v, want lazy stream construction", err)
 	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	err = stream.Flush()
 	if err == nil {
-		t.Fatal("Stream error = nil, want APIConnectionError")
+		t.Fatal("Flush error = nil, want APIConnectionError")
 	}
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
-		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
@@ -228,6 +232,43 @@ func TestTelnyxTTSStreamBuffersTextUntilFlushLikeReference(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamFlushStartsReferenceSegmentWebsockets(t *testing.T) {
+	var segments []*fakeTelnyxEndInputTTSStream
+	provider := NewTelnyxTTS("test-key", "")
+	provider.openSegment = func(context.Context) (tts.SynthesizeStream, error) {
+		segment := &fakeTelnyxEndInputTTSStream{}
+		segments = append(segments, segment)
+		return segment, nil
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	if err := stream.PushText("first"); err != nil {
+		t.Fatalf("PushText first error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush first error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText second error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush second error = %v", err)
+	}
+
+	if len(segments) != 2 {
+		t.Fatalf("segment streams = %d, want one provider websocket per flushed segment", len(segments))
+	}
+	if want := []string{"PushText:first", "EndInput"}; !reflect.DeepEqual(segments[0].calls, want) {
+		t.Fatalf("first segment calls = %#v, want %#v", segments[0].calls, want)
+	}
+	if want := []string{"PushText:second", "EndInput"}; !reflect.DeepEqual(segments[1].calls, want) {
+		t.Fatalf("second segment calls = %#v, want %#v", segments[1].calls, want)
+	}
+}
+
 func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	var writes []string
 	stream := &telnyxTTSStream{
@@ -268,7 +309,7 @@ func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	}
 }
 
-func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
+func TestTelnyxTTSStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
 	closeCalls := 0
@@ -286,8 +327,13 @@ func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	if err := stream.PushText("hello"); err != nil {
 		t.Fatalf("PushText error = %v, want buffered text accepted", err)
 	}
-	if err := stream.Flush(); !errors.Is(err, writeErr) {
-		t.Fatalf("Flush error = %v, want write error", err)
+	err := stream.Flush()
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Flush error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx TTS websocket write failed") || !strings.Contains(err.Error(), writeErr.Error()) {
+		t.Fatalf("Flush error = %q, want Telnyx write context", err)
 	}
 	if !cancelled {
 		t.Fatal("cancel not called after write failure")
@@ -592,11 +638,14 @@ func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
 	if audio == nil || audio.Frame == nil {
 		t.Fatal("audio frame = nil, want decoded PCM frame")
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded MP3 sample rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want reference Telnyx PCM sample rate 16000", audio.Frame.SampleRate)
 	}
-	if audio.Frame.NumChannels != 2 {
-		t.Fatalf("channels = %d, want decoded MP3 stereo", audio.Frame.NumChannels)
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want reference Telnyx mono PCM", audio.Frame.NumChannels)
+	}
+	if audio.Frame.SamplesPerChannel == 0 || int(audio.Frame.SamplesPerChannel)*2 != len(audio.Frame.Data) {
+		t.Fatalf("frame samples = %d data bytes = %d, want complete 16-bit mono PCM frame", audio.Frame.SamplesPerChannel, len(audio.Frame.Data))
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")
@@ -654,6 +703,21 @@ func TestTelnyxTTSStreamEmitsReferenceFinalMarkerAfterMP3Decode(t *testing.T) {
 			t.Fatal("non-final event missing decoded frame")
 		}
 		frames++
+	}
+}
+
+func TestTelnyxTTSStreamNoAudioCloseEndsWithoutDecoderError(t *testing.T) {
+	stream := &telnyxTTSStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error, 1),
+	}
+
+	stream.endAudioInput()
+
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio close = (%#v, %v), want nil EOF", audio, err)
 	}
 }
 

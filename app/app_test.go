@@ -5382,6 +5382,8 @@ func TestDefaultConfigFromEnvSelectsTelnyxProviders(t *testing.T) {
 	t.Setenv("TELNYX_API_KEY", "test-telnyx-key")
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "telnyx")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "telnyx-chat")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://telnyx.example/v2/ai")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", "temperature=0.2,top_p=0.8,parallel_tool_calls=false,tool_choice=required,user=caller-1")
 	t.Setenv("RTP_AGENT_STT_PROVIDER", "telnyx")
 	t.Setenv("RTP_AGENT_STT_BASE_URL", "wss://telnyx.example/transcription")
 	t.Setenv("RTP_AGENT_STT_LANGUAGE", "es")
@@ -5400,6 +5402,13 @@ func TestDefaultConfigFromEnvSelectsTelnyxProviders(t *testing.T) {
 	}
 	if app.Session.LLM == nil {
 		t.Fatal("Session LLM is nil")
+	}
+	telnyxLLM, ok := app.Session.LLM.(*telnyx.TelnyxLLM)
+	if !ok {
+		t.Fatalf("Session LLM type = %T, want *telnyx.TelnyxLLM", app.Session.LLM)
+	}
+	if got := telnyxLLM.BaseURL(); got != "https://telnyx.example/v2/ai" {
+		t.Fatalf("Telnyx LLM base URL = %q, want configured base URL", got)
 	}
 	if got := app.Session.STT.Label(); got != "telnyx.STT" {
 		t.Fatalf("STT label = %q, want telnyx.STT", got)
