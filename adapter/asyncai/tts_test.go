@@ -344,6 +344,22 @@ func TestAsyncAITTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSAudioFromWebsocketMessageDecodesReferenceNoisyBase64(t *testing.T) {
+	audio, done, err := asyncAITTSAudioFromWebsocketMessage([]byte(`{"context_id":"ctx-1","audio":"AQI=!!!!"}`), 32000)
+	if err != nil {
+		t.Fatalf("audio message: %v", err)
+	}
+	if audio == nil || audio.Frame == nil || done {
+		t.Fatalf("audio=%+v done=%v, want decoded audio", audio, done)
+	}
+	if got := string(audio.Frame.Data); got != "\x01\x02" {
+		t.Fatalf("audio data = %q, want decoded noisy base64 bytes", got)
+	}
+	if audio.SegmentID != "ctx-1" {
+		t.Fatalf("segment id = %q, want ctx-1", audio.SegmentID)
+	}
+}
+
 func TestAsyncAITTSWebsocketNextReturnsFinalMarker(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
