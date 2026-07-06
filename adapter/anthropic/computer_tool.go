@@ -12,7 +12,10 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
-const postActionDelay = 300 * time.Millisecond
+const (
+	postActionDelay = 300 * time.Millisecond
+	waitActionDelay = time.Second
+)
 
 type ComputerTool struct {
 	actions *browser.PageActions
@@ -147,12 +150,15 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 		}
 		c.actions.HoldKey(text, duration)
 	case "wait":
+		if err := waitComputerToolDelay(ctx, waitActionDelay); err != nil {
+			return nil, err
+		}
 		c.actions.Wait()
 	default:
 		return nil, fmt.Errorf("Unknown computer_use action: '%s'", action)
 	}
 
-	if err := waitPostActionDelay(ctx); err != nil {
+	if err := waitComputerToolDelay(ctx, postActionDelay); err != nil {
 		return nil, err
 	}
 
@@ -166,8 +172,8 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	return screenshotContent(frame), nil
 }
 
-func waitPostActionDelay(ctx context.Context) error {
-	timer := time.NewTimer(postActionDelay)
+func waitComputerToolDelay(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
