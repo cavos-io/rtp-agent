@@ -5088,6 +5088,16 @@ func TestRimeTTSAudioFromWebsocketIgnoresReferenceEmptyBase64Noise(t *testing.T)
 	}
 }
 
+func TestRimeTTSAudioFromWebsocketDecodesReferenceNoisyBase64(t *testing.T) {
+	audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"chunk","data":"AQ=IDBA=="}`), 24000)
+	if err != nil {
+		t.Fatalf("noisy base64 audio error = %v, want decoded like reference", err)
+	}
+	if done || transcript != "" || audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{1, 2, 3, 4}) {
+		t.Fatalf("noisy base64 audio = audio:%+v done:%v transcript:%q, want decoded PCM", audio, done, transcript)
+	}
+}
+
 func TestRimeTTSAudioFromWebsocketIgnoresUnrepresentableReferenceTimestampTimes(t *testing.T) {
 	for _, payload := range [][]byte{
 		[]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":"x","end":["0.2"]}}`),

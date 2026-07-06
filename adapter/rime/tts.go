@@ -2186,6 +2186,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 func rimeDecodeBase64Chunk(data string) ([]byte, error) {
 	clean := make([]byte, 0, len(data))
 	dataChars := 0
+	paddingChars := 0
 	for i := 0; i < len(data); i++ {
 		b := data[i]
 		switch {
@@ -2199,11 +2200,16 @@ func rimeDecodeBase64Chunk(data string) ([]byte, error) {
 			clean = append(clean, b)
 			dataChars++
 		case b == '=':
-			clean = append(clean, b)
+			paddingChars++
 		}
 	}
 	if dataChars == 0 {
 		return nil, nil
+	}
+	if paddingChars > 0 {
+		if remainder := len(clean) % 4; remainder != 0 {
+			clean = append(clean, bytes.Repeat([]byte{'='}, 4-remainder)...)
+		}
 	}
 	return base64.StdEncoding.DecodeString(string(clean))
 }
