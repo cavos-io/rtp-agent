@@ -866,7 +866,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			// content_block_start fields
 			ContentBlock *struct {
 				Type *string `json:"type"`
-				ID   string `json:"id"`
+				ID   *string `json:"id"`
 				Name *string `json:"name"`
 			} `json:"content_block"`
 
@@ -925,6 +925,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				return nil, wrappedErr
 			}
 			if *event.ContentBlock.Type == "tool_use" {
+				if event.ContentBlock.ID == nil {
+					wrappedErr := s.wrapReadError(errors.New("tool_use content_block missing id"))
+					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+						continue
+					} else if retryErr != wrappedErr {
+						return nil, retryErr
+					}
+					return nil, wrappedErr
+				}
 				if event.ContentBlock.Name == nil {
 					wrappedErr := s.wrapReadError(errors.New("tool_use content_block missing name"))
 					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
@@ -935,7 +944,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					return nil, wrappedErr
 				}
 				s.toolCallActive = true
-				s.toolCallID = event.ContentBlock.ID
+				s.toolCallID = *event.ContentBlock.ID
 				s.toolName = *event.ContentBlock.Name
 				s.toolArgs = ""
 			}

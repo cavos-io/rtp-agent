@@ -1338,6 +1338,28 @@ func TestAnthropicStreamToolUseMissingNameReturnsConnectionError(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamToolUseMissingIDReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"lookup"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{}"}}`,
+			`data: {"type":"content_block_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
 func TestAnthropicStreamContentBlockDeltaMissingDeltaReturnsConnectionError(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
