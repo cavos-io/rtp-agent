@@ -151,7 +151,9 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 		return nil, fmt.Errorf("Unknown computer_use action: '%s'", action)
 	}
 
-	time.Sleep(postActionDelay)
+	if err := waitPostActionDelay(ctx); err != nil {
+		return nil, err
+	}
 
 	frame := c.actions.LastFrame()
 	if frame == nil {
@@ -161,6 +163,17 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	}
 
 	return screenshotContent(frame), nil
+}
+
+func waitPostActionDelay(ctx context.Context) error {
+	timer := time.NewTimer(postActionDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func requireCoordinate(args map[string]interface{}, key string) (int, int, error) {

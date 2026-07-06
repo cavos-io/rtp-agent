@@ -3,8 +3,10 @@ package anthropic
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/browser"
 )
@@ -151,6 +153,22 @@ func TestComputerToolAcceptsReferenceIntegerCoordinates(t *testing.T) {
 	events := actions.Events()
 	if len(events) == 0 || events[0].X != 10 || events[0].Y != 20 {
 		t.Fatalf("events = %#v, want first event at 10,20", events)
+	}
+}
+
+func TestComputerToolPostActionDelayHonorsContextCancel(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	_, err := toolset.Execute(ctx, "screenshot", map[string]interface{}{})
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want context.Canceled", err)
+	}
+	if elapsed := time.Since(start); elapsed >= postActionDelay {
+		t.Fatalf("Execute elapsed = %v, want return before post-action delay %v", elapsed, postActionDelay)
 	}
 }
 
