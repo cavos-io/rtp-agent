@@ -149,7 +149,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if anthropicToolChoiceNone(options.ToolChoice) {
 		body["tools"] = []map[string]interface{}{}
 	}
-	if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls); toolChoice != nil {
+	if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls, options.ParallelToolCallsSet); toolChoice != nil {
 		body["tool_choice"] = toolChoice
 	}
 
@@ -280,7 +280,7 @@ func anthropicRequestID(header http.Header) string {
 	return ""
 }
 
-func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map[string]any {
+func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool, parallelToolCallsSet bool) map[string]any {
 	var toolChoice map[string]any
 	switch tc := choice.(type) {
 	case string:
@@ -309,7 +309,9 @@ func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map
 	if toolChoice == nil {
 		return nil
 	}
-	toolChoice["disable_parallel_tool_use"] = !parallelToolCalls
+	if parallelToolCallsSet {
+		toolChoice["disable_parallel_tool_use"] = !parallelToolCalls
+	}
 	return toolChoice
 }
 
