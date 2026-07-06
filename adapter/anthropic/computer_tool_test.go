@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/browser"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestComputerToolExposesComputerUseTool(t *testing.T) {
@@ -20,8 +21,8 @@ func TestComputerToolExposesComputerUseTool(t *testing.T) {
 		t.Fatalf("Tools length = %d, want 1", len(tools))
 	}
 	tool := tools[0]
-	if tool.ID() != "computer" || tool.Name() != "computer_use" {
-		t.Fatalf("tool identity = %q/%q, want computer/computer_use", tool.ID(), tool.Name())
+	if tool.ID() != "computer" || tool.Name() != "computer" {
+		t.Fatalf("tool identity = %q/%q, want computer/computer", tool.ID(), tool.Name())
 	}
 	if tool.Description() == "" {
 		t.Fatal("tool description is empty")
@@ -43,6 +44,30 @@ func TestComputerToolExposesComputerUseTool(t *testing.T) {
 	}
 	if events[0].Type != "mouse_move" || events[0].X != 10 || events[0].Y != 20 {
 		t.Fatalf("event[0] = %#v, want mouse_move at 10,20", events[0])
+	}
+}
+
+func TestComputerToolProviderNameExecutesReferenceToolCall(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+	tools := toolset.Tools()
+	toolCtx := llm.NewToolContext([]interface{}{tools[0]})
+
+	result := llm.ExecuteFunctionCall(context.Background(), &llm.FunctionToolCall{
+		Name:      "computer",
+		CallID:    "call_computer",
+		Arguments: `{"action":"left_click","coordinate":[10,20]}`,
+	}, toolCtx)
+
+	if result.RawError != nil {
+		t.Fatalf("ExecuteFunctionCall RawError = %v, want nil", result.RawError)
+	}
+	if result.FncCallOut == nil || result.FncCallOut.IsError {
+		t.Fatalf("FncCallOut = %#v, want successful computer output", result.FncCallOut)
+	}
+	events := actions.Events()
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want mouse move/down/up", len(events))
 	}
 }
 

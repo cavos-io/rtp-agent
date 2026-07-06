@@ -308,7 +308,7 @@ func (t *computerUseTool) ID() string {
 }
 
 func (t *computerUseTool) Name() string {
-	return "computer_use"
+	return "computer"
 }
 
 func (t *computerUseTool) Description() string {
