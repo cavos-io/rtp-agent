@@ -88,6 +88,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/ten"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
+	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -527,6 +528,7 @@ func init() {
 	plugin.RegisterPluginMetadata(telnyx.PluginTitle, telnyx.PluginVersion, telnyx.PluginPackage)
 	plugin.RegisterPluginDownloader(ten.PluginTitle, ten.PluginVersion, ten.PluginPackage, ten.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(trugen.PluginTitle, trugen.PluginVersion, trugen.PluginPackage)
+	plugin.RegisterPluginMetadata(ultravox.PluginTitle, ultravox.PluginVersion, ultravox.PluginPackage)
 	plugin.RegisterPluginDownloader(adapterlivekit.PluginTitle, adapterlivekit.PluginVersion, adapterlivekit.PluginPackage, adapterlivekit.Plugin{}.DownloadFiles)
 	plugin.RegisterPluginMetadata(upliftai.PluginTitle, upliftai.PluginVersion, upliftai.PluginPackage)
 	plugin.RegisterPluginMetadata(xai.PluginTitle, xai.PluginVersion, xai.PluginPackage)
@@ -840,6 +842,7 @@ type AppConfig struct {
 	TTSModelOptions                         map[string]any
 	RealtimeProvider                        string
 	RealtimeModel                           string
+	RealtimeBaseURL                         string
 	RealtimeVoice                           string
 	RealtimeTurnDetection                   string
 	RealtimeGenerateReplyTimeoutSeconds     *float64
@@ -1235,6 +1238,7 @@ func DefaultConfigFromEnv() AppConfig {
 		TTSModelOptions:                         splitEnvMap("RTP_AGENT_TTS_MODEL_OPTIONS"),
 		RealtimeProvider:                        normalizedEnv("RTP_AGENT_REALTIME_PROVIDER"),
 		RealtimeModel:                           os.Getenv("RTP_AGENT_REALTIME_MODEL"),
+		RealtimeBaseURL:                         os.Getenv("RTP_AGENT_REALTIME_BASE_URL"),
 		RealtimeVoice:                           os.Getenv("RTP_AGENT_REALTIME_VOICE"),
 		RealtimeTurnDetection:                   os.Getenv("RTP_AGENT_REALTIME_TURN_DETECTION"),
 		RealtimeGenerateReplyTimeoutSeconds:     getenvOptionalFloat("RTP_AGENT_REALTIME_GENERATE_REPLY_TIMEOUT_SECONDS"),
@@ -7419,6 +7423,8 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		return xai.NewXaiRealtimeModel(cfg.XAIAPIKey, opts...), nil
 	case providerPhonic:
 		return phonic.NewRealtimeModel(cfg.PhonicAPIKey)
+	case providerUltravox:
+		return ultravox.NewRealtimeModel(cfg.UltravoxAPIKey, ultravoxRealtimeOptionsFromConfig(cfg)...)
 	case providerAWS:
 		opts := awsRealtimeOptionsFromConfig(cfg)
 		if cfg.RealtimeVoice != "" {
@@ -7451,6 +7457,50 @@ func awsRealtimeOptionsFromConfig(cfg AppConfig) []adapteraws.AWSRealtimeOption 
 	}
 	if toolChoice := modelOptionString(cfg.RealtimeModelOptions, "tool_choice"); toolChoice != "" {
 		opts = append(opts, adapteraws.WithAWSRealtimeToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	return opts
+}
+
+func ultravoxRealtimeOptionsFromConfig(cfg AppConfig) []ultravox.RealtimeOption {
+	opts := []ultravox.RealtimeOption{}
+	if cfg.RealtimeModel != "" {
+		opts = append(opts, ultravox.WithRealtimeModel(cfg.RealtimeModel))
+	}
+	if cfg.RealtimeVoice != "" {
+		opts = append(opts, ultravox.WithRealtimeVoice(cfg.RealtimeVoice))
+	}
+	if cfg.RealtimeBaseURL != "" {
+		opts = append(opts, ultravox.WithRealtimeBaseURL(cfg.RealtimeBaseURL))
+	}
+	if systemPrompt := modelOptionString(cfg.RealtimeModelOptions, "system_prompt"); systemPrompt != "" {
+		opts = append(opts, ultravox.WithRealtimeSystemPrompt(systemPrompt))
+	}
+	if outputMedium := modelOptionString(cfg.RealtimeModelOptions, "output_medium"); outputMedium != "" {
+		opts = append(opts, ultravox.WithRealtimeOutputMedium(outputMedium))
+	}
+	if sampleRate := modelOptionInt(cfg.RealtimeModelOptions, "input_sample_rate"); sampleRate > 0 {
+		opts = append(opts, ultravox.WithRealtimeInputSampleRate(sampleRate))
+	}
+	if sampleRate := modelOptionInt(cfg.RealtimeModelOptions, "output_sample_rate"); sampleRate > 0 {
+		opts = append(opts, ultravox.WithRealtimeOutputSampleRate(sampleRate))
+	}
+	if temperature := modelOptionFloat(cfg.RealtimeModelOptions, "temperature"); temperature != nil {
+		opts = append(opts, ultravox.WithRealtimeTemperature(*temperature))
+	}
+	if languageHint := modelOptionString(cfg.RealtimeModelOptions, "language_hint"); languageHint != "" {
+		opts = append(opts, ultravox.WithRealtimeLanguageHint(languageHint))
+	}
+	if maxDuration := modelOptionString(cfg.RealtimeModelOptions, "max_duration"); maxDuration != "" {
+		opts = append(opts, ultravox.WithRealtimeMaxDuration(maxDuration))
+	}
+	if message := modelOptionString(cfg.RealtimeModelOptions, "time_exceeded_message"); message != "" {
+		opts = append(opts, ultravox.WithRealtimeTimeExceededMessage(message))
+	}
+	if enableGreeting := modelOptionBool(cfg.RealtimeModelOptions, "enable_greeting_prompt"); enableGreeting != nil {
+		opts = append(opts, ultravox.WithRealtimeEnableGreetingPrompt(*enableGreeting))
+	}
+	if firstSpeaker := modelOptionString(cfg.RealtimeModelOptions, "first_speaker"); firstSpeaker != "" {
+		opts = append(opts, ultravox.WithRealtimeFirstSpeaker(firstSpeaker))
 	}
 	return opts
 }
