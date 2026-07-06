@@ -1962,9 +1962,9 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		return nil, false, "", rimeTTSConnectionError("Rime websocket payload decode failed", fmt.Errorf("expected JSON object, got null"))
 	}
 	var message struct {
-		Type           string  `json:"type"`
-		Data           *string `json:"data"`
-		Message        string  `json:"message"`
+		Type           string          `json:"type"`
+		Data           *string         `json:"data"`
+		Message        json.RawMessage `json:"message"`
 		WordTimestamps struct {
 			Words json.RawMessage `json:"words"`
 			Start []float64       `json:"start"`
@@ -2006,10 +2006,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 	case "done":
 		return &tts.SynthesizedAudio{IsFinal: true}, true, "", nil
 	case "error":
-		if message.Message == "" {
-			message.Message = "(no message)"
-		}
-		return nil, false, "", llm.NewAPIError("Rime ws error: "+message.Message, nil, true)
+		return nil, false, "", llm.NewAPIError("Rime ws error: "+rimeTTSWebsocketErrorMessage(message.Message), nil, true)
 	default:
 		return nil, false, "", nil
 	}
@@ -2043,6 +2040,31 @@ func rimeTTSConnectionError(message string, err error) *llm.APIConnectionError {
 		return llm.NewAPIConnectionError(message)
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+}
+
+func rimeTTSWebsocketErrorMessage(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "(no message)"
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "None"
+	}
+	var boolValue bool
+	if err := json.Unmarshal(raw, &boolValue); err == nil {
+		if boolValue {
+			return "True"
+		}
+		return "False"
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return fmt.Sprint(value)
+	}
+	return string(raw)
 }
 
 func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
