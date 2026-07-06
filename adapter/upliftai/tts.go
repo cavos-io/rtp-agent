@@ -43,6 +43,7 @@ type UpliftAITTS struct {
 	apiKey                    string
 	voice                     string
 	outputFormat              string
+	numChannels               int
 	baseURL                   string
 	phraseReplacementConfigID string
 	mu                        sync.Mutex
@@ -89,6 +90,12 @@ func WithUpliftAIOutputFormat(outputFormat string) UpliftAITTSOption {
 	}
 }
 
+func WithUpliftAINumChannels(numChannels int) UpliftAITTSOption {
+	return func(t *UpliftAITTS) {
+		t.numChannels = numChannels
+	}
+}
+
 func WithUpliftAIPhraseReplacementConfigID(configID string) UpliftAITTSOption {
 	return func(t *UpliftAITTS) {
 		t.phraseReplacementConfigID = configID
@@ -122,6 +129,7 @@ func NewUpliftAITTS(apiKey string, voice string, opts ...UpliftAITTSOption) *Upl
 		apiKey:       apiKey,
 		voice:        voice,
 		outputFormat: defaultUpliftAIFormat,
+		numChannels:  1,
 		baseURL:      baseURL,
 		streams:      make(map[io.Closer]struct{}),
 	}
@@ -137,8 +145,12 @@ func (t *UpliftAITTS) Label() string { return "upliftai.TTS" }
 func (t *UpliftAITTS) Capabilities() tts.TTSCapabilities {
 	return tts.TTSCapabilities{Streaming: true, AlignedTranscript: false}
 }
-func (t *UpliftAITTS) SampleRate() int  { return defaultUpliftAISampleRate }
-func (t *UpliftAITTS) NumChannels() int { return 1 }
+func (t *UpliftAITTS) SampleRate() int { return defaultUpliftAISampleRate }
+func (t *UpliftAITTS) NumChannels() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.numChannels
+}
 
 func (t *UpliftAITTS) UpdateOptions(opts ...UpliftAITTSUpdateOption) {
 	var update upliftAITTSUpdateOptions
@@ -245,6 +257,12 @@ func (t *UpliftAITTS) requestOptions() (baseURL string, voiceID string, outputFo
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.baseURL, t.voice, t.outputFormat, t.phraseReplacementConfigID
+}
+
+func (t *UpliftAITTS) outputNumChannels() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.numChannels
 }
 
 func (t *UpliftAITTS) socketIOSynthesis(ctx context.Context, baseURL string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
@@ -550,12 +568,13 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 			if err == io.EOF {
 				s.pendingFinal = true
 			}
+			numChannels := s.currentNumChannels()
 			return &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
 					Data:              buf[:n],
 					SampleRate:        defaultUpliftAISampleRate,
-					NumChannels:       1,
-					SamplesPerChannel: uint32(n / 2),
+					NumChannels:       uint32(numChannels),
+					SamplesPerChannel: uint32(n / 2 / numChannels),
 				},
 			}, nil
 		}
@@ -1010,6 +1029,17 @@ func (s *upliftAITTSChunkedStream) currentOutputFormat() string {
 	return outputFormat
 }
 
+func (s *upliftAITTSChunkedStream) currentNumChannels() int {
+	if s.owner == nil {
+		return 1
+	}
+	numChannels := s.owner.outputNumChannels()
+	if numChannels <= 0 {
+		return 1
+	}
+	return numChannels
+}
+
 func validateUpliftAIOutputFormat(outputFormat string) error {
 	switch {
 	case outputFormat == "PCM_22050_16":
@@ -1061,7 +1091,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
 	}
-	frame = upliftAIDownmixToMono(frame)
+	frame = upliftAINormalizeChannels(frame, s.currentNumChannels())
 	if frame.SampleRate != defaultUpliftAISampleRate {
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
@@ -1106,7 +1136,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
 	}
-	frame = upliftAIDownmixToMono(frame)
+	frame = upliftAINormalizeChannels(frame, s.currentNumChannels())
 	if frame.SampleRate != defaultUpliftAISampleRate {
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
@@ -1135,7 +1165,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 		if err != nil {
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
 		}
-		frame = upliftAIDownmixToMono(frame)
+		frame = upliftAINormalizeChannels(frame, s.currentNumChannels())
 		if frame.SampleRate != defaultUpliftAISampleRate {
 			resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 			if err != nil {
@@ -1278,6 +1308,13 @@ func decodeUpliftAIMuLaw(data []byte) []byte {
 		pcm[i*2+1] = byte(value >> 8)
 	}
 	return pcm
+}
+
+func upliftAINormalizeChannels(frame *model.AudioFrame, numChannels int) *model.AudioFrame {
+	if numChannels > 1 {
+		return frame
+	}
+	return upliftAIDownmixToMono(frame)
 }
 
 func upliftAIDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {

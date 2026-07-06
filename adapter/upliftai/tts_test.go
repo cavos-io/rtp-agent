@@ -109,6 +109,44 @@ func TestUpliftAITTSReferenceDefaultsAndCapabilities(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSConfiguredNumChannelsControlsWAVOutput(t *testing.T) {
+	stereoPCM := []byte{
+		0x01, 0x00, 0x02, 0x00,
+		0x03, 0x00, 0x04, 0x00,
+	}
+	provider := newUpliftAITestHTTPProvider(
+		"test-key",
+		"",
+		WithUpliftAIOutputFormat("WAV_22050_16"),
+		WithUpliftAINumChannels(2),
+	)
+	if got, want := provider.NumChannels(), 2; got != want {
+		t.Fatalf("NumChannels() = %d, want configured reference channel count %d", got, want)
+	}
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(upliftAITestWAV(stereoPCM, 22050, 2)))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded stereo WAV frame", audio)
+	}
+	if got, want := audio.Frame.NumChannels, uint32(2); got != want {
+		t.Fatalf("frame channels = %d, want configured reference channel count %d", got, want)
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(2); got != want {
+		t.Fatalf("samples per channel = %d, want %d", got, want)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, stereoPCM) {
+		t.Fatalf("audio data = %#v, want stereo PCM unchanged %#v", got, stereoPCM)
+	}
+}
+
 func TestUpliftAITTSUsesEnvironmentAPIKey(t *testing.T) {
 	t.Setenv("UPLIFTAI_API_KEY", "env-secret")
 
