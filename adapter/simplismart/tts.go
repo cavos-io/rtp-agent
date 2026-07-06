@@ -303,10 +303,7 @@ func (s *simplismartTTSChunkedStream) ensureResponse() error {
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return llm.NewAPITimeoutError(err.Error())
-		}
-		return llm.NewAPIConnectionError(fmt.Sprintf("Simplismart TTS request failed: %v", err))
+		return simplismartHTTPTransportError("Simplismart TTS request failed", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)

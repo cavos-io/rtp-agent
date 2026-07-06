@@ -326,6 +326,25 @@ func TestSimplismartSTTRecognizeReturnsAPITimeoutError(t *testing.T) {
 	}
 }
 
+func TestSimplismartSTTRecognizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: simplismartSTTRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, simplismartTimeoutError{}
+	})}
+
+	provider := NewSimplismartSTT("test-key")
+
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APITimeoutError", event)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSimplismartSTTRecognizeCallerCancelReturnsContextCanceled(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
@@ -708,4 +727,18 @@ type simplismartSTTRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f simplismartSTTRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type simplismartTimeoutError struct{}
+
+func (simplismartTimeoutError) Error() string {
+	return "simplismart timeout"
+}
+
+func (simplismartTimeoutError) Timeout() bool {
+	return true
+}
+
+func (simplismartTimeoutError) Temporary() bool {
+	return true
 }

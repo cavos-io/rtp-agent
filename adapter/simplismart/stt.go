@@ -246,10 +246,7 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Simplismart STT request failed: %v", err))
+		return nil, simplismartHTTPTransportError("Simplismart STT request failed", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -261,6 +258,17 @@ func (s *SimplismartSTT) Recognize(ctx context.Context, frames []*model.AudioFra
 		return nil, err
 	}
 	return simplismartSTTSpeechEvent(resolveSimplismartSTTLanguage(s, language), result), nil
+}
+
+func simplismartHTTPTransportError(prefix string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", prefix, err))
 }
 
 func simplismartSTTWAVBytes(frames []*model.AudioFrame) []byte {
