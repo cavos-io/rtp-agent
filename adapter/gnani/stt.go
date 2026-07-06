@@ -172,6 +172,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -183,6 +190,13 @@ func (s *STT) Recognize(ctx context.Context, frames []*model.AudioFrame, languag
 
 	var result gnaniSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, err
 	}
 	return gnaniSpeechEventFromResponse(result, resolveSTTLanguage(s, language))

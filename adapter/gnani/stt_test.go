@@ -178,6 +178,66 @@ func TestGnaniSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+type gnaniSTTTimeoutError struct{}
+
+func (gnaniSTTTimeoutError) Error() string   { return "gnani timeout" }
+func (gnaniSTTTimeoutError) Timeout() bool   { return true }
+func (gnaniSTTTimeoutError) Temporary() bool { return true }
+
+type gnaniSTTReadCloser struct {
+	err error
+}
+
+func (r gnaniSTTReadCloser) Read(_ []byte) (int, error) {
+	return 0, r.err
+}
+
+func (r gnaniSTTReadCloser) Close() error {
+	return nil
+}
+
+func TestGnaniSTTRecognizeReturnsAPITimeoutErrorOnTransportTimeout(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return nil, gnaniSTTTimeoutError{}
+	})}
+
+	provider := NewSTT("test-key")
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
+func TestGnaniSTTRecognizeReturnsAPITimeoutErrorOnResponseReadTimeout(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniSTTRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       gnaniSTTReadCloser{err: gnaniSTTTimeoutError{}},
+			Request:    r,
+		}, nil
+	})}
+
+	provider := NewSTT("test-key")
+
+	_, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatal("Recognize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestGnaniSTTWebsocketURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewSTT("test-key", WithSTTBaseURL("https://gnani.example/"), WithSTTLanguage("hi-IN"))
 
