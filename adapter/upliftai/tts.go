@@ -9,11 +9,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
 	"github.com/cavos-io/rtp-agent/core/audio/codecs"
@@ -30,6 +32,7 @@ const (
 	defaultUpliftAIFormat     = "MP3_22050_32"
 	defaultUpliftAIBaseURL    = "wss://api.upliftai.org"
 	upliftAISocketIONamespace = "/text-to-speech/multi-stream"
+	upliftAISocketIOReadyWait = 5 * time.Second
 )
 
 type UpliftAITTS struct {
@@ -50,6 +53,10 @@ type upliftAISocketIOConn interface {
 	ReadMessage() (int, []byte, error)
 	WriteMessage(messageType int, data []byte) error
 	Close() error
+}
+
+type upliftAISocketIODeadlineConn interface {
+	SetReadDeadline(t time.Time) error
 }
 
 var upliftAISocketIODialContext = func(ctx context.Context, endpoint string) (upliftAISocketIOConn, error) {
@@ -634,12 +641,17 @@ func buildUpliftAISocketIOURL(baseURL string) (string, error) {
 }
 
 func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, apiKey string) error {
+	namespaceConnected := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			if namespaceConnected && upliftAIIsTimeoutError(err) {
+				upliftAISetSocketIOReadDeadline(conn, time.Time{})
+				return nil
+			}
 			return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io connect failed: %v", err))
 		}
 		packet := string(msg)
@@ -659,11 +671,27 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 		if strings.HasPrefix(packet, "42"+upliftAISocketIONamespace+",") {
 			payload := strings.TrimPrefix(packet, "42"+upliftAISocketIONamespace+",")
 			if upliftAISocketIOMessageType(payload) == "ready" {
+				upliftAISetSocketIOReadDeadline(conn, time.Time{})
 				return nil
 			}
 			continue
 		}
+		if strings.HasPrefix(packet, "40"+upliftAISocketIONamespace) {
+			namespaceConnected = true
+			upliftAISetSocketIOReadDeadline(conn, time.Now().Add(upliftAISocketIOReadyWait))
+		}
 	}
+}
+
+func upliftAISetSocketIOReadDeadline(conn upliftAISocketIOConn, deadline time.Time) {
+	if deadlineConn, ok := conn.(upliftAISocketIODeadlineConn); ok {
+		_ = deadlineConn.SetReadDeadline(deadline)
+	}
+}
+
+func upliftAIIsTimeoutError(err error) bool {
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func upliftAISocketIOMessageType(payload string) string {

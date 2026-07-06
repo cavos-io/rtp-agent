@@ -791,6 +791,48 @@ func TestUpliftAITTSChunkedStreamWaitsForSocketIOReadyBeforeSynthesize(t *testin
 	}
 }
 
+func TestUpliftAITTSChunkedStreamFallsBackAfterSocketIONamespaceConnect(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	conn.readTimeout = 6 * time.Second
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "fallback")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		resultCh <- err
+	}()
+	if connect := receiveUpliftAITestString(t, conn.writes, "namespace connect packet"); connect != `40/text-to-speech/multi-stream,{"token":"test-key"}` {
+		t.Fatalf("connect packet = %q, want reference namespace auth packet", connect)
+	}
+	synthesize := receiveUpliftAITestStringWithin(t, conn.writes, "synthesize packet after namespace fallback", 7*time.Second)
+	if !strings.HasPrefix(synthesize, `42/text-to-speech/multi-stream,`) {
+		t.Fatalf("synthesize packet = %q, want namespace event after fallback", synthesize)
+	}
+	requestID := upliftAITestSocketIORequestID(t, synthesize)
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + requestID + `"}]`
+	if err := receiveUpliftAITestError(t, resultCh, "stream Next completion"); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIODisconnectEmitsFinalMarker(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
@@ -862,10 +904,15 @@ func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) 
 
 func receiveUpliftAITestString(t *testing.T, ch <-chan string, name string) string {
 	t.Helper()
+	return receiveUpliftAITestStringWithin(t, ch, name, 2*time.Second)
+}
+
+func receiveUpliftAITestStringWithin(t *testing.T, ch <-chan string, name string, timeout time.Duration) string {
+	t.Helper()
 	select {
 	case value := <-ch:
 		return value
-	case <-time.After(2 * time.Second):
+	case <-time.After(timeout):
 		t.Fatalf("timed out waiting for %s", name)
 		return ""
 	}
@@ -922,23 +969,30 @@ func upliftAITestSocketIORequestID(t *testing.T, packet string) string {
 }
 
 type upliftAITestSocketIOConn struct {
-	reads    chan string
-	readErrs chan error
-	writes   chan string
-	closed   chan struct{}
-	once     sync.Once
+	reads        chan string
+	readErrs     chan error
+	writes       chan string
+	closed       chan struct{}
+	deadlineCh   chan time.Time
+	deadlineMu   sync.Mutex
+	readDeadline time.Time
+	readTimeout  time.Duration
+	once         sync.Once
 }
 
 func newUpliftAITestSocketIOConn() *upliftAITestSocketIOConn {
 	return &upliftAITestSocketIOConn{
-		reads:    make(chan string, 10),
-		readErrs: make(chan error, 10),
-		writes:   make(chan string, 10),
-		closed:   make(chan struct{}),
+		reads:      make(chan string, 10),
+		readErrs:   make(chan error, 10),
+		writes:     make(chan string, 10),
+		closed:     make(chan struct{}),
+		deadlineCh: make(chan time.Time, 10),
 	}
 }
 
 func (c *upliftAITestSocketIOConn) ReadMessage() (int, []byte, error) {
+	timer := time.NewTimer(c.currentReadTimeout())
+	defer timer.Stop()
 	select {
 	case msg := <-c.reads:
 		return 1, []byte(msg), nil
@@ -946,10 +1000,55 @@ func (c *upliftAITestSocketIOConn) ReadMessage() (int, []byte, error) {
 		return 0, nil, err
 	case <-c.closed:
 		return 0, nil, io.ErrClosedPipe
-	case <-time.After(2 * time.Second):
+	case <-c.deadlineCh:
+		return c.ReadMessage()
+	case <-timer.C:
+		if c.hasReadDeadline() {
+			return 0, nil, upliftAITestTimeoutError{}
+		}
 		return 0, nil, errors.New("timed out waiting for fake socket.io read")
 	}
 }
+
+func (c *upliftAITestSocketIOConn) SetReadDeadline(deadline time.Time) error {
+	c.deadlineMu.Lock()
+	c.readDeadline = deadline
+	c.deadlineMu.Unlock()
+	select {
+	case c.deadlineCh <- deadline:
+	default:
+	}
+	return nil
+}
+
+func (c *upliftAITestSocketIOConn) currentReadTimeout() time.Duration {
+	c.deadlineMu.Lock()
+	deadline := c.readDeadline
+	c.deadlineMu.Unlock()
+	if !deadline.IsZero() {
+		wait := time.Until(deadline)
+		if wait <= 0 {
+			return time.Nanosecond
+		}
+		return wait
+	}
+	if c.readTimeout > 0 {
+		return c.readTimeout
+	}
+	return 2 * time.Second
+}
+
+func (c *upliftAITestSocketIOConn) hasReadDeadline() bool {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	return !c.readDeadline.IsZero()
+}
+
+type upliftAITestTimeoutError struct{}
+
+func (upliftAITestTimeoutError) Error() string   { return "fake socket.io read timeout" }
+func (upliftAITestTimeoutError) Timeout() bool   { return true }
+func (upliftAITestTimeoutError) Temporary() bool { return true }
 
 func (c *upliftAITestSocketIOConn) WriteMessage(_ int, data []byte) error {
 	select {
