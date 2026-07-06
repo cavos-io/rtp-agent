@@ -527,6 +527,24 @@ func TestResembleTTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestResembleTTSAudioFromWebsocketIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"audio","request_id":7,"audio_content":"!!!!"}`),
+		[]byte(`{"type":"audio","request_id":8,"audio_content":"==="}`),
+	} {
+		audio, done, requestID, err := resembleTTSAudioFromWebsocketMessage(payload)
+		if err != nil {
+			t.Fatalf("audio from websocket noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("noise %s = audio:%+v done:%v requestID:%d, want ignored empty chunk", payload, audio, done, requestID)
+		}
+		if requestID == 0 {
+			t.Fatalf("noise %s request id = 0, want provider request id preserved", payload)
+		}
+	}
+}
+
 func TestResembleTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
 	cases := []struct {
 		name    string

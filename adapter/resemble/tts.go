@@ -621,7 +621,7 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 		if message.AudioContent == "" {
 			return nil, false, message.RequestID, nil
 		}
-		audio, err := base64.StdEncoding.DecodeString(message.AudioContent)
+		audio, err := resembleDecodeWebsocketBase64(message.AudioContent)
 		if err != nil {
 			return nil, false, message.RequestID, resembleTTSConnectionError("Resemble websocket audio decode failed", err)
 		}
@@ -640,6 +640,29 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 	default:
 		return nil, false, message.RequestID, nil
 	}
+}
+
+func resembleDecodeWebsocketBase64(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func resembleTTSConnectionError(message string, err error) *llm.APIConnectionError {
