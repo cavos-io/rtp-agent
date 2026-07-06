@@ -871,7 +871,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			} `json:"content_block"`
 
 			// content_block_delta fields
-			Delta struct {
+			Delta *struct {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
 				PartialJson string `json:"partial_json"`
@@ -923,6 +923,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			}
 
 		case "content_block_delta":
+			if event.Delta == nil {
+				wrappedErr := s.wrapReadError(errors.New("content_block_delta missing delta"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
 			if event.Delta.Type == "text_delta" {
 				text, emit := s.visibleAnthropicTextDelta(event.Delta.Text)
 				if !emit {
