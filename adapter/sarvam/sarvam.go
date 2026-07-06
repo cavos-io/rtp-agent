@@ -1634,7 +1634,7 @@ func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.audios = result.Audios
 	}
 	if s.nextAudio < len(s.audios) {
-		data, err := base64.StdEncoding.DecodeString(s.audios[s.nextAudio])
+		data, err := decodeSarvamTTSBase64Audio(s.audios[s.nextAudio])
 		if err != nil {
 			return nil, err
 		}
@@ -1883,7 +1883,7 @@ func sarvamTTSAudioFromStreamMessage(payload []byte, sampleRate int, outputAudio
 		if message.Data.Audio == "" {
 			return nil, false, nil
 		}
-		data, err := base64.StdEncoding.DecodeString(message.Data.Audio)
+		data, err := decodeSarvamTTSBase64Audio(message.Data.Audio)
 		if err != nil {
 			return nil, false, nil
 		}
@@ -1917,6 +1917,33 @@ func sarvamTTSErrorMessageError(payload []byte, message string) error {
 		}
 	}
 	return llm.NewAPIStatusError("TTS API error from Sarvam: "+raw, http.StatusInternalServerError, "", body)
+}
+
+func decodeSarvamTTSBase64Audio(value string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return data, nil
+	}
+	filtered := make([]byte, 0, len(value))
+	hasData := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'A' && c <= 'Z',
+			c >= 'a' && c <= 'z',
+			c >= '0' && c <= '9',
+			c == '+',
+			c == '/':
+			filtered = append(filtered, c)
+			hasData = true
+		case c == '=':
+			filtered = append(filtered, c)
+		}
+	}
+	if !hasData {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
 
 func sarvamCompactJSON(payload []byte) string {

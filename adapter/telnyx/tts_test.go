@@ -446,13 +446,18 @@ func TestTelnyxTTSAudioFromMessageDecodesBase64Audio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("empty message: %v", err)
 	}
-	if empty != nil || !done {
-		t.Fatalf("empty=%+v done=%v, want done with no audio", empty, done)
+	if empty != nil || done {
+		t.Fatalf("empty=%+v done=%v, want ignored no-audio message", empty, done)
 	}
 
 	audioBytes, done, err := telnyxTTSAudioBytesFromMessage([]byte(`not json`))
 	if err != nil || audioBytes != nil || done {
 		t.Fatalf("invalid JSON = audio=%v done=%v err=%v, want ignored message", audioBytes, done, err)
+	}
+
+	audioBytes, done, err = telnyxTTSAudioBytesFromMessage([]byte(`{}`))
+	if err != nil || audioBytes != nil || done {
+		t.Fatalf("no-audio JSON = audio=%v done=%v err=%v, want ignored message", audioBytes, done, err)
 	}
 }
 

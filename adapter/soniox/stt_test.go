@@ -574,6 +574,16 @@ func TestSonioxProcessMessageEmitsInterimPreflightFinalAndUsage(t *testing.T) {
 	}
 }
 
+func TestSonioxProcessMessageIgnoresReferenceMalformedTextFrame(t *testing.T) {
+	events, err := processSonioxMessage(&sonioxMessageState{}, []byte(`not-json`))
+	if err != nil {
+		t.Fatalf("malformed text frame error = %v, want nil", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want ignored malformed frame", events)
+	}
+}
+
 func TestSonioxProcessMessageFlushesTranscriptBeforeStatusError(t *testing.T) {
 	state := &sonioxMessageState{}
 

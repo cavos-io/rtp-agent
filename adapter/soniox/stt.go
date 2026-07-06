@@ -503,7 +503,7 @@ type sonioxToken struct {
 func processSonioxMessage(state *sonioxMessageState, payload []byte) ([]*stt.SpeechEvent, error) {
 	var message sonioxMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, err
+		return nil, nil
 	}
 	var body map[string]any
 	_ = json.Unmarshal(payload, &body)

@@ -360,6 +360,26 @@ func TestGradiumTTSWebsocketMessageMapsAudioAndEnd(t *testing.T) {
 	}
 }
 
+func TestGradiumTTSWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
+	cases := [][]byte{
+		[]byte(`{`),
+		[]byte(`{"type":"audio","audio":"abcde"}`),
+	}
+	for _, payload := range cases {
+		audio, done, err := gradiumTTSAudioFromMessage(payload, 48000)
+		if err == nil {
+			t.Fatalf("payload %s returned nil error", payload)
+		}
+		if audio != nil || done {
+			t.Fatalf("payload %s audio=%+v done=%v, want no audio and not done", payload, audio, done)
+		}
+		var apiErr *llm.APIConnectionError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("payload %s error = %T %v, want APIConnectionError", payload, err, err)
+		}
+	}
+}
+
 func TestGradiumTTSWebsocketMessageIgnoresReferenceEmptyBase64Noise(t *testing.T) {
 	for _, payload := range [][]byte{
 		[]byte(`{"type":"audio","audio":"!!!!"}`),

@@ -22,8 +22,21 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
+
+type rimeFixedSentenceTokenizer struct {
+	tokens []string
+}
+
+func (t rimeFixedSentenceTokenizer) Tokenize(string, string) []string {
+	return append([]string(nil), t.tokens...)
+}
+
+func (t rimeFixedSentenceTokenizer) Stream(string) tokenize.SentenceStream {
+	return tokenize.NewBasicSentenceTokenizer().Stream("")
+}
 
 func TestRimeTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
@@ -1002,6 +1015,47 @@ func TestRimeTTSSampleRateOptionsAllowReferenceZeroValue(t *testing.T) {
 	}
 	if got := payload["samplingRate"]; got != float64(0) {
 		t.Fatalf("updated samplingRate = %#v, want 0", got)
+	}
+	if updatable.SampleRate() != defaultRimeSampleRate {
+		t.Fatalf("updated output sample rate = %d, want constructor sample rate unchanged", updatable.SampleRate())
+	}
+}
+
+func TestRimeTTSSampleRateOptionsAllowReferenceNegativeValue(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSampleRate(-8000))
+
+	if provider.SampleRate() != -8000 {
+		t.Fatalf("sample rate = %d, want explicit negative like reference", provider.SampleRate())
+	}
+	req, err := buildRimeTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build constructor request: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode constructor body: %v", err)
+	}
+	if got := payload["samplingRate"]; got != float64(-8000) {
+		t.Fatalf("constructor samplingRate = %#v, want -8000", got)
+	}
+
+	streaming := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSSampleRate(-8000))
+	query := buildRimeTTSWebsocketURL(streaming).Query()
+	assertRimePayload(t, queryMap(query), "samplingRate", "-8000")
+
+	updatable := NewRimeTTS("test-key", "")
+	if err := updatable.UpdateOptions(WithRimeTTSSampleRate(-8000)); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	req, err = buildRimeTTSRequest(context.Background(), updatable, "hello")
+	if err != nil {
+		t.Fatalf("build updated request: %v", err)
+	}
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated body: %v", err)
+	}
+	if got := payload["samplingRate"]; got != float64(-8000) {
+		t.Fatalf("updated samplingRate = %#v, want -8000", got)
 	}
 	if updatable.SampleRate() != defaultRimeSampleRate {
 		t.Fatalf("updated output sample rate = %d, want constructor sample rate unchanged", updatable.SampleRate())
@@ -2873,6 +2927,97 @@ func TestRimeTTSStreamBuffersShortReferenceSentenceBeforeBoundary(t *testing.T) 
 	assertRimePayload(t, writes[0], "text", "Dr. Smith is here. Next sentence is long enough. ")
 }
 
+func TestRimeTTSStreamUsesReferenceBlingfireTokenizerForBlankLines(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("First paragraph without punctuation\n\nSecond paragraph without punctuation"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after PushText = %d (%#v), want blank-line text buffered like reference blingfire", len(writes), writes)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want one normalized text packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "First paragraph without punctuation Second paragraph without punctuation ")
+}
+
+func TestRimeTTSStreamUsesConfiguredReferenceTokenizer(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeFixedSentenceTokenizer{tokens: []string{"custom packet"}}))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text ignored by tokenizer"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after PushText = %d, want custom tokenizer tail buffered until Flush", len(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want one custom tokenizer packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "custom packet ")
+}
+
+func TestRimeTTSUpdateOptionsUsesConfiguredTokenizer(t *testing.T) {
+	provider := NewRimeTTS("test-key", "")
+	if err := provider.UpdateOptions(WithRimeTTSSentenceTokenizer(rimeFixedSentenceTokenizer{tokens: []string{"updated packet"}})); err != nil {
+		t.Fatalf("UpdateOptions tokenizer error = %v", err)
+	}
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text ignored by updated tokenizer"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want updated tokenizer packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "updated packet ")
+}
+
 func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
 	var writes []map[string]any
 	stream := &rimeTTSSynthesizeStream{
@@ -4059,6 +4204,14 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("frame = %+v, want 24000 Hz mono", audio.Frame)
 	}
 
+	ignored, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":123,"data":"AQIDBA=="}`), 24000)
+	if err != nil {
+		t.Fatalf("numeric message type: %v", err)
+	}
+	if ignored != nil || done || transcript != "" {
+		t.Fatalf("numeric message type = audio:%+v done:%v transcript:%q, want ignored", ignored, done, transcript)
+	}
+
 	timedAudio, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":["hi","there"],"start":[0.1,0.3],"end":[0.2,0.5]}}`), 24000)
 	if err != nil {
 		t.Fatalf("timestamps message: %v", err)
@@ -4082,6 +4235,46 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 	if done || transcript != "" || truncated == nil || truncated.DeltaText != "keep " || len(truncated.TimedTranscript) != 1 {
 		t.Fatalf("truncated timestamps = audio:%+v done:%v transcript:%q, want shortest zip", truncated, done, transcript)
+	}
+
+	stringWords, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":"hi","start":[0.1,0.3],"end":[0.2,0.4]}}`), 24000)
+	if err != nil {
+		t.Fatalf("string timestamp words message: %v", err)
+	}
+	if done || transcript != "" || stringWords == nil || stringWords.DeltaText != "h i " || len(stringWords.TimedTranscript) != 2 {
+		t.Fatalf("string timestamp words = audio:%+v done:%v transcript:%q, want reference character zip", stringWords, done, transcript)
+	}
+
+	falseyWords, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":false,"start":[0.1],"end":[0.2]}}`), 24000)
+	if err != nil {
+		t.Fatalf("falsey timestamp words message: %v", err)
+	}
+	if falseyWords != nil || done || transcript != "" {
+		t.Fatalf("falsey timestamp words = audio:%+v done:%v transcript:%q, want ignored like reference", falseyWords, done, transcript)
+	}
+
+	falseyStarts, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":false,"end":[0.2]}}`), 24000)
+	if err != nil {
+		t.Fatalf("falsey timestamp starts message: %v", err)
+	}
+	if falseyStarts != nil || done || transcript != "" {
+		t.Fatalf("falsey timestamp starts = audio:%+v done:%v transcript:%q, want ignored like reference", falseyStarts, done, transcript)
+	}
+
+	falseyTimestamps, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":false}`), 24000)
+	if err != nil {
+		t.Fatalf("falsey word_timestamps message: %v", err)
+	}
+	if falseyTimestamps != nil || done || transcript != "" {
+		t.Fatalf("falsey word_timestamps = audio:%+v done:%v transcript:%q, want ignored like reference", falseyTimestamps, done, transcript)
+	}
+
+	emptyListTimestamps, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":[]}`), 24000)
+	if err != nil {
+		t.Fatalf("empty-list word_timestamps message: %v", err)
+	}
+	if emptyListTimestamps != nil || done || transcript != "" {
+		t.Fatalf("empty-list word_timestamps = audio:%+v done:%v transcript:%q, want ignored like reference", emptyListTimestamps, done, transcript)
 	}
 
 	finished, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"done"}`), 24000)
@@ -4112,6 +4305,54 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 	} else if err.Error() != "Rime ws error: (no message)" {
 		t.Fatalf("empty error message = %q, want reference fallback", err)
 	}
+
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":123}`), 24000); err == nil {
+		t.Fatal("numeric error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("numeric error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Rime ws error: 123" {
+			t.Fatalf("numeric APIError message = %q, want reference message", apiErr.Message)
+		}
+	}
+
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":{}}`), 24000); err == nil {
+		t.Fatal("object error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("object error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Rime ws error: {}" {
+			t.Fatalf("object APIError message = %q, want Python-style empty dict", apiErr.Message)
+		}
+	}
+
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":{"b":1,"a":"x"}}`), 24000); err == nil {
+		t.Fatal("ordered object error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("ordered object error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Rime ws error: {'b': 1, 'a': 'x'}" {
+			t.Fatalf("ordered object APIError message = %q, want Python-style dict order", apiErr.Message)
+		}
+	}
+
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":["bad",1]}`), 24000); err == nil {
+		t.Fatal("array error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("array error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Rime ws error: ['bad', 1]" {
+			t.Fatalf("array APIError message = %q, want Python-style list", apiErr.Message)
+		}
+	}
 }
 
 func TestRimeTTSAudioFromWebsocketIgnoresReferenceEmptyBase64Noise(t *testing.T) {
@@ -4137,6 +4378,10 @@ func TestRimeTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *t
 		{
 			name:    "malformed json",
 			payload: []byte(`{`),
+		},
+		{
+			name:    "null json",
+			payload: []byte(`null`),
 		},
 		{
 			name:    "malformed audio",

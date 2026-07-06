@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/blingfire"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -83,6 +85,7 @@ type RimeTTS struct {
 	mistPhonemizeBrackets    *bool
 	useWebsocket             bool
 	segment                  string
+	sentenceTokenizer        tokenize.SentenceTokenizer
 	streamResponseTimeout    time.Duration
 	closed                   bool
 	modelTouched             bool
@@ -139,11 +142,9 @@ func WithRimeTTSVoice(voice string) RimeTTSOption {
 
 func WithRimeTTSSampleRate(sampleRate int) RimeTTSOption {
 	return func(t *RimeTTS) {
-		if sampleRate >= 0 {
-			t.requestSampleRate = sampleRate
-			t.requestSampleRateSet = true
-			t.requestSampleRateTouched = true
-		}
+		t.requestSampleRate = sampleRate
+		t.requestSampleRateSet = true
+		t.requestSampleRateTouched = true
 	}
 }
 
@@ -231,6 +232,14 @@ func WithRimeTTSSegment(segment string) RimeTTSOption {
 	}
 }
 
+func WithRimeTTSSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) RimeTTSOption {
+	return func(t *RimeTTS) {
+		if tokenizer != nil {
+			t.sentenceTokenizer = tokenizer
+		}
+	}
+}
+
 func WithRimeTTSStreamResponseTimeout(timeout time.Duration) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if timeout >= 0 {
@@ -256,6 +265,7 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		timeScaleFactors:      make(map[string]*float64),
 		maxTokensByModel:      make(map[string]*int),
 		segment:               defaultRimeSegment,
+		sentenceTokenizer:     newRimeTTSSentenceTokenizer(),
 		streamResponseTimeout: defaultRimeStreamTimeout,
 	}
 	for _, opt := range opts {
@@ -659,6 +669,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		mistPhonemizeBrackets:    cloneBoolPtr(t.mistPhonemizeBrackets),
 		useWebsocket:             t.useWebsocket,
 		segment:                  t.segment,
+		sentenceTokenizer:        t.sentenceTokenizer,
 		streamResponseTimeout:    t.streamResponseTimeout,
 	}
 	t.mu.Unlock()
@@ -715,6 +726,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.mistPhonemizeBrackets = candidate.mistPhonemizeBrackets
 	t.useWebsocket = candidate.useWebsocket
 	t.segment = candidate.segment
+	t.sentenceTokenizer = candidate.sentenceTokenizer
 	t.streamResponseTimeout = candidate.streamResponseTimeout
 	t.mu.Unlock()
 
@@ -814,17 +826,18 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rimeTTSSynthesizeStream{
-		conn:            conn,
-		ctx:             streamCtx,
-		cancel:          cancel,
-		provider:        t,
-		requestID:       cavosmath.ShortUUID(""),
-		contextID:       cavosmath.ShortUUID(""),
-		websocketURL:    websocketURL,
-		poolGeneration:  poolGeneration,
-		responseTimeout: t.streamResponseTimeout,
-		events:          make(chan *tts.SynthesizedAudio, 100),
-		errCh:           make(chan error, 1),
+		conn:              conn,
+		ctx:               streamCtx,
+		cancel:            cancel,
+		provider:          t,
+		requestID:         cavosmath.ShortUUID(""),
+		contextID:         cavosmath.ShortUUID(""),
+		websocketURL:      websocketURL,
+		poolGeneration:    poolGeneration,
+		responseTimeout:   t.streamResponseTimeout,
+		sentenceTokenizer: t.sentenceTokenizer,
+		events:            make(chan *tts.SynthesizedAudio, 100),
+		errCh:             make(chan error, 1),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -1181,6 +1194,10 @@ func buildRimeTTSEOSMessage() ([]byte, error) {
 	})
 }
 
+func newRimeTTSSentenceTokenizer() tokenize.SentenceTokenizer {
+	return blingfire.NewSentenceTokenizer("", 20, 10)
+}
+
 type rimeTTSChunkedStream struct {
 	resp         *http.Response
 	ctx          context.Context
@@ -1485,6 +1502,7 @@ type rimeTTSSynthesizeStream struct {
 	readStarted           bool
 	pendingText           string
 	pushedText            string
+	sentenceTokenizer     tokenize.SentenceTokenizer
 	audioSeen             bool
 	pendingPCM            []byte
 	pendingTranscriptText string
@@ -1575,7 +1593,7 @@ func (s *rimeTTSSynthesizeStream) EndInput() error {
 
 func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 	if s.pendingText != "" {
-		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		text := strings.Join(s.tokenizerLocked().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
 		if err := s.sendSentenceLocked(text); err != nil {
 			s.closeAfterWriteFailureLocked()
@@ -1602,7 +1620,7 @@ func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 
 func (s *rimeTTSSynthesizeStream) sendCompleteSentencesLocked() error {
 	for {
-		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		tokens := s.tokenizerLocked().Tokenize(s.pendingText, "")
 		if len(tokens) <= 1 {
 			return nil
 		}
@@ -1619,6 +1637,13 @@ func (s *rimeTTSSynthesizeStream) sendCompleteSentencesLocked() error {
 			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
 		})
 	}
+}
+
+func (s *rimeTTSSynthesizeStream) tokenizerLocked() tokenize.SentenceTokenizer {
+	if s.sentenceTokenizer != nil {
+		return s.sentenceTokenizer
+	}
+	return newRimeTTSSentenceTokenizer()
 }
 
 func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
@@ -1960,20 +1985,19 @@ func rimeTTSReadErrorWithRequestID(err error, requestID string) error {
 }
 
 func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, string, error) {
+	if bytes.Equal(bytes.TrimSpace(payload), []byte("null")) {
+		return nil, false, "", rimeTTSConnectionError("Rime websocket payload decode failed", fmt.Errorf("expected JSON object, got null"))
+	}
 	var message struct {
-		Type           string  `json:"type"`
-		Data           *string `json:"data"`
-		Message        string  `json:"message"`
-		WordTimestamps struct {
-			Words []string  `json:"words"`
-			Start []float64 `json:"start"`
-			End   []float64 `json:"end"`
-		} `json:"word_timestamps"`
+		Type           json.RawMessage `json:"type"`
+		Data           *string         `json:"data"`
+		Message        json.RawMessage `json:"message"`
+		WordTimestamps json.RawMessage `json:"word_timestamps"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return nil, false, "", rimeTTSConnectionError("Rime websocket payload decode failed", err)
 	}
-	switch message.Type {
+	switch rimeTTSWebsocketMessageType(message.Type) {
 	case "chunk":
 		if message.Data == nil {
 			return nil, false, "", rimeTTSConnectionError("Rime websocket chunk missing data", nil)
@@ -1990,7 +2014,23 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		}
 		return rimeTTSAudioFrame(audio, sampleRate), false, "", nil
 	case "timestamps":
-		timed := rimeTTSTimedTranscript(message.WordTimestamps.Words, message.WordTimestamps.Start, message.WordTimestamps.End)
+		wordTimestamps, err := rimeTTSWordTimestamps(message.WordTimestamps)
+		if err != nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
+		}
+		words, err := rimeTTSTimestampWords(wordTimestamps.Words)
+		if err != nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
+		}
+		starts, err := rimeTTSTimestampTimes(wordTimestamps.Start)
+		if err != nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
+		}
+		ends, err := rimeTTSTimestampTimes(wordTimestamps.End)
+		if err != nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
+		}
+		timed := rimeTTSTimedTranscript(words, starts, ends)
 		if len(timed) == 0 {
 			return nil, false, "", nil
 		}
@@ -2001,10 +2041,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 	case "done":
 		return &tts.SynthesizedAudio{IsFinal: true}, true, "", nil
 	case "error":
-		if message.Message == "" {
-			message.Message = "(no message)"
-		}
-		return nil, false, "", llm.NewAPIError("Rime ws error: "+message.Message, nil, true)
+		return nil, false, "", llm.NewAPIError("Rime ws error: "+rimeTTSWebsocketErrorMessage(message.Message), nil, true)
 	default:
 		return nil, false, "", nil
 	}
@@ -2038,6 +2075,201 @@ func rimeTTSConnectionError(message string, err error) *llm.APIConnectionError {
 		return llm.NewAPIConnectionError(message)
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+}
+
+func rimeTTSWebsocketMessageType(raw json.RawMessage) string {
+	var messageType string
+	if err := json.Unmarshal(raw, &messageType); err != nil {
+		return ""
+	}
+	return messageType
+}
+
+func rimeTTSWebsocketErrorMessage(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "(no message)"
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return "None"
+	}
+	var boolValue bool
+	if err := json.Unmarshal(raw, &boolValue); err == nil {
+		if boolValue {
+			return "True"
+		}
+		return "False"
+	}
+	if repr, ok := rimeTTSPythonJSONRepr(raw); ok {
+		return repr
+	}
+	return string(raw)
+}
+
+type rimeTTSOrderedObject []struct {
+	key   string
+	value any
+}
+
+func rimeTTSPythonJSONRepr(raw json.RawMessage) (string, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	value, err := rimeTTSDecodeOrderedJSONValue(decoder)
+	if err != nil {
+		return "", false
+	}
+	return rimeTTSPythonRepr(value), true
+}
+
+func rimeTTSDecodeOrderedJSONValue(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return token, nil
+	}
+	switch delim {
+	case '{':
+		var object rimeTTSOrderedObject
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, fmt.Errorf("invalid JSON object key")
+			}
+			value, err := rimeTTSDecodeOrderedJSONValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			object = append(object, struct {
+				key   string
+				value any
+			}{key: key, value: value})
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return object, nil
+	case '[':
+		var items []any
+		for decoder.More() {
+			value, err := rimeTTSDecodeOrderedJSONValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, value)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return items, nil
+	default:
+		return nil, fmt.Errorf("unexpected JSON delimiter %q", delim)
+	}
+}
+
+func rimeTTSPythonRepr(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return "None"
+	case string:
+		return "'" + typed + "'"
+	case bool:
+		if typed {
+			return "True"
+		}
+		return "False"
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			parts = append(parts, rimeTTSPythonRepr(item))
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case rimeTTSOrderedObject:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			parts = append(parts, rimeTTSPythonRepr(item.key)+": "+rimeTTSPythonRepr(item.value))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, rimeTTSPythonRepr(key)+": "+rimeTTSPythonRepr(typed[key]))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
+type rimeTTSWordTimestampsPayload struct {
+	Words json.RawMessage `json:"words"`
+	Start json.RawMessage `json:"start"`
+	End   json.RawMessage `json:"end"`
+}
+
+func rimeTTSWordTimestamps(raw json.RawMessage) (rimeTTSWordTimestampsPayload, error) {
+	if len(raw) == 0 || rimeTTSJSONNullOrFalsey(raw) {
+		return rimeTTSWordTimestampsPayload{}, nil
+	}
+	var payload rimeTTSWordTimestampsPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return rimeTTSWordTimestampsPayload{}, err
+	}
+	return payload, nil
+}
+
+func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 || rimeTTSJSONNullOrFalsey(raw) {
+		return nil, nil
+	}
+	var words []string
+	if err := json.Unmarshal(raw, &words); err == nil {
+		return words, nil
+	}
+	var wordText string
+	if err := json.Unmarshal(raw, &wordText); err != nil {
+		return nil, err
+	}
+	words = make([]string, 0, len(wordText))
+	for _, r := range wordText {
+		words = append(words, string(r))
+	}
+	return words, nil
+}
+
+func rimeTTSTimestampTimes(raw json.RawMessage) ([]float64, error) {
+	if len(raw) == 0 || rimeTTSJSONNullOrFalsey(raw) {
+		return nil, nil
+	}
+	var times []float64
+	if err := json.Unmarshal(raw, &times); err != nil {
+		return nil, err
+	}
+	return times, nil
+}
+
+func rimeTTSJSONNullOrFalsey(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return bytes.Equal(trimmed, []byte("null")) ||
+		bytes.Equal(trimmed, []byte("false")) ||
+		bytes.Equal(trimmed, []byte("0")) ||
+		bytes.Equal(trimmed, []byte(`""`)) ||
+		bytes.Equal(trimmed, []byte("[]")) ||
+		bytes.Equal(trimmed, []byte("{}"))
 }
 
 func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {

@@ -780,6 +780,17 @@ func TestGradiumSTTProcessMessagesMapsTextAndVADFinal(t *testing.T) {
 	assertGradiumSTTEvent(t, events, 1, stt.SpeechEventEndOfSpeech, "")
 }
 
+func TestGradiumSTTProcessMessageIgnoresReferenceMalformedTextFrame(t *testing.T) {
+	state := &gradiumSTTMessageState{language: "en"}
+	events, err := processGradiumSTTMessage(state, []byte(`not-json`), 0)
+	if err != nil {
+		t.Fatalf("malformed text frame error = %v, want nil", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %#v, want ignored malformed frame", events)
+	}
+}
+
 func TestGradiumSTTZeroVADBucketDisablesFinalizationLikeReference(t *testing.T) {
 	bucket := 0
 	state := &gradiumSTTMessageState{language: "en", vadBucket: &bucket, vadThreshold: 0.9, delayInTokens: 1}
