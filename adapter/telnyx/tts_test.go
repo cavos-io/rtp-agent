@@ -660,6 +660,21 @@ func TestTelnyxTTSStreamEmitsReferenceFinalMarkerAfterMP3Decode(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamNoAudioCloseEndsWithoutDecoderError(t *testing.T) {
+	stream := &telnyxTTSStream{
+		ctx:    context.Background(),
+		events: make(chan *tts.SynthesizedAudio),
+		errCh:  make(chan error, 1),
+	}
+
+	stream.endAudioInput()
+
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after no-audio close = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestTelnyxTTSStreamUnexpectedCloseReturnsAPIConnectionError(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

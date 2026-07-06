@@ -168,7 +168,6 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		events:     make(chan *tts.SynthesizedAudio, 100),
 		errCh:      make(chan error, 1),
 	}
-	stream.startDecoder()
 	if err := writeTelnyxTTSMessage(conn, buildTelnyxTTSTextMessage(" ")); err != nil {
 		conn.Close()
 		cancel()
@@ -295,6 +294,7 @@ type telnyxTTSStream struct {
 	events      chan *tts.SynthesizedAudio
 	errCh       chan error
 	decoder     codecs.AudioStreamDecoder
+	eventsOnce  sync.Once
 	mu          sync.Mutex
 	closed      bool
 	inputEnded  bool
@@ -515,11 +515,13 @@ func (s *telnyxTTSStream) pushAudioData(audio []byte) {
 func (s *telnyxTTSStream) endAudioInput() {
 	if s.decoder != nil {
 		s.decoder.EndInput()
+		return
 	}
+	s.closeEvents()
 }
 
 func (s *telnyxTTSStream) decodeLoop() {
-	defer close(s.events)
+	defer s.closeEvents()
 	for {
 		frame, err := s.decoder.Next()
 		if err != nil {
@@ -532,6 +534,12 @@ func (s *telnyxTTSStream) decodeLoop() {
 		}
 		s.events <- &tts.SynthesizedAudio{Frame: frame}
 	}
+}
+
+func (s *telnyxTTSStream) closeEvents() {
+	s.eventsOnce.Do(func() {
+		close(s.events)
+	})
 }
 
 func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
