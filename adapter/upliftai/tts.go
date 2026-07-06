@@ -23,30 +23,64 @@ const (
 	defaultUpliftAIVoiceID    = "v_meklc281"
 	defaultUpliftAISampleRate = 22050
 	defaultUpliftAIFormat     = "MP3_22050_32"
+	defaultUpliftAIBaseURL    = "https://api.upliftai.org/v1/tts"
 )
 
 type UpliftAITTS struct {
-	apiKey       string
-	voice        string
-	outputFormat string
-	mu           sync.Mutex
-	closed       bool
-	streams      map[io.Closer]struct{}
+	apiKey                    string
+	voice                     string
+	outputFormat              string
+	baseURL                   string
+	phraseReplacementConfigID string
+	mu                        sync.Mutex
+	closed                    bool
+	streams                   map[io.Closer]struct{}
 }
 
-func NewUpliftAITTS(apiKey string, voice string) *UpliftAITTS {
+type UpliftAITTSOption func(*UpliftAITTS)
+
+func WithUpliftAIBaseURL(baseURL string) UpliftAITTSOption {
+	return func(t *UpliftAITTS) {
+		t.baseURL = baseURL
+	}
+}
+
+func WithUpliftAIOutputFormat(outputFormat string) UpliftAITTSOption {
+	return func(t *UpliftAITTS) {
+		t.outputFormat = outputFormat
+	}
+}
+
+func WithUpliftAIPhraseReplacementConfigID(configID string) UpliftAITTSOption {
+	return func(t *UpliftAITTS) {
+		t.phraseReplacementConfigID = configID
+	}
+}
+
+func NewUpliftAITTS(apiKey string, voice string, opts ...UpliftAITTSOption) *UpliftAITTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("UPLIFTAI_API_KEY")
 	}
 	if voice == "" {
 		voice = defaultUpliftAIVoiceID
 	}
-	return &UpliftAITTS{
+	baseURL := os.Getenv("UPLIFTAI_BASE_URL")
+	if baseURL == "" {
+		baseURL = defaultUpliftAIBaseURL
+	}
+	tts := &UpliftAITTS{
 		apiKey:       apiKey,
 		voice:        voice,
 		outputFormat: defaultUpliftAIFormat,
+		baseURL:      baseURL,
 		streams:      make(map[io.Closer]struct{}),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(tts)
+		}
+	}
+	return tts
 }
 
 func (t *UpliftAITTS) Label() string { return "upliftai.TTS" }
@@ -377,8 +411,11 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 		"voiceId":      s.owner.voiceSnapshot(),
 		"outputFormat": s.owner.outputFormat,
 	}
+	if s.owner.phraseReplacementConfigID != "" {
+		reqBody["phraseReplacementConfigId"] = s.owner.phraseReplacementConfigID
+	}
 	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(s.ctx, "POST", "https://api.upliftai.org/v1/tts", bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(s.ctx, "POST", s.owner.baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return err
 	}

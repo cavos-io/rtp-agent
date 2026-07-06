@@ -104,7 +104,7 @@ func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 			t.Fatalf("decode request body: %v", err)
 		}
-		gotVoice = payload["voice"]
+		gotVoice = payload["voiceId"]
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader("")),
@@ -126,6 +126,16 @@ func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
 	}
 	if gotVoice != "voice-updated" {
 		t.Fatalf("request voice = %q, want updated voice", gotVoice)
+	}
+}
+
+func TestUpliftAITTSUsesEnvironmentBaseURL(t *testing.T) {
+	t.Setenv("UPLIFTAI_BASE_URL", "https://upliftai.example/tts")
+
+	tts := NewUpliftAITTS("secret", "")
+
+	if got, want := tts.baseURL, "https://upliftai.example/tts"; got != want {
+		t.Fatalf("baseURL = %q, want environment base URL %q", got, want)
 	}
 }
 
@@ -315,6 +325,66 @@ func TestUpliftAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	}
 	if got, want := requestBody["outputFormat"], "PCM_22050_16"; got != want {
 		t.Fatalf("request outputFormat = %q, want %q", got, want)
+	}
+}
+
+func TestUpliftAITTSSynthesizeUsesReferenceRouteAndOptions(t *testing.T) {
+	var requestBody map[string]string
+	var requestPath string
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		requestPath = req.URL.Path
+		if auth := req.Header.Get("Authorization"); auth != "Bearer test-key" {
+			t.Errorf("Authorization = %q, want bearer test-key", auth)
+		}
+		if contentType := req.Header.Get("Content-Type"); contentType != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", contentType)
+		}
+		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+			t.Errorf("decode request body: %v", err)
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("https://upliftai.example/custom-tts"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+		WithUpliftAIPhraseReplacementConfigID("phrases-1"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello route")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want frame", audio)
+	}
+	if requestPath != "/custom-tts" {
+		t.Fatalf("request path = %q, want /custom-tts", requestPath)
+	}
+	if got, want := requestBody["text"], "hello route"; got != want {
+		t.Fatalf("request text = %q, want %q", got, want)
+	}
+	if got, want := requestBody["voiceId"], "voice-1"; got != want {
+		t.Fatalf("request voiceId = %q, want %q", got, want)
+	}
+	if got, want := requestBody["outputFormat"], "PCM_22050_16"; got != want {
+		t.Fatalf("request outputFormat = %q, want %q", got, want)
+	}
+	if got, want := requestBody["phraseReplacementConfigId"], "phrases-1"; got != want {
+		t.Fatalf("request phraseReplacementConfigId = %q, want %q", got, want)
 	}
 }
 
