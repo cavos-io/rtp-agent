@@ -33,6 +33,7 @@ const (
 	defaultUpliftAIBaseURL    = "wss://api.upliftai.org"
 	upliftAISocketIONamespace = "/text-to-speech/multi-stream"
 	upliftAISocketIOReadyWait = 5 * time.Second
+	upliftAISocketIODialWait  = 10 * time.Second
 )
 
 type UpliftAITTS struct {
@@ -607,6 +608,11 @@ func startUpliftAISocketIOSynthesis(ctx context.Context, baseURL string, apiKey 
 	socketURL, err := buildUpliftAISocketIOURL(baseURL)
 	if err != nil {
 		return nil, err
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, upliftAISocketIODialWait)
+		defer cancel()
 	}
 	conn, err := upliftAISocketIODialContext(ctx, socketURL)
 	if err != nil {

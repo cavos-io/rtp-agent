@@ -833,6 +833,39 @@ func TestUpliftAITTSChunkedStreamFallsBackAfterSocketIONamespaceConnect(t *testi
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIODialUsesReferenceTimeout(t *testing.T) {
+	oldDial := upliftAISocketIODialContext
+	var sawDeadline bool
+	upliftAISocketIODialContext = func(ctx context.Context, endpoint string) (upliftAISocketIOConn, error) {
+		deadline, ok := ctx.Deadline()
+		sawDeadline = ok
+		if !ok {
+			return nil, errors.New("missing dial deadline")
+		}
+		remaining := time.Until(deadline)
+		if remaining < 9*time.Second || remaining > 10*time.Second {
+			return nil, fmt.Errorf("deadline remaining = %s, want about 10s", remaining)
+		}
+		return nil, errors.New("stop after deadline check")
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIBaseURL("ws://upliftai.example"))
+	stream, err := provider.Synthesize(context.Background(), "timeout")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want dial error after deadline check")
+	}
+	if !sawDeadline {
+		t.Fatal("socket.io dial context had no reference timeout deadline")
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIODisconnectEmitsFinalMarker(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
