@@ -119,7 +119,7 @@ func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
 	}
 	defer stream.Close()
 
-	tts.UpdateOptions("voice-updated")
+	tts.UpdateOptions(WithUpliftAIUpdateVoiceID("voice-updated"))
 
 	if _, err := stream.Next(); err != nil {
 		t.Fatalf("Next error = %v", err)
@@ -388,6 +388,54 @@ func TestUpliftAITTSSynthesizeUsesReferenceRouteAndOptions(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
+	var requestBody map[string]string
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("https://upliftai.example/custom-tts"),
+		WithUpliftAIOutputFormat("MP3_22050_32"),
+	)
+	provider.UpdateOptions(
+		WithUpliftAIUpdateVoiceID(""),
+		WithUpliftAIUpdateOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "updated")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want frame", audio)
+	}
+	if got, want := requestBody["text"], "updated"; got != want {
+		t.Fatalf("request text = %q, want %q", got, want)
+	}
+	if got, want := requestBody["voiceId"], ""; got != want {
+		t.Fatalf("request voiceId = %q, want explicit empty voice", got)
+	}
+	if got, want := requestBody["outputFormat"], "PCM_22050_16"; got != want {
+		t.Fatalf("request outputFormat = %q, want %q", got, want)
+	}
+}
+
 func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewUpliftAITTS("test-key", "")
 	if err := provider.Close(); err != nil {
@@ -496,6 +544,44 @@ func TestUpliftAITTSStreamFlushSynthesizesReferenceSegment(t *testing.T) {
 	}
 	if got, want := requestBody["outputFormat"], "PCM_22050_16"; got != want {
 		t.Fatalf("request outputFormat = %q, want %q", got, want)
+	}
+}
+
+func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
+	var requestBody map[string]string
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("\x01\x02")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("hello,\n"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.PushText("  world"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("Next = (%#v, %v), want audio frame", audio, err)
+	}
+	if got, want := requestBody["text"], "hello, world"; got != want {
+		t.Fatalf("request text = %q, want reference formatted text %q", got, want)
 	}
 }
 

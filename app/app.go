@@ -5584,7 +5584,11 @@ func fallbackTTSFromProvider(cfg AppConfig, provider string) (coretts.TTS, error
 		}
 		return spitch.NewSpitchTTS(cfg.SpitchAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerUpliftAI:
-		return upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice), nil
+		ttsOpts := []upliftai.UpliftAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, upliftai.WithUpliftAIBaseURL(cfg.TTSBaseURL))
+		}
+		return upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice, ttsOpts...), nil
 	case providerXAI:
 		ttsOpts := []xai.XaiTTSOption{}
 		if cfg.TTSWebsocketURL != "" {
@@ -7276,7 +7280,11 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.TTS = telnyx.NewTelnyxTTS(cfg.TelnyxAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerUpliftAI:
-		a.TTS = upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice)
+		ttsOpts := []upliftai.UpliftAITTSOption{}
+		if cfg.TTSBaseURL != "" {
+			ttsOpts = append(ttsOpts, upliftai.WithUpliftAIBaseURL(cfg.TTSBaseURL))
+		}
+		a.TTS = upliftai.NewUpliftAITTS(cfg.UpliftAIAPIKey, cfg.TTSVoice, ttsOpts...)
 	case providerXAI:
 		ttsOpts := []xai.XaiTTSOption{}
 		if cfg.TTSWebsocketURL != "" {

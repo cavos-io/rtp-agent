@@ -3505,9 +3505,28 @@ func TestDefaultConfigFromEnvRejectsTrugenLLMFallbackProvider(t *testing.T) {
 }
 
 func TestDefaultConfigFromEnvSelectsUpliftAITTSProvider(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+	var ttsRequests int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: appRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		ttsRequests++
+		if req.URL.Path != "/upliftai-tts" {
+			t.Errorf("request path = %q, want /upliftai-tts", req.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(mp3Data)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
 	t.Setenv("UPLIFTAI_API_KEY", "test-upliftai-key")
 	t.Setenv("RTP_AGENT_TTS_PROVIDER", "upliftai")
 	t.Setenv("RTP_AGENT_TTS_VOICE", "bright")
+	t.Setenv("RTP_AGENT_TTS_BASE_URL", "https://upliftai.example/upliftai-tts")
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -3535,6 +3554,28 @@ func TestDefaultConfigFromEnvSelectsUpliftAITTSProvider(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("TTS Stream Close() error = %v", err)
 	}
+
+	chunked, err := app.Session.TTS.Synthesize(context.Background(), "route check")
+	if err != nil {
+		t.Fatalf("TTS Synthesize() error = %v", err)
+	}
+	defer chunked.Close()
+	audio, err := chunked.Next()
+	if err != nil {
+		t.Fatalf("TTS Next() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("TTS audio = %#v, want decoded frame", audio)
+	}
+	if ttsRequests != 1 {
+		t.Fatalf("UpliftAI TTS requests = %d, want 1", ttsRequests)
+	}
+}
+
+type appRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f appRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestDefaultConfigFromEnvRejectsUpliftAILLMProvider(t *testing.T) {
