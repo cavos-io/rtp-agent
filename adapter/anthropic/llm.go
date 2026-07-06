@@ -497,17 +497,23 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, []st
 			case *llm.ChatMessage:
 				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
 					if text := msg.TextContent(); text != "" {
-						if !instructionSeen {
+						if msg.Role == llm.ChatRoleSystem && !instructionSeen {
 							systemMessages = append(systemMessages, text)
-						} else {
+							instructionSeen = true
+							continue
+						}
+						if instructionSeen {
 							appendBlocks("user", anthropicContentBlock{
 								Type: "text",
 								Text: inlineAnthropicInstructions(text),
 							})
+							continue
 						}
 					}
 					instructionSeen = true
-					continue
+					if msg.Role == llm.ChatRoleSystem {
+						continue
+					}
 				}
 				role := "user"
 				if msg.Role == llm.ChatRoleAssistant {

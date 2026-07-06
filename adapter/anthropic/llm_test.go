@@ -2266,6 +2266,28 @@ func TestAnthropicChatSendsSystemMessagesAsTextBlocks(t *testing.T) {
 	assertAnthropicRequestTextBlock(t, content[1], "hello")
 }
 
+func TestBuildAnthropicMessagesKeepsLeadingDeveloperAsUserMessage(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "developer", Role: llm.ChatRoleDeveloper, Content: []llm.ChatContent{{Text: "speak tersely"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	messages, system := buildAnthropicMessages(ctx)
+
+	if system != "" {
+		t.Fatalf("system = %q, want no system blocks for leading developer role", system)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want one merged user message: %#v", len(messages), messages)
+	}
+	if messages[0].Role != "user" {
+		t.Fatalf("messages[0].Role = %q, want user", messages[0].Role)
+	}
+	assertAnthropicTextBlock(t, messages[0].Content, 0, "speak tersely")
+	assertAnthropicTextBlock(t, messages[0].Content, 1, "hello")
+}
+
 func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
