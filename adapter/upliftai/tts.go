@@ -373,7 +373,7 @@ func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if s.inputDone {
 		return nil
@@ -395,7 +395,7 @@ func (s *upliftAITTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if s.inputDone {
 		return nil

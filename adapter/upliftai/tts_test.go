@@ -564,14 +564,17 @@ func TestUpliftAITTSProviderCloseClosesActiveSynthesizeStreams(t *testing.T) {
 	if err := provider.Close(); err != nil {
 		t.Fatalf("provider Close error = %v", err)
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Fatalf("PushText after provider Close error = %v, want reference no-op", err)
 	}
-	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after provider Close error = %v, want reference no-op", err)
 	}
 	if audio, err := stream.Next(); audio != nil || err != io.EOF {
 		t.Fatalf("Next after provider Close = (%#v, %v), want EOF", audio, err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("stream Close after provider Close error = %v", err)
 	}
 }
 
