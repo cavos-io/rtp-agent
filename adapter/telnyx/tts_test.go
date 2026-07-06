@@ -509,6 +509,19 @@ func TestTelnyxTTSStreamWriteFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSWarmupWriteFailureReturnsAPIConnectionError(t *testing.T) {
+	writeErr := errors.New("write failed")
+	err := telnyxTTSWarmupWriteError(writeErr)
+
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("warmup error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "Telnyx TTS websocket write failed") || !strings.Contains(err.Error(), writeErr.Error()) {
+		t.Fatalf("warmup error = %q, want write failure context", err)
+	}
+}
+
 func TestTelnyxTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	cancelled := false
 	closeCalls := 0

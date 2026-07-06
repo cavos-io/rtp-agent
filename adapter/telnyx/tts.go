@@ -189,7 +189,7 @@ func (t *TelnyxTTS) openSegmentStream(ctx context.Context) (tts.SynthesizeStream
 	if err := writeTelnyxTTSMessage(conn, buildTelnyxTTSTextMessage(" ")); err != nil {
 		conn.Close()
 		cancel()
-		return nil, err
+		return nil, telnyxTTSWarmupWriteError(err)
 	}
 	if t.isClosed() {
 		conn.Close()
@@ -557,6 +557,10 @@ func telnyxTTSWriteError(err error) error {
 		return nil
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS websocket write failed: %v", err))
+}
+
+func telnyxTTSWarmupWriteError(err error) error {
+	return telnyxTTSWriteError(err)
 }
 
 func (s *telnyxTTSStream) Close() error {
