@@ -115,16 +115,9 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if err != nil {
 		return nil, err
 	}
-	var cancel context.CancelFunc
-	if connectOptions.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
-	}
 
 	messages, systemMessages, err := buildAnthropicMessagesE(chatCtx)
 	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
 		return nil, err
 	}
 	if anthropicModelDisablesPrefill(l.model) {
@@ -135,9 +128,6 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		applyAnthropicMessageCacheControl(messages, cacheControl)
 	}
 	if err := validateAnthropicExtraParams(options.ExtraParams); err != nil {
-		if cancel != nil {
-			cancel()
-		}
 		return nil, err
 	}
 
@@ -187,9 +177,6 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
 		return nil, err
 	}
 	var lastErr error
@@ -205,21 +192,14 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				retryAttempt:   attempt,
 				resp:           resp,
 				reader:         bufio.NewReader(resp.Body),
-				cancel:         cancel,
 			}, nil
 		}
 		lastErr = err
 		var statusErr *llm.APIStatusError
 		if errors.As(lastErr, &statusErr) && statusErr.StatusCode == 499 {
-			if cancel != nil {
-				cancel()
-			}
 			return anthropicEOFStream{}, nil
 		}
 		if attempt == connectOptions.MaxRetry || !anthropicShouldRetryError(lastErr) {
-			if cancel != nil {
-				cancel()
-			}
 			if connectOptions.MaxRetry > 0 && attempt == connectOptions.MaxRetry && anthropicShouldRetryError(lastErr) {
 				return nil, llm.NewAPIConnectionError(
 					fmt.Sprintf("failed to generate LLM completion after %d attempts", connectOptions.MaxRetry+1),
@@ -228,16 +208,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 			return nil, lastErr
 		}
 		if err := waitAnthropicRetryInterval(ctx, connectOptions.IntervalForRetry(attempt)); err != nil {
-			if cancel != nil {
-				cancel()
-			}
 			return nil, err
 		}
 	}
 
-	if cancel != nil {
-		cancel()
-	}
 	return nil, lastErr
 }
 

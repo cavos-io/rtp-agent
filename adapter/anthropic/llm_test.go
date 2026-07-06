@@ -339,7 +339,7 @@ func (t anthropicProviderTool) AnthropicToolSpec() map[string]interface{} {
 }
 func (t anthropicProviderTool) AnthropicBetaFlag() string { return t.betaFlag }
 
-func TestAnthropicChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
+func TestAnthropicChatDoesNotApplyConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = transport
@@ -359,15 +359,12 @@ func TestAnthropicChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T)
 	}
 	_ = stream.Close()
 
-	if !transport.hasDeadline {
-		t.Fatal("request context has no deadline, want connect options timeout deadline")
-	}
-	if transport.remaining <= 0 || transport.remaining > 75*time.Millisecond {
-		t.Fatalf("request context deadline remaining = %v, want bounded by connect timeout", transport.remaining)
+	if transport.hasDeadline {
+		t.Fatalf("request context deadline remaining = %v, want no whole-stream deadline from connect timeout", transport.remaining)
 	}
 }
 
-func TestAnthropicChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testing.T) {
+func TestAnthropicChatDoesNotApplyDefaultConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = transport
@@ -383,11 +380,34 @@ func TestAnthropicChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *tes
 	}
 	_ = stream.Close()
 
-	if !transport.hasDeadline {
-		t.Fatal("request context has no deadline, want default connect timeout deadline")
+	if transport.hasDeadline {
+		t.Fatalf("request context deadline remaining = %v, want no whole-stream deadline from default connect timeout", transport.remaining)
 	}
-	if transport.remaining <= 0 || transport.remaining > llm.DefaultAPIConnectOptions().Timeout {
-		t.Fatalf("request context deadline remaining = %v, want bounded by default connect timeout", transport.remaining)
+}
+
+func TestAnthropicChatPreservesCallerDeadlineLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	stream, err := model.Chat(ctx, llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if !transport.hasDeadline {
+		t.Fatal("request context has no deadline, want caller deadline preserved")
+	}
+	if transport.remaining <= 0 || transport.remaining > time.Minute {
+		t.Fatalf("request context deadline remaining = %v, want caller deadline", transport.remaining)
 	}
 }
 
