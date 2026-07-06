@@ -463,7 +463,10 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, stri
 				if msg.Role == llm.ChatRoleAssistant {
 					role = "assistant"
 				}
-				blocks := anthropicMessageContentBlocks(msg)
+				blocks, err := anthropicMessageContentBlocks(msg)
+				if err != nil {
+					return nil, "", err
+				}
 				if len(blocks) > 0 {
 					appendBlocks(role, blocks...)
 				}
@@ -494,43 +497,45 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, stri
 	return messages, strings.Join(systemMessages, "\n"), nil
 }
 
-func anthropicMessageContentBlocks(msg *llm.ChatMessage) []anthropicContentBlock {
+func anthropicMessageContentBlocks(msg *llm.ChatMessage) ([]anthropicContentBlock, error) {
 	blocks := make([]anthropicContentBlock, 0, len(msg.Content))
 	for _, c := range msg.Content {
 		if c.Text != "" {
 			blocks = append(blocks, anthropicContentBlock{Type: "text", Text: c.Text})
 		}
 		if c.Image != nil {
-			if block := anthropicImageBlock(c.Image); block != nil {
-				blocks = append(blocks, *block)
+			block, err := anthropicImageBlock(c.Image)
+			if err != nil {
+				return nil, err
 			}
+			blocks = append(blocks, block)
 		}
 	}
-	return blocks
+	return blocks, nil
 }
 
-func anthropicImageBlock(image *llm.ImageContent) *anthropicContentBlock {
+func anthropicImageBlock(image *llm.ImageContent) (anthropicContentBlock, error) {
 	img, err := llm.SerializeImage(image)
 	if err != nil {
-		return nil
+		return anthropicContentBlock{}, err
 	}
 	if img.ExternalURL != "" {
-		return &anthropicContentBlock{
+		return anthropicContentBlock{
 			Type: "image",
 			Source: map[string]any{
 				"type": "url",
 				"url":  img.ExternalURL,
 			},
-		}
+		}, nil
 	}
-	return &anthropicContentBlock{
+	return anthropicContentBlock{
 		Type: "image",
 		Source: map[string]any{
 			"type":       "base64",
 			"data":       base64.StdEncoding.EncodeToString(img.DataBytes),
 			"media_type": img.MIMEType,
 		},
-	}
+	}, nil
 }
 
 func anthropicToolUseBlock(fc *llm.FunctionCall) (anthropicContentBlock, error) {

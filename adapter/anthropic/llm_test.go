@@ -428,6 +428,37 @@ func TestAnthropicChatRejectsMalformedToolCallArguments(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatRejectsMalformedImageContent(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{
+			ID:   "user",
+			Role: llm.ChatRoleUser,
+			Content: []llm.ChatContent{
+				{Image: &llm.ImageContent{Image: "data:image/png;base64,not-valid-base64"}},
+			},
+		},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+
+	_, err = model.Chat(context.Background(), ctx)
+
+	if err == nil {
+		t.Fatalf("Chat() error = %v, want image serialization error", err)
+	}
+	if transport.reqURL != "" {
+		t.Fatalf("request URL = %q, want no HTTP request after malformed image", transport.reqURL)
+	}
+}
+
 func TestBuildAnthropicMessagesGroupsToolCallsWithResults(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"
