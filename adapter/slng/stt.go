@@ -561,7 +561,7 @@ func sttEventsFromMessage(payload []byte, defaultLanguage string, partials bool)
 func sttEventsFromMessageWithSpeechState(payload []byte, defaultLanguage string, partials bool, speechStarted bool, speechDuration float64) ([]*stt.SpeechEvent, bool, float64, error) {
 	var message map[string]any
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, speechStarted, speechDuration, err
+		return nil, speechStarted, speechDuration, nil
 	}
 	messageType := slngString(message["type"])
 	if messageType == "Results" {

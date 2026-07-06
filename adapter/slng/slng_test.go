@@ -957,6 +957,16 @@ func TestSLNGSTTStreamEventsMapReferenceMessages(t *testing.T) {
 	}
 }
 
+func TestSLNGSTTStreamIgnoresReferenceNonJSONTextFrame(t *testing.T) {
+	events, err := sttEventsFromMessage([]byte(`not-json`), "en", true)
+	if err != nil {
+		t.Fatalf("non-json text frame error = %v, want nil", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("events = %+v, want ignored frame", events)
+	}
+}
+
 func TestSLNGSTTStreamNextPreservesReferenceEventSequence(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
