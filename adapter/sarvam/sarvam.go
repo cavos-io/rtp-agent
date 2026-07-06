@@ -503,7 +503,12 @@ func (s *SarvamSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("sarvam stt error: %s", string(respBody))
+		return nil, llm.NewAPIStatusError(
+			fmt.Sprintf("Sarvam API Error (%d): %s", resp.StatusCode, string(respBody)),
+			resp.StatusCode,
+			"",
+			string(respBody),
+		)
 	}
 	var result sarvamSTTResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

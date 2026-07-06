@@ -196,6 +196,33 @@ func TestSarvamSTTRecognizeDecodeFailureReturnsAPIConnectionError(t *testing.T) 
 	}
 }
 
+func TestSarvamSTTRecognizeStatusFailureReturnsAPIStatusError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":"rate limited"}`)),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamSTT("test-key")
+	event, err := provider.Recognize(context.Background(), nil, "")
+	if err == nil {
+		t.Fatalf("Recognize returned event %+v, want APIStatusError", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Recognize error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want 429", statusErr.StatusCode)
+	}
+	if statusErr.Body != `{"error":"rate limited"}` {
+		t.Fatalf("body = %#v, want provider error body", statusErr.Body)
+	}
+}
+
 func TestSarvamSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
