@@ -425,6 +425,24 @@ func TestBasetenTTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing.
 	}
 }
 
+func TestBasetenTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &basetenTTSChunkedStream{
+		body:       basetenErrorReadCloser{err: basetenTimeoutError{}},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on read timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestBasetenTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &basetenCloseErrorBody{reader: strings.NewReader("ab")}
 	stream := &basetenTTSChunkedStream{
@@ -1113,6 +1131,20 @@ func (b basetenErrorReadCloser) Read([]byte) (int, error) {
 
 func (b basetenErrorReadCloser) Close() error {
 	return nil
+}
+
+type basetenTimeoutError struct{}
+
+func (basetenTimeoutError) Error() string {
+	return "baseten timeout"
+}
+
+func (basetenTimeoutError) Timeout() bool {
+	return true
+}
+
+func (basetenTimeoutError) Temporary() bool {
+	return true
 }
 
 type basetenTTSRoundTripFunc func(*http.Request) (*http.Response, error)

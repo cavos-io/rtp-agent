@@ -410,12 +410,20 @@ func (s *basetenTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		if err == io.EOF {
 			return s.emitFinal()
 		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil, llm.NewAPITimeoutError(err.Error())
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Baseten TTS response read failed: %v", err))
+		return nil, basetenTTSReadError(err)
 	}
 	return s.emitFinal()
+}
+
+func basetenTTSReadError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Baseten TTS response read failed: %v", err))
 }
 
 func (s *basetenTTSChunkedStream) ensureResponse() error {
