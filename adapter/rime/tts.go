@@ -1474,7 +1474,8 @@ func (s *rimeTTSChunkedStream) Close() error {
 	}
 	body := s.resp.Body
 	s.resp = nil
-	return body.Close()
+	_ = body.Close()
+	return nil
 }
 
 func rimeTTSTotalTimeout(model string) time.Duration {

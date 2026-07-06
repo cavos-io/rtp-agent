@@ -1838,6 +1838,27 @@ func TestRimeTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRimeTTSChunkedStreamCloseSuppressesBodyCloseError(t *testing.T) {
+	body := &rimeCloseErrorBody{
+		Reader: bytes.NewReader([]byte{0x01, 0x02}),
+		err:    errors.New("response body close failed"),
+	}
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil like reference ChunkedStream.aclose", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
+	}
+}
+
 func TestRimeTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	stream := &rimeTTSChunkedStream{
 		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte{0x01, 0x02}))},
@@ -4627,6 +4648,17 @@ func (b *rimeCloseCountBody) Close() error {
 		return errors.New("closed twice")
 	}
 	return nil
+}
+
+type rimeCloseErrorBody struct {
+	*bytes.Reader
+	err        error
+	closeCount int
+}
+
+func (b *rimeCloseErrorBody) Close() error {
+	b.closeCount++
+	return b.err
 }
 
 type rimeBlockingCancelBody struct {
