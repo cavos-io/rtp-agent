@@ -2914,6 +2914,35 @@ func TestRimeTTSStreamBuffersShortReferenceSentenceBeforeBoundary(t *testing.T) 
 	assertRimePayload(t, writes[0], "text", "Dr. Smith is here. Next sentence is long enough. ")
 }
 
+func TestRimeTTSStreamUsesReferenceBlingfireTokenizerForBlankLines(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("First paragraph without punctuation\n\nSecond paragraph without punctuation"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after PushText = %d (%#v), want blank-line text buffered like reference blingfire", len(writes), writes)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want one normalized text packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "First paragraph without punctuation Second paragraph without punctuation ")
+}
+
 func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
 	var writes []map[string]any
 	stream := &rimeTTSSynthesizeStream{

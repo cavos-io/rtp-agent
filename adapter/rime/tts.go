@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cavos-io/rtp-agent/adapter/blingfire"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -83,6 +84,7 @@ type RimeTTS struct {
 	mistPhonemizeBrackets    *bool
 	useWebsocket             bool
 	segment                  string
+	sentenceTokenizer        tokenize.SentenceTokenizer
 	streamResponseTimeout    time.Duration
 	closed                   bool
 	modelTouched             bool
@@ -254,6 +256,7 @@ func NewRimeTTS(apiKey string, voice string, opts ...RimeTTSOption) *RimeTTS {
 		timeScaleFactors:      make(map[string]*float64),
 		maxTokensByModel:      make(map[string]*int),
 		segment:               defaultRimeSegment,
+		sentenceTokenizer:     newRimeTTSSentenceTokenizer(),
 		streamResponseTimeout: defaultRimeStreamTimeout,
 	}
 	for _, opt := range opts {
@@ -812,17 +815,18 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
 	stream := &rimeTTSSynthesizeStream{
-		conn:            conn,
-		ctx:             streamCtx,
-		cancel:          cancel,
-		provider:        t,
-		requestID:       cavosmath.ShortUUID(""),
-		contextID:       cavosmath.ShortUUID(""),
-		websocketURL:    websocketURL,
-		poolGeneration:  poolGeneration,
-		responseTimeout: t.streamResponseTimeout,
-		events:          make(chan *tts.SynthesizedAudio, 100),
-		errCh:           make(chan error, 1),
+		conn:              conn,
+		ctx:               streamCtx,
+		cancel:            cancel,
+		provider:          t,
+		requestID:         cavosmath.ShortUUID(""),
+		contextID:         cavosmath.ShortUUID(""),
+		websocketURL:      websocketURL,
+		poolGeneration:    poolGeneration,
+		responseTimeout:   t.streamResponseTimeout,
+		sentenceTokenizer: t.sentenceTokenizer,
+		events:            make(chan *tts.SynthesizedAudio, 100),
+		errCh:             make(chan error, 1),
 	}
 	stream.writeMessage = stream.writeWebsocketMessage
 	stream.closeConn = stream.closeWebsocketConn
@@ -1179,6 +1183,10 @@ func buildRimeTTSEOSMessage() ([]byte, error) {
 	})
 }
 
+func newRimeTTSSentenceTokenizer() tokenize.SentenceTokenizer {
+	return blingfire.NewSentenceTokenizer("", 20, 10)
+}
+
 type rimeTTSChunkedStream struct {
 	resp         *http.Response
 	ctx          context.Context
@@ -1483,6 +1491,7 @@ type rimeTTSSynthesizeStream struct {
 	readStarted           bool
 	pendingText           string
 	pushedText            string
+	sentenceTokenizer     tokenize.SentenceTokenizer
 	audioSeen             bool
 	pendingPCM            []byte
 	pendingTranscriptText string
@@ -1573,7 +1582,7 @@ func (s *rimeTTSSynthesizeStream) EndInput() error {
 
 func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 	if s.pendingText != "" {
-		text := strings.Join(tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, ""), " ")
+		text := strings.Join(s.tokenizerLocked().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
 		if err := s.sendSentenceLocked(text); err != nil {
 			s.closeAfterWriteFailureLocked()
@@ -1600,7 +1609,7 @@ func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 
 func (s *rimeTTSSynthesizeStream) sendCompleteSentencesLocked() error {
 	for {
-		tokens := tokenize.NewBasicSentenceTokenizer().Tokenize(s.pendingText, "")
+		tokens := s.tokenizerLocked().Tokenize(s.pendingText, "")
 		if len(tokens) <= 1 {
 			return nil
 		}
@@ -1617,6 +1626,13 @@ func (s *rimeTTSSynthesizeStream) sendCompleteSentencesLocked() error {
 			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
 		})
 	}
+}
+
+func (s *rimeTTSSynthesizeStream) tokenizerLocked() tokenize.SentenceTokenizer {
+	if s.sentenceTokenizer != nil {
+		return s.sentenceTokenizer
+	}
+	return newRimeTTSSentenceTokenizer()
 }
 
 func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
