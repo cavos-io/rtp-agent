@@ -2183,6 +2183,11 @@ func (c *upliftAITestSocketIOConn) ReadMessage() (int, []byte, error) {
 	select {
 	case msg := <-c.reads:
 		return 1, []byte(msg), nil
+	default:
+	}
+	select {
+	case msg := <-c.reads:
+		return 1, []byte(msg), nil
 	case err := <-c.readErrs:
 		return 0, nil, err
 	case <-c.closed:
