@@ -437,6 +437,38 @@ func TestBuildAnthropicMessagesGroupsToolCallsWithResults(t *testing.T) {
 	assertAnthropicToolResultBlock(t, messages[2].Content, 1, "call_weather", "sunny", false)
 }
 
+func TestBuildAnthropicMessagesParsesJSONListToolResultContent(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "look"}}},
+		&llm.FunctionCall{ID: "assistant/tool", CallID: "call_computer", Name: "computer", Arguments: `{"action":"screenshot"}`},
+		&llm.FunctionCallOutput{
+			ID:     "output",
+			CallID: "call_computer",
+			Name:   "computer",
+			Output: `[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}}]`,
+		},
+	}
+
+	messages, _ := buildAnthropicMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want user, assistant tool, user result: %#v", len(messages), messages)
+	}
+	result := messages[2].Content[0]
+	content, ok := result.Content.([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("tool result content = %#v, want structured list", result.Content)
+	}
+	block, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool result content[0] = %#v, want map", content[0])
+	}
+	if block["type"] != "image" {
+		t.Fatalf("tool result block = %#v, want image block", block)
+	}
+}
+
 func TestBuildAnthropicMessagesFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

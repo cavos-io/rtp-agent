@@ -533,9 +533,17 @@ func anthropicToolResultBlock(fco *llm.FunctionCallOutput) anthropicContentBlock
 	return anthropicContentBlock{
 		Type:      "tool_result",
 		ToolUseID: fco.CallID,
-		Content:   fco.Output,
+		Content:   anthropicToolResultContent(fco.Output),
 		IsError:   fco.IsError,
 	}
+}
+
+func anthropicToolResultContent(output string) any {
+	var parsed []any
+	if err := json.Unmarshal([]byte(output), &parsed); err == nil {
+		return parsed
+	}
+	return output
 }
 
 type anthropicChatItemGroup struct {
