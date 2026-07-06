@@ -272,6 +272,23 @@ func TestComputerToolWaitActionUsesReferenceDelay(t *testing.T) {
 	}
 }
 
+func TestComputerToolHoldKeyUsesReferenceDuration(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+
+	start := time.Now()
+	_, err := toolset.Execute(context.Background(), "hold_key", map[string]interface{}{
+		"text":     "Shift",
+		"duration": float64(0.75),
+	})
+
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil", err)
+	}
+	if elapsed := time.Since(start); elapsed < 700*time.Millisecond {
+		t.Fatalf("Execute elapsed = %v, want reference hold duration before screenshot", elapsed)
+	}
+}
+
 func TestComputerToolCloseClosesPageActions(t *testing.T) {
 	actions := browser.NewPageActions()
 	toolset := NewComputerTool(actions, 1024, 768)

@@ -149,6 +149,9 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			duration = parsedDuration
 		}
 		c.actions.HoldKey(text, duration)
+		if err := waitComputerToolDelay(ctx, time.Duration(duration*float64(time.Second))); err != nil {
+			return nil, err
+		}
 	case "wait":
 		if err := waitComputerToolDelay(ctx, waitActionDelay); err != nil {
 			return nil, err
