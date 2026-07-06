@@ -135,6 +135,23 @@ func TestComputerToolUsesReferenceErrorText(t *testing.T) {
 	}
 }
 
+func TestComputerToolAcceptsReferenceIntegerCoordinates(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "left_click", map[string]interface{}{
+		"coordinate": []interface{}{10, 20},
+	})
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil for integer coordinates", err)
+	}
+
+	events := actions.Events()
+	if len(events) == 0 || events[0].X != 10 || events[0].Y != 20 {
+		t.Fatalf("events = %#v, want first event at 10,20", events)
+	}
+}
+
 func TestComputerToolCloseClosesPageActions(t *testing.T) {
 	actions := browser.NewPageActions()
 	toolset := NewComputerTool(actions, 1024, 768)

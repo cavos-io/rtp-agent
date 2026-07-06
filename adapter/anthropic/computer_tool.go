@@ -173,13 +173,24 @@ func requireCoordinate(args map[string]interface{}, key string) (int, int, error
 		return 0, 0, fmt.Errorf("invalid coordinate format")
 	}
 
-	x, okX := coords[0].(float64)
-	y, okY := coords[1].(float64)
+	x, okX := coordinateNumber(coords[0])
+	y, okY := coordinateNumber(coords[1])
 	if !okX || !okY {
 		return 0, 0, fmt.Errorf("coordinates must be numbers")
 	}
 
-	return int(x), int(y), nil
+	return x, y, nil
+}
+
+func coordinateNumber(val interface{}) (int, bool) {
+	switch v := val.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
 }
 
 func requireInt(val interface{}, key string) (int, error) {
