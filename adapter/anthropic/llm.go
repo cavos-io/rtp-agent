@@ -874,7 +874,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			Delta *struct {
 				Type        string `json:"type"`
 				Text        *string `json:"text"`
-				PartialJson string `json:"partial_json"`
+				PartialJson *string `json:"partial_json"`
 			} `json:"delta"`
 		}
 
@@ -963,7 +963,16 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					}
 					return nil, wrappedErr
 				}
-				s.toolArgs += event.Delta.PartialJson
+				if event.Delta.PartialJson == nil {
+					wrappedErr := s.wrapReadError(errors.New("input_json_delta missing partial_json"))
+					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+						continue
+					} else if retryErr != wrappedErr {
+						return nil, retryErr
+					}
+					return nil, wrappedErr
+				}
+				s.toolArgs += *event.Delta.PartialJson
 			}
 
 		case "content_block_stop":

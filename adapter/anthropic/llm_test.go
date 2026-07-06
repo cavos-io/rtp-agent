@@ -1337,6 +1337,29 @@ func TestAnthropicStreamTextDeltaMissingTextReturnsConnectionError(t *testing.T)
 	}
 }
 
+func TestAnthropicStreamInputJSONDeltaMissingPartialJSONReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_1","name":"lookup"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta"}}`,
+			`data: {"type":"content_block_stop"}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
 func TestAnthropicChatRetriesInputDeltaWithoutToolStartLikeReference(t *testing.T) {
 	transport := &sequenceRoundTripper{responses: []*http.Response{
 		anthropicTestResponse(http.StatusOK, strings.Join([]string{
