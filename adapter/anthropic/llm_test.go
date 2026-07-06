@@ -706,6 +706,55 @@ func TestAnthropicChatToolChoiceNoneClearsTools(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatAppendsTrailingUserForNoPrefillModels(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+		&llm.ChatMessage{ID: "assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+
+	stream, err := model.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	messages, ok := transport.body["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages = %#v, want list", transport.body["messages"])
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want trailing user turn: %#v", len(messages), messages)
+	}
+	last, ok := messages[2].(map[string]any)
+	if !ok {
+		t.Fatalf("last message = %#v, want map", messages[2])
+	}
+	if last["role"] != "user" {
+		t.Fatalf("last role = %#v, want user", last["role"])
+	}
+	content, ok := last["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("last content = %#v, want one text block", last["content"])
+	}
+	block, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("last content block = %#v, want map", content[0])
+	}
+	if block["type"] != "text" || block["text"] != " " {
+		t.Fatalf("last content block = %#v, want blank reference trailing user text", block)
+	}
+}
+
 func TestAnthropicDefaultsMatchReference(t *testing.T) {
 	model, err := NewAnthropicLLM("test-key", "")
 	if err != nil {

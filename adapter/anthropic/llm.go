@@ -33,6 +33,11 @@ const (
 	defaultAnthropicMode = "claude-sonnet-4-6"
 )
 
+var anthropicNoPrefillModelPrefixes = []string{
+	"claude-sonnet-4-6",
+	"claude-opus-4-6",
+}
+
 type AnthropicOption func(*AnthropicLLM)
 
 func WithAnthropicBaseURL(baseURL string) AnthropicOption {
@@ -109,6 +114,9 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	}
 
 	messages, system := buildAnthropicMessages(chatCtx)
+	if anthropicModelDisablesPrefill(l.model) {
+		messages = appendAnthropicTrailingUserMessage(messages)
+	}
 
 	body := map[string]interface{}{
 		"model":      l.model,
@@ -308,6 +316,27 @@ func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool) map
 func anthropicToolChoiceNone(choice llm.ToolChoice) bool {
 	tc, ok := choice.(string)
 	return ok && tc == "none"
+}
+
+func anthropicModelDisablesPrefill(model string) bool {
+	for _, prefix := range anthropicNoPrefillModelPrefixes {
+		if strings.HasPrefix(model, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendAnthropicTrailingUserMessage(messages []anthropicMessage) []anthropicMessage {
+	if len(messages) == 0 || messages[len(messages)-1].Role != "assistant" {
+		return messages
+	}
+	return append(messages, anthropicMessage{
+		Role: "user",
+		Content: []anthropicContentBlock{
+			{Type: "text", Text: " "},
+		},
+	})
 }
 
 type anthropicStream struct {
