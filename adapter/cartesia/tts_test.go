@@ -912,6 +912,74 @@ func TestCartesiaTTSStreamPushTextAppendsReferenceTrailingSpace(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamTextPacketsIncludeReferenceOptions(t *testing.T) {
+	messages := make(chan map[string]any, 1)
+	closed := make(chan struct{})
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaCaptureMessageWebsocketServer(serverConn, messages, closed, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "voice-1", "sonic-3",
+		WithCartesiaBaseURL("http://cartesia.test"),
+		WithCartesiaAudioFormat("pcm_s16le", 16000),
+		WithCartesiaLanguage("fr"),
+		WithCartesiaWordTimestamps(false),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("Bonjour tout le monde. Tail"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+
+	msg := receiveCartesiaTestValue(t, messages, "stream text packet")
+	if msg["context_id"] != "default" || msg["transcript"] != "Bonjour tout le monde. " || msg["continue"] != true {
+		t.Fatalf("stream text packet = %#v, want reference context/transcript/continue", msg)
+	}
+	if msg["model_id"] != "sonic-3" || msg["language"] != "fr" || msg["add_timestamps"] != false || msg["max_buffer_delay_ms"] != float64(0) {
+		t.Fatalf("stream options = %#v, want reference model/language/timestamp/max-buffer fields", msg)
+	}
+	voice, ok := msg["voice"].(map[string]any)
+	if !ok || voice["mode"] != "id" || voice["id"] != "voice-1" {
+		t.Fatalf("voice = %#v, want reference voice id packet", msg["voice"])
+	}
+	outputFormat, ok := msg["output_format"].(map[string]any)
+	if !ok || outputFormat["encoding"] != "pcm_s16le" || outputFormat["sample_rate"] != float64(16000) {
+		t.Fatalf("output_format = %#v, want reference output format", msg["output_format"])
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error = %v", err)
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for capture websocket close")
+	}
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("capture websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for capture websocket server")
+	}
+}
+
 func TestCartesiaTTSStreamSendsSentencesAndFlushesTailLikeReference(t *testing.T) {
 	var writes []map[string]any
 	stream := &cartesiaTTSStream{
@@ -1658,6 +1726,42 @@ func runCartesiaNoInitialMessageWebsocketServer(conn net.Conn, errCh chan<- erro
 				return
 			}
 			errCh <- fmt.Errorf("unexpected initial websocket message %s", raw)
+		}),
+	}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
+func runCartesiaCaptureMessageWebsocketServer(conn net.Conn, messages chan<- map[string]any, closed chan<- struct{}, errCh chan<- error) {
+	upgrader := websocket.Upgrader{}
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ws, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer ws.Close()
+			_, raw, err := ws.ReadMessage()
+			if err != nil {
+				errCh <- err
+				return
+			}
+			var msg map[string]any
+			if err := json.Unmarshal(raw, &msg); err != nil {
+				errCh <- err
+				return
+			}
+			messages <- msg
+			_, _, err = ws.ReadMessage()
+			if err == nil {
+				errCh <- errors.New("expected websocket close after captured message")
+				return
+			}
+			close(closed)
+			errCh <- nil
 		}),
 	}
 	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
