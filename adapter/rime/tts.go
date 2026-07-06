@@ -1503,6 +1503,7 @@ type rimeTTSSynthesizeStream struct {
 	pendingText           string
 	pushedText            string
 	sentenceTokenizer     tokenize.SentenceTokenizer
+	sentenceStream        tokenize.SentenceStream
 	audioSeen             bool
 	pendingPCM            []byte
 	pendingTranscriptText string
@@ -1531,7 +1532,11 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 		return nil
 	}
 	s.pendingText += text
-	if err := s.sendCompleteSentencesLocked(); err != nil {
+	if err := s.sentenceStreamLocked().PushText(text); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	if err := s.drainSentenceStreamLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -1593,10 +1598,18 @@ func (s *rimeTTSSynthesizeStream) EndInput() error {
 
 func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 	hadPendingText := s.pendingText != ""
-	if s.pendingText != "" {
-		text := strings.Join(s.tokenizerLocked().Tokenize(s.pendingText, ""), " ")
+	if s.sentenceStream != nil {
+		var err error
+		if sendProviderFlush {
+			err = s.sentenceStream.EndInput()
+		} else {
+			err = s.sentenceStream.Flush()
+		}
+		if err != nil {
+			return err
+		}
 		s.pendingText = ""
-		if err := s.sendSentenceLocked(text); err != nil {
+		if err := s.drainSentenceStreamLocked(); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
@@ -1622,24 +1635,35 @@ func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 	return nil
 }
 
-func (s *rimeTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+type rimeSentenceStreamDrainer interface {
+	TryNext() (*tokenize.TokenData, bool, error)
+}
+
+func (s *rimeTTSSynthesizeStream) drainSentenceStreamLocked() error {
+	if s.sentenceStream == nil {
+		return nil
+	}
+	drainer, ok := s.sentenceStream.(rimeSentenceStreamDrainer)
+	if !ok {
+		return nil
+	}
 	for {
-		tokens := s.tokenizerLocked().Tokenize(s.pendingText, "")
-		if len(tokens) <= 1 {
+		token, ok, err := drainer.TryNext()
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
-		sentence := tokens[0]
-		if err := s.sendSentenceLocked(sentence); err != nil {
+		if err != nil {
 			return err
 		}
-		tokenIdx := strings.Index(s.pendingText, sentence)
-		if tokenIdx < 0 {
-			s.pendingText = strings.TrimSpace(strings.TrimPrefix(s.pendingText, sentence))
+		if !ok {
+			return nil
+		}
+		if token == nil {
 			continue
 		}
-		s.pendingText = strings.TrimLeftFunc(s.pendingText[tokenIdx+len(sentence):], func(r rune) bool {
-			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
-		})
+		if err := s.sendSentenceLocked(token.Token); err != nil {
+			return err
+		}
 	}
 }
 
@@ -1648,6 +1672,13 @@ func (s *rimeTTSSynthesizeStream) tokenizerLocked() tokenize.SentenceTokenizer {
 		return s.sentenceTokenizer
 	}
 	return newRimeTTSSentenceTokenizer()
+}
+
+func (s *rimeTTSSynthesizeStream) sentenceStreamLocked() tokenize.SentenceStream {
+	if s.sentenceStream == nil {
+		s.sentenceStream = s.tokenizerLocked().Stream("")
+	}
+	return s.sentenceStream
 }
 
 func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {

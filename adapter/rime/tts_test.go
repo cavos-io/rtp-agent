@@ -35,7 +35,21 @@ func (t rimeFixedSentenceTokenizer) Tokenize(string, string) []string {
 }
 
 func (t rimeFixedSentenceTokenizer) Stream(string) tokenize.SentenceStream {
-	return tokenize.NewBasicSentenceTokenizer().Stream("")
+	return tokenize.NewBufferedTokenStream(func(string) []string {
+		return append([]string(nil), t.tokens...)
+	}, 1, 1)
+}
+
+type rimeDivergentSentenceTokenizer struct{}
+
+func (rimeDivergentSentenceTokenizer) Tokenize(string, string) []string {
+	return []string{"tokenize packet"}
+}
+
+func (rimeDivergentSentenceTokenizer) Stream(string) tokenize.SentenceStream {
+	return tokenize.NewBufferedTokenStream(func(string) []string {
+		return []string{"stream packet"}
+	}, 1, 1)
 }
 
 func TestRimeTTSDefaultsMatchReference(t *testing.T) {
@@ -2985,6 +2999,37 @@ func TestRimeTTSStreamUsesConfiguredReferenceTokenizer(t *testing.T) {
 		t.Fatalf("writes after Flush = %d, want one custom tokenizer packet", len(writes))
 	}
 	assertRimePayload(t, writes[0], "text", "custom packet ")
+}
+
+func TestRimeTTSStreamUsesReferenceTokenizerStream(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeDivergentSentenceTokenizer{}))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after PushText = %d, want stream token buffered until Flush", len(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want one stream token packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "stream packet ")
 }
 
 func TestRimeTTSUpdateOptionsUsesConfiguredTokenizer(t *testing.T) {
