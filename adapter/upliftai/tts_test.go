@@ -1616,6 +1616,58 @@ func TestUpliftAITTSChunkedStreamSocketIOReconnectDeadlineIsAPIConnectionError(t
 	}
 }
 
+func TestUpliftAITTSChunkedStreamCloseCancelsReferenceSocketIOConnect(t *testing.T) {
+	oldDial := upliftAISocketIODialContext
+	dialStarted := make(chan struct{})
+	dialReleased := make(chan struct{})
+	upliftAISocketIODialContext = func(ctx context.Context, _ string) (upliftAISocketIOConn, error) {
+		close(dialStarted)
+		<-ctx.Done()
+		close(dialReleased)
+		return nil, ctx.Err()
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+
+	stream, err := provider.Synthesize(context.Background(), "cancel connect")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		resultCh <- err
+	}()
+	select {
+	case <-dialStarted:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for socket.io dial to start")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close during socket.io connect error = %v", err)
+	}
+	select {
+	case <-dialReleased:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Close did not cancel reference socket.io connect")
+	}
+	select {
+	case err := <-resultCh:
+		if err != io.EOF {
+			t.Fatalf("Next after Close during connect error = %v, want EOF", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Next did not finish after Close canceled socket.io connect")
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIOReadErrorEndsRequestAndReconnects(t *testing.T) {
 	firstConn := newUpliftAITestSocketIOConn()
 	firstConn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`

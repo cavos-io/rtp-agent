@@ -205,11 +205,16 @@ func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	if t.apiKey == "" {
 		return nil, fmt.Errorf("API key is required, either as argument or set UPLIFTAI_API_KEY environment variable")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
 
 	stream := &upliftAITTSChunkedStream{
-		owner: t,
-		ctx:   ctx,
-		text:  text,
+		owner:  t,
+		ctx:    ctx,
+		cancel: cancel,
+		text:   text,
 	}
 	if !t.registerStream(stream) {
 		_ = stream.Close()
@@ -594,6 +599,7 @@ func (s *upliftAITTSSynthesizeStream) Close() error {
 type upliftAITTSChunkedStream struct {
 	owner        *UpliftAITTS
 	ctx          context.Context
+	cancel       context.CancelFunc
 	text         string
 	resp         *http.Response
 	once         sync.Once
@@ -612,6 +618,9 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 	if err := s.ensureResponse(); err != nil {
+		if s.closed {
+			return nil, io.EOF
+		}
 		return nil, err
 	}
 	if s.resp == nil || s.resp.Body == nil {
@@ -1430,6 +1439,9 @@ func upliftAIDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
 func (s *upliftAITTSChunkedStream) Close() error {
 	s.once.Do(func() {
 		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}
