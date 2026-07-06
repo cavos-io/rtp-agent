@@ -471,13 +471,13 @@ func gradiumTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesize
 		Audio string `json:"audio"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return nil, false, err
+		return nil, false, llm.NewAPIConnectionError(err.Error())
 	}
 	switch message.Type {
 	case "audio":
 		audio, err := gradiumDecodeBase64Audio(message.Audio)
 		if err != nil {
-			return nil, false, err
+			return nil, false, llm.NewAPIConnectionError(err.Error())
 		}
 		if len(audio) == 0 {
 			return nil, false, nil
