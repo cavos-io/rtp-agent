@@ -366,6 +366,13 @@ func asyncAITTSReadError(err error) error {
 	if errors.As(err, &closeErr) {
 		return llm.NewAPIStatusError("Async connection closed unexpectedly", closeErr.Code, "", err.Error())
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Async websocket receive failed: %v", err))
 }
 

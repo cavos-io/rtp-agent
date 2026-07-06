@@ -591,6 +591,15 @@ func TestAsyncAITTSWebsocketNextNormalCloseBeforeFinalReturnsAPIStatusError(t *t
 	}
 }
 
+func TestAsyncAITTSReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	err := asyncAITTSReadError(asyncAITTSTimeoutError{})
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("read error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestAsyncAITTSStreamNextReturnsEOFAfterReferenceFinalMarker(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
