@@ -804,8 +804,10 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		if err != nil {
 			if err == io.EOF {
 				if chunk := s.finalUsageChunk(); chunk != nil && !s.closed {
+					s.closeResponseBody()
 					return markAnthropicStreamChunk(s, chunk), nil
 				}
+				s.closeResponseBody()
 				return nil, io.EOF
 			}
 			if s.closed {
@@ -1088,4 +1090,18 @@ func (s *anthropicStream) Close() error {
 		s.cancel = nil
 	}
 	return err
+}
+
+func (s *anthropicStream) closeResponseBody() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.resp != nil && s.resp.Body != nil {
+		_ = s.resp.Body.Close()
+	}
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 }

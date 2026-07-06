@@ -168,6 +168,27 @@ func (b *anthropicSingleCloseBody) Close() error {
 	return nil
 }
 
+type anthropicTrackedBody struct {
+	reader strings.Reader
+	closed bool
+}
+
+func newAnthropicTrackedBody(payload string) *anthropicTrackedBody {
+	return &anthropicTrackedBody{reader: *strings.NewReader(payload)}
+}
+
+func (b *anthropicTrackedBody) Read(p []byte) (int, error) {
+	return b.reader.Read(p)
+}
+
+func (b *anthropicTrackedBody) Close() error {
+	if b.closed {
+		return errors.New("closed twice")
+	}
+	b.closed = true
+	return nil
+}
+
 func TestAnthropicLLMMetadataMatchesReference(t *testing.T) {
 	model, err := NewAnthropicLLM("test-key", "")
 	if err != nil {
@@ -1426,6 +1447,38 @@ func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+}
+
+func TestAnthropicStreamClosesBodyAfterEOFLikeReference(t *testing.T) {
+	body := newAnthropicTrackedBody(strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n"))
+	stream := &anthropicStream{
+		resp:   &http.Response{Body: body},
+		reader: bufio.NewReader(body),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	if chunk.Usage == nil {
+		t.Fatalf("chunk = %#v, want final usage before EOF", chunk)
+	}
+	if body.closed {
+		t.Fatal("body closed before EOF, want close after stream drains")
+	}
+
+	_, err = stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("EOF Next() error = %v, want io.EOF", err)
+	}
+	if !body.closed {
+		t.Fatal("body closed = false, want provider stream body closed at EOF")
 	}
 }
 
