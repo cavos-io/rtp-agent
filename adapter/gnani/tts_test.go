@@ -748,6 +748,35 @@ func TestGnaniTTSStreamNormalCloseBeforeCompleteReturnsAPIConnectionError(t *tes
 	}
 }
 
+func TestGnaniTTSStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	conn := newGnaniSilentWebsocketConn(t)
+	if err := conn.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &gnaniTTSSynthesizeStream{
+		conn:        conn,
+		ctx:         ctx,
+		cancel:      cancel,
+		sampleRate:  16000,
+		numChannels: 1,
+		events:      make(chan *tts.SynthesizedAudio, 1),
+		errCh:       make(chan error, 1),
+	}
+	go stream.readLoop()
+
+	_, err := stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func newGnaniProviderCloseWebsocketConn(t *testing.T, closeCode int) *websocket.Conn {
 	t.Helper()
 	clientConn, serverConn := net.Pipe()
@@ -784,6 +813,63 @@ func newGnaniProviderCloseWebsocketConn(t *testing.T, closeCode int) *websocket.
 		t.Fatalf("dial test websocket: %v", err)
 	}
 	t.Cleanup(func() {
+		_ = server.Close()
+		_ = listener.Close()
+		_ = conn.Close()
+		_ = clientConn.Close()
+		_ = serverConn.Close()
+		select {
+		case err := <-serverErr:
+			t.Errorf("test websocket server error: %v", err)
+		default:
+		}
+	})
+	return conn
+}
+
+func newGnaniSilentWebsocketConn(t *testing.T) *websocket.Conn {
+	t.Helper()
+	clientConn, serverConn := net.Pipe()
+	listener := newGnaniSingleConnListener(serverConn)
+	upgrader := websocket.Upgrader{}
+	serverErr := make(chan error, 1)
+	serverReady := make(chan struct{})
+	done := make(chan struct{})
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		close(serverReady)
+		<-done
+	})}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			serverErr <- err
+		}
+	}()
+	dialer := websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	conn, _, err := dialer.Dial("ws://gnani.test/api/v1/tts", nil)
+	if err != nil {
+		clientConn.Close()
+		t.Fatalf("dial test websocket: %v", err)
+	}
+	select {
+	case <-serverReady:
+	case err := <-serverErr:
+		t.Fatalf("test websocket server error: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("test websocket server did not accept connection")
+	}
+	t.Cleanup(func() {
+		close(done)
 		_ = server.Close()
 		_ = listener.Close()
 		_ = conn.Close()

@@ -521,6 +521,13 @@ func gnaniTTSReadError(err error) error {
 	if errors.As(err, &closeErr) {
 		return llm.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket closed: %v", err))
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Gnani TTS WebSocket error: %v", err))
 }
 
