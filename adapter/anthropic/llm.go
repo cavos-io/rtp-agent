@@ -20,19 +20,21 @@ import (
 )
 
 type AnthropicLLM struct {
-	apiKey       string
-	model        string
-	baseURL      string
-	user         string
-	userSet      bool
-	maxTokens    int
-	maxTokensSet bool
-	temperature  float64
-	tempSet      bool
-	topK         int
-	topKSet      bool
-	caching      string
-	cachingSet   bool
+	apiKey               string
+	model                string
+	baseURL              string
+	user                 string
+	userSet              bool
+	maxTokens            int
+	maxTokensSet         bool
+	temperature          float64
+	tempSet              bool
+	topK                 int
+	topKSet              bool
+	caching              string
+	cachingSet           bool
+	toolChoice           llm.ToolChoice
+	toolChoiceSet        bool
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
 }
@@ -98,6 +100,13 @@ func WithAnthropicCaching(caching string) AnthropicOption {
 	return func(l *AnthropicLLM) {
 		l.caching = caching
 		l.cachingSet = true
+	}
+}
+
+func WithAnthropicToolChoice(choice llm.ToolChoice) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.toolChoice = choice
+		l.toolChoiceSet = true
 	}
 }
 
@@ -234,7 +243,11 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 			tools[len(tools)-1]["cache_control"] = cacheControl
 		}
 		body["tools"] = tools
-		if anthropicToolChoiceNone(options.ToolChoice) {
+		toolChoice := options.ToolChoice
+		if toolChoice == nil && l.toolChoiceSet {
+			toolChoice = l.toolChoice
+		}
+		if anthropicToolChoiceNone(toolChoice) {
 			body["tools"] = []map[string]interface{}{}
 		}
 		parallelToolCalls := options.ParallelToolCalls
@@ -243,8 +256,8 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 			parallelToolCalls = l.parallelToolCalls
 			parallelToolCallsSet = true
 		}
-		if toolChoice := buildAnthropicToolChoice(options.ToolChoice, parallelToolCalls, parallelToolCallsSet); toolChoice != nil {
-			body["tool_choice"] = toolChoice
+		if providerToolChoice := buildAnthropicToolChoice(toolChoice, parallelToolCalls, parallelToolCallsSet); providerToolChoice != nil {
+			body["tool_choice"] = providerToolChoice
 		}
 	}
 
@@ -928,9 +941,9 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				ID    *string `json:"id"`
 				Usage *struct {
 					InputTokens              *int `json:"input_tokens"`
-					OutputTokens             int `json:"output_tokens"`
-					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-					CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+					OutputTokens             int  `json:"output_tokens"`
+					CacheCreationInputTokens int  `json:"cache_creation_input_tokens"`
+					CacheReadInputTokens     int  `json:"cache_read_input_tokens"`
 				} `json:"usage"`
 			} `json:"message"`
 
