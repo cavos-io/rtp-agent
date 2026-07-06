@@ -703,7 +703,7 @@ func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampl
 		if message.Data == "" {
 			return nil, false, nil
 		}
-		audio, err := base64.StdEncoding.DecodeString(message.Data)
+		audio, err := respeecherDecodeBase64Audio(message.Data)
 		if err != nil {
 			return nil, false, err
 		}
@@ -718,6 +718,29 @@ func respeecherTTSAudioFromStreamMessage(payload []byte, contextID string, sampl
 	default:
 		return nil, false, nil
 	}
+}
+
+func respeecherDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func respeecherTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {
