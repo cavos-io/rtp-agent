@@ -315,7 +315,7 @@ func (s *resembleTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return nil, fmt.Errorf("resemble api returned failure: %s", issues)
 	}
-	audio, err := base64.StdEncoding.DecodeString(result.AudioContent)
+	audio, err := resembleDecodeBase64Audio(result.AudioContent)
 	if err != nil {
 		return nil, resembleTTSConnectionError("Resemble TTS audio decode failed", err)
 	}
@@ -621,7 +621,7 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 		if message.AudioContent == "" {
 			return nil, false, message.RequestID, nil
 		}
-		audio, err := resembleDecodeWebsocketBase64(message.AudioContent)
+		audio, err := resembleDecodeBase64Audio(message.AudioContent)
 		if err != nil {
 			return nil, false, message.RequestID, resembleTTSConnectionError("Resemble websocket audio decode failed", err)
 		}
@@ -642,7 +642,7 @@ func resembleTTSAudioFromWebsocketMessage(payload []byte) (*tts.SynthesizedAudio
 	}
 }
 
-func resembleDecodeWebsocketBase64(data string) ([]byte, error) {
+func resembleDecodeBase64Audio(data string) ([]byte, error) {
 	clean := make([]byte, 0, len(data))
 	dataChars := 0
 	for i := 0; i < len(data); i++ {

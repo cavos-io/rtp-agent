@@ -254,6 +254,25 @@ func TestResembleTTSChunkedStreamDecodesReferenceResponse(t *testing.T) {
 	}
 }
 
+func TestResembleTTSChunkedStreamDecodesReferenceNoisyBase64(t *testing.T) {
+	stream := &resembleTTSChunkedStream{
+		resp:       &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(`{"success":true,"audio_content":"AQI=!!!!"}`)))},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error: %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded audio", audio)
+	}
+	if got := string(audio.Frame.Data); got != "\x01\x02" {
+		t.Fatalf("audio data = %q, want decoded noisy base64 bytes", got)
+	}
+}
+
 func TestResembleTTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: resembleRoundTripFunc(func(*http.Request) (*http.Response, error) {
