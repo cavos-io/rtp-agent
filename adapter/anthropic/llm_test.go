@@ -1274,6 +1274,26 @@ func TestAnthropicStreamMessageStartMissingMessageReturnsConnectionError(t *test
 	}
 }
 
+func TestAnthropicStreamMessageStartMissingIDReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
 func TestAnthropicStreamContentBlockStartMissingBlockReturnsConnectionError(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
