@@ -38,6 +38,12 @@ type UpliftAITTS struct {
 }
 
 type UpliftAITTSOption func(*UpliftAITTS)
+type UpliftAITTSUpdateOption func(*upliftAITTSUpdateOptions)
+
+type upliftAITTSUpdateOptions struct {
+	voiceID      *string
+	outputFormat *string
+}
 
 func WithUpliftAIBaseURL(baseURL string) UpliftAITTSOption {
 	return func(t *UpliftAITTS) {
@@ -54,6 +60,18 @@ func WithUpliftAIOutputFormat(outputFormat string) UpliftAITTSOption {
 func WithUpliftAIPhraseReplacementConfigID(configID string) UpliftAITTSOption {
 	return func(t *UpliftAITTS) {
 		t.phraseReplacementConfigID = configID
+	}
+}
+
+func WithUpliftAIUpdateVoiceID(voiceID string) UpliftAITTSUpdateOption {
+	return func(opts *upliftAITTSUpdateOptions) {
+		opts.voiceID = &voiceID
+	}
+}
+
+func WithUpliftAIUpdateOutputFormat(outputFormat string) UpliftAITTSUpdateOption {
+	return func(opts *upliftAITTSUpdateOptions) {
+		opts.outputFormat = &outputFormat
 	}
 }
 
@@ -90,13 +108,21 @@ func (t *UpliftAITTS) Capabilities() tts.TTSCapabilities {
 func (t *UpliftAITTS) SampleRate() int  { return defaultUpliftAISampleRate }
 func (t *UpliftAITTS) NumChannels() int { return 1 }
 
-func (t *UpliftAITTS) UpdateOptions(voice string) {
-	if voice == "" {
-		return
+func (t *UpliftAITTS) UpdateOptions(opts ...UpliftAITTSUpdateOption) {
+	var update upliftAITTSUpdateOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&update)
+		}
 	}
 	t.mu.Lock()
-	t.voice = voice
-	t.mu.Unlock()
+	defer t.mu.Unlock()
+	if update.voiceID != nil {
+		t.voice = *update.voiceID
+	}
+	if update.outputFormat != nil {
+		t.outputFormat = *update.outputFormat
+	}
 }
 
 func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
@@ -160,12 +186,6 @@ func (t *UpliftAITTS) isClosed() bool {
 	return t.closed
 }
 
-func (t *UpliftAITTS) voiceSnapshot() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.voice
-}
-
 func (t *UpliftAITTS) registerStream(stream io.Closer) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -180,6 +200,12 @@ func (t *UpliftAITTS) unregisterStream(stream io.Closer) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
+}
+
+func (t *UpliftAITTS) requestOptions() (baseURL string, voiceID string, outputFormat string, phraseReplacementConfigID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.baseURL, t.voice, t.outputFormat, t.phraseReplacementConfigID
 }
 
 type upliftAITTSSynthesizeStream struct {
@@ -348,6 +374,7 @@ type upliftAITTSChunkedStream struct {
 	once         sync.Once
 	err          error
 	decoder      codecs.AudioStreamDecoder
+	outputFormat string
 	started      bool
 	hasAudio     bool
 	pendingFinal bool
@@ -365,7 +392,7 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
 	}
-	if s.owner != nil && strings.HasPrefix(s.owner.outputFormat, "MP3") {
+	if strings.HasPrefix(s.currentOutputFormat(), "MP3") {
 		return s.nextDecodedMP3()
 	}
 	if s.pendingFinal {
@@ -406,16 +433,18 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	if s.resp != nil || s.owner == nil {
 		return nil
 	}
+	baseURL, voiceID, outputFormat, phraseReplacementConfigID := s.owner.requestOptions()
+	s.outputFormat = outputFormat
 	reqBody := map[string]interface{}{
 		"text":         s.text,
-		"voiceId":      s.owner.voiceSnapshot(),
-		"outputFormat": s.owner.outputFormat,
+		"voiceId":      voiceID,
+		"outputFormat": outputFormat,
 	}
-	if s.owner.phraseReplacementConfigID != "" {
-		reqBody["phraseReplacementConfigId"] = s.owner.phraseReplacementConfigID
+	if phraseReplacementConfigID != "" {
+		reqBody["phraseReplacementConfigId"] = phraseReplacementConfigID
 	}
 	jsonBody, _ := json.Marshal(reqBody)
-	req, err := http.NewRequestWithContext(s.ctx, "POST", s.owner.baseURL, bytes.NewBuffer(jsonBody))
+	req, err := http.NewRequestWithContext(s.ctx, "POST", baseURL, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return err
 	}
@@ -432,6 +461,17 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	}
 	s.resp = resp
 	return nil
+}
+
+func (s *upliftAITTSChunkedStream) currentOutputFormat() string {
+	if s.outputFormat != "" {
+		return s.outputFormat
+	}
+	if s.owner == nil {
+		return ""
+	}
+	_, _, outputFormat, _ := s.owner.requestOptions()
+	return outputFormat
 }
 
 func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {

@@ -119,7 +119,7 @@ func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
 	}
 	defer stream.Close()
 
-	tts.UpdateOptions("voice-updated")
+	tts.UpdateOptions(WithUpliftAIUpdateVoiceID("voice-updated"))
 
 	if _, err := stream.Next(); err != nil {
 		t.Fatalf("Next error = %v", err)
@@ -385,6 +385,54 @@ func TestUpliftAITTSSynthesizeUsesReferenceRouteAndOptions(t *testing.T) {
 	}
 	if got, want := requestBody["phraseReplacementConfigId"], "phrases-1"; got != want {
 		t.Fatalf("request phraseReplacementConfigId = %q, want %q", got, want)
+	}
+}
+
+func TestUpliftAITTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
+	var requestBody map[string]string
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader([]byte{0x01, 0x02})),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("https://upliftai.example/custom-tts"),
+		WithUpliftAIOutputFormat("MP3_22050_32"),
+	)
+	provider.UpdateOptions(
+		WithUpliftAIUpdateVoiceID(""),
+		WithUpliftAIUpdateOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "updated")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want frame", audio)
+	}
+	if got, want := requestBody["text"], "updated"; got != want {
+		t.Fatalf("request text = %q, want %q", got, want)
+	}
+	if got, want := requestBody["voiceId"], ""; got != want {
+		t.Fatalf("request voiceId = %q, want explicit empty voice", got)
+	}
+	if got, want := requestBody["outputFormat"], "PCM_22050_16"; got != want {
+		t.Fatalf("request outputFormat = %q, want %q", got, want)
 	}
 }
 
