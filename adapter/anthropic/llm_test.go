@@ -2690,9 +2690,40 @@ func TestAnthropicChatForwardsReferenceExtraParams(t *testing.T) {
 	if _, ok := transport.body["metadata"]; !ok {
 		t.Fatalf("metadata missing from body: %#v", transport.body)
 	}
-	if _, ok := transport.body["caching"]; ok {
-		t.Fatalf("caching leaked to provider body: %#v", transport.body["caching"])
+	if transport.body["caching"] != "ephemeral" {
+		t.Fatalf("caching = %#v, want forwarded extra param", transport.body["caching"])
 	}
+}
+
+func TestAnthropicChatExtraCachingDoesNotApplyCacheControlLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "be fast"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		ctx,
+		llm.WithExtraParams(map[string]any{"caching": "ephemeral"}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["caching"] != "ephemeral" {
+		t.Fatalf("caching = %#v, want forwarded extra param", transport.body["caching"])
+	}
+	assertNoCacheControlBlock(t, transport.body["system"], "system")
 }
 
 func TestAnthropicChatRejectsReservedExtraParamModelLikeReference(t *testing.T) {
@@ -2858,16 +2889,11 @@ func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 		&llm.ChatMessage{ID: "assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
 	}
-	model, err := NewAnthropicLLM("test-key", "claude-test")
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicCaching("ephemeral"))
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
-	stream, err := model.Chat(
-		context.Background(),
-		ctx,
-		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
-		llm.WithExtraParams(map[string]any{"caching": "ephemeral"}),
-	)
+	stream, err := model.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
@@ -2896,7 +2922,7 @@ func TestAnthropicChatCachesExtraSystemLikeReference(t *testing.T) {
 	http.DefaultTransport = transport
 	t.Cleanup(func() { http.DefaultTransport = originalTransport })
 
-	model, err := NewAnthropicLLM("test-key", "claude-test")
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicCaching("ephemeral"))
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
@@ -2904,8 +2930,7 @@ func TestAnthropicChatCachesExtraSystemLikeReference(t *testing.T) {
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithExtraParams(map[string]any{
-			"caching": "ephemeral",
-			"system":  []map[string]any{{"type": "text", "text": "extra"}},
+			"system": []map[string]any{{"type": "text", "text": "extra"}},
 		}),
 	)
 	if err != nil {
@@ -2922,7 +2947,7 @@ func TestAnthropicChatCachesExtraToolsLikeReference(t *testing.T) {
 	http.DefaultTransport = transport
 	t.Cleanup(func() { http.DefaultTransport = originalTransport })
 
-	model, err := NewAnthropicLLM("test-key", "claude-test")
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicCaching("ephemeral"))
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
@@ -2930,7 +2955,6 @@ func TestAnthropicChatCachesExtraToolsLikeReference(t *testing.T) {
 		context.Background(),
 		llm.NewChatContext(),
 		llm.WithExtraParams(map[string]any{
-			"caching": "ephemeral",
 			"tools": []map[string]any{{
 				"name":         "lookup",
 				"description":  "look up information",
@@ -3115,6 +3139,21 @@ func assertCacheControlMap(t *testing.T, raw any, label string) {
 	}
 	if cacheControl["type"] != "ephemeral" {
 		t.Fatalf("%s cache_control.type = %#v, want ephemeral", label, cacheControl["type"])
+	}
+}
+
+func assertNoCacheControlBlock(t *testing.T, raw any, label string) {
+	t.Helper()
+	blocks, ok := raw.([]any)
+	if !ok || len(blocks) == 0 {
+		t.Fatalf("%s = %#v, want non-empty block list", label, raw)
+	}
+	block, ok := blocks[len(blocks)-1].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want map", label, blocks[len(blocks)-1])
+	}
+	if _, ok := block["cache_control"]; ok {
+		t.Fatalf("%s cache_control = %#v, want omitted", label, block["cache_control"])
 	}
 }
 

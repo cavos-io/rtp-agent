@@ -194,7 +194,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if anthropicModelDisablesPrefill(l.model) {
 		messages = appendAnthropicTrailingUserMessage(messages)
 	}
-	cacheControl := l.anthropicEphemeralCacheControl(options.ExtraParams)
+	cacheControl := l.anthropicEphemeralCacheControl()
 	if cacheControl != nil {
 		applyAnthropicMessageCacheControl(messages, cacheControl)
 	}
@@ -406,7 +406,7 @@ func waitAnthropicRetryInterval(ctx context.Context, interval time.Duration) err
 
 func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 	for key, value := range params {
-		if key == "caching" || key == "max_tokens" {
+		if key == "max_tokens" {
 			continue
 		}
 		body[key] = value
@@ -460,14 +460,11 @@ func validateAnthropicExtraParams(params map[string]any) error {
 	return nil
 }
 
-func (l *AnthropicLLM) anthropicEphemeralCacheControl(params map[string]any) map[string]any {
+func (l *AnthropicLLM) anthropicEphemeralCacheControl() map[string]any {
 	if l.cachingSet && l.caching == "ephemeral" {
 		return map[string]any{"type": "ephemeral"}
 	}
-	if params["caching"] != "ephemeral" {
-		return nil
-	}
-	return map[string]any{"type": "ephemeral"}
+	return nil
 }
 
 func anthropicRequestID(header http.Header) string {
