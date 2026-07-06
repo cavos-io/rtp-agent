@@ -1018,6 +1018,35 @@ func TestAnthropicChatToolChoiceNoneClearsTools(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatOmitsToolChoiceWhenNoTools(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithToolChoice("required"),
+		llm.WithParallelToolCalls(false),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if _, ok := transport.body["tools"]; ok {
+		t.Fatalf("tools = %#v, want omitted without configured tools", transport.body["tools"])
+	}
+	if _, ok := transport.body["tool_choice"]; ok {
+		t.Fatalf("tool_choice = %#v, want omitted without configured tools", transport.body["tool_choice"])
+	}
+}
+
 func TestAnthropicChatAppendsTrailingUserForNoPrefillModels(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

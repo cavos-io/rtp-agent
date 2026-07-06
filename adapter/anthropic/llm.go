@@ -171,12 +171,12 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 			tools[len(tools)-1]["cache_control"] = cacheControl
 		}
 		body["tools"] = tools
-	}
-	if anthropicToolChoiceNone(options.ToolChoice) {
-		body["tools"] = []map[string]interface{}{}
-	}
-	if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls, options.ParallelToolCallsSet); toolChoice != nil {
-		body["tool_choice"] = toolChoice
+		if anthropicToolChoiceNone(options.ToolChoice) {
+			body["tools"] = []map[string]interface{}{}
+		}
+		if toolChoice := buildAnthropicToolChoice(options.ToolChoice, options.ParallelToolCalls, options.ParallelToolCallsSet); toolChoice != nil {
+			body["tool_choice"] = toolChoice
+		}
 	}
 
 	jsonBody, _ := json.Marshal(body)
