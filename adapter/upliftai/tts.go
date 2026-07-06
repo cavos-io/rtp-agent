@@ -210,12 +210,14 @@ func (t *UpliftAITTS) requestOptions() (baseURL string, voiceID string, outputFo
 }
 
 type upliftAITTSSynthesizeStream struct {
-	owner *UpliftAITTS
-	ctx   context.Context
+	owner  *UpliftAITTS
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu        sync.Mutex
 	buf       strings.Builder
 	inputCh   chan string
+	eventCh   chan upliftAITTSStreamResult
 	doneCh    chan struct{}
 	active    tts.ChunkedStream
 	closed    bool
@@ -223,16 +225,26 @@ type upliftAITTSSynthesizeStream struct {
 	once      sync.Once
 }
 
+type upliftAITTSStreamResult struct {
+	audio *tts.SynthesizedAudio
+	err   error
+}
+
 func newUpliftAITTSSynthesizeStream(owner *UpliftAITTS, ctx context.Context) *upliftAITTSSynthesizeStream {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &upliftAITTSSynthesizeStream{
+	ctx, cancel := context.WithCancel(ctx)
+	stream := &upliftAITTSSynthesizeStream{
 		owner:   owner,
 		ctx:     ctx,
+		cancel:  cancel,
 		inputCh: make(chan string, 100),
+		eventCh: make(chan upliftAITTSStreamResult, 100),
 		doneCh:  make(chan struct{}),
 	}
+	go stream.run()
+	return stream
 }
 
 func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
@@ -324,45 +336,87 @@ func (s *upliftAITTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			s.mu.Unlock()
 			return nil, io.EOF
 		}
-		active := s.active
 		s.mu.Unlock()
 
-		if active != nil {
-			audio, err := active.Next()
-			if err == io.EOF {
-				_ = active.Close()
-				s.mu.Lock()
-				if s.active == active {
-					s.active = nil
-				}
-				s.mu.Unlock()
-				continue
-			}
-			return audio, err
-		}
-
 		select {
-		case text, ok := <-s.inputCh:
+		case result, ok := <-s.eventCh:
 			if !ok {
 				return nil, io.EOF
 			}
-			stream, err := s.owner.Synthesize(s.ctx, text)
-			if err != nil {
-				return nil, err
+			if result.err != nil {
+				return nil, result.err
 			}
-			s.mu.Lock()
-			if s.closed {
-				s.mu.Unlock()
-				_ = stream.Close()
-				return nil, io.EOF
-			}
-			s.active = stream
-			s.mu.Unlock()
-		case <-s.doneCh:
-			return nil, io.EOF
+			return result.audio, nil
 		case <-s.ctx.Done():
-			return nil, s.ctx.Err()
+			return nil, io.EOF
 		}
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) run() {
+	defer close(s.doneCh)
+	defer close(s.eventCh)
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case text, ok := <-s.inputCh:
+			if !ok {
+				return
+			}
+			if err := s.runSegment(text); err != nil {
+				s.sendResult(nil, err)
+				return
+			}
+		}
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
+	stream, err := s.owner.Synthesize(s.ctx, text)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = stream.Close()
+		return nil
+	}
+	s.active = stream
+	s.mu.Unlock()
+	defer func() {
+		_ = stream.Close()
+		s.mu.Lock()
+		if s.active == stream {
+			s.active = nil
+		}
+		s.mu.Unlock()
+	}()
+
+	for {
+		audio, err := stream.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if audio == nil {
+			continue
+		}
+		if !s.sendResult(audio, nil) {
+			return nil
+		}
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) sendResult(audio *tts.SynthesizedAudio, err error) bool {
+	select {
+	case s.eventCh <- upliftAITTSStreamResult{audio: audio, err: err}:
+		return true
+	case <-s.ctx.Done():
+		return false
 	}
 }
 
@@ -375,11 +429,11 @@ func (s *upliftAITTSSynthesizeStream) Close() error {
 			s.inputDone = true
 			close(s.inputCh)
 		}
-		close(s.doneCh)
 		active := s.active
 		s.active = nil
 		s.mu.Unlock()
 
+		s.cancel()
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
@@ -511,6 +512,7 @@ func TestUpliftAITTSStreamFlushSynthesizesReferenceSegment(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
+	upliftAIWaitForCondition(t, func() bool { return httpCalls == 1 }, "provider request after Flush")
 
 	audio, err := stream.Next()
 	if err != nil {
@@ -583,6 +585,18 @@ func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
 	if got, want := requestBody["text"], "hello, world"; got != want {
 		t.Fatalf("request text = %q, want reference formatted text %q", got, want)
 	}
+}
+
+func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", name)
 }
 
 func TestUpliftAITTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
