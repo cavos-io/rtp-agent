@@ -682,16 +682,22 @@ func (g *anthropicChatItemGroup) removeInvalidToolItems() {
 		return
 	}
 
-	outputsByCallID := make(map[string]*llm.FunctionCallOutput)
+	outputCallIDs := make(map[string]bool)
 	for _, toolOutput := range g.toolOutputs {
-		outputsByCallID[toolOutput.CallID] = toolOutput
+		outputCallIDs[toolOutput.CallID] = true
 	}
 
 	validCalls := make([]*llm.FunctionCall, 0, len(g.toolCalls))
 	validOutputs := make([]*llm.FunctionCallOutput, 0, len(g.toolOutputs))
+	validCallIDs := make(map[string]bool)
 	for _, toolCall := range g.toolCalls {
-		if toolOutput := outputsByCallID[toolCall.CallID]; toolOutput != nil {
+		if outputCallIDs[toolCall.CallID] {
 			validCalls = append(validCalls, toolCall)
+			validCallIDs[toolCall.CallID] = true
+		}
+	}
+	for _, toolOutput := range g.toolOutputs {
+		if validCallIDs[toolOutput.CallID] {
 			validOutputs = append(validOutputs, toolOutput)
 		}
 	}

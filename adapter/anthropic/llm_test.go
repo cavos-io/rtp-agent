@@ -519,6 +519,30 @@ func TestBuildAnthropicMessagesGroupsToolCallsWithResults(t *testing.T) {
 	assertAnthropicToolResultBlock(t, messages[2].Content, 1, "call_weather", "sunny", false)
 }
 
+func TestBuildAnthropicMessagesKeepsDuplicateMatchingToolOutputs(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-turn", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output-1", CallID: "call_lookup", Name: "lookup", Output: "first"},
+		&llm.FunctionCallOutput{ID: "lookup-output-2", CallID: "call_lookup", Name: "lookup", Output: "second"},
+	}
+
+	messages, _ := buildAnthropicMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want dummy user, assistant call, duplicate tool results: %#v", len(messages), messages)
+	}
+	if messages[2].Role != "user" {
+		t.Fatalf("third role = %q, want user", messages[2].Role)
+	}
+	if len(messages[2].Content) != 2 {
+		t.Fatalf("tool results = %#v, want both duplicate matching outputs", messages[2].Content)
+	}
+	assertAnthropicToolResultBlock(t, messages[2].Content, 0, "call_lookup", "first", false)
+	assertAnthropicToolResultBlock(t, messages[2].Content, 1, "call_lookup", "second", false)
+}
+
 func TestBuildAnthropicMessagesParsesJSONListToolResultContent(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
