@@ -38,6 +38,7 @@ type AnthropicLLM struct {
 	strictToolSchema     bool
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
+	httpClient           *http.Client
 }
 
 type anthropicToolSpecProvider interface {
@@ -53,9 +54,11 @@ type functionToolSchemaParser interface {
 }
 
 const (
-	anthropicAPIKeyEnv   = "ANTHROPIC_API_KEY"
-	defaultAnthropicURL  = "https://api.anthropic.com"
-	defaultAnthropicMode = "claude-sonnet-4-6"
+	anthropicAPIKeyEnv             = "ANTHROPIC_API_KEY"
+	defaultAnthropicURL            = "https://api.anthropic.com"
+	defaultAnthropicMode           = "claude-sonnet-4-6"
+	defaultAnthropicConnectTimeout = 5 * time.Second
+	defaultAnthropicReadTimeout    = 30 * time.Second
 )
 
 var anthropicNoPrefillModelPrefixes = []string{
@@ -143,6 +146,7 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 		model:            model,
 		baseURL:          defaultAnthropicURL,
 		strictToolSchema: true,
+		httpClient:       newAnthropicHTTPClient(http.DefaultTransport),
 	}
 	for _, opt := range opts {
 		opt(llm)
@@ -352,7 +356,7 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 		req.Header.Set("anthropic-beta", betaFlag)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError("")
@@ -370,6 +374,48 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 		return nil, llm.CreateAPIErrorFromHTTP(message, resp.StatusCode, anthropicRequestID(resp.Header), body)
 	}
 	return resp, nil
+}
+
+type anthropicTimeoutRoundTripper struct {
+	*http.Transport
+	connectTimeout time.Duration
+	readTimeout    time.Duration
+}
+
+type anthropicReadTimeoutConn struct {
+	net.Conn
+	readTimeout time.Duration
+}
+
+func (c *anthropicReadTimeoutConn) Read(p []byte) (int, error) {
+	if c.readTimeout > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.readTimeout))
+	}
+	return c.Conn.Read(p)
+}
+
+func newAnthropicHTTPClient(base http.RoundTripper) *http.Client {
+	if transport, ok := base.(*http.Transport); ok {
+		cloned := transport.Clone()
+		dialer := &net.Dialer{
+			Timeout:   defaultAnthropicConnectTimeout,
+			KeepAlive: 30 * time.Second,
+		}
+		cloned.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			return &anthropicReadTimeoutConn{Conn: conn, readTimeout: defaultAnthropicReadTimeout}, nil
+		}
+		cloned.ResponseHeaderTimeout = defaultAnthropicReadTimeout
+		return &http.Client{Transport: &anthropicTimeoutRoundTripper{
+			Transport:      cloned,
+			connectTimeout: defaultAnthropicConnectTimeout,
+			readTimeout:    defaultAnthropicReadTimeout,
+		}}
+	}
+	return &http.Client{Transport: base}
 }
 
 func parseAnthropicErrorBody(respBody []byte) (string, any) {

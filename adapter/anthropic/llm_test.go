@@ -459,6 +459,23 @@ func TestAnthropicChatPreservesCallerDeadlineLikeReference(t *testing.T) {
 	}
 }
 
+func TestAnthropicDefaultHTTPClientUsesReferenceTimeouts(t *testing.T) {
+	client := newAnthropicHTTPClient(http.DefaultTransport)
+	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
+	if !ok {
+		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
+	}
+	if transport.connectTimeout != 5*time.Second {
+		t.Fatalf("connect timeout = %v, want reference 5s", transport.connectTimeout)
+	}
+	if transport.readTimeout != 30*time.Second {
+		t.Fatalf("read timeout = %v, want reference 30s", transport.readTimeout)
+	}
+	if transport.ResponseHeaderTimeout != 30*time.Second {
+		t.Fatalf("ResponseHeaderTimeout = %v, want reference read timeout", transport.ResponseHeaderTimeout)
+	}
+}
+
 func TestAnthropicChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	transport := &captureRoundTripper{
 		statusCode:   http.StatusTooManyRequests,
