@@ -4245,6 +4245,14 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("string timestamp words = audio:%+v done:%v transcript:%q, want reference character zip", stringWords, done, transcript)
 	}
 
+	objectWords, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":{"b":1,"a":2},"start":[0.1,0.3],"end":[0.2,0.4]}}`), 24000)
+	if err != nil {
+		t.Fatalf("object timestamp words message: %v", err)
+	}
+	if done || transcript != "" || objectWords == nil || objectWords.DeltaText != "b a " || len(objectWords.TimedTranscript) != 2 {
+		t.Fatalf("object timestamp words = audio:%+v done:%v transcript:%q, want reference dict-key zip", objectWords, done, transcript)
+	}
+
 	falseyWords, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":false,"start":[0.1],"end":[0.2]}}`), 24000)
 	if err != nil {
 		t.Fatalf("falsey timestamp words message: %v", err)

@@ -2244,6 +2244,10 @@ func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
 	}
 	var wordText string
 	if err := json.Unmarshal(raw, &wordText); err != nil {
+		keys, keyErr := rimeTTSJSONRawObjectKeys(raw)
+		if keyErr == nil {
+			return keys, nil
+		}
 		return nil, err
 	}
 	words = make([]string, 0, len(wordText))
@@ -2251,6 +2255,37 @@ func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
 		words = append(words, string(r))
 	}
 	return words, nil
+}
+
+func rimeTTSJSONRawObjectKeys(raw json.RawMessage) ([]string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if token != json.Delim('{') {
+		return nil, fmt.Errorf("expected JSON object")
+	}
+	var keys []string
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid JSON object key")
+		}
+		var discard any
+		if err := decoder.Decode(&discard); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 func rimeTTSTimestampTimes(raw json.RawMessage) ([]float64, error) {
