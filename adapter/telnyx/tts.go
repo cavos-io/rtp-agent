@@ -503,7 +503,7 @@ func (s *telnyxTTSStream) startDecoder() {
 	if s.decoder != nil {
 		return
 	}
-	s.decoder = codecs.NewMP3AudioStreamDecoder()
+	s.decoder = codecs.NewFFmpegAudioStreamDecoder("mp3", defaultTelnyxTTSSampleRate, telnyxTTSNumChannels)
 	go s.decodeLoop()
 }
 

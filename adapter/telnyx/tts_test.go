@@ -592,11 +592,14 @@ func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
 	if audio == nil || audio.Frame == nil {
 		t.Fatal("audio frame = nil, want decoded PCM frame")
 	}
-	if audio.Frame.SampleRate != 48000 {
-		t.Fatalf("sample rate = %d, want decoded MP3 sample rate 48000", audio.Frame.SampleRate)
+	if audio.Frame.SampleRate != 16000 {
+		t.Fatalf("sample rate = %d, want reference Telnyx PCM sample rate 16000", audio.Frame.SampleRate)
 	}
-	if audio.Frame.NumChannels != 2 {
-		t.Fatalf("channels = %d, want decoded MP3 stereo", audio.Frame.NumChannels)
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want reference Telnyx mono PCM", audio.Frame.NumChannels)
+	}
+	if audio.Frame.SamplesPerChannel == 0 || int(audio.Frame.SamplesPerChannel)*2 != len(audio.Frame.Data) {
+		t.Fatalf("frame samples = %d data bytes = %d, want complete 16-bit mono PCM frame", audio.Frame.SamplesPerChannel, len(audio.Frame.Data))
 	}
 	if len(audio.Frame.Data) == 0 {
 		t.Fatal("decoded frame is empty")
