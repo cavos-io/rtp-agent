@@ -122,19 +122,19 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	case "type":
 		text, ok := args["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing required argument: 'text'")
+			return nil, fmt.Errorf("Missing required argument: 'text'")
 		}
 		c.actions.TypeText(text)
 	case "key":
 		text, ok := args["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing required argument: 'text'")
+			return nil, fmt.Errorf("Missing required argument: 'text'")
 		}
 		c.actions.Key(text)
 	case "hold_key":
 		text, ok := args["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing required argument: 'text'")
+			return nil, fmt.Errorf("Missing required argument: 'text'")
 		}
 		duration := 0.5
 		if rawDuration, ok := args["duration"]; ok {
@@ -148,7 +148,7 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	case "wait":
 		c.actions.Wait()
 	default:
-		return nil, fmt.Errorf("unknown computer_use action: %s", action)
+		return nil, fmt.Errorf("Unknown computer_use action: '%s'", action)
 	}
 
 	time.Sleep(postActionDelay)

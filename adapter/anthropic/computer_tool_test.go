@@ -96,10 +96,10 @@ func TestComputerToolValidatesRequiredArguments(t *testing.T) {
 		{name: "missing coordinate", action: "left_click", args: map[string]interface{}{}, wantErr: "missing required argument"},
 		{name: "invalid coordinate", action: "left_click", args: map[string]interface{}{"coordinate": "10,20"}, wantErr: "invalid coordinate"},
 		{name: "non numeric coordinate", action: "left_click", args: map[string]interface{}{"coordinate": []interface{}{"x", float64(20)}}, wantErr: "coordinates must be numbers"},
-		{name: "missing text", action: "type", args: map[string]interface{}{}, wantErr: "missing required argument"},
+		{name: "missing text", action: "type", args: map[string]interface{}{}, wantErr: "Missing required argument"},
 		{name: "invalid scroll amount", action: "scroll", args: map[string]interface{}{"coordinate": []interface{}{float64(10), float64(20)}, "scroll_amount": "lots"}, wantErr: "scroll_amount must be a number"},
 		{name: "invalid hold duration", action: "hold_key", args: map[string]interface{}{"text": "Shift", "duration": "long"}, wantErr: "duration must be a number"},
-		{name: "unknown", action: "unknown", args: map[string]interface{}{}, wantErr: "unknown computer_use action"},
+		{name: "unknown", action: "unknown", args: map[string]interface{}{}, wantErr: "Unknown computer_use action"},
 	}
 
 	for _, tc := range cases {
@@ -107,6 +107,29 @@ func TestComputerToolValidatesRequiredArguments(t *testing.T) {
 			_, err := toolset.Execute(context.Background(), tc.action, tc.args)
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("Execute error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestComputerToolUsesReferenceErrorText(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+
+	cases := []struct {
+		name    string
+		action  string
+		args    map[string]interface{}
+		wantErr string
+	}{
+		{name: "missing text", action: "type", args: map[string]interface{}{}, wantErr: "Missing required argument: 'text'"},
+		{name: "unknown action", action: "unknown", args: map[string]interface{}{}, wantErr: "Unknown computer_use action: 'unknown'"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := toolset.Execute(context.Background(), tc.action, tc.args)
+			if err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("Execute error = %v, want %q", err, tc.wantErr)
 			}
 		})
 	}
