@@ -1332,6 +1332,10 @@ func (s *deepgramTTSStream) ensureConnectedLocked() error {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return llm.NewAPITimeoutError(err.Error())
 		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		if resp != nil && resp.StatusCode != 0 {
 			if resp.Body != nil {
 				_ = resp.Body.Close()
