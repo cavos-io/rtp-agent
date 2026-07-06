@@ -2103,11 +2103,77 @@ func rimeTTSWebsocketErrorMessage(raw json.RawMessage) string {
 		}
 		return "False"
 	}
-	var value any
-	if err := json.Unmarshal(raw, &value); err == nil {
-		return rimeTTSPythonRepr(value)
+	if repr, ok := rimeTTSPythonJSONRepr(raw); ok {
+		return repr
 	}
 	return string(raw)
+}
+
+type rimeTTSOrderedObject []struct {
+	key   string
+	value any
+}
+
+func rimeTTSPythonJSONRepr(raw json.RawMessage) (string, bool) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	value, err := rimeTTSDecodeOrderedJSONValue(decoder)
+	if err != nil {
+		return "", false
+	}
+	return rimeTTSPythonRepr(value), true
+}
+
+func rimeTTSDecodeOrderedJSONValue(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return token, nil
+	}
+	switch delim {
+	case '{':
+		var object rimeTTSOrderedObject
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, fmt.Errorf("invalid JSON object key")
+			}
+			value, err := rimeTTSDecodeOrderedJSONValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			object = append(object, struct {
+				key   string
+				value any
+			}{key: key, value: value})
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return object, nil
+	case '[':
+		var items []any
+		for decoder.More() {
+			value, err := rimeTTSDecodeOrderedJSONValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, value)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return items, nil
+	default:
+		return nil, fmt.Errorf("unexpected JSON delimiter %q", delim)
+	}
 }
 
 func rimeTTSPythonRepr(value any) string {
@@ -2127,6 +2193,12 @@ func rimeTTSPythonRepr(value any) string {
 			parts = append(parts, rimeTTSPythonRepr(item))
 		}
 		return "[" + strings.Join(parts, ", ") + "]"
+	case rimeTTSOrderedObject:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			parts = append(parts, rimeTTSPythonRepr(item.key)+": "+rimeTTSPythonRepr(item.value))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
 	case map[string]any:
 		keys := make([]string, 0, len(typed))
 		for key := range typed {
