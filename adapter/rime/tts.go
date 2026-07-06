@@ -42,6 +42,8 @@ const (
 	rimeWebsocketMaxAge      = 300 * time.Second
 )
 
+var errRimeTTSClientClosed = errors.New("rime tts client closed")
+
 type RimeTTS struct {
 	mu                       sync.Mutex
 	streams                  map[*rimeTTSSynthesizeStream]struct{}
@@ -817,6 +819,19 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		var err error
 		conn, err = t.dialWebsocket(ctx)
 		if err != nil {
+			if errors.Is(err, errRimeTTSClientClosed) {
+				streamCtx, cancel := context.WithCancel(ctx)
+				cancel()
+				return &rimeTTSSynthesizeStream{
+					ctx:         streamCtx,
+					cancel:      func() {},
+					provider:    t,
+					requestID:   cavosmath.ShortUUID(""),
+					contextID:   cavosmath.ShortUUID(""),
+					closed:      true,
+					inputClosed: true,
+				}, nil
+			}
 			return nil, err
 		}
 	}
@@ -957,6 +972,9 @@ func (t *RimeTTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
 		if resp != nil && resp.StatusCode > 0 {
 			if resp.Body != nil {
 				_ = resp.Body.Close()
+			}
+			if resp.StatusCode == 499 {
+				return nil, errRimeTTSClientClosed
 			}
 			return nil, llm.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
 		}

@@ -1522,6 +1522,58 @@ func TestRimeTTSStreamHandshakeStatusReturnsReferenceAPIStatusError(t *testing.T
 	}
 }
 
+func TestRimeTTSStreamHandshakeStatus499EndsLikeReferenceClientClose(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go func() {
+				defer server.Close()
+				reader := bufio.NewReader(server)
+				for {
+					line, err := reader.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if line == "\r\n" {
+						break
+					}
+				}
+				_, _ = io.WriteString(server, "HTTP/1.1 499 Client Closed Request\r\nContent-Length: 0\r\n\r\n")
+			}()
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSBaseURL("ws://rime.example"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v, want nil for reference 499 client close", err)
+	}
+	if stream == nil {
+		t.Fatal("Stream = nil, want closed stream for reference 499 client close")
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText after 499 error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after 499 error = %v, want nil", err)
+	}
+	if ending, ok := any(stream).(interface{ EndInput() error }); ok {
+		if err := ending.EndInput(); err != nil {
+			t.Fatalf("EndInput after 499 error = %v, want nil", err)
+		}
+	} else {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after 499 = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestRimeTTSStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
