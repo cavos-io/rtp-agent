@@ -1198,6 +1198,60 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceNoisySocketIOAudio(t *testing.T
 	}
 }
 
+func TestUpliftAITTSChunkedStreamIgnoresReferenceMalformedSocketIOAudio(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello socket")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	_ = receiveUpliftAITestString(t, conn.writes, "namespace connect packet")
+	synthesize := receiveUpliftAITestString(t, conn.writes, "synthesize packet")
+	requestID := upliftAITestSocketIORequestID(t, synthesize)
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio","requestId":"` + requestID + `","audio":"abc"}]`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio","requestId":"` + requestID + `","audio":"AQIDBA=="}]`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + requestID + `"}]`
+
+	result := receiveUpliftAITestSocketIOResult(t, resultCh)
+	if result.err != nil {
+		t.Fatalf("Next error = %v, want reference to keep request alive after malformed socket.io audio", result.err)
+	}
+	if result.audio == nil || result.audio.Frame == nil {
+		t.Fatalf("audio = %#v, want valid audio after malformed socket.io audio", result.audio)
+	}
+	if got, want := result.audio.Frame.Data, []byte{0x01, 0x02, 0x03, 0x04}; !bytes.Equal(got, want) {
+		t.Fatalf("audio data = %#v, want later valid socket.io audio %#v", got, want)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIOErrorEventEmitsFinalMarker(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`

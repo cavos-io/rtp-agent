@@ -871,7 +871,6 @@ func (c *upliftAISocketIOClient) handleEvent(event upliftAISocketIOEvent) {
 	case "audio":
 		audio, err := decodeUpliftAIBase64Audio(event.Audio)
 		if err != nil {
-			c.finishRequest(event.RequestID, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io audio decode failed: %v", err)))
 			return
 		}
 		if len(audio) > 0 {
