@@ -1547,6 +1547,9 @@ type rimeTTSSynthesizeStream struct {
 	pushedText            string
 	sentenceTokenizer     tokenize.SentenceTokenizer
 	sentenceStream        tokenize.SentenceStream
+	sentenceDone          chan struct{}
+	sentenceErr           error
+	sentencePumpStarted   bool
 	audioSeen             bool
 	pendingPCM            []byte
 	pendingTranscriptText string
@@ -1581,7 +1584,7 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
-	if err := s.drainSentenceStreamLocked(); err != nil {
+	if err := s.drainSentenceStreamLocked(false); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -1654,7 +1657,7 @@ func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 			return err
 		}
 		s.pendingText = ""
-		if err := s.drainSentenceStreamLocked(); err != nil {
+		if err := s.drainSentenceStreamLocked(sendProviderFlush); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
@@ -1684,30 +1687,13 @@ type rimeSentenceStreamDrainer interface {
 	TryNext() (*tokenize.TokenData, bool, error)
 }
 
-func (s *rimeTTSSynthesizeStream) drainSentenceStreamLocked() error {
+func (s *rimeTTSSynthesizeStream) drainSentenceStreamLocked(waitForEOF bool) error {
 	if s.sentenceStream == nil {
 		return nil
 	}
 	drainer, ok := s.sentenceStream.(rimeSentenceStreamDrainer)
 	if !ok {
-		if !s.sentenceStream.Closed() {
-			return nil
-		}
-		for {
-			token, err := s.sentenceStream.Next()
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if token == nil {
-				continue
-			}
-			if err := s.sendSentenceLocked(token.Token); err != nil {
-				return err
-			}
-		}
+		return s.waitSentencePumpLocked(waitForEOF)
 	}
 	for {
 		token, ok, err := drainer.TryNext()
@@ -1729,6 +1715,17 @@ func (s *rimeTTSSynthesizeStream) drainSentenceStreamLocked() error {
 	}
 }
 
+func (s *rimeTTSSynthesizeStream) waitSentencePumpLocked(wait bool) error {
+	if !wait || s.sentenceDone == nil {
+		return s.sentenceErr
+	}
+	done := s.sentenceDone
+	s.mu.Unlock()
+	<-done
+	s.mu.Lock()
+	return s.sentenceErr
+}
+
 func (s *rimeTTSSynthesizeStream) tokenizerLocked() tokenize.SentenceTokenizer {
 	if s.sentenceTokenizer != nil {
 		return s.sentenceTokenizer
@@ -1739,8 +1736,51 @@ func (s *rimeTTSSynthesizeStream) tokenizerLocked() tokenize.SentenceTokenizer {
 func (s *rimeTTSSynthesizeStream) sentenceStreamLocked() tokenize.SentenceStream {
 	if s.sentenceStream == nil {
 		s.sentenceStream = s.tokenizerLocked().Stream("")
+		if _, ok := s.sentenceStream.(rimeSentenceStreamDrainer); !ok {
+			s.startSentencePumpLocked()
+		}
 	}
 	return s.sentenceStream
+}
+
+func (s *rimeTTSSynthesizeStream) startSentencePumpLocked() {
+	if s.sentencePumpStarted || s.sentenceStream == nil {
+		return
+	}
+	s.sentencePumpStarted = true
+	s.sentenceDone = make(chan struct{})
+	stream := s.sentenceStream
+	done := s.sentenceDone
+	go func() {
+		defer close(done)
+		for {
+			token, err := stream.Next()
+			if err != nil {
+				s.mu.Lock()
+				if !errors.Is(err, io.EOF) {
+					s.sentenceErr = err
+					s.closeAfterWriteFailureLocked()
+				}
+				s.mu.Unlock()
+				return
+			}
+			if token == nil {
+				continue
+			}
+			s.mu.Lock()
+			if s.closed || s.inputClosed {
+				s.mu.Unlock()
+				return
+			}
+			if err := s.sendSentenceLocked(token.Token); err != nil {
+				s.sentenceErr = err
+				s.closeAfterWriteFailureLocked()
+				s.mu.Unlock()
+				return
+			}
+			s.mu.Unlock()
+		}
+	}()
 }
 
 func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
@@ -1783,6 +1823,9 @@ func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 	}
 	s.closed = true
 	s.inputClosed = true
+	if s.sentenceStream != nil {
+		_ = s.sentenceStream.AClose()
+	}
 	s.cancel()
 	defer func() {
 		if s.provider != nil {
@@ -1869,6 +1912,9 @@ func (s *rimeTTSSynthesizeStream) closeAfterWriteFailureLocked() {
 		return
 	}
 	s.closed = true
+	if s.sentenceStream != nil {
+		_ = s.sentenceStream.AClose()
+	}
 	s.cancel()
 	_ = s.closeConnection()
 	if s.provider != nil {

@@ -63,12 +63,18 @@ func (rimeNextOnlySentenceTokenizer) Stream(string) tokenize.SentenceStream {
 }
 
 type rimeNextOnlySentenceStream struct {
+	once   sync.Once
+	mu     sync.Mutex
+	cond   *sync.Cond
 	text   string
 	tokens []*tokenize.TokenData
 	closed bool
 }
 
 func (s *rimeNextOnlySentenceStream) PushText(text string) error {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -77,6 +83,24 @@ func (s *rimeNextOnlySentenceStream) PushText(text string) error {
 }
 
 func (s *rimeNextOnlySentenceStream) Flush() error {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.text != "" {
+		s.tokens = append(s.tokens, &tokenize.TokenData{Token: "next-only packet"})
+		s.text = ""
+		s.cond.Signal()
+	}
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) EndInput() error {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
 	}
@@ -84,24 +108,19 @@ func (s *rimeNextOnlySentenceStream) Flush() error {
 		s.tokens = append(s.tokens, &tokenize.TokenData{Token: "next-only packet"})
 		s.text = ""
 	}
-	return nil
-}
-
-func (s *rimeNextOnlySentenceStream) EndInput() error {
-	if s.closed {
-		return io.ErrClosedPipe
-	}
-	if err := s.Flush(); err != nil {
-		return err
-	}
 	s.closed = true
+	s.cond.Broadcast()
 	return nil
 }
 
 func (s *rimeNextOnlySentenceStream) AClose() error {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.text = ""
 	s.tokens = nil
 	s.closed = true
+	s.cond.Broadcast()
 	return nil
 }
 
@@ -110,10 +129,15 @@ func (s *rimeNextOnlySentenceStream) Close() error {
 }
 
 func (s *rimeNextOnlySentenceStream) Next() (*tokenize.TokenData, error) {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if len(s.tokens) == 0 {
-		if s.closed {
-			return nil, io.EOF
+		for len(s.tokens) == 0 && !s.closed {
+			s.cond.Wait()
 		}
+	}
+	if len(s.tokens) == 0 && s.closed {
 		return nil, io.EOF
 	}
 	token := s.tokens[0]
@@ -122,7 +146,16 @@ func (s *rimeNextOnlySentenceStream) Next() (*tokenize.TokenData, error) {
 }
 
 func (s *rimeNextOnlySentenceStream) Closed() bool {
+	s.initCond()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *rimeNextOnlySentenceStream) initCond() {
+	s.once.Do(func() {
+		s.cond = sync.NewCond(&s.mu)
+	})
 }
 
 func TestRimeTTSDefaultsMatchReference(t *testing.T) {
@@ -3598,6 +3631,63 @@ func TestRimeTTSStreamEndInputDrainsNextOnlyReferenceTokenizer(t *testing.T) {
 	}
 	assertRimePayload(t, writes[0], "text", "next-only packet ")
 	assertRimePayload(t, writes[1], "operation", "flush")
+}
+
+func TestRimeTTSStreamFlushDrainsNextOnlyReferenceTokenizer(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeNextOnlySentenceTokenizer{}))
+	var writesMu sync.Mutex
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		cancel:            func() {},
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writesMu.Lock()
+			defer writesMu.Unlock()
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	writesLen := func() int {
+		writesMu.Lock()
+		defer writesMu.Unlock()
+		return len(writes)
+	}
+	writeAt := func(index int) map[string]any {
+		writesMu.Lock()
+		defer writesMu.Unlock()
+		return writes[index]
+	}
+
+	if err := stream.PushText("raw text"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if writesLen() != 0 {
+		t.Fatalf("writes after PushText = %d, want next-only stream buffered until Flush", writesLen())
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for writesLen() < 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if writesLen() < 1 {
+		t.Fatalf("writes after Flush = %d, want next-only tokenizer packet", writesLen())
+	}
+	assertRimePayload(t, writeAt(0), "text", "next-only packet ")
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if writesLen() != 2 {
+		t.Fatalf("writes after EndInput = %d, want provider flush after text packet", writesLen())
+	}
+	assertRimePayload(t, writeAt(1), "operation", "flush")
 }
 
 func TestRimeTTSUpdateOptionsUsesConfiguredTokenizer(t *testing.T) {
