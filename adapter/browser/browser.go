@@ -94,9 +94,6 @@ func (p *PageActions) LeftMouseUp(x, y int) {
 }
 
 func (p *PageActions) Scroll(x, y int, direction string, amount int) {
-	if amount == 0 {
-		amount = 3
-	}
 	pixels := amount * 120
 	deltaX, deltaY := 0, 0
 	switch direction {

@@ -235,6 +235,28 @@ func TestComputerToolNonStringScrollDirectionMatchesReferenceNoopWheel(t *testin
 	}
 }
 
+func TestComputerToolZeroScrollAmountMatchesReferenceNoopWheel(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "scroll", map[string]interface{}{
+		"coordinate":       []interface{}{float64(10), float64(20)},
+		"scroll_amount":    float64(0),
+		"scroll_direction": "down",
+	})
+	if err != nil {
+		t.Fatalf("scroll Execute error = %v, want nil for zero scroll amount", err)
+	}
+
+	events := actions.Events()
+	if len(events) < 2 {
+		t.Fatalf("events = %#v, want mouse move and wheel", events)
+	}
+	if events[1].Type != "mouse_wheel" || events[1].DeltaX != 0 || events[1].DeltaY != 0 {
+		t.Fatalf("wheel event = %#v, want zero delta for explicit zero scroll amount", events[1])
+	}
+}
+
 func TestComputerToolAcceptsReferenceTypedCoordinateSlices(t *testing.T) {
 	actions := browser.NewPageActions()
 	toolset := NewComputerTool(actions, 1024, 768)
