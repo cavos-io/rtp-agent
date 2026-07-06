@@ -217,6 +217,34 @@ func TestAnthropicChatReturnsAPITimeoutErrorOnTransportDeadline(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatReturnsAPITimeoutErrorOnTransportTimeout(t *testing.T) {
+	transport := &captureRoundTripper{err: anthropicTimeoutError{}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Chat error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("Message = %q, want default timeout message", timeoutErr.Message)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("Retryable = false, want timeout errors retryable")
+	}
+}
+
 func TestAnthropicChatReturnsAPIConnectionErrorOnTransportError(t *testing.T) {
 	transport := &captureRoundTripper{err: errors.New("dial failed")}
 	originalTransport := http.DefaultTransport

@@ -269,6 +269,10 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError("")
 		}
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, llm.NewAPITimeoutError("")
+		}
 		return nil, llm.NewAPIConnectionError(anthropicConnectionErrorMessage(err))
 	}
 	if resp.StatusCode != http.StatusOK {
