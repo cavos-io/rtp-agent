@@ -42,6 +42,12 @@ func (fishAudioErrorReader) Read([]byte) (int, error) {
 
 func (fishAudioErrorReader) Close() error { return nil }
 
+type fishAudioTTSTimeoutError struct{}
+
+func (fishAudioTTSTimeoutError) Error() string   { return "fishaudio tts timeout" }
+func (fishAudioTTSTimeoutError) Timeout() bool   { return true }
+func (fishAudioTTSTimeoutError) Temporary() bool { return true }
+
 func TestFishAudioTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewFishAudioTTS("test-key", "")
 
@@ -160,6 +166,30 @@ func TestFishAudioTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestFishAudioTTSStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, fishAudioTTSTimeoutError{}
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewFishAudioTTS("test-key", "")
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
