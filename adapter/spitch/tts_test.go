@@ -396,6 +396,27 @@ func TestSpitchTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSpitchTTSSynthesizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: spitchRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, spitchTimeoutError{}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSpitchTTS("test-key", "", WithSpitchTTSBaseURL("https://spitch.example"))
+
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v, want deferred stream", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpitchTTSOptionsMatchReference(t *testing.T) {
 	provider := NewSpitchTTS("test-key", "",
 		WithSpitchTTSBaseURL("https://spitch.example/"),

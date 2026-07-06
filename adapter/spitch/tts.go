@@ -238,7 +238,7 @@ func (s *spitchTTSChunkedStream) ensureResponse() error {
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return llm.NewAPIConnectionError(err.Error())
+		return spitchTTSTransportError(err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -287,11 +287,23 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 
 func spitchTTSReadError(err error) error {
 	msg := fmt.Sprintf("Spitch TTS response read failed: %v", err)
-	var timeout interface{ Timeout() bool }
-	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+	if spitchTTSIsTimeout(err) {
 		return llm.NewAPITimeoutError(msg)
 	}
 	return llm.NewAPIConnectionError(msg)
+}
+
+func spitchTTSTransportError(err error) error {
+	msg := err.Error()
+	if spitchTTSIsTimeout(err) {
+		return llm.NewAPITimeoutError(msg)
+	}
+	return llm.NewAPIConnectionError(msg)
+}
+
+func spitchTTSIsTimeout(err error) bool {
+	var timeout interface{ Timeout() bool }
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout())
 }
 
 func (s *spitchTTSChunkedStream) Close() error {
