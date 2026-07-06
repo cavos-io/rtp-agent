@@ -607,6 +607,7 @@ type upliftAITTSChunkedStream struct {
 	decoder       codecs.AudioStreamDecoder
 	decodeMu      sync.Mutex
 	decodeReadErr error
+	wav           *upliftAIWAVStream
 	outputFormat  string
 	started       bool
 	hasAudio      bool
@@ -1316,100 +1317,166 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 	}
 	if !s.started {
 		s.started = true
-		data, err := io.ReadAll(s.resp.Body)
-		if err != nil {
-			return nil, upliftAITTSReadError("UpliftAI TTS WAV read failed", err)
-		}
-		if len(data) == 0 {
+		s.wav = &upliftAIWAVStream{r: s.resp.Body}
+	}
+	frame, done, err := s.wav.nextFrame()
+	if err != nil {
+		if errors.Is(err, io.EOF) && !s.hasAudio {
 			s.finalSent = true
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
-		frame, err := decodeUpliftAIWAVPCM(data)
-		if err != nil {
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
-		}
-		frame = upliftAINormalizeChannels(frame, s.currentNumChannels())
-		if frame.SampleRate != defaultUpliftAISampleRate {
-			resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
-			if err != nil {
-				return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV resample failed: %v", err))
-			}
-			frame = resampled
-		}
-		s.hasAudio = true
-		s.pendingFinal = true
-		return &tts.SynthesizedAudio{Frame: frame}, nil
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
 	}
+	if done {
+		if s.hasAudio && !s.finalSent {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	frame = upliftAINormalizeChannels(frame, s.currentNumChannels())
+	if frame.SampleRate != defaultUpliftAISampleRate {
+		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV resample failed: %v", err))
+		}
+		frame = resampled
+	}
+	s.hasAudio = true
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
 		return &tts.SynthesizedAudio{IsFinal: true}, nil
 	}
-	return nil, io.EOF
+	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
-func decodeUpliftAIWAVPCM(data []byte) (*model.AudioFrame, error) {
-	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
-		return nil, fmt.Errorf("invalid upliftai wav data")
+type upliftAIWAVStream struct {
+	r             io.Reader
+	parsed        bool
+	done          bool
+	sampleRate    uint32
+	channels      uint16
+	bitsPerSample uint16
+	dataRemaining uint32
+}
+
+func (w *upliftAIWAVStream) nextFrame() (*model.AudioFrame, bool, error) {
+	if w.done {
+		return nil, true, nil
 	}
-	offset := 12
-	var sampleRate uint32
-	var channels uint16
-	var bitsPerSample uint16
-	var pcm []byte
-	for offset+8 <= len(data) {
-		chunkID := string(data[offset : offset+4])
-		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
-		offset += 8
-		if offset+chunkSize > len(data) {
-			return nil, fmt.Errorf("invalid upliftai wav chunk size")
+	if !w.parsed {
+		if err := w.parseHeader(); err != nil {
+			return nil, false, err
 		}
-		switch chunkID {
-		case "fmt ":
-			if chunkSize < 16 {
-				return nil, fmt.Errorf("invalid upliftai wav fmt chunk")
-			}
-			audioFormat := binary.LittleEndian.Uint16(data[offset : offset+2])
-			channels = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
-			sampleRate = binary.LittleEndian.Uint32(data[offset+4 : offset+8])
-			bitsPerSample = binary.LittleEndian.Uint16(data[offset+14 : offset+16])
-			if audioFormat != 1 || (bitsPerSample != 16 && bitsPerSample != 32) {
-				return nil, fmt.Errorf("unsupported upliftai wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
-			}
-		case "data":
-			pcm = bytes.Clone(data[offset : offset+chunkSize])
-		}
-		offset += chunkSize
-		if chunkSize%2 == 1 {
-			offset++
-		}
+		w.parsed = true
 	}
-	if sampleRate == 0 || channels == 0 || bitsPerSample == 0 {
-		return nil, fmt.Errorf("missing upliftai wav format metadata")
+	if w.dataRemaining == 0 {
+		w.done = true
+		return nil, true, nil
 	}
-	if pcm == nil {
-		return nil, fmt.Errorf("missing upliftai wav data chunk")
+	bytesPerInputSample := int(w.bitsPerSample / 8)
+	blockAlign := int(w.channels) * bytesPerInputSample
+	if blockAlign <= 0 {
+		return nil, false, fmt.Errorf("invalid upliftai wav block alignment")
 	}
-	bytesPerSample := int(bitsPerSample / 8)
-	blockAlign := int(channels) * bytesPerSample
-	if blockAlign == 0 || len(pcm)%blockAlign != 0 {
-		return nil, fmt.Errorf("invalid upliftai wav data size")
+	readSize := int(w.dataRemaining)
+	if readSize > 4096 {
+		readSize = 4096
 	}
-	if bitsPerSample == 32 {
-		pcm16 := make([]byte, len(pcm)/2)
-		for in, out := 0, 0; in+4 <= len(pcm); in, out = in+4, out+2 {
-			sample := int32(binary.LittleEndian.Uint32(pcm[in : in+4]))
+	if readSize > blockAlign {
+		readSize -= readSize % blockAlign
+	}
+	if readSize == 0 || readSize%blockAlign != 0 {
+		return nil, false, fmt.Errorf("invalid upliftai wav data size")
+	}
+	buf := make([]byte, readSize)
+	if _, err := io.ReadFull(w.r, buf); err != nil {
+		return nil, false, fmt.Errorf("read upliftai wav data: %w", err)
+	}
+	w.dataRemaining -= uint32(readSize)
+	pcm := buf
+	bytesPerOutputSample := bytesPerInputSample
+	if w.bitsPerSample == 32 {
+		pcm16 := make([]byte, len(buf)/2)
+		for in, out := 0, 0; in+4 <= len(buf); in, out = in+4, out+2 {
+			sample := int32(binary.LittleEndian.Uint32(buf[in : in+4]))
 			binary.LittleEndian.PutUint16(pcm16[out:out+2], uint16(int16(sample>>16)))
 		}
 		pcm = pcm16
-		bytesPerSample = 2
+		bytesPerOutputSample = 2
 	}
 	return &model.AudioFrame{
 		Data:              pcm,
-		SampleRate:        sampleRate,
-		NumChannels:       uint32(channels),
-		SamplesPerChannel: uint32(len(pcm) / int(channels) / bytesPerSample),
-	}, nil
+		SampleRate:        w.sampleRate,
+		NumChannels:       uint32(w.channels),
+		SamplesPerChannel: uint32(len(pcm) / int(w.channels) / bytesPerOutputSample),
+	}, false, nil
+}
+
+func (w *upliftAIWAVStream) parseHeader() error {
+	header := make([]byte, 12)
+	if _, err := io.ReadFull(w.r, header); err != nil {
+		return fmt.Errorf("read upliftai wav header: %w", err)
+	}
+	if string(header[:4]) != "RIFF" || string(header[8:12]) != "WAVE" {
+		return fmt.Errorf("invalid upliftai wav data")
+	}
+	for {
+		chunkHeader := make([]byte, 8)
+		if _, err := io.ReadFull(w.r, chunkHeader); err != nil {
+			return fmt.Errorf("read upliftai wav chunk header: %w", err)
+		}
+		chunkID := string(chunkHeader[:4])
+		chunkSize := binary.LittleEndian.Uint32(chunkHeader[4:8])
+		switch chunkID {
+		case "fmt ":
+			if chunkSize < 16 {
+				return fmt.Errorf("invalid upliftai wav fmt chunk")
+			}
+			fmtChunk := make([]byte, chunkSize)
+			if _, err := io.ReadFull(w.r, fmtChunk); err != nil {
+				return fmt.Errorf("read upliftai wav fmt chunk: %w", err)
+			}
+			audioFormat := binary.LittleEndian.Uint16(fmtChunk[0:2])
+			w.channels = binary.LittleEndian.Uint16(fmtChunk[2:4])
+			w.sampleRate = binary.LittleEndian.Uint32(fmtChunk[4:8])
+			w.bitsPerSample = binary.LittleEndian.Uint16(fmtChunk[14:16])
+			if audioFormat != 1 || (w.bitsPerSample != 16 && w.bitsPerSample != 32) {
+				return fmt.Errorf("unsupported upliftai wav format: audio_format=%d bits_per_sample=%d", audioFormat, w.bitsPerSample)
+			}
+			if chunkSize%2 == 1 {
+				if err := discardUpliftAIWAVBytes(w.r, 1); err != nil {
+					return err
+				}
+			}
+		case "data":
+			if w.sampleRate == 0 || w.channels == 0 || w.bitsPerSample == 0 {
+				return fmt.Errorf("missing upliftai wav format metadata")
+			}
+			w.dataRemaining = chunkSize
+			return nil
+		default:
+			skip := int64(chunkSize)
+			if chunkSize%2 == 1 {
+				skip++
+			}
+			if err := discardUpliftAIWAVBytes(w.r, skip); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func discardUpliftAIWAVBytes(r io.Reader, n int64) error {
+	if n <= 0 {
+		return nil
+	}
+	if _, err := io.CopyN(io.Discard, r, n); err != nil {
+		return fmt.Errorf("discard upliftai wav chunk: %w", err)
+	}
+	return nil
 }
 
 func (s *upliftAITTSChunkedStream) nextDecodedULaw() (*tts.SynthesizedAudio, error) {

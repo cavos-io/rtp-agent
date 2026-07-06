@@ -2205,6 +2205,47 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamStreamsReferenceWAVBeforeEOF(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x03, 0x00, 0x05, 0x00, 0x07, 0x00}
+	body := newUpliftAIBlockingEOFBody(upliftAITestWAV(pcm, 22050, 1))
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("WAV_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: body},
+	}
+	defer stream.Close()
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- result{audio: audio, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("Next error = %v", got.err)
+		}
+		if got.audio == nil || got.audio.Frame == nil {
+			t.Fatalf("audio = %#v, want decoded WAV frame before response EOF", got.audio)
+		}
+		if !bytes.Equal(got.audio.Frame.Data, pcm) {
+			t.Fatalf("audio data = %#v, want decoded wav pcm %#v", got.audio.Frame.Data, pcm)
+		}
+	case <-time.After(500 * time.Millisecond):
+		_ = stream.Close()
+		select {
+		case <-resultCh:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("timed out waiting for decoded WAV frame before response EOF")
+	}
+}
+
 func TestUpliftAITTSChunkedStreamDecodesReferenceWAV32Response(t *testing.T) {
 	pcm32 := []byte{
 		0x00, 0x00, 0x00, 0x40,
