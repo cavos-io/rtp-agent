@@ -582,10 +582,13 @@ func (s *cartesiaTTSStream) readLoop() {
 		}
 
 		if resp.Type == "chunk" && resp.Data != "" {
-			data, err := base64.StdEncoding.DecodeString(resp.Data)
+			data, err := cartesiaDecodeBase64Chunk(resp.Data)
 			if err != nil {
 				s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("failed to decode Cartesia audio: %v", err))
 				return
+			}
+			if len(data) == 0 {
+				continue
 			}
 			s.audio <- &tts.SynthesizedAudio{
 				Frame: &model.AudioFrame{
@@ -614,6 +617,29 @@ func (s *cartesiaTTSStream) readLoop() {
 			}
 		}
 	}
+}
+
+func cartesiaDecodeBase64Chunk(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func (s *cartesiaTTSStream) cartesiaTimedTranscript(timestamps cartesiaTTSWordTimestamps) []tts.TimedString {
