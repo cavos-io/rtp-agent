@@ -966,6 +966,9 @@ func (s *anthropicStream) retryBeforeOutput(err error) error {
 		_ = s.resp.Body.Close()
 	}
 	if waitErr := waitAnthropicRetryInterval(s.ctx, s.connectOptions.IntervalForRetry(s.retryAttempt)); waitErr != nil {
+		if s.closed {
+			return io.EOF
+		}
 		return waitErr
 	}
 	for s.retryAttempt < s.connectOptions.MaxRetry {
@@ -989,6 +992,9 @@ func (s *anthropicStream) retryBeforeOutput(err error) error {
 			return startErr
 		}
 		if waitErr := waitAnthropicRetryInterval(s.ctx, s.connectOptions.IntervalForRetry(s.retryAttempt)); waitErr != nil {
+			if s.closed {
+				return io.EOF
+			}
 			return waitErr
 		}
 	}

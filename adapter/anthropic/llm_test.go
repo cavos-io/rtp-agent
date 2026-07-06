@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -115,6 +116,23 @@ func (b *anthropicReadErrorBody) Read(p []byte) (int, error) {
 }
 
 func (b *anthropicReadErrorBody) Close() error {
+	return nil
+}
+
+type anthropicSignalCloseErrorBody struct {
+	err       error
+	closeCh   chan struct{}
+	closeOnce sync.Once
+}
+
+func (b *anthropicSignalCloseErrorBody) Read(_ []byte) (int, error) {
+	return 0, b.err
+}
+
+func (b *anthropicSignalCloseErrorBody) Close() error {
+	b.closeOnce.Do(func() {
+		close(b.closeCh)
+	})
 	return nil
 }
 
@@ -1395,6 +1413,50 @@ func TestAnthropicStreamCloseIsIdempotent(t *testing.T) {
 	}
 	if err := stream.Close(); err != nil {
 		t.Fatalf("second Close() error = %v, want nil", err)
+	}
+}
+
+func TestAnthropicStreamCloseDuringRetryWaitReturnsEOF(t *testing.T) {
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	body := &anthropicSignalCloseErrorBody{
+		err:     errors.New("stream reset"),
+		closeCh: make(chan struct{}),
+	}
+	stream := &anthropicStream{
+		llm:            model,
+		ctx:            ctx,
+		connectOptions: llm.APIConnectOptions{MaxRetry: 2, RetryInterval: time.Hour},
+		retryAttempt:   1,
+		resp:           &http.Response{Body: body},
+		reader:         bufio.NewReader(body),
+		cancel:         cancel,
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		errCh <- err
+	}()
+
+	select {
+	case <-body.closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("stream did not enter retry wait")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next() error = %v, want io.EOF", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Next() did not return after Close")
 	}
 }
 
