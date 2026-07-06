@@ -1,32 +1,41 @@
 package ultravox
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestUltravoxAdapterHasNoProductionSurfaceWithoutRealtimeModel(t *testing.T) {
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("ReadDir adapter/ultravox: %v", err)
+func TestUltravoxPluginMetadataMatchesReference(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{
+			name: "title",
+			got:  PluginTitle,
+			want: "rtp-agent.plugins.ultravox",
+		},
+		{
+			name: "version",
+			got:  PluginVersion,
+			want: "v0.1.5",
+		},
+		{
+			name: "package",
+			got:  PluginPackage,
+			want: "rtp-agent.plugins.ultravox",
+		},
 	}
 
-	var productionFiles []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if name == "doc.go" {
-			continue
-		}
-		if filepath.Ext(name) == ".go" && !strings.HasSuffix(name, "_test.go") {
-			productionFiles = append(productionFiles, name)
-		}
-	}
-	if len(productionFiles) != 0 {
-		t.Fatalf("Ultravox production files = %v, want no runtime surface until a real realtime adapter exists", productionFiles)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Fatalf("%s = %q, want %q", tt.name, tt.got, tt.want)
+			}
+			if strings.TrimSpace(tt.got) != tt.got {
+				t.Fatalf("%s = %q, want no surrounding whitespace", tt.name, tt.got)
+			}
+		})
 	}
 }

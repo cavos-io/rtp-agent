@@ -96,6 +96,7 @@ import (
 	"github.com/cavos-io/rtp-agent/adapter/telnyx"
 	"github.com/cavos-io/rtp-agent/adapter/ten"
 	"github.com/cavos-io/rtp-agent/adapter/trugen"
+	"github.com/cavos-io/rtp-agent/adapter/ultravox"
 	"github.com/cavos-io/rtp-agent/adapter/upliftai"
 	"github.com/cavos-io/rtp-agent/adapter/xai"
 	"github.com/cavos-io/rtp-agent/core/agent"
@@ -416,6 +417,7 @@ func TestAppRegistersReferencePluginMetadataBatch(t *testing.T) {
 		telnyx.PluginPackage:         {title: telnyx.PluginTitle, version: telnyx.PluginVersion},
 		ten.PluginPackage:            {title: ten.PluginTitle, version: ten.PluginVersion},
 		trugen.PluginPackage:         {title: trugen.PluginTitle, version: trugen.PluginVersion},
+		ultravox.PluginPackage:       {title: ultravox.PluginTitle, version: ultravox.PluginVersion},
 		adapterlivekit.PluginPackage: {title: adapterlivekit.PluginTitle, version: adapterlivekit.PluginVersion},
 		upliftai.PluginPackage:       {title: upliftai.PluginTitle, version: upliftai.PluginVersion},
 		xai.PluginPackage:            {title: xai.PluginTitle, version: xai.PluginVersion},
@@ -522,12 +524,20 @@ func TestAppRegistersSLNGPluginMetadata(t *testing.T) {
 	t.Fatal("SLNG plugin metadata was not registered")
 }
 
-func TestAppDoesNotRegisterUltravoxMetadataWithoutRealtimeAdapter(t *testing.T) {
+func TestAppRegistersUltravoxPluginMetadata(t *testing.T) {
 	for _, registered := range plugin.RegisteredPlugins() {
-		if registered.Package() == "rtp-agent.plugins.ultravox" {
-			t.Fatalf("Ultravox plugin metadata was registered without a realtime adapter")
+		if registered.Package() != ultravox.PluginPackage {
+			continue
 		}
+		if registered.Title() != ultravox.PluginTitle {
+			t.Fatalf("plugin title = %q, want %q", registered.Title(), ultravox.PluginTitle)
+		}
+		if registered.Version() != ultravox.PluginVersion {
+			t.Fatalf("plugin version = %q, want %q", registered.Version(), ultravox.PluginVersion)
+		}
+		return
 	}
+	t.Fatal("Ultravox plugin metadata was not registered")
 }
 
 func TestAppRegistersSileroPluginDownloader(t *testing.T) {
@@ -15365,14 +15375,55 @@ func TestDefaultConfigFromEnvSelectsAWSRealtimeModel(t *testing.T) {
 	}
 }
 
-func TestDefaultConfigFromEnvRejectsUltravoxRealtimeProvider(t *testing.T) {
+func TestDefaultConfigFromEnvSelectsUltravoxRealtimeModel(t *testing.T) {
 	t.Setenv("ULTRAVOX_API_KEY", "test-ultravox-key")
+	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "ultravox")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL", "fixie-ai/ultravox-qwen3-32b-preview")
+	t.Setenv("RTP_AGENT_REALTIME_VOICE", "Jessica")
+	t.Setenv("RTP_AGENT_REALTIME_BASE_URL", "https://ultravox.example/api/")
+	t.Setenv("RTP_AGENT_REALTIME_MODEL_OPTIONS", "system_prompt=stay concise,output_medium=text,input_sample_rate=8000,output_sample_rate=48000,temperature=0.3,language_hint=es,max_duration=30m,time_exceeded_message=done,enable_greeting_prompt=false,first_speaker=FIRST_SPEAKER_AGENT")
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	if app.RealtimeModel == nil {
+		t.Fatal("RealtimeModel is nil")
+	}
+	if got := llm.RealtimeModelName(app.RealtimeModel); got != "fixie-ai/ultravox-qwen3-32b-preview" {
+		t.Fatalf("Realtime model = %q, want configured Ultravox model", got)
+	}
+	if got := llm.RealtimeProvider(app.RealtimeModel); got != "Ultravox" {
+		t.Fatalf("Realtime provider = %q, want Ultravox", got)
+	}
+	model, ok := app.RealtimeModel.(*ultravox.RealtimeModel)
+	if !ok {
+		t.Fatalf("RealtimeModel = %T, want *ultravox.RealtimeModel", app.RealtimeModel)
+	}
+	if got := model.APIKey(); got != "test-ultravox-key" {
+		t.Fatalf("Realtime API key = %q, want env key", got)
+	}
+	if got := model.Voice(); got != "Jessica" {
+		t.Fatalf("Realtime voice = %q, want Jessica", got)
+	}
+	if got := model.BaseURL(); got != "https://ultravox.example/api" {
+		t.Fatalf("Realtime base URL = %q, want trimmed configured URL", got)
+	}
+	if got := model.OutputMedium(); got != "text" {
+		t.Fatalf("Realtime output medium = %q, want text", got)
+	}
+	if _, ok := app.Session.Assistant.(*agent.MultimodalAgent); !ok {
+		t.Fatalf("Session assistant = %T, want *agent.MultimodalAgent", app.Session.Assistant)
+	}
+}
+
+func TestDefaultConfigFromEnvRejectsUltravoxRealtimeProviderWithoutAPIKey(t *testing.T) {
+	t.Setenv("ULTRAVOX_API_KEY", "")
 	t.Setenv("RTP_AGENT_REALTIME_PROVIDER", "ultravox")
 
 	_, err := NewApp(DefaultConfigFromEnv())
-
-	if err == nil || !strings.Contains(err.Error(), `unsupported RTP_AGENT_REALTIME_PROVIDER "ultravox"`) {
-		t.Fatalf("NewApp() error = %v, want unsupported Ultravox realtime provider", err)
+	if err == nil || !strings.Contains(err.Error(), "ULTRAVOX_API_KEY") {
+		t.Fatalf("NewApp() error = %v, want missing Ultravox API key", err)
 	}
 }
 
