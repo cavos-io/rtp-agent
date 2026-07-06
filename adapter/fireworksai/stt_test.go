@@ -577,6 +577,65 @@ func TestFireworksSTTClosedStreamNextReturnsEOF(t *testing.T) {
 	}
 }
 
+type fireworksReadTimeoutError struct{}
+
+func (fireworksReadTimeoutError) Error() string   { return "read timeout" }
+func (fireworksReadTimeoutError) Timeout() bool   { return true }
+func (fireworksReadTimeoutError) Temporary() bool { return true }
+
+func TestFireworksSTTReadTimeoutDoesNotAbortReferenceStream(t *testing.T) {
+	messages := [][]byte{
+		[]byte(`{"segments":[{"id":0,"text":"after timeout","words":[{"word":"after timeout","is_final":true}]}]}`),
+	}
+	releaseRead := make(chan struct{})
+	reads := 0
+	stream := &fireworksStream{
+		events: make(chan *stt.SpeechEvent, 4),
+		errCh:  make(chan error, 1),
+		ctx:    context.Background(),
+		state: &fireworksStreamState{
+			language:            "en",
+			lastFinalSegmentID:  -1,
+			transcriptState:     map[int]string{},
+			finalSegmentsLength: map[int]int{},
+		},
+		readMessage: func() (int, []byte, error) {
+			reads++
+			if reads == 1 {
+				return 0, nil, fireworksReadTimeoutError{}
+			}
+			if reads-2 < len(messages) {
+				return websocket.TextMessage, messages[reads-2], nil
+			}
+			<-releaseRead
+			return 0, nil, io.EOF
+		},
+	}
+
+	go stream.readLoop(nil)
+	t.Cleanup(func() {
+		close(releaseRead)
+	})
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want start after timeout", err)
+	}
+	if event.Type != stt.SpeechEventStartOfSpeech {
+		t.Fatalf("event.Type = %s, want start_of_speech", event.Type)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("transcript Next error = %v, want transcript after timeout", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event.Type = %s, want final transcript", event.Type)
+	}
+	if event.Alternatives[0].Text != "after timeout" {
+		t.Fatalf("text = %q, want transcript after timeout", event.Alternatives[0].Text)
+	}
+}
+
 func TestFireworksSTTStreamAfterCloseIsRejected(t *testing.T) {
 	dialCalls := 0
 	provider := NewFireworksSTT("test-key",
