@@ -668,6 +668,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 		mistPhonemizeBrackets:    cloneBoolPtr(t.mistPhonemizeBrackets),
 		useWebsocket:             t.useWebsocket,
 		segment:                  t.segment,
+		sentenceTokenizer:        t.sentenceTokenizer,
 		streamResponseTimeout:    t.streamResponseTimeout,
 	}
 	t.mu.Unlock()
@@ -724,6 +725,7 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.mistPhonemizeBrackets = candidate.mistPhonemizeBrackets
 	t.useWebsocket = candidate.useWebsocket
 	t.segment = candidate.segment
+	t.sentenceTokenizer = candidate.sentenceTokenizer
 	t.streamResponseTimeout = candidate.streamResponseTimeout
 	t.mu.Unlock()
 

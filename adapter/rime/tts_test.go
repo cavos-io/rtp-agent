@@ -2987,6 +2987,37 @@ func TestRimeTTSStreamUsesConfiguredReferenceTokenizer(t *testing.T) {
 	assertRimePayload(t, writes[0], "text", "custom packet ")
 }
 
+func TestRimeTTSUpdateOptionsUsesConfiguredTokenizer(t *testing.T) {
+	provider := NewRimeTTS("test-key", "")
+	if err := provider.UpdateOptions(WithRimeTTSSentenceTokenizer(rimeFixedSentenceTokenizer{tokens: []string{"updated packet"}})); err != nil {
+		t.Fatalf("UpdateOptions tokenizer error = %v", err)
+	}
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text ignored by updated tokenizer"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want updated tokenizer packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "updated packet ")
+}
+
 func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
 	var writes []map[string]any
 	stream := &rimeTTSSynthesizeStream{
