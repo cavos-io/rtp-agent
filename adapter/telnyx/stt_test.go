@@ -117,6 +117,18 @@ func TestTelnyxSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamDialHTTPStatusReturnsAPIStatusError(t *testing.T) {
+	err := telnyxSTTDialError(errors.New("websocket: bad handshake"), &http.Response{StatusCode: http.StatusTooManyRequests})
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("dial error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
 func TestTelnyxSTTStreamURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewTelnyxSTT("test-key",
 		WithTelnyxSTTBaseURL("wss://telnyx.example/transcription"),

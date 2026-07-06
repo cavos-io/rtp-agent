@@ -129,12 +129,9 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if err := validateTelnyxAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxSTTStreamURL(s, language), buildTelnyxSTTHeaders(s))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxSTTStreamURL(s, language), buildTelnyxSTTHeaders(s))
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx stt websocket: %v", err))
+		return nil, telnyxSTTDialError(err, resp)
 	}
 	if s.isClosed() {
 		_ = conn.Close()
@@ -293,6 +290,19 @@ func buildTelnyxSTTHeaders(s *TelnyxSTT) http.Header {
 	headers := make(http.Header)
 	headers.Set("Authorization", "Bearer "+s.apiKey)
 	return headers
+}
+
+func telnyxSTTDialError(err error, resp *http.Response) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError("Telnyx STT websocket connect timed out")
+	}
+	if resp != nil && resp.StatusCode > 0 {
+		return llm.NewAPIStatusError("Telnyx STT websocket handshake failed", resp.StatusCode, "", nil)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx stt websocket: %v", err))
 }
 
 func resolveTelnyxSTTLanguage(s *TelnyxSTT, language string) string {
