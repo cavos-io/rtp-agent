@@ -837,8 +837,8 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "content_block_delta":
 			if event.Delta.Type == "text_delta" {
-				text := s.visibleAnthropicTextDelta(event.Delta.Text)
-				if text == "" {
+				text, emit := s.visibleAnthropicTextDelta(event.Delta.Text)
+				if !emit {
 					continue
 				}
 				return markAnthropicStreamChunk(s, &llm.ChatChunk{
@@ -925,19 +925,19 @@ func (s *anthropicStream) wrapReadError(err error) error {
 	return llm.NewAPIConnectionErrorWithRetryable(err.Error(), retryable)
 }
 
-func (s *anthropicStream) visibleAnthropicTextDelta(text string) string {
+func (s *anthropicStream) visibleAnthropicTextDelta(text string) (string, bool) {
 	if strings.HasPrefix(text, "<thinking>") {
 		s.ignoringCoT = true
-		return ""
+		return "", false
 	}
 	if s.ignoringCoT {
 		if _, after, ok := strings.Cut(text, "</thinking>"); ok {
 			s.ignoringCoT = false
-			return after
+			return after, true
 		}
-		return ""
+		return "", false
 	}
-	return text
+	return text, true
 }
 
 func (s *anthropicStream) Close() error {

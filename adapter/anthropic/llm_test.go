@@ -948,6 +948,37 @@ func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamEmitsEmptyThinkingCloseDeltaLikeReference(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"<thinking>hidden"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"</thinking>"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want empty assistant delta", err)
+	}
+	if chunk.Delta == nil {
+		t.Fatal("Delta = nil, want empty assistant delta before final usage")
+	}
+	if chunk.Delta.Role != llm.ChatRoleAssistant || chunk.Delta.Content != "" {
+		t.Fatalf("Delta = %#v, want assistant role with empty content", chunk.Delta)
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	if usage.Usage == nil {
+		t.Fatalf("usage chunk = %#v, want final usage after empty delta", usage)
+	}
+}
+
 func TestAnthropicStreamDropsSameChunkThinkingCloseLikeReference(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
