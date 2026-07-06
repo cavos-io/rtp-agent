@@ -1431,6 +1431,70 @@ func TestInferenceTTSUpdateOptionsMatchReferenceFutureStreams(t *testing.T) {
 	}
 }
 
+func TestInferenceTTSUpdateOptionsKeepsReferenceAudioAndSessionConfig(t *testing.T) {
+	writes := make(chan map[string]any, 8)
+	provider := NewTTS("cartesia/sonic-3", "key", "secret",
+		WithTTSSampleRate(16000),
+		WithTTSEncoding("mulaw"),
+	)
+	provider.baseURL = "wss://inference.test/v1"
+	provider.dialWebsocket = func(ctx context.Context, endpoint string, header http.Header) (inferenceTTSConn, error) {
+		return &recordingTTSConn{
+			onWriteJSON: func(msg map[string]any) {
+				writes <- msg
+			},
+		}, nil
+	}
+
+	provider.UpdateOptions(
+		WithTTSSampleRate(48000),
+		WithTTSEncoding("pcm_s16le"),
+		WithTTSConnectOptions(APIConnectOptions{Timeout: 1500 * time.Millisecond, MaxRetry: 2}),
+		WithTTSFallbackModels(FallbackModel{Model: "rime/arcana", Voice: "astra"}),
+		WithTTSModel("elevenlabs/turbo"),
+		WithTTSVoice("voice-updated"),
+		WithTTSLanguage("id"),
+		WithTTSExtraKwargs(map[string]any{"sync_alignment": true}),
+	)
+
+	if got := provider.SampleRate(); got != 16000 {
+		t.Fatalf("SampleRate = %d, want constructor value like reference", got)
+	}
+
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v", err)
+	}
+	defer stream.Close()
+
+	session := <-writes
+	if session["sample_rate"] != "16000" {
+		t.Fatalf("session.create sample_rate = %#v, want constructor value 16000", session["sample_rate"])
+	}
+	if session["encoding"] != "mulaw" {
+		t.Fatalf("session.create encoding = %#v, want constructor value mulaw", session["encoding"])
+	}
+	if _, ok := session["connection"]; ok {
+		t.Fatalf("session.create connection = %#v, want omitted like reference update_options", session["connection"])
+	}
+	if _, ok := session["fallback"]; ok {
+		t.Fatalf("session.create fallback = %#v, want omitted like reference update_options", session["fallback"])
+	}
+	if session["model"] != "elevenlabs/turbo" {
+		t.Fatalf("session.create model = %#v, want updated model", session["model"])
+	}
+	if session["voice"] != "voice-updated" {
+		t.Fatalf("session.create voice = %#v, want updated voice", session["voice"])
+	}
+	sessionExtra, ok := session["extra"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("session.create extra = %#v, want map", session["extra"])
+	}
+	if sessionExtra["sync_alignment"] != true {
+		t.Fatalf("session.create extra = %#v, want updated extra kwargs", sessionExtra)
+	}
+}
+
 func TestInferenceTTSStreamKeepsReferenceOptionSnapshot(t *testing.T) {
 	writes := make(chan map[string]any, 8)
 	provider := NewTTS("cartesia/sonic-3:voice-original", "key", "secret", WithTTSExtraKwargs(map[string]any{
