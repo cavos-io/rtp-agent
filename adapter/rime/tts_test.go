@@ -3095,6 +3095,38 @@ func TestRimeTTSStreamIgnoresReferenceSecondSegment(t *testing.T) {
 	assertRimePayload(t, writes[0], "text", "first ")
 }
 
+func TestRimeTTSStreamIgnoresTextAfterReferenceWhitespaceSegment(t *testing.T) {
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID: "ctx-1",
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("   "); err != nil {
+		t.Fatalf("PushText(whitespace) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(whitespace) error = %v", err)
+	}
+	if err := stream.PushText("second"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v", err)
+	}
+
+	if len(writes) != 0 {
+		t.Fatalf("writes = %d (%#v), want no provider text after flushed whitespace segment", len(writes), writes)
+	}
+}
+
 func TestRimeTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false

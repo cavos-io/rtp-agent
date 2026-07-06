@@ -1592,6 +1592,7 @@ func (s *rimeTTSSynthesizeStream) EndInput() error {
 }
 
 func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
+	hadPendingText := s.pendingText != ""
 	if s.pendingText != "" {
 		text := strings.Join(s.tokenizerLocked().Tokenize(s.pendingText, ""), " ")
 		s.pendingText = ""
@@ -1601,6 +1602,9 @@ func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 		}
 	}
 	if !s.started {
+		if hadPendingText && !sendProviderFlush {
+			s.segmentDone = true
+		}
 		return nil
 	}
 	if !sendProviderFlush {
