@@ -3,6 +3,7 @@ package upliftai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -672,6 +673,47 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
 }
 
+func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x03, 0x00, 0x05, 0x00, 0x07, 0x00}
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("WAV_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(upliftAITestWAV(pcm, 22050, 1)))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded WAV frame", audio)
+	}
+	if audio.Frame.SampleRate != defaultUpliftAISampleRate {
+		t.Fatalf("sample rate = %d, want %d", audio.Frame.SampleRate, defaultUpliftAISampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want mono output", audio.Frame.NumChannels)
+	}
+	if bytes.HasPrefix(audio.Frame.Data, []byte("RIFF")) {
+		t.Fatal("frame data still contains WAV header")
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("audio data = %#v, want decoded wav pcm %#v", audio.Frame.Data, pcm)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after final = (%#v, %v), want EOF", audio, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
@@ -835,4 +877,25 @@ func (b *upliftAICloseCountBody) Read(p []byte) (int, error) {
 func (b *upliftAICloseCountBody) Close() error {
 	b.closeCount++
 	return nil
+}
+
+func upliftAITestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	blockAlign := uint16(channels * 2)
+	byteRate := sampleRate * uint32(blockAlign)
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
 }

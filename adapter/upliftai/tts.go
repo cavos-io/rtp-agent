@@ -473,6 +473,9 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if strings.HasPrefix(s.currentOutputFormat(), "MP3") {
 		return s.nextDecodedMP3()
 	}
+	if strings.HasPrefix(s.currentOutputFormat(), "WAV") {
+		return s.nextDecodedWAV()
+	}
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
@@ -595,6 +598,94 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		frame = resampled
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if !s.started {
+		s.started = true
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV read failed: %v", err))
+		}
+		if len(data) == 0 {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
+		frame, err := decodeUpliftAIWAVPCM16(data)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
+		}
+		frame = upliftAIDownmixToMono(frame)
+		if frame.SampleRate != defaultUpliftAISampleRate {
+			resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
+			if err != nil {
+				return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV resample failed: %v", err))
+			}
+			frame = resampled
+		}
+		s.hasAudio = true
+		s.pendingFinal = true
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	return nil, io.EOF
+}
+
+func decodeUpliftAIWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid upliftai wav data")
+	}
+	offset := 12
+	var sampleRate uint32
+	var channels uint16
+	var bitsPerSample uint16
+	var pcm []byte
+	for offset+8 <= len(data) {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid upliftai wav chunk size")
+		}
+		switch chunkID {
+		case "fmt ":
+			if chunkSize < 16 {
+				return nil, fmt.Errorf("invalid upliftai wav fmt chunk")
+			}
+			audioFormat := binary.LittleEndian.Uint16(data[offset : offset+2])
+			channels = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+			sampleRate = binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+			bitsPerSample = binary.LittleEndian.Uint16(data[offset+14 : offset+16])
+			if audioFormat != 1 || bitsPerSample != 16 {
+				return nil, fmt.Errorf("unsupported upliftai wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+			}
+		case "data":
+			pcm = bytes.Clone(data[offset : offset+chunkSize])
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if sampleRate == 0 || channels == 0 || bitsPerSample == 0 {
+		return nil, fmt.Errorf("missing upliftai wav format metadata")
+	}
+	if pcm == nil {
+		return nil, fmt.Errorf("missing upliftai wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(channels),
+		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
+	}, nil
 }
 
 func upliftAIDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
