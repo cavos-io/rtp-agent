@@ -475,6 +475,22 @@ func TestComputerToolToolContextCloseClosesReferenceToolset(t *testing.T) {
 	}
 }
 
+func TestComputerToolContextCloseClosesProviderChild(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+	toolCtx := llm.NewToolContext([]interface{}{toolset.Tools()[0]})
+
+	if err := toolCtx.Close(); err != nil {
+		t.Fatalf("ToolContext.Close error = %v, want nil", err)
+	}
+
+	actions.TypeText("ignored")
+	events := actions.Events()
+	if len(events) != 1 || events[0].Type != "close" {
+		t.Fatalf("events = %#v, want only close", events)
+	}
+}
+
 func TestRequireCoordinateAndScreenshotContent(t *testing.T) {
 	x, y, err := requireCoordinate(map[string]interface{}{
 		"coordinate": []interface{}{float64(12), float64(34)},

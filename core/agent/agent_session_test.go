@@ -4083,6 +4083,21 @@ func TestAgentSessionShutdownClosesSessionToolsets(t *testing.T) {
 	}
 }
 
+func TestAgentSessionShutdownClosesSessionTools(t *testing.T) {
+	agent := NewAgent("test")
+	session := NewAgentSession(agent, nil, AgentSessionOptions{})
+	session.activity = NewAgentActivity(agent, session)
+	session.started = true
+	tool := &closeableSessionTool{fakeGenerationTool: fakeGenerationTool{name: "provider"}}
+	session.Tools = []llm.Tool{tool}
+
+	session.Shutdown(false)
+
+	if tool.closeCalls != 1 {
+		t.Fatalf("session tool Close calls = %d, want 1", tool.closeCalls)
+	}
+}
+
 func TestAgentSessionStopIgnoresSessionToolsetCloseError(t *testing.T) {
 	agent := NewAgent("test")
 	session := NewAgentSession(agent, nil, AgentSessionOptions{})
@@ -7074,6 +7089,17 @@ type closeableSessionToolset struct {
 func (c *closeableSessionToolset) Tools() []llm.Tool { return c.tools }
 
 func (c *closeableSessionToolset) Close() error {
+	c.closeCalls++
+	return c.closeErr
+}
+
+type closeableSessionTool struct {
+	fakeGenerationTool
+	closeCalls int
+	closeErr   error
+}
+
+func (c *closeableSessionTool) Close() error {
 	c.closeCalls++
 	return c.closeErr
 }
