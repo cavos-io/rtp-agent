@@ -21,6 +21,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type asyncAITTSTimeoutError struct{}
+
+func (asyncAITTSTimeoutError) Error() string   { return "asyncai tts timeout" }
+func (asyncAITTSTimeoutError) Timeout() bool   { return true }
+func (asyncAITTSTimeoutError) Temporary() bool { return true }
+
 func TestAsyncAITTSDefaultsMatchReference(t *testing.T) {
 	provider := NewAsyncAITTS("test-key", "")
 
@@ -101,6 +107,30 @@ func TestAsyncAITTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	var connErr *llm.APIConnectionError
 	if !errors.As(err, &connErr) {
 		t.Fatalf("Stream error = %T %v, want APIConnectionError", err, err)
+	}
+}
+
+func TestAsyncAITTSStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, asyncAITTSTimeoutError{}
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewAsyncAITTS("test-key", "")
+	stream, err := provider.Stream(context.Background())
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil", stream)
+	}
+	if err == nil {
+		t.Fatal("Stream error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
