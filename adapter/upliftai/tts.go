@@ -3,11 +3,14 @@ package upliftai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -18,6 +21,7 @@ import (
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
 	"github.com/cavos-io/rtp-agent/library/tokenize"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -25,6 +29,7 @@ const (
 	defaultUpliftAISampleRate = 22050
 	defaultUpliftAIFormat     = "MP3_22050_32"
 	defaultUpliftAIBaseURL    = "https://api.upliftai.org/v1/tts"
+	upliftAISocketIONamespace = "/text-to-speech/multi-stream"
 )
 
 type UpliftAITTS struct {
@@ -40,6 +45,20 @@ type UpliftAITTS struct {
 
 type UpliftAITTSOption func(*UpliftAITTS)
 type UpliftAITTSUpdateOption func(*upliftAITTSUpdateOptions)
+
+type upliftAISocketIOConn interface {
+	ReadMessage() (int, []byte, error)
+	WriteMessage(messageType int, data []byte) error
+	Close() error
+}
+
+var upliftAISocketIODialContext = func(ctx context.Context, endpoint string) (upliftAISocketIOConn, error) {
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
+}
 
 type upliftAITTSUpdateOptions struct {
 	voiceID      *string
@@ -210,12 +229,14 @@ func (t *UpliftAITTS) requestOptions() (baseURL string, voiceID string, outputFo
 }
 
 type upliftAITTSSynthesizeStream struct {
-	owner *UpliftAITTS
-	ctx   context.Context
+	owner  *UpliftAITTS
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu        sync.Mutex
 	buf       strings.Builder
 	inputCh   chan string
+	eventCh   chan upliftAITTSStreamResult
 	doneCh    chan struct{}
 	active    tts.ChunkedStream
 	closed    bool
@@ -223,16 +244,26 @@ type upliftAITTSSynthesizeStream struct {
 	once      sync.Once
 }
 
+type upliftAITTSStreamResult struct {
+	audio *tts.SynthesizedAudio
+	err   error
+}
+
 func newUpliftAITTSSynthesizeStream(owner *UpliftAITTS, ctx context.Context) *upliftAITTSSynthesizeStream {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &upliftAITTSSynthesizeStream{
+	ctx, cancel := context.WithCancel(ctx)
+	stream := &upliftAITTSSynthesizeStream{
 		owner:   owner,
 		ctx:     ctx,
+		cancel:  cancel,
 		inputCh: make(chan string, 100),
+		eventCh: make(chan upliftAITTSStreamResult, 100),
 		doneCh:  make(chan struct{}),
 	}
+	go stream.run()
+	return stream
 }
 
 func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
@@ -324,45 +355,87 @@ func (s *upliftAITTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 			s.mu.Unlock()
 			return nil, io.EOF
 		}
-		active := s.active
 		s.mu.Unlock()
 
-		if active != nil {
-			audio, err := active.Next()
-			if err == io.EOF {
-				_ = active.Close()
-				s.mu.Lock()
-				if s.active == active {
-					s.active = nil
-				}
-				s.mu.Unlock()
-				continue
-			}
-			return audio, err
-		}
-
 		select {
-		case text, ok := <-s.inputCh:
+		case result, ok := <-s.eventCh:
 			if !ok {
 				return nil, io.EOF
 			}
-			stream, err := s.owner.Synthesize(s.ctx, text)
-			if err != nil {
-				return nil, err
+			if result.err != nil {
+				return nil, result.err
 			}
-			s.mu.Lock()
-			if s.closed {
-				s.mu.Unlock()
-				_ = stream.Close()
-				return nil, io.EOF
-			}
-			s.active = stream
-			s.mu.Unlock()
-		case <-s.doneCh:
-			return nil, io.EOF
+			return result.audio, nil
 		case <-s.ctx.Done():
-			return nil, s.ctx.Err()
+			return nil, io.EOF
 		}
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) run() {
+	defer close(s.doneCh)
+	defer close(s.eventCh)
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case text, ok := <-s.inputCh:
+			if !ok {
+				return
+			}
+			if err := s.runSegment(text); err != nil {
+				s.sendResult(nil, err)
+				return
+			}
+		}
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) runSegment(text string) error {
+	stream, err := s.owner.Synthesize(s.ctx, text)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = stream.Close()
+		return nil
+	}
+	s.active = stream
+	s.mu.Unlock()
+	defer func() {
+		_ = stream.Close()
+		s.mu.Lock()
+		if s.active == stream {
+			s.active = nil
+		}
+		s.mu.Unlock()
+	}()
+
+	for {
+		audio, err := stream.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if audio == nil {
+			continue
+		}
+		if !s.sendResult(audio, nil) {
+			return nil
+		}
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) sendResult(audio *tts.SynthesizedAudio, err error) bool {
+	select {
+	case s.eventCh <- upliftAITTSStreamResult{audio: audio, err: err}:
+		return true
+	case <-s.ctx.Done():
+		return false
 	}
 }
 
@@ -375,11 +448,11 @@ func (s *upliftAITTSSynthesizeStream) Close() error {
 			s.inputDone = true
 			close(s.inputCh)
 		}
-		close(s.doneCh)
 		active := s.active
 		s.active = nil
 		s.mu.Unlock()
 
+		s.cancel()
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}
@@ -419,6 +492,15 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if strings.HasPrefix(s.currentOutputFormat(), "MP3") {
 		return s.nextDecodedMP3()
 	}
+	if strings.HasPrefix(s.currentOutputFormat(), "WAV") {
+		return s.nextDecodedWAV()
+	}
+	if strings.HasPrefix(s.currentOutputFormat(), "OGG") {
+		return s.nextDecodedOGG()
+	}
+	if s.currentOutputFormat() == "ULAW_8000_8" {
+		return s.nextDecodedULaw()
+	}
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
@@ -448,7 +530,7 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 				}
 				return nil, io.EOF
 			}
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS stream read failed: %v", err))
+			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
 		}
 	}
 }
@@ -459,6 +541,25 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	}
 	baseURL, voiceID, outputFormat, phraseReplacementConfigID := s.owner.requestOptions()
 	s.outputFormat = outputFormat
+	if err := validateUpliftAIOutputFormat(outputFormat); err != nil {
+		return llm.NewAPIConnectionError(err.Error())
+	}
+	if upliftAIUsesSocketIO(baseURL) {
+		body, err := startUpliftAISocketIOSynthesis(
+			s.ctx,
+			baseURL,
+			s.owner.apiKey,
+			s.text,
+			voiceID,
+			outputFormat,
+			phraseReplacementConfigID,
+		)
+		if err != nil {
+			return err
+		}
+		s.resp = &http.Response{Body: body}
+		return nil
+	}
 	reqBody := map[string]interface{}{
 		"text":         s.text,
 		"voiceId":      voiceID,
@@ -487,6 +588,177 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	return nil
 }
 
+func upliftAIUsesSocketIO(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "ws" || u.Scheme == "wss"
+}
+
+func startUpliftAISocketIOSynthesis(ctx context.Context, baseURL string, apiKey string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
+	socketURL, err := buildUpliftAISocketIOURL(baseURL)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := upliftAISocketIODialContext(ctx, socketURL)
+	if err != nil {
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
+	}
+	if err := upliftAISocketIOConnect(ctx, conn, apiKey); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	requestID := fmt.Sprintf("upliftai-%p", conn)
+	if err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	pr, pw := io.Pipe()
+	body := &upliftAISocketIOBody{PipeReader: pr, conn: conn}
+	go readUpliftAISocketIOAudio(conn, pw, requestID)
+	return body, nil
+}
+
+func buildUpliftAISocketIOURL(baseURL string) (string, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/socket.io/"
+	q := u.Query()
+	q.Set("EIO", "4")
+	q.Set("transport", "websocket")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, apiKey string) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io connect failed: %v", err))
+		}
+		packet := string(msg)
+		if packet == "2" {
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(packet, "0") {
+			payload, _ := json.Marshal(map[string]string{"token": apiKey})
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("40"+upliftAISocketIONamespace+","+string(payload))); err != nil {
+				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io auth failed: %v", err))
+			}
+			continue
+		}
+		if strings.HasPrefix(packet, "40"+upliftAISocketIONamespace) {
+			return nil
+		}
+	}
+}
+
+func writeUpliftAISocketIOSynthesize(conn upliftAISocketIOConn, requestID string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) error {
+	payload := map[string]string{
+		"type":         "synthesize",
+		"requestId":    requestID,
+		"text":         text,
+		"voiceId":      voiceID,
+		"outputFormat": outputFormat,
+	}
+	if phraseReplacementConfigID != "" {
+		payload["phraseReplacementConfigId"] = phraseReplacementConfigID
+	}
+	event, err := json.Marshal([]interface{}{"synthesize", payload})
+	if err != nil {
+		return err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("42"+upliftAISocketIONamespace+","+string(event))); err != nil {
+		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io synthesize failed: %v", err))
+	}
+	return nil
+}
+
+func readUpliftAISocketIOAudio(conn upliftAISocketIOConn, pw *io.PipeWriter, requestID string) {
+	defer conn.Close()
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			_ = pw.CloseWithError(llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io read failed: %v", err)))
+			return
+		}
+		packet := string(msg)
+		if packet == "2" {
+			_ = conn.WriteMessage(websocket.TextMessage, []byte("3"))
+			continue
+		}
+		payload, ok := strings.CutPrefix(packet, "42"+upliftAISocketIONamespace+",")
+		if !ok {
+			continue
+		}
+		done, err := handleUpliftAISocketIOEvent(payload, pw, requestID)
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if done {
+			_ = pw.Close()
+			return
+		}
+	}
+}
+
+func handleUpliftAISocketIOEvent(payload string, pw *io.PipeWriter, requestID string) (bool, error) {
+	var event []json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return false, nil
+	}
+	if len(event) != 2 || string(event[0]) != `"message"` {
+		return false, nil
+	}
+	var message struct {
+		Type      string `json:"type"`
+		RequestID string `json:"requestId"`
+		Audio     string `json:"audio"`
+		Message   string `json:"message"`
+	}
+	if err := json.Unmarshal(event[1], &message); err != nil {
+		return false, nil
+	}
+	if message.RequestID != "" && message.RequestID != requestID {
+		return false, nil
+	}
+	switch message.Type {
+	case "audio":
+		audio, err := base64.StdEncoding.DecodeString(message.Audio)
+		if err != nil {
+			return false, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io audio decode failed: %v", err))
+		}
+		if len(audio) > 0 {
+			if _, err := pw.Write(audio); err != nil {
+				return false, err
+			}
+		}
+	case "audio_end", "error":
+		return true, nil
+	}
+	return false, nil
+}
+
+type upliftAISocketIOBody struct {
+	*io.PipeReader
+	conn upliftAISocketIOConn
+}
+
+func (b *upliftAISocketIOBody) Close() error {
+	_ = b.conn.Close()
+	return b.PipeReader.Close()
+}
+
 func (s *upliftAITTSChunkedStream) currentOutputFormat() string {
 	if s.outputFormat != "" {
 		return s.outputFormat
@@ -498,6 +770,23 @@ func (s *upliftAITTSChunkedStream) currentOutputFormat() string {
 	return outputFormat
 }
 
+func validateUpliftAIOutputFormat(outputFormat string) error {
+	switch {
+	case outputFormat == "PCM_22050_16":
+		return nil
+	case outputFormat == "WAV_22050_16", outputFormat == "WAV_22050_32":
+		return nil
+	case strings.HasPrefix(outputFormat, "MP3"):
+		return nil
+	case strings.HasPrefix(outputFormat, "OGG"):
+		return nil
+	case outputFormat == "ULAW_8000_8":
+		return nil
+	default:
+		return fmt.Errorf("unsupported output format: %s", outputFormat)
+	}
+}
+
 func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
 	if s.finalSent {
 		return nil, io.EOF
@@ -506,7 +795,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		s.started = true
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 read failed: %v", err))
+			return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", err)
 		}
 		if len(data) == 0 {
 			s.finalSent = true
@@ -541,6 +830,200 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		frame = resampled
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if !s.started {
+		s.started = true
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", err)
+		}
+		if len(data) == 0 {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
+		s.hasAudio = true
+		decoder := codecs.NewOpusAudioStreamDecoder(defaultUpliftAISampleRate, 1)
+		s.decoder = decoder
+		go func() {
+			decoder.Push(data)
+			decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			if s.hasAudio && !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
+			return nil, io.EOF
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
+	}
+	frame = upliftAIDownmixToMono(frame)
+	if frame.SampleRate != defaultUpliftAISampleRate {
+		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG resample failed: %v", err))
+		}
+		frame = resampled
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if !s.started {
+		s.started = true
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, upliftAITTSReadError("UpliftAI TTS WAV read failed", err)
+		}
+		if len(data) == 0 {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
+		frame, err := decodeUpliftAIWAVPCM16(data)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
+		}
+		frame = upliftAIDownmixToMono(frame)
+		if frame.SampleRate != defaultUpliftAISampleRate {
+			resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
+			if err != nil {
+				return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV resample failed: %v", err))
+			}
+			frame = resampled
+		}
+		s.hasAudio = true
+		s.pendingFinal = true
+		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	return nil, io.EOF
+}
+
+func decodeUpliftAIWAVPCM16(data []byte) (*model.AudioFrame, error) {
+	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return nil, fmt.Errorf("invalid upliftai wav data")
+	}
+	offset := 12
+	var sampleRate uint32
+	var channels uint16
+	var bitsPerSample uint16
+	var pcm []byte
+	for offset+8 <= len(data) {
+		chunkID := string(data[offset : offset+4])
+		chunkSize := int(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
+		offset += 8
+		if offset+chunkSize > len(data) {
+			return nil, fmt.Errorf("invalid upliftai wav chunk size")
+		}
+		switch chunkID {
+		case "fmt ":
+			if chunkSize < 16 {
+				return nil, fmt.Errorf("invalid upliftai wav fmt chunk")
+			}
+			audioFormat := binary.LittleEndian.Uint16(data[offset : offset+2])
+			channels = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
+			sampleRate = binary.LittleEndian.Uint32(data[offset+4 : offset+8])
+			bitsPerSample = binary.LittleEndian.Uint16(data[offset+14 : offset+16])
+			if audioFormat != 1 || bitsPerSample != 16 {
+				return nil, fmt.Errorf("unsupported upliftai wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
+			}
+		case "data":
+			pcm = bytes.Clone(data[offset : offset+chunkSize])
+		}
+		offset += chunkSize
+		if chunkSize%2 == 1 {
+			offset++
+		}
+	}
+	if sampleRate == 0 || channels == 0 || bitsPerSample == 0 {
+		return nil, fmt.Errorf("missing upliftai wav format metadata")
+	}
+	if pcm == nil {
+		return nil, fmt.Errorf("missing upliftai wav data chunk")
+	}
+	return &model.AudioFrame{
+		Data:              pcm,
+		SampleRate:        sampleRate,
+		NumChannels:       uint32(channels),
+		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
+	}, nil
+}
+
+func (s *upliftAITTSChunkedStream) nextDecodedULaw() (*tts.SynthesizedAudio, error) {
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	buf := make([]byte, 4096)
+	for {
+		n, err := s.resp.Body.Read(buf)
+		if n > 0 {
+			if err == io.EOF {
+				s.pendingFinal = true
+			}
+			data := decodeUpliftAIMuLaw(buf[:n])
+			return &tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              data,
+					SampleRate:        8000,
+					NumChannels:       1,
+					SamplesPerChannel: uint32(len(data) / 2),
+				},
+			}, nil
+		}
+		if err != nil {
+			if err == io.EOF {
+				if !s.finalSent {
+					s.finalSent = true
+					return &tts.SynthesizedAudio{IsFinal: true}, nil
+				}
+				return nil, io.EOF
+			}
+			return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
+		}
+	}
+}
+
+func upliftAITTSReadError(prefix string, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(fmt.Sprintf("%s: %v", prefix, err))
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", prefix, err))
+}
+
+func decodeUpliftAIMuLaw(data []byte) []byte {
+	pcm := make([]byte, len(data)*2)
+	for i, encoded := range data {
+		u := ^encoded
+		sign := 1
+		if u&0x80 != 0 {
+			sign = -1
+		}
+		exponent := int((u >> 4) & 0x07)
+		mantissa := int(u & 0x0f)
+		sample := ((mantissa << 3) + 0x84) << exponent
+		value := int16(sign * (sample - 0x84))
+		pcm[i*2] = byte(value)
+		pcm[i*2+1] = byte(value >> 8)
+	}
+	return pcm
 }
 
 func upliftAIDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {

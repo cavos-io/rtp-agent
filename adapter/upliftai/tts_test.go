@@ -3,16 +3,23 @@ package upliftai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cavos-io/rtp-agent/core/llm"
+	"github.com/cavos-io/rtp-agent/core/tts"
 )
 
 type upliftAIFinalEOFReader struct {
@@ -37,6 +44,13 @@ func (upliftAIErrorReader) Read([]byte) (int, error) {
 }
 
 func (upliftAIErrorReader) Close() error { return nil }
+
+type upliftAIReadErrorBody struct {
+	err error
+}
+
+func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
+func (b upliftAIReadErrorBody) Close() error             { return nil }
 
 func TestUpliftAIPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.upliftai" {
@@ -436,6 +450,44 @@ func TestUpliftAITTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSRejectsUnsupportedReferenceOutputFormatBeforeRequest(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("\x01\x02")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("BAD_FORMAT"))
+	stream, err := provider.Synthesize(context.Background(), "bad format")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil for unsupported output format", audio)
+	}
+	if err == nil {
+		t.Fatal("Next error = nil, want unsupported output format error")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "unsupported output format: BAD_FORMAT") {
+		t.Fatalf("Next error = %q, want reference unsupported output format message", err.Error())
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls = %d, want 0 before rejecting unsupported output format", httpCalls)
+	}
+}
+
 func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewUpliftAITTS("test-key", "")
 	if err := provider.Close(); err != nil {
@@ -511,6 +563,7 @@ func TestUpliftAITTSStreamFlushSynthesizesReferenceSegment(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush error = %v", err)
 	}
+	upliftAIWaitForCondition(t, func() bool { return httpCalls == 1 }, "provider request after Flush")
 
 	audio, err := stream.Next()
 	if err != nil {
@@ -585,6 +638,205 @@ func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamUsesReferenceSocketIOTransport(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(ctx context.Context, endpoint string) (upliftAISocketIOConn, error) {
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			return nil, err
+		}
+		if parsed.Scheme != "ws" || parsed.Host != "upliftai.example" || parsed.Path != "/base/socket.io/" {
+			return nil, fmt.Errorf("endpoint = %q, want socket.io endpoint under configured base path", endpoint)
+		}
+		if parsed.Query().Get("EIO") != "4" || parsed.Query().Get("transport") != "websocket" || parsed.Query().Get("keep") != "1" {
+			return nil, fmt.Errorf("endpoint query = %s, want EIO=4&transport=websocket plus existing query", parsed.RawQuery)
+		}
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example/base?keep=1"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+		WithUpliftAIPhraseReplacementConfigID("phrases-1"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "hello socket")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+
+	connect := receiveUpliftAITestString(t, conn.writes, "namespace connect packet")
+	if connect != `40/text-to-speech/multi-stream,{"token":"test-key"}` {
+		t.Fatalf("connect packet = %q, want reference namespace auth packet", connect)
+	}
+	synthesize := receiveUpliftAITestString(t, conn.writes, "synthesize packet")
+	if !strings.HasPrefix(synthesize, `42/text-to-speech/multi-stream,`) {
+		t.Fatalf("synthesize packet = %q, want reference namespace event packet", synthesize)
+	}
+	requestID := upliftAITestSocketIORequestID(t, synthesize)
+	audioPayload := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0x03, 0x04})
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio","requestId":"` + requestID + `","audio":"` + audioPayload + `"}]`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + requestID + `"}]`
+
+	result := receiveUpliftAITestSocketIOResult(t, resultCh)
+	audio, err := result.audio, result.err
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want socket.io audio frame", audio)
+	}
+	if got, want := audio.Frame.Data, []byte{0x01, 0x02, 0x03, 0x04}; !bytes.Equal(got, want) {
+		t.Fatalf("audio data = %#v, want socket.io audio %#v", got, want)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+
+	var event []json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(synthesize, `42/text-to-speech/multi-stream,`)), &event); err != nil {
+		t.Fatalf("decode synthesize event: %v", err)
+	}
+	if len(event) != 2 || string(event[0]) != `"synthesize"` {
+		t.Fatalf("synthesize event = %s, want synthesize event name and payload", synthesize)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(event[1], &payload); err != nil {
+		t.Fatalf("decode synthesize payload: %v", err)
+	}
+	if payload["type"] != "synthesize" || payload["text"] != "hello socket" ||
+		payload["voiceId"] != "voice-1" || payload["outputFormat"] != "PCM_22050_16" ||
+		payload["phraseReplacementConfigId"] != "phrases-1" || payload["requestId"] == "" {
+		t.Fatalf("synthesize payload = %#v, want reference fields", payload)
+	}
+}
+
+func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", name)
+}
+
+func receiveUpliftAITestString(t *testing.T, ch <-chan string, name string) string {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+		return ""
+	}
+}
+
+func receiveUpliftAITestSocketIOResult(t *testing.T, ch <-chan struct {
+	audio *tts.SynthesizedAudio
+	err   error
+}) struct {
+	audio *tts.SynthesizedAudio
+	err   error
+} {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for socket.io audio result")
+		return struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{}
+	}
+}
+
+func upliftAITestSocketIORequestID(t *testing.T, packet string) string {
+	t.Helper()
+	var event []json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(packet, `42/text-to-speech/multi-stream,`)), &event); err != nil {
+		t.Fatalf("decode socket.io event: %v", err)
+	}
+	if len(event) != 2 {
+		t.Fatalf("socket.io event = %s, want event name and payload", packet)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(event[1], &payload); err != nil {
+		t.Fatalf("decode socket.io payload: %v", err)
+	}
+	if payload["requestId"] == "" {
+		t.Fatalf("socket.io payload = %#v, want requestId", payload)
+	}
+	return payload["requestId"]
+}
+
+type upliftAITestSocketIOConn struct {
+	reads  chan string
+	writes chan string
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newUpliftAITestSocketIOConn() *upliftAITestSocketIOConn {
+	return &upliftAITestSocketIOConn{
+		reads:  make(chan string, 10),
+		writes: make(chan string, 10),
+		closed: make(chan struct{}),
+	}
+}
+
+func (c *upliftAITestSocketIOConn) ReadMessage() (int, []byte, error) {
+	select {
+	case msg := <-c.reads:
+		return 1, []byte(msg), nil
+	case <-c.closed:
+		return 0, nil, io.ErrClosedPipe
+	case <-time.After(2 * time.Second):
+		return 0, nil, errors.New("timed out waiting for fake socket.io read")
+	}
+}
+
+func (c *upliftAITestSocketIOConn) WriteMessage(_ int, data []byte) error {
+	select {
+	case c.writes <- string(data):
+		return nil
+	case <-c.closed:
+		return io.ErrClosedPipe
+	case <-time.After(2 * time.Second):
+		return errors.New("timed out writing fake socket.io packet")
+	}
+}
+
+func (c *upliftAITestSocketIOConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
 func TestUpliftAITTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -656,6 +908,140 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 		}
 	}
 	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
+}
+
+func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
+	pcm := []byte{0x01, 0x00, 0x03, 0x00, 0x05, 0x00, 0x07, 0x00}
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("WAV_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(upliftAITestWAV(pcm, 22050, 1)))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded WAV frame", audio)
+	}
+	if audio.Frame.SampleRate != defaultUpliftAISampleRate {
+		t.Fatalf("sample rate = %d, want %d", audio.Frame.SampleRate, defaultUpliftAISampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want mono output", audio.Frame.NumChannels)
+	}
+	if bytes.HasPrefix(audio.Frame.Data, []byte("RIFF")) {
+		t.Fatal("frame data still contains WAV header")
+	}
+	if !bytes.Equal(audio.Frame.Data, pcm) {
+		t.Fatalf("audio data = %#v, want decoded wav pcm %#v", audio.Frame.Data, pcm)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after final = (%#v, %v), want EOF", audio, err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamDecodesReferenceULawResponse(t *testing.T) {
+	encoded := []byte{0x00, 0xff}
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("ULAW_8000_8"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(encoded))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded mu-law frame", audio)
+	}
+	if got, want := audio.Frame.SampleRate, uint32(8000); got != want {
+		t.Fatalf("sample rate = %d, want ULAW_8000_8 rate %d", got, want)
+	}
+	if got, want := audio.Frame.NumChannels, uint32(1); got != want {
+		t.Fatalf("channels = %d, want mono output %d", got, want)
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(2); got != want {
+		t.Fatalf("samples per channel = %d, want one PCM16 sample per mu-law byte", got)
+	}
+	wantPCM := []byte{0x84, 0x82, 0x00, 0x00}
+	if !bytes.Equal(audio.Frame.Data, wantPCM) {
+		t.Fatalf("audio data = %#v, want decoded mu-law PCM %#v", audio.Frame.Data, wantPCM)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamDecodesReferenceOGGResponse(t *testing.T) {
+	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode ogg fixture: %v", err)
+	}
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("OGG_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(oggData))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded OGG frame", audio)
+	}
+	if got, want := audio.Frame.SampleRate, uint32(defaultUpliftAISampleRate); got != want {
+		t.Fatalf("sample rate = %d, want %d", got, want)
+	}
+	if got, want := audio.Frame.NumChannels, uint32(1); got != want {
+		t.Fatalf("channels = %d, want mono output %d", got, want)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded OGG frame is empty")
+	}
+	if bytes.HasPrefix(audio.Frame.Data, []byte("OggS")) {
+		t.Fatal("frame data still contains OGG container bytes")
+	}
+
+	frames := 1
+	for i := 0; i < 500; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next after %d frames error = %v", frames, err)
+		}
+		if audio == nil {
+			t.Fatalf("audio after %d frames = nil", frames)
+		}
+		if audio.IsFinal {
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded OGG frames")
+			}
+			return
+		}
+		if audio.Frame != nil {
+			frames++
+		}
+	}
+	t.Fatalf("read %d decoded OGG frames without final marker", frames)
 }
 
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
@@ -777,6 +1163,22 @@ func TestUpliftAITTSChunkedStreamReadFailureReturnsAPIConnectionError(t *testing
 	}
 }
 
+func TestUpliftAITTSChunkedStreamReadDeadlineReturnsAPITimeoutError(t *testing.T) {
+	stream := &upliftAITTSChunkedStream{
+		resp: &http.Response{Body: upliftAIReadErrorBody{err: context.DeadlineExceeded}},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &upliftAICloseCountBody{reader: strings.NewReader("audio")}
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
@@ -822,3 +1224,26 @@ func (b *upliftAICloseCountBody) Close() error {
 	b.closeCount++
 	return nil
 }
+
+func upliftAITestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	var wav bytes.Buffer
+	blockAlign := uint16(channels * 2)
+	byteRate := sampleRate * uint32(blockAlign)
+	wav.WriteString("RIFF")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
+	wav.WriteString("WAVE")
+	wav.WriteString("fmt ")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(16))
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(1))
+	_ = binary.Write(&wav, binary.LittleEndian, channels)
+	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
+	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
+	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
+	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	wav.WriteString("data")
+	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
+	wav.Write(pcm)
+	return wav.Bytes()
+}
+
+const upliftAITestOpusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="
