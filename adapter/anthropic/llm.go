@@ -322,6 +322,7 @@ func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool, par
 	var toolChoice map[string]any
 	switch tc := choice.(type) {
 	case string:
+		toolChoice = map[string]any{"type": "auto"}
 		switch tc {
 		case "auto":
 			toolChoice = map[string]any{"type": "auto"}

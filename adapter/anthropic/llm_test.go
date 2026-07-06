@@ -1188,6 +1188,36 @@ func TestAnthropicChatOmitsParallelToolChoiceFlagWhenUnset(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatUnknownStringToolChoiceFallsBackToAuto(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
+		llm.WithToolChoice("unexpected"),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	choice, ok := transport.body["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want auto map", transport.body["tool_choice"])
+	}
+	if choice["type"] != "auto" {
+		t.Fatalf("tool_choice = %#v, want reference auto fallback", choice)
+	}
+}
+
 func TestAnthropicChatToolChoiceNoneClearsTools(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
