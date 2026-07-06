@@ -709,6 +709,10 @@ func readUpliftAISocketIOAudio(conn upliftAISocketIOConn, pw *io.PipeWriter, req
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
+				_ = pw.Close()
+				return
+			}
 			_ = pw.CloseWithError(llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io read failed: %v", err)))
 			return
 		}

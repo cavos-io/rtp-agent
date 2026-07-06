@@ -791,6 +791,63 @@ func TestUpliftAITTSChunkedStreamWaitsForSocketIOReadyBeforeSynthesize(t *testin
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIODisconnectEmitsFinalMarker(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "disconnect final")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	resultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	_ = receiveUpliftAITestString(t, conn.writes, "namespace connect packet")
+	synthesize := receiveUpliftAITestString(t, conn.writes, "synthesize packet")
+	requestID := upliftAITestSocketIORequestID(t, synthesize)
+	audioPayload := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio","requestId":"` + requestID + `","audio":"` + audioPayload + `"}]`
+	conn.readErrs <- io.EOF
+
+	result := receiveUpliftAITestSocketIOResult(t, resultCh)
+	if result.err != nil {
+		t.Fatalf("first Next error = %v", result.err)
+	}
+	if result.audio == nil || result.audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want audio before disconnect", result.audio)
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v, want final marker after disconnect", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker after disconnect", final)
+	}
+}
+
 func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -865,17 +922,19 @@ func upliftAITestSocketIORequestID(t *testing.T, packet string) string {
 }
 
 type upliftAITestSocketIOConn struct {
-	reads  chan string
-	writes chan string
-	closed chan struct{}
-	once   sync.Once
+	reads    chan string
+	readErrs chan error
+	writes   chan string
+	closed   chan struct{}
+	once     sync.Once
 }
 
 func newUpliftAITestSocketIOConn() *upliftAITestSocketIOConn {
 	return &upliftAITestSocketIOConn{
-		reads:  make(chan string, 10),
-		writes: make(chan string, 10),
-		closed: make(chan struct{}),
+		reads:    make(chan string, 10),
+		readErrs: make(chan error, 10),
+		writes:   make(chan string, 10),
+		closed:   make(chan struct{}),
 	}
 }
 
@@ -883,6 +942,8 @@ func (c *upliftAITestSocketIOConn) ReadMessage() (int, []byte, error) {
 	select {
 	case msg := <-c.reads:
 		return 1, []byte(msg), nil
+	case err := <-c.readErrs:
+		return 0, nil, err
 	case <-c.closed:
 		return 0, nil, io.ErrClosedPipe
 	case <-time.After(2 * time.Second):
