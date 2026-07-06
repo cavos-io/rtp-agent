@@ -34,6 +34,10 @@ func (c *ComputerTool) Tools() []llm.Tool {
 	return []llm.Tool{c.tool}
 }
 
+func (c *ComputerTool) Close() {
+	c.actions.Close()
+}
+
 func (c *ComputerTool) Execute(ctx context.Context, action string, args map[string]interface{}) ([]map[string]interface{}, error) {
 	switch action {
 	case "screenshot":
@@ -118,19 +122,19 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	case "type":
 		text, ok := args["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing required argument: 'text'")
+			return nil, fmt.Errorf("Missing required argument: 'text'")
 		}
 		c.actions.TypeText(text)
 	case "key":
 		text, ok := args["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing required argument: 'text'")
+			return nil, fmt.Errorf("Missing required argument: 'text'")
 		}
 		c.actions.Key(text)
 	case "hold_key":
 		text, ok := args["text"].(string)
 		if !ok {
-			return nil, fmt.Errorf("missing required argument: 'text'")
+			return nil, fmt.Errorf("Missing required argument: 'text'")
 		}
 		duration := 0.5
 		if rawDuration, ok := args["duration"]; ok {
@@ -144,7 +148,7 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 	case "wait":
 		c.actions.Wait()
 	default:
-		return nil, fmt.Errorf("unknown computer_use action: %s", action)
+		return nil, fmt.Errorf("Unknown computer_use action: '%s'", action)
 	}
 
 	time.Sleep(postActionDelay)
@@ -241,6 +245,10 @@ func (t *computerUseTool) AnthropicToolSpec() map[string]interface{} {
 		"display_height_px": t.height,
 		"display_number":    1,
 	}
+}
+
+func (t *computerUseTool) AnthropicBetaFlag() string {
+	return "computer-use-2025-11-24"
 }
 
 func (t *computerUseTool) Parameters() map[string]any {
