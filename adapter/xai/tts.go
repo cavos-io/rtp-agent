@@ -606,9 +606,12 @@ func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error)
 	}
 	switch message.Type {
 	case "audio.delta":
-		audio, err := base64.StdEncoding.DecodeString(message.Delta)
+		audio, err := xaiDecodeBase64Audio(message.Delta)
 		if err != nil {
 			return nil, false, llm.NewAPIConnectionError(err.Error())
+		}
+		if len(audio) == 0 {
+			return nil, false, nil
 		}
 		return xaiTTSAudioFrame(audio), false, nil
 	case "audio.done":
@@ -621,6 +624,29 @@ func xaiTTSAudioFromMessage(payload []byte) (*tts.SynthesizedAudio, bool, error)
 	default:
 		return nil, false, nil
 	}
+}
+
+func xaiDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func xaiTTSAudioFrame(audio []byte) *tts.SynthesizedAudio {
