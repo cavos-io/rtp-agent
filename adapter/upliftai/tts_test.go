@@ -647,6 +647,69 @@ func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSStreamReusesReferenceSocketIOClientAcrossFlushes(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	oldDial := upliftAISocketIODialContext
+	var dials int
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		dials++
+		if dials > 1 {
+			return nil, fmt.Errorf("socket.io dial count = %d, want reference client reuse", dials)
+		}
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	defer provider.Close()
+
+	if err := stream.PushText("first segment"); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(first) error = %v", err)
+	}
+	_ = receiveUpliftAITestString(t, conn.writes, "namespace connect packet")
+	firstSynthesize := receiveUpliftAITestString(t, conn.writes, "first synthesize packet")
+	firstRequestID := upliftAITestSocketIORequestID(t, firstSynthesize)
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + firstRequestID + `"}]`
+	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("first segment Next = (%#v, %v), want final marker", final, err)
+	}
+
+	if err := stream.PushText("second segment"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush(second) error = %v", err)
+	}
+	secondSynthesize := receiveUpliftAITestString(t, conn.writes, "second synthesize packet")
+	secondRequestID := upliftAITestSocketIORequestID(t, secondSynthesize)
+	if secondRequestID == firstRequestID {
+		t.Fatalf("second requestID = %q, want new segment request id", secondRequestID)
+	}
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + secondRequestID + `"}]`
+	if final, err := stream.Next(); err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("second segment Next = (%#v, %v), want final marker", final, err)
+	}
+	if got, want := dials, 1; got != want {
+		t.Fatalf("socket.io dial count = %d, want reference client reuse across stream flushes", got)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamUsesReferenceSocketIOTransport(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
