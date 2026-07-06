@@ -153,6 +153,68 @@ func TestCartesiaTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSUpdateOptionsKeepsReferenceAudioRouteAndTimestampConfig(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "voice-1", "sonic-lite",
+		WithCartesiaBaseURL("https://cartesia.example"),
+		WithCartesiaAudioFormat("pcm_mulaw", 8000),
+		WithCartesiaWordTimestamps(false),
+	)
+
+	provider.UpdateOptions(
+		WithCartesiaBaseURL("https://changed.example"),
+		WithCartesiaAudioFormat("pcm_s16le", 48000),
+		WithCartesiaWordTimestamps(true),
+		WithCartesiaModel("sonic-3"),
+		WithCartesiaVoiceID("voice-2"),
+		WithCartesiaLanguage("fr"),
+		WithCartesiaAPIVersion("2025-05-01"),
+	)
+
+	if provider.baseURL != "https://cartesia.example" {
+		t.Fatalf("baseURL = %q, want constructor value like reference", provider.baseURL)
+	}
+	if provider.encoding != "pcm_mulaw" || provider.sampleRate != 8000 {
+		t.Fatalf("audio format = %s/%d, want constructor value like reference", provider.encoding, provider.sampleRate)
+	}
+	if provider.wordTimestamps {
+		t.Fatal("wordTimestamps = true, want constructor value like reference")
+	}
+	if provider.Capabilities().AlignedTranscript {
+		t.Fatal("AlignedTranscript = true, want constructor value like reference")
+	}
+
+	requestURL, body, err := buildCartesiaSynthesizeRequest(provider, "bonjour")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := requestURL; got != "https://cartesia.example/tts/bytes" {
+		t.Fatalf("request URL = %q, want constructor route", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	outputFormat := payload["output_format"].(map[string]any)
+	if outputFormat["encoding"] != "pcm_mulaw" || outputFormat["sample_rate"] != float64(8000) {
+		t.Fatalf("output_format = %+v, want constructor encoding/sample rate", outputFormat)
+	}
+	if got, want := payload["model_id"], "sonic-3"; got != want {
+		t.Fatalf("model_id = %#v, want %#v", got, want)
+	}
+	if got, want := payload["language"], "fr"; got != want {
+		t.Fatalf("language = %#v, want %#v", got, want)
+	}
+	voice := payload["voice"].(map[string]any)
+	if got, want := voice["id"], "voice-2"; got != want {
+		t.Fatalf("voice.id = %#v, want %#v", got, want)
+	}
+
+	streamOptions := buildCartesiaOptions(provider, true)
+	if got := streamOptions["add_timestamps"]; got != false {
+		t.Fatalf("add_timestamps = %#v, want constructor value false", got)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaSpeed(1.2),
@@ -1351,6 +1413,62 @@ func TestCartesiaTTSStreamAudioDoneAfterEndInputEmitsFinalMarker(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSStreamIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	serverErr := make(chan error, 1)
+	go runCartesiaReadEndInputThenBase64NoiseAudioDoneWebsocketServer(serverConn, serverErr)
+
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return clientConn, nil
+		},
+		Proxy: nil,
+	}
+	defer func() {
+		websocket.DefaultDialer = oldDialer
+	}()
+
+	provider := NewCartesiaTTS("test-key", "", "", WithCartesiaBaseURL("http://cartesia.test"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := endCartesiaTestInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("audio Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want frame after ignored noise", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio data = %v, want decoded chunk bytes after ignored noise", got)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("final Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("final = %#v, want IsFinal marker", final)
+	}
+
+	select {
+	case err := <-serverErr:
+		if err != nil {
+			t.Fatalf("test websocket server error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for noise audio done server")
+	}
+}
+
 func TestCartesiaTTSStreamEmitsWordTimestamps(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	serverErr := make(chan error, 1)
@@ -1603,6 +1721,46 @@ func runCartesiaReadEndInputThenAudioDoneWebsocketServer(conn net.Conn, errCh ch
 	}
 }
 
+func runCartesiaReadEndInputThenBase64NoiseAudioDoneWebsocketServer(conn net.Conn, errCh chan<- error) {
+	listener := &singleCartesiaConnListener{conn: conn}
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer ws.Close()
+
+		for i := 0; i < 2; i++ {
+			var msg map[string]any
+			if err := ws.ReadJSON(&msg); err != nil {
+				errCh <- err
+				return
+			}
+			if msg["continue"] == false {
+				for _, payload := range [][]byte{
+					[]byte(`{"type":"chunk","data":"!!!!"}`),
+					[]byte(`{"type":"chunk","data":"==="}`),
+					[]byte(`{"type":"chunk","data":"AQIDBA==","done":true}`),
+					[]byte(`{"type":"done","done":true}`),
+				} {
+					if err := ws.WriteMessage(websocket.TextMessage, payload); err != nil {
+						errCh <- err
+						return
+					}
+				}
+				errCh <- nil
+				return
+			}
+		}
+		errCh <- errors.New("end-input packet not received")
+	})}
+	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		errCh <- err
+	}
+}
+
 func runCartesiaReadEndInputThenWordTimestampsServer(conn net.Conn, errCh chan<- error) {
 	upgrader := websocket.Upgrader{}
 	listener := &singleCartesiaConnListener{conn: conn}
@@ -1729,7 +1887,7 @@ func runCartesiaReadThenMalformedAudioWebsocketServer(conn net.Conn, errCh chan<
 				errCh <- err
 				return
 			}
-			if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"chunk","data":"%%%%%"}`)); err != nil {
+			if err := ws.WriteMessage(websocket.TextMessage, []byte(`{"type":"chunk","data":"not-base64"}`)); err != nil {
 				errCh <- err
 				return
 			}

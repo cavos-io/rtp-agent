@@ -217,6 +217,42 @@ func TestAsyncAITTSUpdateOptionsAppliesToFutureInitPayload(t *testing.T) {
 	}
 }
 
+func TestAsyncAITTSUpdateOptionsKeepsReferenceAudioAndRouteConfig(t *testing.T) {
+	provider := NewAsyncAITTS("test-key", "voice-1",
+		WithAsyncAITTSBaseURL("https://async.example"),
+		WithAsyncAITTSEncoding("pcm_mulaw"),
+		WithAsyncAITTSSampleRate(24000),
+	)
+
+	provider.UpdateOptions(
+		WithAsyncAITTSBaseURL("https://changed.example"),
+		WithAsyncAITTSEncoding("pcm_s16le"),
+		WithAsyncAITTSSampleRate(48000),
+	)
+
+	if provider.baseURL != "https://async.example" {
+		t.Fatalf("base URL after update = %q, want constructor value like reference", provider.baseURL)
+	}
+	if provider.encoding != "pcm_mulaw" || provider.sampleRate != 24000 {
+		t.Fatalf("audio config after update = %s/%d, want constructor values", provider.encoding, provider.sampleRate)
+	}
+	payload, err := buildAsyncAITTSInitMessage(provider)
+	if err != nil {
+		t.Fatalf("build init message: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(payload, &message); err != nil {
+		t.Fatalf("decode init message: %v", err)
+	}
+	output := message["output_format"].(map[string]any)
+	if output["encoding"] != "pcm_mulaw" || output["sample_rate"] != float64(24000) {
+		t.Fatalf("output after update = %+v, want constructor audio format", output)
+	}
+	if got := buildAsyncAITTSWebsocketURL(provider); !strings.HasPrefix(got, "wss://async.example/") {
+		t.Fatalf("websocket URL after update = %q, want constructor route", got)
+	}
+}
+
 func TestAsyncAITTSTextAndEndMessagesMatchReference(t *testing.T) {
 	textPayload, err := buildAsyncAITTSTextMessage("ctx-1", "hello")
 	if err != nil {

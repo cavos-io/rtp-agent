@@ -144,9 +144,25 @@ func NewTTS(model string, apiKey, apiSecret string, opts ...TTSOption) *TTS {
 }
 
 func (t *TTS) UpdateOptions(opts ...TTSOption) {
-	for _, opt := range opts {
-		opt(t)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	candidate := &TTS{
+		model:          t.model,
+		voice:          t.voice,
+		language:       t.language,
+		encoding:       t.encoding,
+		sampleRate:     t.sampleRate,
+		extraKwargs:    cloneTTSExtra(t.extraKwargs),
+		fallbackModels: cloneTTSFallbackModels(t.fallbackModels),
+		connectOptions: t.connectOptions,
 	}
+	for _, opt := range opts {
+		opt(candidate)
+	}
+	t.model = candidate.model
+	t.voice = candidate.voice
+	t.language = candidate.language
+	t.extraKwargs = cloneTTSExtra(candidate.extraKwargs)
 }
 
 func (t *TTS) Close() error {

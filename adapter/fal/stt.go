@@ -71,6 +71,22 @@ func NewFalSTT(apiKey string, opts ...FalSTTOption) *FalSTT {
 	return provider
 }
 
+func (s *FalSTT) UpdateOptions(opts ...FalSTTOption) {
+	if s == nil {
+		return
+	}
+	candidate := &FalSTT{
+		language:   s.language,
+		task:       s.task,
+		chunkLevel: s.chunkLevel,
+		version:    s.version,
+	}
+	for _, opt := range opts {
+		opt(candidate)
+	}
+	s.language = candidate.language
+}
+
 func (s *FalSTT) Label() string { return "fal.STT" }
 func (s *FalSTT) Model() string { return "Wizper" }
 func (s *FalSTT) Provider() string {

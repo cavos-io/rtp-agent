@@ -129,9 +129,22 @@ func (s *MistralAISTT) Capabilities() stt.STTCapabilities {
 
 func (s *MistralAISTT) UpdateOptions(opts ...MistralAISTTOption) {
 	beforeDelay := cloneIntPtr(s.targetStreamingDelayMS)
-	for _, opt := range opts {
-		opt(s)
+	candidate := &MistralAISTT{
+		apiKey:                 s.apiKey,
+		baseURL:                s.baseURL,
+		model:                  s.model,
+		language:               s.language,
+		contextBias:            append([]string(nil), s.contextBias...),
+		sampleRate:             s.sampleRate,
+		targetStreamingDelayMS: cloneIntPtr(s.targetStreamingDelayMS),
+		vad:                    s.vad,
 	}
+	for _, opt := range opts {
+		opt(candidate)
+	}
+	s.language = candidate.language
+	s.contextBias = append([]string(nil), candidate.contextBias...)
+	s.targetStreamingDelayMS = cloneIntPtr(candidate.targetStreamingDelayMS)
 	if intPtrsEqual(beforeDelay, s.targetStreamingDelayMS) || s.targetStreamingDelayMS == nil {
 		return
 	}

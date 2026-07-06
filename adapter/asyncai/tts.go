@@ -132,9 +132,21 @@ func (t *AsyncAITTS) UpdateOptions(opts ...AsyncAITTSOption) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, opt := range opts {
-		opt(t)
+	candidate := &AsyncAITTS{
+		apiKey:     t.apiKey,
+		baseURL:    t.baseURL,
+		model:      t.model,
+		language:   t.language,
+		encoding:   t.encoding,
+		voice:      t.voice,
+		sampleRate: t.sampleRate,
 	}
+	for _, opt := range opts {
+		opt(candidate)
+	}
+	t.model = candidate.model
+	t.language = candidate.language
+	t.voice = candidate.voice
 }
 
 func (t *AsyncAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {

@@ -93,6 +93,14 @@ func WithNeuphonicTTSSpeed(speed float64) NeuphonicTTSOption {
 	}
 }
 
+func cloneFloatPtr(value *float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
 func NewNeuphonicTTS(apiKey string, voice string, opts ...NeuphonicTTSOption) *NeuphonicTTS {
 	if apiKey == "" {
 		apiKey = os.Getenv("NEUPHONIC_API_KEY")
@@ -129,9 +137,21 @@ func (t *NeuphonicTTS) Provider() string { return "Neuphonic" }
 func (t *NeuphonicTTS) UpdateOptions(opts ...NeuphonicTTSOption) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, opt := range opts {
-		opt(t)
+	candidate := &NeuphonicTTS{
+		apiKey:     t.apiKey,
+		baseURL:    t.baseURL,
+		voice:      t.voice,
+		langCode:   t.langCode,
+		encoding:   t.encoding,
+		sampleRate: t.sampleRate,
+		speed:      cloneFloatPtr(t.speed),
 	}
+	for _, opt := range opts {
+		opt(candidate)
+	}
+	t.voice = candidate.voice
+	t.langCode = candidate.langCode
+	t.speed = cloneFloatPtr(candidate.speed)
 }
 
 func (t *NeuphonicTTS) Close() error {

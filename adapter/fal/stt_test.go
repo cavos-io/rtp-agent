@@ -145,6 +145,31 @@ func TestFalSTTRecognizeLanguageOverridePersistsLikeReference(t *testing.T) {
 	}
 }
 
+func TestFalSTTUpdateOptionsMatchesReferenceLanguageOnly(t *testing.T) {
+	provider := NewFalSTT("test-key")
+
+	provider.UpdateOptions(
+		WithFalSTTLanguage("fr"),
+		WithFalSTTTask("translate"),
+		WithFalSTTChunkLevel("word"),
+		WithFalSTTVersion("2"),
+	)
+
+	req, err := buildFalSTTRequest(context.Background(), provider, []byte{0x01}, "")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertFalSTTPayload(t, payload, "language", "fr")
+	assertFalSTTPayload(t, payload, "task", "transcribe")
+	assertFalSTTPayload(t, payload, "chunk_level", "segment")
+	assertFalSTTPayload(t, payload, "version", "3")
+}
+
 func TestFalSTTResponsePreservesReferenceLanguage(t *testing.T) {
 	event := falSTTResponseToEvent(falSTTResponse{Text: "bonjour"}, "fr")
 

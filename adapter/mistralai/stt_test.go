@@ -222,22 +222,20 @@ func TestMistralAISTTUpdateOptionsMatchesReferenceFutureCalls(t *testing.T) {
 		t.Fatalf("build request: %v", err)
 	}
 	fields, _ := readMistralMultipartRequest(t, req)
-	if fields["model"] != "voxtral-mini-2507" || fields["language"] != "fr" || fields["context_bias"] != "Cavos,LiveKit" {
-		t.Fatalf("updated request fields = %#v, want model/language/context_bias", fields)
+	if fields["model"] != defaultMistralAISTTModel || fields["language"] != "fr" || fields["context_bias"] != "Cavos,LiveKit" {
+		t.Fatalf("updated request fields = %#v, want immutable model plus updated language/context_bias", fields)
 	}
 	if _, ok := fields["timestamp_granularities"]; ok {
 		t.Fatalf("timestamp_granularities present with updated language: %#v", fields)
 	}
 
 	conn := &mistralAISTTFakeRealtimeConn{}
-	provider.UpdateOptions(
-		WithMistralAISTTModel("voxtral-realtime-latest"),
-		WithMistralAISTTTargetStreamingDelay(120),
-	)
-	provider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
+	realtimeProvider := NewMistralAISTT("test-key", WithMistralAISTTModel("voxtral-realtime-latest"))
+	realtimeProvider.UpdateOptions(WithMistralAISTTTargetStreamingDelay(120))
+	realtimeProvider.dialRealtime = func(ctx context.Context, endpoint string, headers http.Header) (mistralAISTTRealtimeConn, error) {
 		return conn, nil
 	}
-	if _, err := provider.Stream(context.Background(), ""); err != nil {
+	if _, err := realtimeProvider.Stream(context.Background(), ""); err != nil {
 		t.Fatalf("Stream error = %v", err)
 	}
 	messages := conn.messages()
@@ -247,6 +245,20 @@ func TestMistralAISTTUpdateOptionsMatchesReferenceFutureCalls(t *testing.T) {
 	assertMistralRealtimeMessage(t, messages[0], "session.update", map[string]any{
 		"session": map[string]any{"target_streaming_delay_ms": float64(120)},
 	})
+}
+
+func TestMistralAISTTUpdateOptionsKeepsReferenceModel(t *testing.T) {
+	provider := NewMistralAISTT("test-key")
+
+	provider.UpdateOptions(WithMistralAISTTModel("voxtral-realtime-latest"))
+
+	if got := provider.Model(); got != defaultMistralAISTTModel {
+		t.Fatalf("Model = %q, want constructor model like reference", got)
+	}
+	caps := provider.Capabilities()
+	if caps.Streaming || !caps.OfflineRecognize {
+		t.Fatalf("Capabilities = %+v, want constructor batch-mode capabilities", caps)
+	}
 }
 
 func TestMistralAISTTUpdateOptionsUpdatesActiveRealtimeStreams(t *testing.T) {

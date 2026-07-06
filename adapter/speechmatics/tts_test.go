@@ -115,6 +115,23 @@ func TestSpeechmaticsTTSUpdateOptionsPreservesReferenceSampleRate(t *testing.T) 
 	}
 }
 
+func TestSpeechmaticsTTSUpdateOptionsPreservesReferenceBaseURL(t *testing.T) {
+	provider := NewSpeechmaticsTTS("test-key", WithSpeechmaticsTTSBaseURL("https://tts.example.com"))
+
+	provider.UpdateOptions(WithSpeechmaticsTTSBaseURL("https://changed.example.com"))
+
+	if provider.baseURL != "https://tts.example.com" {
+		t.Fatalf("base URL = %q, want constructor value like reference", provider.baseURL)
+	}
+	req, err := buildSpeechmaticsTTSRequest(context.Background(), provider, "hello")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Host != "tts.example.com" {
+		t.Fatalf("request host = %q, want constructor route", req.URL.Host)
+	}
+}
+
 func TestSpeechmaticsTTSSynthesizePostsAndStreamsPCM(t *testing.T) {
 	originalClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

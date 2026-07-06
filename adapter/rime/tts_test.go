@@ -4114,6 +4114,21 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestRimeTTSAudioFromWebsocketIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"chunk","data":"!!!!"}`),
+		[]byte(`{"type":"chunk","data":"==="}`),
+	} {
+		audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage(payload, 24000)
+		if err != nil {
+			t.Fatalf("audio from websocket noise %s: %v", payload, err)
+		}
+		if audio != nil || done || transcript != "" {
+			t.Fatalf("noise %s = audio:%+v done:%v transcript:%q, want ignored empty chunk", payload, audio, done, transcript)
+		}
+	}
+}
+
 func TestRimeTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
 	cases := []struct {
 		name    string

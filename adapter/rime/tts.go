@@ -1981,7 +1981,7 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		if *message.Data == "" {
 			return nil, false, "", nil
 		}
-		audio, err := base64.StdEncoding.DecodeString(*message.Data)
+		audio, err := rimeDecodeBase64Chunk(*message.Data)
 		if err != nil {
 			return nil, false, "", rimeTTSConnectionError("Rime websocket audio decode failed", err)
 		}
@@ -2008,6 +2008,29 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 	default:
 		return nil, false, "", nil
 	}
+}
+
+func rimeDecodeBase64Chunk(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func rimeTTSConnectionError(message string, err error) *llm.APIConnectionError {
