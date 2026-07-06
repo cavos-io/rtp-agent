@@ -2337,12 +2337,19 @@ func rimeTTSTimestampTimes(raw json.RawMessage) ([]float64, error) {
 
 func rimeTTSJSONNullOrFalsey(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
-	return bytes.Equal(trimmed, []byte("null")) ||
+	if bytes.Equal(trimmed, []byte("null")) ||
 		bytes.Equal(trimmed, []byte("false")) ||
-		bytes.Equal(trimmed, []byte("0")) ||
 		bytes.Equal(trimmed, []byte(`""`)) ||
 		bytes.Equal(trimmed, []byte("[]")) ||
-		bytes.Equal(trimmed, []byte("{}"))
+		bytes.Equal(trimmed, []byte("{}")) {
+		return true
+	}
+	var number json.Number
+	if err := json.Unmarshal(trimmed, &number); err == nil {
+		value, err := number.Float64()
+		return err == nil && value == 0
+	}
+	return false
 }
 
 func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
