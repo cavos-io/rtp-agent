@@ -757,7 +757,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
+			return nil, s.wrapReadError(err)
 		}
 
 		switch event.Type {
