@@ -816,11 +816,7 @@ func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
-				c.closeConn(conn, nil)
-				return
-			}
-			c.closeConn(conn, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io read failed: %v", err)))
+			c.closeConn(conn, nil)
 			return
 		}
 		packet := string(msg)

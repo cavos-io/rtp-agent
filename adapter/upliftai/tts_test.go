@@ -1328,6 +1328,93 @@ func TestUpliftAITTSChunkedStreamSocketIOWriteFailureReconnectsNextRequest(t *te
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIOReadErrorEndsRequestAndReconnects(t *testing.T) {
+	firstConn := newUpliftAITestSocketIOConn()
+	firstConn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	firstConn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	firstConn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+
+	secondConn := newUpliftAITestSocketIOConn()
+	secondConn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	secondConn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	secondConn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-2"}]`
+
+	oldDial := upliftAISocketIODialContext
+	dials := 0
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		dials++
+		switch dials {
+		case 1:
+			return firstConn, nil
+		case 2:
+			return secondConn, nil
+		default:
+			return nil, fmt.Errorf("socket.io dial count = %d, want reconnect once", dials)
+		}
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+
+	firstStream, err := provider.Synthesize(context.Background(), "first")
+	if err != nil {
+		t.Fatalf("first Synthesize error = %v", err)
+	}
+	defer firstStream.Close()
+	firstResultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := firstStream.Next()
+		firstResultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	_ = receiveUpliftAITestString(t, firstConn.writes, "first namespace connect packet")
+	_ = receiveUpliftAITestString(t, firstConn.writes, "first synthesize packet")
+	firstConn.readErrs <- errors.New("temporary socket read failure")
+	firstResult := receiveUpliftAITestSocketIOResult(t, firstResultCh)
+	if firstResult.err != nil || firstResult.audio == nil || !firstResult.audio.IsFinal {
+		t.Fatalf("first Next = (%#v, %v), want final marker after reference disconnect handling", firstResult.audio, firstResult.err)
+	}
+
+	secondStream, err := provider.Synthesize(context.Background(), "second")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	defer secondStream.Close()
+	secondResultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := secondStream.Next()
+		secondResultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	_ = receiveUpliftAITestString(t, secondConn.writes, "second namespace connect packet")
+	secondSynthesize := receiveUpliftAITestString(t, secondConn.writes, "second synthesize packet")
+	secondRequestID := upliftAITestSocketIORequestID(t, secondSynthesize)
+	secondConn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + secondRequestID + `"}]`
+	secondResult := receiveUpliftAITestSocketIOResult(t, secondResultCh)
+	if secondResult.err != nil || secondResult.audio == nil || !secondResult.audio.IsFinal {
+		t.Fatalf("second Next = (%#v, %v), want final marker after reconnect", secondResult.audio, secondResult.err)
+	}
+	if got, want := dials, 2; got != want {
+		t.Fatalf("socket.io dial count = %d, want reconnect after read error", got)
+	}
+}
+
 func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
