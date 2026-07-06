@@ -438,6 +438,44 @@ func TestUpliftAITTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSRejectsUnsupportedReferenceOutputFormatBeforeRequest(t *testing.T) {
+	var httpCalls int
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		httpCalls++
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("\x01\x02")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("BAD_FORMAT"))
+	stream, err := provider.Synthesize(context.Background(), "bad format")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil for unsupported output format", audio)
+	}
+	if err == nil {
+		t.Fatal("Next error = nil, want unsupported output format error")
+	}
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("Next error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), "unsupported output format: BAD_FORMAT") {
+		t.Fatalf("Next error = %q, want reference unsupported output format message", err.Error())
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls = %d, want 0 before rejecting unsupported output format", httpCalls)
+	}
+}
+
 func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
 	provider := NewUpliftAITTS("test-key", "")
 	if err := provider.Close(); err != nil {

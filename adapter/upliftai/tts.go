@@ -519,6 +519,9 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	}
 	baseURL, voiceID, outputFormat, phraseReplacementConfigID := s.owner.requestOptions()
 	s.outputFormat = outputFormat
+	if err := validateUpliftAIOutputFormat(outputFormat); err != nil {
+		return llm.NewAPIConnectionError(err.Error())
+	}
 	reqBody := map[string]interface{}{
 		"text":         s.text,
 		"voiceId":      voiceID,
@@ -556,6 +559,23 @@ func (s *upliftAITTSChunkedStream) currentOutputFormat() string {
 	}
 	_, _, outputFormat, _ := s.owner.requestOptions()
 	return outputFormat
+}
+
+func validateUpliftAIOutputFormat(outputFormat string) error {
+	switch {
+	case outputFormat == "PCM_22050_16":
+		return nil
+	case outputFormat == "WAV_22050_16", outputFormat == "WAV_22050_32":
+		return nil
+	case strings.HasPrefix(outputFormat, "MP3"):
+		return nil
+	case strings.HasPrefix(outputFormat, "OGG"):
+		return nil
+	case outputFormat == "ULAW_8000_8":
+		return nil
+	default:
+		return fmt.Errorf("unsupported output format: %s", outputFormat)
+	}
 }
 
 func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
