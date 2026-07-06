@@ -174,9 +174,35 @@ func (t *CartesiaTTS) Model() string    { return t.model }
 func (t *CartesiaTTS) Provider() string { return "Cartesia" }
 
 func (t *CartesiaTTS) UpdateOptions(opts ...CartesiaTTSOption) {
-	for _, opt := range opts {
-		opt(t)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	candidate := &CartesiaTTS{
+		baseURL:             t.baseURL,
+		voiceID:             t.voiceID,
+		voiceEmbedding:      append([]float64(nil), t.voiceEmbedding...),
+		model:               t.model,
+		language:            t.language,
+		encoding:            t.encoding,
+		sampleRate:          t.sampleRate,
+		apiVersion:          t.apiVersion,
+		speed:               t.speed,
+		emotion:             t.emotion,
+		volume:              t.volume,
+		wordTimestamps:      t.wordTimestamps,
+		pronunciationDictID: t.pronunciationDictID,
 	}
+	for _, opt := range opts {
+		opt(candidate)
+	}
+	t.voiceID = candidate.voiceID
+	t.voiceEmbedding = append([]float64(nil), candidate.voiceEmbedding...)
+	t.model = candidate.model
+	t.language = candidate.language
+	t.apiVersion = candidate.apiVersion
+	t.speed = candidate.speed
+	t.emotion = candidate.emotion
+	t.volume = candidate.volume
+	t.pronunciationDictID = candidate.pronunciationDictID
 }
 
 func (t *CartesiaTTS) Close() error {

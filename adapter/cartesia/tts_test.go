@@ -153,6 +153,68 @@ func TestCartesiaTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
 	}
 }
 
+func TestCartesiaTTSUpdateOptionsKeepsReferenceAudioRouteAndTimestampConfig(t *testing.T) {
+	provider := NewCartesiaTTS("test-key", "voice-1", "sonic-lite",
+		WithCartesiaBaseURL("https://cartesia.example"),
+		WithCartesiaAudioFormat("pcm_mulaw", 8000),
+		WithCartesiaWordTimestamps(false),
+	)
+
+	provider.UpdateOptions(
+		WithCartesiaBaseURL("https://changed.example"),
+		WithCartesiaAudioFormat("pcm_s16le", 48000),
+		WithCartesiaWordTimestamps(true),
+		WithCartesiaModel("sonic-3"),
+		WithCartesiaVoiceID("voice-2"),
+		WithCartesiaLanguage("fr"),
+		WithCartesiaAPIVersion("2025-05-01"),
+	)
+
+	if provider.baseURL != "https://cartesia.example" {
+		t.Fatalf("baseURL = %q, want constructor value like reference", provider.baseURL)
+	}
+	if provider.encoding != "pcm_mulaw" || provider.sampleRate != 8000 {
+		t.Fatalf("audio format = %s/%d, want constructor value like reference", provider.encoding, provider.sampleRate)
+	}
+	if provider.wordTimestamps {
+		t.Fatal("wordTimestamps = true, want constructor value like reference")
+	}
+	if provider.Capabilities().AlignedTranscript {
+		t.Fatal("AlignedTranscript = true, want constructor value like reference")
+	}
+
+	requestURL, body, err := buildCartesiaSynthesizeRequest(provider, "bonjour")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if got := requestURL; got != "https://cartesia.example/tts/bytes" {
+		t.Fatalf("request URL = %q, want constructor route", got)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("unmarshal body: %v", err)
+	}
+	outputFormat := payload["output_format"].(map[string]any)
+	if outputFormat["encoding"] != "pcm_mulaw" || outputFormat["sample_rate"] != float64(8000) {
+		t.Fatalf("output_format = %+v, want constructor encoding/sample rate", outputFormat)
+	}
+	if got, want := payload["model_id"], "sonic-3"; got != want {
+		t.Fatalf("model_id = %#v, want %#v", got, want)
+	}
+	if got, want := payload["language"], "fr"; got != want {
+		t.Fatalf("language = %#v, want %#v", got, want)
+	}
+	voice := payload["voice"].(map[string]any)
+	if got, want := voice["id"], "voice-2"; got != want {
+		t.Fatalf("voice.id = %#v, want %#v", got, want)
+	}
+
+	streamOptions := buildCartesiaOptions(provider, true)
+	if got := streamOptions["add_timestamps"]; got != false {
+		t.Fatalf("add_timestamps = %#v, want constructor value false", got)
+	}
+}
+
 func TestCartesiaSynthesizeRequestUsesReferenceOptions(t *testing.T) {
 	provider := NewCartesiaTTS("test-key", "", "",
 		WithCartesiaSpeed(1.2),
