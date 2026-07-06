@@ -2733,6 +2733,9 @@ func anthropicLLMOptionsFromConfig(cfg AppConfig) []anthropic.AnthropicOption {
 	if caching := modelOptionString(cfg.LLMModelOptions, "caching"); caching != "" {
 		llmOpts = append(llmOpts, anthropic.WithAnthropicCaching(caching))
 	}
+	if strictToolSchema := modelOptionBool(cfg.LLMModelOptions, "strict_tool_schema"); strictToolSchema != nil {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicStrictToolSchema(*strictToolSchema))
+	}
 	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
 		llmOpts = append(llmOpts, anthropic.WithAnthropicToolChoice(llm.ToolChoice(toolChoice)))
 	}

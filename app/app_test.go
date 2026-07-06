@@ -15954,7 +15954,7 @@ func TestDefaultConfigFromEnvMapsAnthropicLLMModelOptions(t *testing.T) {
 	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
 	t.Setenv("RTP_AGENT_LLM_MODEL", "claude-test")
 	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://anthropic.example")
-	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `max_output_tokens=256,temperature=0.2,top_k=12,tool_choice=required,parallel_tool_calls=false,caching=ephemeral,stop_sequences=["END"]`)
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `max_output_tokens=256,temperature=0.2,top_k=12,tool_choice=required,parallel_tool_calls=false,caching=ephemeral,strict_tool_schema=false,stop_sequences=["END"]`)
 
 	app, err := NewApp(DefaultConfigFromEnv())
 	if err != nil {
@@ -15996,6 +15996,9 @@ func TestDefaultConfigFromEnvMapsAnthropicLLMModelOptions(t *testing.T) {
 		cacheControl, ok := tool["cache_control"].(map[string]any)
 		if !ok || cacheControl["type"] != "ephemeral" {
 			t.Fatalf("tool cache_control = %#v, want ephemeral cache control", tool["cache_control"])
+		}
+		if _, ok := tool["strict"]; ok {
+			t.Fatalf("tool strict = %#v, want omitted when strict_tool_schema=false", tool["strict"])
 		}
 	}
 	toolChoice, ok := requestBody["tool_choice"].(map[string]any)
