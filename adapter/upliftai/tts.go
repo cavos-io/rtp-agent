@@ -35,9 +35,13 @@ const (
 	upliftAISocketIONamespace = "/text-to-speech/multi-stream"
 	upliftAISocketIOReadyWait = 5 * time.Second
 	upliftAISocketIODialWait  = 10 * time.Second
+	upliftAISocketIOAttempts  = 3
 )
 
-var upliftAISocketIOAudioWait = 30 * time.Second
+var (
+	upliftAISocketIOAudioWait      = 30 * time.Second
+	upliftAISocketIOReconnectDelay = time.Second
+)
 
 type UpliftAITTS struct {
 	apiKey                    string
@@ -45,6 +49,9 @@ type UpliftAITTS struct {
 	outputFormat              string
 	numChannels               int
 	baseURL                   string
+	wordTokenizer             tokenize.WordTokenizer
+	sentenceTokenizer         tokenize.SentenceTokenizer
+	tokenizerKind             string
 	phraseReplacementConfigID string
 	mu                        sync.Mutex
 	closed                    bool
@@ -93,6 +100,28 @@ func WithUpliftAIOutputFormat(outputFormat string) UpliftAITTSOption {
 func WithUpliftAINumChannels(numChannels int) UpliftAITTSOption {
 	return func(t *UpliftAITTS) {
 		t.numChannels = numChannels
+	}
+}
+
+func WithUpliftAISentenceTokenizer(tokenizer tokenize.SentenceTokenizer) UpliftAITTSOption {
+	return func(t *UpliftAITTS) {
+		if tokenizer == nil {
+			return
+		}
+		t.sentenceTokenizer = tokenizer
+		t.wordTokenizer = nil
+		t.tokenizerKind = "sentence"
+	}
+}
+
+func WithUpliftAIWordTokenizer(tokenizer tokenize.WordTokenizer) UpliftAITTSOption {
+	return func(t *UpliftAITTS) {
+		if tokenizer == nil {
+			return
+		}
+		t.wordTokenizer = tokenizer
+		t.sentenceTokenizer = nil
+		t.tokenizerKind = "word"
 	}
 }
 
@@ -176,11 +205,16 @@ func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedS
 	if t.apiKey == "" {
 		return nil, fmt.Errorf("API key is required, either as argument or set UPLIFTAI_API_KEY environment variable")
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
 
 	stream := &upliftAITTSChunkedStream{
-		owner: t,
-		ctx:   ctx,
-		text:  text,
+		owner:  t,
+		ctx:    ctx,
+		cancel: cancel,
+		text:   text,
 	}
 	if !t.registerStream(stream) {
 		_ = stream.Close()
@@ -265,6 +299,24 @@ func (t *UpliftAITTS) outputNumChannels() int {
 	return t.numChannels
 }
 
+func (t *UpliftAITTS) streamSentenceTokenizer() tokenize.SentenceTokenizer {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.tokenizerKind != "sentence" {
+		return nil
+	}
+	return t.sentenceTokenizer
+}
+
+func (t *UpliftAITTS) streamWordTokenizer() tokenize.WordTokenizer {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.tokenizerKind != "word" {
+		return nil
+	}
+	return t.wordTokenizer
+}
+
 func (t *UpliftAITTS) socketIOSynthesis(ctx context.Context, baseURL string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
 	t.mu.Lock()
 	if t.closed {
@@ -296,6 +348,7 @@ type upliftAITTSSynthesizeStream struct {
 	active    tts.ChunkedStream
 	closed    bool
 	inputDone bool
+	segmented bool
 	once      sync.Once
 }
 
@@ -325,10 +378,19 @@ func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if s.inputDone {
-		return io.ErrClosedPipe
+		return nil
+	}
+	if text == "" {
+		return nil
+	}
+	if s.buf.Len() == 0 {
+		if s.segmented {
+			return nil
+		}
+		s.segmented = true
 	}
 	s.buf.WriteString(text)
 	return nil
@@ -338,7 +400,7 @@ func (s *upliftAITTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return io.ErrClosedPipe
+		return nil
 	}
 	if s.inputDone {
 		return nil
@@ -392,6 +454,22 @@ func (s *upliftAITTSSynthesizeStream) EndInput() error {
 }
 
 func (s *upliftAITTSSynthesizeStream) formatSegmentText(text string) string {
+	if s.owner != nil {
+		if tokenizer := s.owner.streamWordTokenizer(); tokenizer != nil {
+			words := tokenizer.Tokenize(text, "")
+			return strings.TrimSpace(tokenizer.FormatWords(words))
+		}
+		if tokenizer := s.owner.streamSentenceTokenizer(); tokenizer != nil {
+			sentences := tokenizer.Tokenize(text, "")
+			parts := make([]string, 0, len(sentences))
+			for _, sentence := range sentences {
+				if sentence = strings.TrimSpace(sentence); sentence != "" {
+					parts = append(parts, sentence)
+				}
+			}
+			return strings.Join(parts, " ")
+		}
+	}
 	wordTokens := tokenize.SplitWords(text, false, false, false)
 	words := make([]string, 0, len(wordTokens))
 	for _, word := range wordTokens {
@@ -439,7 +517,8 @@ func (s *upliftAITTSSynthesizeStream) run() {
 				return
 			}
 			if err := s.runSegment(text); err != nil {
-				continue
+				_ = s.sendResult(nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS segment synthesis failed: %v", err)))
+				return
 			}
 		}
 	}
@@ -520,6 +599,7 @@ func (s *upliftAITTSSynthesizeStream) Close() error {
 type upliftAITTSChunkedStream struct {
 	owner        *UpliftAITTS
 	ctx          context.Context
+	cancel       context.CancelFunc
 	text         string
 	resp         *http.Response
 	once         sync.Once
@@ -538,6 +618,9 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		return nil, io.EOF
 	}
 	if err := s.ensureResponse(); err != nil {
+		if s.closed {
+			return nil, io.EOF
+		}
 		return nil, err
 	}
 	if s.resp == nil || s.resp.Body == nil {
@@ -731,42 +814,57 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 		c.mu.Unlock()
 		return err
 	}
-	conn, err := upliftAISocketIODialContext(ctx, socketURL)
-	if err != nil {
-		c.mu.Unlock()
-		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
-	}
-	if err := upliftAISocketIOConnect(ctx, conn, c.apiKey); err != nil {
-		c.mu.Unlock()
-		_ = conn.Close()
-		return err
-	}
-	if c.closed {
-		c.mu.Unlock()
-		_ = conn.Close()
-		return io.ErrClosedPipe
-	}
-	c.conn = conn
-	c.mu.Unlock()
+	var lastErr error
+	for attempt := 1; attempt <= upliftAISocketIOAttempts; attempt++ {
+		conn, err := upliftAISocketIODialContext(ctx, socketURL)
+		if err != nil {
+			lastErr = llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
+		} else if err := upliftAISocketIOConnect(ctx, conn, c.apiKey); err != nil {
+			_ = conn.Close()
+			lastErr = err
+		} else {
+			if c.closed {
+				c.mu.Unlock()
+				_ = conn.Close()
+				return io.ErrClosedPipe
+			}
+			c.conn = conn
+			c.mu.Unlock()
 
-	go c.readLoop(conn)
-	return nil
+			go c.readLoop(conn)
+			return nil
+		}
+		if attempt < upliftAISocketIOAttempts && upliftAISocketIOReconnectDelay > 0 {
+			timer := time.NewTimer(upliftAISocketIOReconnectDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				c.mu.Unlock()
+				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io reconnect failed: %v", ctx.Err()))
+			case <-timer.C:
+			}
+		}
+	}
+	c.mu.Unlock()
+	if lastErr != nil {
+		return lastErr
+	}
+	return llm.NewAPIConnectionError("UpliftAI TTS socket.io dial failed")
 }
 
 func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
-				c.closeConn(conn, nil)
-				return
-			}
-			c.closeConn(conn, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io read failed: %v", err)))
+			c.closeConn(conn, nil)
 			return
 		}
 		packet := string(msg)
 		if packet == "2" {
-			_ = conn.WriteMessage(websocket.TextMessage, []byte("3"))
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
+				c.closeConn(conn, nil)
+				return
+			}
 			continue
 		}
 		payload, ok := strings.CutPrefix(packet, "42"+upliftAISocketIONamespace+",")
@@ -914,7 +1012,7 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 		packet := string(msg)
 		if packet == "2" {
 			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
-				return err
+				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io ping failed: %v", err))
 			}
 			continue
 		}
@@ -1341,6 +1439,9 @@ func upliftAIDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
 func (s *upliftAITTSChunkedStream) Close() error {
 	s.once.Do(func() {
 		s.closed = true
+		if s.cancel != nil {
+			s.cancel()
+		}
 		if s.owner != nil {
 			s.owner.unregisterStream(s)
 		}
