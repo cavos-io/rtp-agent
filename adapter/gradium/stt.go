@@ -456,7 +456,7 @@ type gradiumSTTMessageState struct {
 func processGradiumSTTMessage(state *gradiumSTTMessageState, payload []byte, startTimeOffset float64) ([]*stt.SpeechEvent, error) {
 	var raw map[string]any
 	if err := json.Unmarshal(payload, &raw); err != nil {
-		return nil, err
+		return nil, nil
 	}
 	msgType, _ := raw["type"].(string)
 	switch msgType {
