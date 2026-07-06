@@ -2373,6 +2373,51 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceOGGResponse(t *testing.T) {
 	t.Fatalf("read %d decoded OGG frames without final marker", frames)
 }
 
+func TestUpliftAITTSChunkedStreamStreamsReferenceOGGBeforeEOF(t *testing.T) {
+	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode ogg fixture: %v", err)
+	}
+
+	body := newUpliftAIBlockingEOFBody(oggData)
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("OGG_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: body},
+	}
+	defer stream.Close()
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- result{audio: audio, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("Next error = %v", got.err)
+		}
+		if got.audio == nil || got.audio.Frame == nil {
+			t.Fatalf("audio = %#v, want decoded OGG frame before response EOF", got.audio)
+		}
+		if bytes.HasPrefix(got.audio.Frame.Data, []byte("OggS")) {
+			t.Fatal("frame data still contains OGG container bytes")
+		}
+	case <-time.After(500 * time.Millisecond):
+		_ = stream.Close()
+		select {
+		case <-resultCh:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("timed out waiting for decoded OGG frame before response EOF")
+	}
+}
+
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
