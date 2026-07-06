@@ -875,6 +875,26 @@ func TestSarvamTTSChunkedStreamEmitsAllReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSChunkedStreamDecodesReferenceNoisyBase64(t *testing.T) {
+	stream := &sarvamTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(strings.NewReader(`{
+			"request_id":"req-noisy",
+			"audios":["AQIDBA==!!!!"]
+		}`))},
+		sampleRate:       22050,
+		outputAudioCodec: "linear16",
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.RequestID != "req-noisy" || !bytes.Equal(audio.Frame.Data, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded noisy base64 PCM", audio)
+	}
+}
+
 func TestSarvamTTSChunkedStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &sarvamCloseErrorBody{}
 	stream := &sarvamTTSChunkedStream{resp: &http.Response{Body: body}}
@@ -1319,6 +1339,19 @@ func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	}
 	if finished.RequestID != "req-2" {
 		t.Fatalf("final marker request id = %q, want req-2", finished.RequestID)
+	}
+}
+
+func TestSarvamTTSAudioFromStreamMessageDecodesReferenceNoisyBase64(t *testing.T) {
+	audio, done, err := sarvamTTSAudioFromStreamMessage([]byte(`{"type":"audio","data":{"audio":"AQIDBA==!!!!","request_id":"req-noisy"}}`), 22050, "linear16")
+	if err != nil {
+		t.Fatalf("audio from stream noisy base64: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for audio message")
+	}
+	if audio == nil || audio.RequestID != "req-noisy" || !bytes.Equal(audio.Frame.Data, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded noisy base64 PCM", audio)
 	}
 }
 
