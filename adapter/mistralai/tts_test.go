@@ -227,6 +227,21 @@ func TestMistralAITTSStreamDecodesAudioDeltaDoneAndPCM(t *testing.T) {
 	}
 }
 
+func TestMistralAITTSStreamDecodesReferenceNoisyBase64(t *testing.T) {
+	pcmF32 := []byte{0x00, 0x00, 0x00, 0x3f}
+	stream := &mistralAITTSChunkedStream{
+		reader: strings.NewReader(`data: {"event":"speech.audio.delta","data":{"audio_data":"` +
+			base64.StdEncoding.EncodeToString(pcmF32) + `!!!!"}}` + "\n"),
+		responseFormat: "pcm",
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("next audio: %v", err)
+	}
+	assertMistralTTSAudio(t, audio, []byte{0xff, 0x3f})
+}
+
 func TestMistralAITTSStreamDecodesJSONAudioResponse(t *testing.T) {
 	stream := &mistralAITTSChunkedStream{
 		reader:         strings.NewReader(`{"audio_data":"` + base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}) + `"}`),

@@ -335,7 +335,7 @@ func mistralAITTSAudioFromJSONResponse(data string, responseFormat string) (*tts
 }
 
 func decodeMistralAITTSAudioFrame(audioData string, responseFormat string) (*tts.SynthesizedAudio, error) {
-	audio, err := base64.StdEncoding.DecodeString(audioData)
+	audio, err := decodeMistralAIBase64Audio(audioData)
 	if err != nil {
 		return nil, err
 	}
@@ -353,6 +353,23 @@ func decodeMistralAITTSAudioFrame(audioData string, responseFormat string) (*tts
 		return decodeMistralAIMP3Audio(audio)
 	}
 	return mistralAITTSAudioFrame(audio), nil
+}
+
+func decodeMistralAIBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/',
+			b == '=':
+			clean = append(clean, b)
+		}
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func decodeMistralAIMP3Audio(audio []byte) (*tts.SynthesizedAudio, error) {
