@@ -641,7 +641,7 @@ func smallestAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int, segm
 		if message.Data.Audio == "" {
 			return nil, false, nil
 		}
-		audio, err := base64.StdEncoding.DecodeString(message.Data.Audio)
+		audio, err := smallestAIDecodeBase64Audio(message.Data.Audio)
 		if err != nil {
 			return nil, false, err
 		}
@@ -667,6 +667,29 @@ func smallestAITTSAudioFromWebsocketMessage(payload []byte, sampleRate int, segm
 	default:
 		return nil, false, nil
 	}
+}
+
+func smallestAIDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func smallestAITTSFinalAudioDone(segmentID string) *tts.SynthesizedAudio {

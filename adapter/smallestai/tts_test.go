@@ -361,6 +361,21 @@ func TestSmallestAITTSAudioFromWebsocketMessage(t *testing.T) {
 	}
 }
 
+func TestSmallestAITTSAudioFromWebsocketIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"status":"chunk","data":{"audio":"!!!!"}}`),
+		[]byte(`{"status":"chunk","data":{"audio":"==="}}`),
+	} {
+		audio, done, err := smallestAITTSAudioFromWebsocketMessage(payload, 24000, "seg-1")
+		if err != nil {
+			t.Fatalf("audio from noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("noise %s = audio:%+v done:%v, want ignored empty chunk", payload, audio, done)
+		}
+	}
+}
+
 func TestSmallestAITTSAudioFromWebsocketMessageReturnsAPIConnectionError(t *testing.T) {
 	_, _, err := smallestAITTSAudioFromWebsocketMessage([]byte(`{"status":"error","message":"voice unavailable"}`), 24000, "seg-1")
 
