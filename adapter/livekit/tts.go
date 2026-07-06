@@ -787,7 +787,7 @@ func (s *inferenceTTSStream) run() {
 						s.setStreamError(fmt.Errorf("missing output_audio payload"))
 						return
 					}
-					data, err := base64.StdEncoding.DecodeString(audioB64)
+					data, err := decodeInferenceTTSOutputAudio(audioB64)
 					if err != nil {
 						s.setStreamError(fmt.Errorf("invalid output_audio payload: %w", err))
 						return
@@ -836,6 +836,33 @@ func (s *inferenceTTSStream) run() {
 			}
 		}
 	}
+}
+
+func decodeInferenceTTSOutputAudio(value string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return data, nil
+	}
+	filtered := make([]byte, 0, len(value))
+	hasData := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'A' && c <= 'Z',
+			c >= 'a' && c <= 'z',
+			c >= '0' && c <= '9',
+			c == '+',
+			c == '/':
+			filtered = append(filtered, c)
+			hasData = true
+		case c == '=':
+			filtered = append(filtered, c)
+		}
+	}
+	if !hasData {
+		return nil, err
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
 
 func inferenceTTSTimedTranscript(data map[string]interface{}) ([]tts.TimedString, error) {

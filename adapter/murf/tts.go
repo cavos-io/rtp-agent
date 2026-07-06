@@ -662,7 +662,7 @@ func murfAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Synthesize
 		return nil, false, murfTTSConnectionError("Murf AI websocket payload decode failed", err)
 	}
 	if message.Audio != "" {
-		audio, err := base64.StdEncoding.DecodeString(message.Audio)
+		audio, err := murfDecodeBase64Audio(message.Audio)
 		if err != nil {
 			return nil, false, murfTTSConnectionError("Murf AI websocket audio decode failed", err)
 		}
@@ -674,6 +674,29 @@ func murfAudioFromStreamMessage(payload []byte, sampleRate int) (*tts.Synthesize
 		return &tts.SynthesizedAudio{IsFinal: true}, true, nil
 	}
 	return nil, false, nil
+}
+
+func murfDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func murfTTSConnectionError(message string, err error) *llm.APIConnectionError {

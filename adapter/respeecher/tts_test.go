@@ -962,6 +962,21 @@ func TestRespeecherTTSAudioFromStreamMessage(t *testing.T) {
 	}
 }
 
+func TestRespeecherTTSAudioFromStreamIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"context_id":"ctx-1","type":"chunk","data":"!!!!"}`),
+		[]byte(`{"context_id":"ctx-1","type":"chunk","data":"==="}`),
+	} {
+		audio, done, err := respeecherTTSAudioFromStreamMessage(payload, "ctx-1", 24000)
+		if err != nil {
+			t.Fatalf("audio from noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("noise %s = audio:%+v done:%v, want ignored empty chunk", payload, audio, done)
+		}
+	}
+}
+
 func TestRespeecherTTSImplementsStreamingInterface(t *testing.T) {
 	var _ tts.TTS = NewRespeecherTTS("test-key", "")
 }

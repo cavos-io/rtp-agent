@@ -1322,6 +1322,21 @@ func TestSarvamTTSAudioFromStreamMessage(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSAudioFromStreamMessageIgnoresReferenceInvalidBase64(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"audio","data":{"audio":"not-base64","request_id":"req-bad"}}`),
+		[]byte(`{"type":"audio","data":{"audio":"!!!!","request_id":"req-noise"}}`),
+	} {
+		audio, done, err := sarvamTTSAudioFromStreamMessage(payload, 22050, "mp3")
+		if err != nil {
+			t.Fatalf("audio from stream invalid base64 %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("invalid base64 %s = audio:%+v done:%v, want ignored audio frame", payload, audio, done)
+		}
+	}
+}
+
 func TestSarvamTTSAudioFromStreamMessageDecodesReferenceMP3(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {

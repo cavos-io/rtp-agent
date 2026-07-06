@@ -815,6 +815,21 @@ func TestXaiTTSAudioFromMessageDecodesAudioDeltaAndDone(t *testing.T) {
 	}
 }
 
+func TestXaiTTSAudioFromMessageIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"audio.delta","delta":"!!!!"}`),
+		[]byte(`{"type":"audio.delta","delta":"==="}`),
+	} {
+		audio, done, err := xaiTTSAudioFromMessage(payload)
+		if err != nil {
+			t.Fatalf("audio from noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("noise %s = audio:%+v done:%v, want ignored empty delta", payload, audio, done)
+		}
+	}
+}
+
 func TestXaiTTSAudioFromMessageReportsReferenceError(t *testing.T) {
 	_, _, err := xaiTTSAudioFromMessage([]byte(`{"type":"error","message":"bad voice"}`))
 	if err == nil {

@@ -654,6 +654,24 @@ func TestSLNGTTSReceivedEventIgnoresInvalidBase64LikeReference(t *testing.T) {
 	}
 }
 
+func TestSLNGTTSReceivedEventDecodesReferenceNoisyBase64(t *testing.T) {
+	for _, payload := range []string{
+		`{"type":"audio_chunk","data":"AQI=!!!!"}`,
+		`{"audio":"AQI=!!!!"}`,
+	} {
+		audio, done, err := ttsAudioFromMessage([]byte(payload), 24000)
+		if err != nil {
+			t.Fatalf("ttsAudioFromMessage(%s) error = %v", payload, err)
+		}
+		if audio == nil || audio.Frame == nil || done {
+			t.Fatalf("ttsAudioFromMessage(%s) audio=%+v done=%v, want decoded audio", payload, audio, done)
+		}
+		if got := string(audio.Frame.Data); got != "\x01\x02" {
+			t.Fatalf("ttsAudioFromMessage(%s) audio data = %q, want decoded noisy base64 bytes", payload, got)
+		}
+	}
+}
+
 func TestSLNGTTSReceivedEventIgnoresNonJSONTextLikeReference(t *testing.T) {
 	audio, done, err := ttsAudioFromMessage([]byte(`not-json`), 24000)
 	if err != nil {

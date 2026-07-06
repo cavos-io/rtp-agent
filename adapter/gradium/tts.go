@@ -475,9 +475,12 @@ func gradiumTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesize
 	}
 	switch message.Type {
 	case "audio":
-		audio, err := base64.StdEncoding.DecodeString(message.Audio)
+		audio, err := gradiumDecodeBase64Audio(message.Audio)
 		if err != nil {
 			return nil, false, err
+		}
+		if len(audio) == 0 {
+			return nil, false, nil
 		}
 		return gradiumTTSAudioFrame(audio, sampleRate), false, nil
 	case "end_of_stream":
@@ -485,6 +488,29 @@ func gradiumTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesize
 	default:
 		return nil, false, nil
 	}
+}
+
+func gradiumDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func gradiumTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {

@@ -5068,6 +5068,20 @@ func TestElevenLabsSynthesizedAudioUsesConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestElevenLabsSynthesizedAudioDecodesReferenceNoisyBase64(t *testing.T) {
+	resp := elWSResponse{
+		Audio: "AQIDBA==!!!!",
+	}
+
+	audio, err := elevenLabsSynthesizedAudio(resp, 22050, "pcm_22050")
+	if err != nil {
+		t.Fatalf("elevenLabsSynthesizedAudio() error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || !bytes.Equal(audio.Frame.Data, []byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded PCM frame", audio)
+	}
+}
+
 func TestElevenLabsTTSAlignmentMapsTimedTranscript(t *testing.T) {
 	resp := elWSResponse{
 		Audio:   base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),

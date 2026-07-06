@@ -504,7 +504,7 @@ func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
 	if message.Audio == "" {
 		return nil, true, nil
 	}
-	data, err := base64.StdEncoding.DecodeString(message.Audio)
+	data, err := telnyxDecodeBase64Audio(message.Audio)
 	if err != nil {
 		return nil, false, llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 	}
@@ -521,11 +521,37 @@ func telnyxTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesized
 	if message.Audio == "" {
 		return nil, true, nil
 	}
-	data, err := base64.StdEncoding.DecodeString(message.Audio)
+	data, err := telnyxDecodeBase64Audio(message.Audio)
 	if err != nil {
 		return nil, false, err
 	}
+	if len(data) == 0 {
+		return nil, false, nil
+	}
 	return telnyxTTSAudioFrame(data, sampleRate), false, nil
+}
+
+func telnyxDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func telnyxTTSAudioFrame(audio []byte, sampleRate int) *tts.SynthesizedAudio {

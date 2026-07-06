@@ -519,7 +519,7 @@ func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChanne
 		if message.Data.Audio == "" {
 			return nil, false, nil
 		}
-		audio, err := base64.StdEncoding.DecodeString(message.Data.Audio)
+		audio, err := gnaniDecodeBase64Audio(message.Data.Audio)
 		if err != nil {
 			return nil, false, err
 		}
@@ -532,7 +532,7 @@ func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChanne
 		if message.Data.Audio == "" {
 			return gnaniTTSFinalAudio(), true, nil
 		}
-		audio, err := base64.StdEncoding.DecodeString(message.Data.Audio)
+		audio, err := gnaniDecodeBase64Audio(message.Data.Audio)
 		if err != nil {
 			return nil, false, err
 		}
@@ -549,6 +549,23 @@ func gnaniTTSAudioFromWebsocketMessage(payload []byte, sampleRate int, numChanne
 	default:
 		return nil, false, nil
 	}
+}
+
+func gnaniDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/',
+			b == '=':
+			clean = append(clean, b)
+		}
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func gnaniTTSFinalAudio() *tts.SynthesizedAudio {

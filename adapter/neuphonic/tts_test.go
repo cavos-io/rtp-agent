@@ -405,6 +405,30 @@ func TestNeuphonicTTSChunkedStreamEmitsReferenceFinalMarkerAfterEmptyAudio(t *te
 	}
 }
 
+func TestNeuphonicTTSChunkedStreamIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	stream := &neuphonicTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(
+			"event: message\n" +
+				"data: {\"status_code\":200,\"data\":{\"audio\":\"!!!!\"}}\n\n" +
+				"event: message\n" +
+				"data: {\"status_code\":200,\"data\":{\"audio\":\"===\"}}\n\n",
+		)))},
+		sampleRate: 16000,
+	}
+	defer stream.Close()
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next returned error before final marker: %v", err)
+	}
+	if final == nil || !final.IsFinal || final.Frame != nil {
+		t.Fatalf("audio = %#v, want final marker after ignored empty chunks", final)
+	}
+	if _, err := stream.Next(); err != io.EOF {
+		t.Fatalf("second Next error = %v, want EOF", err)
+	}
+}
+
 func TestNeuphonicTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &neuphonicCloseCountBody{Reader: bytes.NewReader([]byte("data: {\"status_code\":200,\"data\":{\"audio\":\"AQI=\"}}\n\n"))}
 	stream := &neuphonicTTSChunkedStream{
@@ -1026,6 +1050,19 @@ func TestNeuphonicTTSAudioFromStreamMessage(t *testing.T) {
 	}
 	if finished.Frame != nil {
 		t.Fatalf("final marker frame = %+v, want no audio frame", finished.Frame)
+	}
+}
+
+func TestNeuphonicTTSAudioFromStreamMessageDecodesReferenceNoisyBase64(t *testing.T) {
+	audio, done, err := neuphonicAudioFromStreamMessage([]byte(`{"data":{"audio":"AQIDBA==!!!!","context_id":"segment-1"}}`), "segment-1", 22050)
+	if err != nil {
+		t.Fatalf("audio from stream message: %v", err)
+	}
+	if done {
+		t.Fatal("done = true for audio message")
+	}
+	if audio == nil || string(audio.Frame.Data) != string([]byte{1, 2, 3, 4}) {
+		t.Fatalf("audio = %+v, want decoded frame", audio)
 	}
 }
 
