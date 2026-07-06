@@ -813,7 +813,7 @@ func TestUpliftAITTSStreamTokenizerOptionsUseReferenceLastValue(t *testing.T) {
 	}
 }
 
-func TestUpliftAITTSStreamContinuesAfterReferenceSegmentError(t *testing.T) {
+func TestUpliftAITTSStreamStopsAfterReferenceSegmentError(t *testing.T) {
 	var httpCalls int
 	oldClient := http.DefaultClient
 	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -841,24 +841,29 @@ func TestUpliftAITTSStreamContinuesAfterReferenceSegmentError(t *testing.T) {
 	if err := stream.Flush(); err != nil {
 		t.Fatalf("Flush(first) error = %v", err)
 	}
-	upliftAIWaitForCondition(t, func() bool { return httpCalls == 1 }, "first failed segment request")
 
-	if err := stream.PushText("still speaks"); err != nil {
-		t.Fatalf("PushText(second) error = %v", err)
+	nextErrCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		nextErrCh <- err
+	}()
+	select {
+	case err = <-nextErrCh:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for reference segment failure to terminate stream")
 	}
-	if err := stream.Flush(); err != nil {
-		t.Fatalf("Flush(second) error = %v", err)
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T(%v), want reference APIConnectionError after segment failure", err, err)
 	}
-
-	audio, err := stream.Next()
-	if err != nil {
-		t.Fatalf("Next error = %v, want later segment audio after reference-swallowed segment error", err)
+	if got, want := httpCalls, 1; got != want {
+		t.Fatalf("HTTP calls = %d, want one failed segment request", got)
 	}
-	if audio == nil || audio.Frame == nil || audio.IsFinal {
-		t.Fatalf("audio = %#v, want later segment frame after first segment failure", audio)
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after stream failure = (%#v, %v), want terminal EOF", audio, err)
 	}
-	if got, want := httpCalls, 2; got != want {
-		t.Fatalf("HTTP calls = %d, want second segment request after first failure", got)
+	if got, want := httpCalls, 1; got != want {
+		t.Fatalf("HTTP calls after terminal failure = %d, want no second segment request", got)
 	}
 }
 
