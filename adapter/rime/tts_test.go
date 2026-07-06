@@ -52,6 +52,79 @@ func (rimeDivergentSentenceTokenizer) Stream(string) tokenize.SentenceStream {
 	}, 1, 1)
 }
 
+type rimeNextOnlySentenceTokenizer struct{}
+
+func (rimeNextOnlySentenceTokenizer) Tokenize(string, string) []string {
+	return []string{"tokenize packet"}
+}
+
+func (rimeNextOnlySentenceTokenizer) Stream(string) tokenize.SentenceStream {
+	return &rimeNextOnlySentenceStream{}
+}
+
+type rimeNextOnlySentenceStream struct {
+	text   string
+	tokens []*tokenize.TokenData
+	closed bool
+}
+
+func (s *rimeNextOnlySentenceStream) PushText(text string) error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	s.text += text
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) Flush() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.text != "" {
+		s.tokens = append(s.tokens, &tokenize.TokenData{Token: "next-only packet"})
+		s.text = ""
+	}
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) EndInput() error {
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if err := s.Flush(); err != nil {
+		return err
+	}
+	s.closed = true
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) AClose() error {
+	s.text = ""
+	s.tokens = nil
+	s.closed = true
+	return nil
+}
+
+func (s *rimeNextOnlySentenceStream) Close() error {
+	return s.EndInput()
+}
+
+func (s *rimeNextOnlySentenceStream) Next() (*tokenize.TokenData, error) {
+	if len(s.tokens) == 0 {
+		if s.closed {
+			return nil, io.EOF
+		}
+		return nil, io.EOF
+	}
+	token := s.tokens[0]
+	s.tokens = s.tokens[1:]
+	return token, nil
+}
+
+func (s *rimeNextOnlySentenceStream) Closed() bool {
+	return s.closed
+}
+
 func TestRimeTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
 
@@ -3492,6 +3565,39 @@ func TestRimeTTSStreamUsesReferenceTokenizerStream(t *testing.T) {
 		t.Fatalf("writes after Flush = %d, want one stream token packet", len(writes))
 	}
 	assertRimePayload(t, writes[0], "text", "stream packet ")
+}
+
+func TestRimeTTSStreamEndInputDrainsNextOnlyReferenceTokenizer(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeNextOnlySentenceTokenizer{}))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		cancel:            func() {},
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after PushText = %d, want next-only stream buffered until EndInput", len(writes))
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if len(writes) != 2 {
+		t.Fatalf("writes after EndInput = %d, want next-only tokenizer packet then provider flush", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "next-only packet ")
+	assertRimePayload(t, writes[1], "operation", "flush")
 }
 
 func TestRimeTTSUpdateOptionsUsesConfiguredTokenizer(t *testing.T) {

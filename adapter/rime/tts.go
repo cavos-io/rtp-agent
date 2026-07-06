@@ -1690,7 +1690,24 @@ func (s *rimeTTSSynthesizeStream) drainSentenceStreamLocked() error {
 	}
 	drainer, ok := s.sentenceStream.(rimeSentenceStreamDrainer)
 	if !ok {
-		return nil
+		if !s.sentenceStream.Closed() {
+			return nil
+		}
+		for {
+			token, err := s.sentenceStream.Next()
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if token == nil {
+				continue
+			}
+			if err := s.sendSentenceLocked(token.Token); err != nil {
+				return err
+			}
+		}
 	}
 	for {
 		token, ok, err := drainer.TryNext()
