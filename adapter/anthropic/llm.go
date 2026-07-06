@@ -1322,7 +1322,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, wrappedErr
 			}
-			s.outputTokens += *event.Usage.OutputTokens
+			s.outputTokens = *event.Usage.OutputTokens
 
 		case "message_stop":
 			if chunk := s.finalUsageChunk(); chunk != nil {

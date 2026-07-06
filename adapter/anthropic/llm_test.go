@@ -1137,6 +1137,37 @@ func TestAnthropicStreamEmitsFinalUsageAfterText(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamUsesCumulativeMessageDeltaTokensLikeReference(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"output_tokens":2}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Okay"}}`,
+			`data: {"type":"message_delta","usage":{"output_tokens":15}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	text, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text Next() error = %v", err)
+	}
+	if text.Delta == nil || text.Delta.Content != "Okay" {
+		t.Fatalf("text chunk = %#v, want Okay delta", text)
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	if usage.Usage == nil {
+		t.Fatal("Usage = nil, want final usage metadata")
+	}
+	if usage.Usage.CompletionTokens != 15 || usage.Usage.TotalTokens != 40 {
+		t.Fatalf("Usage = %#v, want cumulative output_tokens from message_delta", usage.Usage)
+	}
+}
+
 func TestAnthropicStreamEmitsFinalUsageOnEOFWithoutMessageStop(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
