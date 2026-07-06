@@ -2487,9 +2487,25 @@ func rimeTTSTimestampTimes(raw json.RawMessage) ([]float64, error) {
 	}
 	var times []float64
 	if err := json.Unmarshal(raw, &times); err != nil {
+		if rimeTTSJSONIterableButUnrepresentableTimes(raw) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return times, nil
+}
+
+func rimeTTSJSONIterableButUnrepresentableTimes(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return false
+	}
+	switch trimmed[0] {
+	case '"', '[', '{':
+		return json.Valid(trimmed)
+	default:
+		return false
+	}
 }
 
 func rimeTTSJSONNullOrFalsey(raw json.RawMessage) bool {

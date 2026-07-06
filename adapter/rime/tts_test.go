@@ -5088,6 +5088,21 @@ func TestRimeTTSAudioFromWebsocketIgnoresReferenceEmptyBase64Noise(t *testing.T)
 	}
 }
 
+func TestRimeTTSAudioFromWebsocketIgnoresUnrepresentableReferenceTimestampTimes(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":"x","end":["0.2"]}}`),
+		[]byte(`{"type":"timestamps","word_timestamps":{"words":["hi"],"start":{"x":1},"end":[0.2]}}`),
+	} {
+		audio, done, transcript, err := rimeTTSAudioFromWebsocketMessage(payload, 24000)
+		if err != nil {
+			t.Fatalf("timestamp times %s error = %v, want ignored like reference non-float TimedString metadata", payload, err)
+		}
+		if audio != nil || done || transcript != "" {
+			t.Fatalf("timestamp times %s = audio:%+v done:%v transcript:%q, want ignored", payload, audio, done, transcript)
+		}
+	}
+}
+
 func TestRimeTTSAudioFromWebsocketMalformedPayloadReturnsAPIConnectionError(t *testing.T) {
 	cases := []struct {
 		name    string
