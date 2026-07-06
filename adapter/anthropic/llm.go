@@ -38,6 +38,7 @@ type AnthropicLLM struct {
 	strictToolSchema     bool
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
+	readTimeout          time.Duration
 	httpClient           *http.Client
 }
 
@@ -131,6 +132,15 @@ func WithAnthropicParallelToolCalls(parallel bool) AnthropicOption {
 	}
 }
 
+func WithAnthropicReadTimeout(timeout time.Duration) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		if timeout > 0 {
+			l.readTimeout = timeout
+			l.httpClient = newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout, timeout)
+		}
+	}
+}
+
 func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*AnthropicLLM, error) {
 	if model == "" {
 		model = defaultAnthropicMode
@@ -146,7 +156,8 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 		model:            model,
 		baseURL:          defaultAnthropicURL,
 		strictToolSchema: true,
-		httpClient:       newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout),
+		readTimeout:      defaultAnthropicReadTimeout,
+		httpClient:       newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout, defaultAnthropicReadTimeout),
 	}
 	for _, opt := range opts {
 		opt(llm)
@@ -360,7 +371,7 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 
 	client := l.httpClient
 	if connectTimeout != defaultAnthropicConnectTimeout {
-		client = newAnthropicHTTPClient(http.DefaultTransport, connectTimeout)
+		client = newAnthropicHTTPClient(http.DefaultTransport, connectTimeout, l.readTimeout)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -400,9 +411,12 @@ func (c *anthropicReadTimeoutConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-func newAnthropicHTTPClient(base http.RoundTripper, connectTimeout time.Duration) *http.Client {
+func newAnthropicHTTPClient(base http.RoundTripper, connectTimeout time.Duration, readTimeout time.Duration) *http.Client {
 	if connectTimeout <= 0 {
 		connectTimeout = defaultAnthropicConnectTimeout
+	}
+	if readTimeout <= 0 {
+		readTimeout = defaultAnthropicReadTimeout
 	}
 	if transport, ok := base.(*http.Transport); ok {
 		cloned := transport.Clone()
@@ -415,13 +429,13 @@ func newAnthropicHTTPClient(base http.RoundTripper, connectTimeout time.Duration
 			if err != nil {
 				return nil, err
 			}
-			return &anthropicReadTimeoutConn{Conn: conn, readTimeout: defaultAnthropicReadTimeout}, nil
+			return &anthropicReadTimeoutConn{Conn: conn, readTimeout: readTimeout}, nil
 		}
-		cloned.ResponseHeaderTimeout = defaultAnthropicReadTimeout
+		cloned.ResponseHeaderTimeout = readTimeout
 		return &http.Client{Transport: &anthropicTimeoutRoundTripper{
 			Transport:      cloned,
 			connectTimeout: connectTimeout,
-			readTimeout:    defaultAnthropicReadTimeout,
+			readTimeout:    readTimeout,
 		}}
 	}
 	return &http.Client{Transport: base}

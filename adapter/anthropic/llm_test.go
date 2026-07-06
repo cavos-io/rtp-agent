@@ -460,7 +460,7 @@ func TestAnthropicChatPreservesCallerDeadlineLikeReference(t *testing.T) {
 }
 
 func TestAnthropicDefaultHTTPClientUsesReferenceTimeouts(t *testing.T) {
-	client := newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout)
+	client := newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout, defaultAnthropicReadTimeout)
 	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
 	if !ok {
 		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
@@ -476,8 +476,28 @@ func TestAnthropicDefaultHTTPClientUsesReferenceTimeouts(t *testing.T) {
 	}
 }
 
+func TestAnthropicLLMUsesConfiguredReadTimeoutLikeReference(t *testing.T) {
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicReadTimeout(60*time.Second))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	transport, ok := model.httpClient.Transport.(*anthropicTimeoutRoundTripper)
+	if !ok {
+		t.Fatalf("Transport = %T, want Anthropic timeout transport", model.httpClient.Transport)
+	}
+	if transport.connectTimeout != 5*time.Second {
+		t.Fatalf("connect timeout = %v, want reference default 5s", transport.connectTimeout)
+	}
+	if transport.readTimeout != 60*time.Second {
+		t.Fatalf("read timeout = %v, want configured reference read timeout", transport.readTimeout)
+	}
+	if transport.ResponseHeaderTimeout != 60*time.Second {
+		t.Fatalf("ResponseHeaderTimeout = %v, want configured read timeout", transport.ResponseHeaderTimeout)
+	}
+}
+
 func TestAnthropicHTTPClientUsesConnectOptionsTimeoutLikeReference(t *testing.T) {
-	client := newAnthropicHTTPClient(http.DefaultTransport, 75*time.Millisecond)
+	client := newAnthropicHTTPClient(http.DefaultTransport, 75*time.Millisecond, defaultAnthropicReadTimeout)
 	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
 	if !ok {
 		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
