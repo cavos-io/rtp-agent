@@ -179,10 +179,9 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag)
 		if err == nil {
 			return &anthropicStream{
-				resp:     resp,
-				reader:   bufio.NewReader(resp.Body),
-				cancel:   cancel,
-				hasTools: len(options.Tools) > 0,
+				resp:   resp,
+				reader: bufio.NewReader(resp.Body),
+				cancel: cancel,
 			}, nil
 		}
 		lastErr = err
@@ -409,7 +408,6 @@ type anthropicStream struct {
 	outputTokens        int
 	cacheCreationTokens int
 	cacheReadTokens     int
-	hasTools            bool
 	ignoringCoT         bool
 	emittedChunk        bool
 }
@@ -804,9 +802,6 @@ func (s *anthropicStream) wrapReadError(err error) error {
 }
 
 func (s *anthropicStream) visibleAnthropicTextDelta(text string) string {
-	if !s.hasTools {
-		return text
-	}
 	if strings.HasPrefix(text, "<thinking>") {
 		s.ignoringCoT = true
 	}

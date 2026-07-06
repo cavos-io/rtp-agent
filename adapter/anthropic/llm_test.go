@@ -608,6 +608,30 @@ func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamSuppressesReferenceThinkingTextWithoutTools(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"<thinking>hidden"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":" still hidden"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"</thinking>visible answer"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("visible text Next() error = %v", err)
+	}
+	if chunk.Delta == nil {
+		t.Fatalf("chunk Delta = nil, want visible text")
+	}
+	if chunk.Delta.Content != "visible answer" {
+		t.Fatalf("content = %q, want visible answer without thinking text", chunk.Delta.Content)
+	}
+}
+
 func TestAnthropicStreamTextChunkCarriesReferenceRequestID(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
