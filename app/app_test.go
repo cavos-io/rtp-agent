@@ -15923,6 +15923,109 @@ func TestDefaultConfigFromEnvSelectsAnthropicLLM(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigFromEnvMapsAnthropicLLMModelOptions(t *testing.T) {
+	var requestBody map[string]any
+	transport := appAnthropicRoundTripper(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://anthropic.example/v1/messages" {
+			t.Fatalf("request URL = %q, want configured Anthropic endpoint", req.URL.String())
+		}
+		if req.Header.Get("x-api-key") != "test-anthropic-key" {
+			t.Fatalf("x-api-key = %q, want configured key", req.Header.Get("x-api-key"))
+		}
+		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}`,
+				`data: {"type":"message_delta","usage":{"output_tokens":4}}`,
+				`data: {"type":"message_stop"}`,
+				``,
+			}, "\n"))),
+		}, nil
+	})
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	t.Setenv("RTP_AGENT_LLM_PROVIDER", "anthropic")
+	t.Setenv("RTP_AGENT_LLM_MODEL", "claude-test")
+	t.Setenv("RTP_AGENT_LLM_BASE_URL", "https://anthropic.example")
+	t.Setenv("RTP_AGENT_LLM_MODEL_OPTIONS", `max_output_tokens=256,temperature=0.2,top_k=12,tool_choice=required,parallel_tool_calls=false,caching=ephemeral,stop_sequences=["END"]`)
+
+	app, err := NewApp(DefaultConfigFromEnv())
+	if err != nil {
+		t.Fatalf("NewApp() error = %v", err)
+	}
+	stream, err := app.Session.LLM.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithTools([]llm.Tool{appAnthropicTestTool{}}),
+		llm.WithExtraParams(app.Session.Options.LLMExtraParams),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+
+	if got := numericTestValue(requestBody["max_tokens"]); got != 256 {
+		t.Fatalf("max_tokens = %#v, want 256", requestBody["max_tokens"])
+	}
+	if requestBody["temperature"] != 0.2 {
+		t.Fatalf("temperature = %#v, want 0.2", requestBody["temperature"])
+	}
+	if got := numericTestValue(requestBody["top_k"]); got != 12 {
+		t.Fatalf("top_k = %#v, want 12", requestBody["top_k"])
+	}
+	if !reflect.DeepEqual(requestBody["stop_sequences"], []any{"END"}) {
+		t.Fatalf("stop_sequences = %#v, want [END]", requestBody["stop_sequences"])
+	}
+	if tools, ok := requestBody["tools"].([]any); !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want configured tool", requestBody["tools"])
+	} else {
+		tool, ok := tools[0].(map[string]any)
+		if !ok {
+			t.Fatalf("tool = %#v, want map", tools[0])
+		}
+		cacheControl, ok := tool["cache_control"].(map[string]any)
+		if !ok || cacheControl["type"] != "ephemeral" {
+			t.Fatalf("tool cache_control = %#v, want ephemeral cache control", tool["cache_control"])
+		}
+	}
+	toolChoice, ok := requestBody["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice = %#v, want Anthropic tool_choice map", requestBody["tool_choice"])
+	}
+	if toolChoice["type"] != "any" || toolChoice["disable_parallel_tool_use"] != true {
+		t.Fatalf("tool_choice = %#v, want required with disabled parallel tool use", toolChoice)
+	}
+}
+
+type appAnthropicRoundTripper func(*http.Request) (*http.Response, error)
+
+func (f appAnthropicRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type appAnthropicTestTool struct{}
+
+func (appAnthropicTestTool) ID() string          { return "lookup" }
+func (appAnthropicTestTool) Name() string        { return "lookup" }
+func (appAnthropicTestTool) Description() string { return "look up information" }
+func (appAnthropicTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+func (appAnthropicTestTool) Execute(context.Context, string) (string, error) { return "ok", nil }
+
 func TestInitRegistersWorkerEntrypoint(t *testing.T) {
 	app, err := Init(AppConfig{})
 	if err != nil {

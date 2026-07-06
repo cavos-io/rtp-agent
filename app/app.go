@@ -2711,6 +2711,40 @@ func awsLLMOptionsFromConfig(cfg AppConfig) []adapteraws.AWSLLMOption {
 	return llmOpts
 }
 
+func anthropicLLMOptionsFromConfig(cfg AppConfig) []anthropic.AnthropicOption {
+	llmOpts := []anthropic.AnthropicOption{}
+	if cfg.LLMBaseURL != "" {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicBaseURL(cfg.LLMBaseURL))
+	}
+	if user := modelOptionString(cfg.LLMModelOptions, "user"); user != "" {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicUser(user))
+	}
+	if maxTokens := modelOptionInt(cfg.LLMModelOptions, "max_output_tokens"); maxTokens > 0 {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicMaxTokens(maxTokens))
+	} else if maxTokens := modelOptionInt(cfg.LLMModelOptions, "max_tokens"); maxTokens > 0 {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicMaxTokens(maxTokens))
+	}
+	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicTemperature(*temperature))
+	}
+	if topK := modelOptionInt(cfg.LLMModelOptions, "top_k"); topK > 0 {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicTopK(topK))
+	}
+	if caching := modelOptionString(cfg.LLMModelOptions, "caching"); caching != "" {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicCaching(caching))
+	}
+	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	if parallelToolCalls := modelOptionBool(cfg.LLMModelOptions, "parallel_tool_calls"); parallelToolCalls != nil {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicParallelToolCalls(*parallelToolCalls))
+	}
+	if readTimeoutMS, ok := modelOptionIntValue(cfg.LLMModelOptions, "read_timeout_ms"); ok && readTimeoutMS > 0 {
+		llmOpts = append(llmOpts, anthropic.WithAnthropicReadTimeout(time.Duration(readTimeoutMS)*time.Millisecond))
+	}
+	return llmOpts
+}
+
 func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	switch normalizeProvider(provider) {
 	case providerAWS:
@@ -2722,11 +2756,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 	case providerFireworks:
 		return fireworksai.NewFireworksLLM(cfg.FireworksAPIKey, cfg.LLMModel), nil
 	case providerAnthropic:
-		llmOpts := []anthropic.AnthropicOption{}
-		if cfg.LLMBaseURL != "" {
-			llmOpts = append(llmOpts, anthropic.WithAnthropicBaseURL(cfg.LLMBaseURL))
-		}
-		return anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, llmOpts...)
+		return anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, anthropicLLMOptionsFromConfig(cfg)...)
 	case providerGoogle:
 		return appNewGoogleLLM(cfg.GoogleAPIKey, cfg.LLMModel, googleLLMConfigFromAppConfig(cfg))
 	case providerBaseten:
@@ -5623,11 +5653,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 	case providerFireworks:
 		a.LLM = fireworksai.NewFireworksLLM(cfg.FireworksAPIKey, cfg.LLMModel)
 	case providerAnthropic:
-		llmOpts := []anthropic.AnthropicOption{}
-		if cfg.LLMBaseURL != "" {
-			llmOpts = append(llmOpts, anthropic.WithAnthropicBaseURL(cfg.LLMBaseURL))
-		}
-		provider, err := anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, llmOpts...)
+		provider, err := anthropic.NewAnthropicLLM(cfg.AnthropicAPIKey, cfg.LLMModel, anthropicLLMOptionsFromConfig(cfg)...)
 		if err != nil {
 			return nil, err
 		}
@@ -7481,10 +7507,32 @@ func llmExtraParamsFromConfig(cfg AppConfig) map[string]any {
 			params[key] = value
 		}
 	}
+	if normalizeProvider(cfg.LLMProvider) == providerAnthropic {
+		for _, key := range anthropicLLMExtraParamKeys {
+			value, ok := cfg.LLMModelOptions[key]
+			if !ok {
+				continue
+			}
+			if _, exists := params[key]; exists {
+				continue
+			}
+			if params == nil {
+				params = make(map[string]any)
+			}
+			params[key] = value
+		}
+	}
 	if len(params) == 0 {
 		return nil
 	}
 	return params
+}
+
+var anthropicLLMExtraParamKeys = []string{
+	"metadata",
+	"service_tier",
+	"stop_sequences",
+	"thinking",
 }
 
 func googleLLMConfigFromAppConfig(cfg AppConfig) appGoogleLLMConfig {
