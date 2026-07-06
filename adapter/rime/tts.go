@@ -1966,9 +1966,9 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		Data           *string `json:"data"`
 		Message        string  `json:"message"`
 		WordTimestamps struct {
-			Words []string  `json:"words"`
-			Start []float64 `json:"start"`
-			End   []float64 `json:"end"`
+			Words json.RawMessage `json:"words"`
+			Start []float64       `json:"start"`
+			End   []float64       `json:"end"`
 		} `json:"word_timestamps"`
 	}
 	if err := json.Unmarshal(payload, &message); err != nil {
@@ -1991,7 +1991,11 @@ func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.Synt
 		}
 		return rimeTTSAudioFrame(audio, sampleRate), false, "", nil
 	case "timestamps":
-		timed := rimeTTSTimedTranscript(message.WordTimestamps.Words, message.WordTimestamps.Start, message.WordTimestamps.End)
+		words, err := rimeTTSTimestampWords(message.WordTimestamps.Words)
+		if err != nil {
+			return nil, false, "", rimeTTSConnectionError("Rime websocket timestamp decode failed", err)
+		}
+		timed := rimeTTSTimedTranscript(words, message.WordTimestamps.Start, message.WordTimestamps.End)
 		if len(timed) == 0 {
 			return nil, false, "", nil
 		}
@@ -2039,6 +2043,25 @@ func rimeTTSConnectionError(message string, err error) *llm.APIConnectionError {
 		return llm.NewAPIConnectionError(message)
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("%s: %v", message, err))
+}
+
+func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, nil
+	}
+	var words []string
+	if err := json.Unmarshal(raw, &words); err == nil {
+		return words, nil
+	}
+	var wordText string
+	if err := json.Unmarshal(raw, &wordText); err != nil {
+		return nil, err
+	}
+	words = make([]string, 0, len(wordText))
+	for _, r := range wordText {
+		words = append(words, string(r))
+	}
+	return words, nil
 }
 
 func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {

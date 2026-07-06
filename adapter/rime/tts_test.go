@@ -4125,6 +4125,14 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 		t.Fatalf("truncated timestamps = audio:%+v done:%v transcript:%q, want shortest zip", truncated, done, transcript)
 	}
 
+	stringWords, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"timestamps","word_timestamps":{"words":"hi","start":[0.1,0.3],"end":[0.2,0.4]}}`), 24000)
+	if err != nil {
+		t.Fatalf("string timestamp words message: %v", err)
+	}
+	if done || transcript != "" || stringWords == nil || stringWords.DeltaText != "h i " || len(stringWords.TimedTranscript) != 2 {
+		t.Fatalf("string timestamp words = audio:%+v done:%v transcript:%q, want reference character zip", stringWords, done, transcript)
+	}
+
 	finished, done, transcript, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"done"}`), 24000)
 	if err != nil {
 		t.Fatalf("done message: %v", err)
