@@ -392,6 +392,24 @@ func TestSpeechifyTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *test
 	}
 }
 
+func TestSpeechifyTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &speechifyTTSChunkedStream{
+		resp:       &http.Response{Body: speechifyTimeoutBody{}},
+		sampleRate: 24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil on timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpeechifyTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	body := &speechifyCloseCountBody{Reader: strings.NewReader("audio")}
 	stream := &speechifyTTSChunkedStream{
@@ -449,6 +467,11 @@ type speechifyTimeoutError struct{}
 func (speechifyTimeoutError) Error() string   { return "speechify timeout" }
 func (speechifyTimeoutError) Timeout() bool   { return true }
 func (speechifyTimeoutError) Temporary() bool { return true }
+
+type speechifyTimeoutBody struct{}
+
+func (speechifyTimeoutBody) Read([]byte) (int, error) { return 0, speechifyTimeoutError{} }
+func (speechifyTimeoutBody) Close() error             { return nil }
 
 type speechifyCloseCountBody struct {
 	*strings.Reader

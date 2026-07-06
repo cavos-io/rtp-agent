@@ -249,7 +249,7 @@ func (s *speechifyTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	data, err := io.ReadAll(s.resp.Body)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+		return nil, speechifyTTSReadError(err)
 	}
 	if len(data) == 0 {
 		s.finalSent = true
@@ -312,6 +312,17 @@ func speechifyTTSTransportError(err error) error {
 		return llm.NewAPITimeoutError(err.Error())
 	}
 	return llm.NewAPIConnectionError(err.Error())
+}
+
+func speechifyTTSReadError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(fmt.Sprintf("speechify TTS response read failed: %v", err))
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("speechify TTS response read failed: %v", err))
 }
 
 func (s *speechifyTTSChunkedStream) Close() error {
