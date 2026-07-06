@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -117,9 +118,25 @@ func (b *anthropicReadErrorBody) Close() error {
 	return nil
 }
 
+type anthropicTimeoutError struct{}
+
+func (anthropicTimeoutError) Error() string {
+	return "read timeout"
+}
+
+func (anthropicTimeoutError) Timeout() bool {
+	return true
+}
+
+func (anthropicTimeoutError) Temporary() bool {
+	return false
+}
+
 type anthropicSingleCloseBody struct {
 	closed bool
 }
+
+var _ net.Error = anthropicTimeoutError{}
 
 func (b *anthropicSingleCloseBody) Read(_ []byte) (int, error) {
 	return 0, io.EOF
@@ -1100,6 +1117,30 @@ func TestAnthropicStreamReadErrorBeforeChunkReturnsAPIConnectionError(t *testing
 	}
 	if !connectionErr.Retryable {
 		t.Fatal("Retryable = false, want read errors before output retryable")
+	}
+}
+
+func TestAnthropicStreamReadTimeoutReturnsAPITimeoutErrorLikeReference(t *testing.T) {
+	body := &anthropicReadErrorBody{
+		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",
+		err:     anthropicTimeoutError{},
+	}
+	stream := &anthropicStream{
+		resp:   &http.Response{Body: body},
+		reader: bufio.NewReader(body),
+	}
+
+	_, err := stream.Next()
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next() error = %T %v, want APITimeoutError", err, err)
+	}
+	if timeoutErr.Message != "Request timed out." {
+		t.Fatalf("Message = %q, want default timeout message", timeoutErr.Message)
+	}
+	if !timeoutErr.Retryable {
+		t.Fatal("Retryable = false, want timeout before output retryable")
 	}
 }
 

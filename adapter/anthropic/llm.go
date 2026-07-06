@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -1039,6 +1040,10 @@ func markAnthropicStreamChunk(s *anthropicStream, chunk *llm.ChatChunk) *llm.Cha
 func (s *anthropicStream) wrapReadError(err error) error {
 	retryable := !s.emittedChunk
 	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutErrorWithRetryable("", retryable)
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return llm.NewAPITimeoutErrorWithRetryable("", retryable)
 	}
 	return llm.NewAPIConnectionErrorWithRetryable(err.Error(), retryable)
