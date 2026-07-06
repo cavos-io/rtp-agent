@@ -296,8 +296,12 @@ func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 		NumChannels:       1,
 		SamplesPerChannel: 800,
 	})
-	if !errors.Is(err, writeErr) {
-		t.Fatalf("PushFrame error = %v, want write error", err)
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("PushFrame error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), writeErr.Error()) {
+		t.Fatalf("PushFrame error = %q, want write failure context", err)
 	}
 	if !cancelled {
 		t.Fatal("cancel not called after write failure")

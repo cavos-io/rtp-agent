@@ -378,7 +378,7 @@ func (s *telnyxSTTStream) PushFrame(frame *model.AudioFrame) error {
 	for _, chunk := range s.audioBStream.Write(frame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closeAfterWriteFailureLocked()
-			return err
+			return telnyxSTTWriteError(err)
 		}
 	}
 	return nil
@@ -399,7 +399,7 @@ func (s *telnyxSTTStream) Flush() error {
 	for _, chunk := range s.audioBStream.Flush() {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closeAfterWriteFailureLocked()
-			return err
+			return telnyxSTTWriteError(err)
 		}
 	}
 	return nil
@@ -418,7 +418,7 @@ func (s *telnyxSTTStream) EndInput() error {
 		for _, chunk := range s.audioBStream.Flush() {
 			if err := s.writeBinaryData(chunk.Data); err != nil {
 				s.closeAfterWriteFailureLocked()
-				return err
+				return telnyxSTTWriteError(err)
 			}
 		}
 	}
@@ -469,6 +469,13 @@ func (s *telnyxSTTStream) writeBinaryData(data []byte) error {
 		return s.writeBinary(data)
 	}
 	return s.writeBinaryMessage(data)
+}
+
+func telnyxSTTWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx STT websocket write failed: %v", err))
 }
 
 func (s *telnyxSTTStream) writeBinaryMessage(data []byte) error {
