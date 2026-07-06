@@ -212,10 +212,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		"max_tokens": maxTokens,
 		"stream":     true,
 	}
+	applyAnthropicExtraParams(body, options.ExtraParams)
 	if len(systemMessages) > 0 {
 		body["system"] = anthropicSystemBlocks(systemMessages, cacheControl)
 	}
-	applyAnthropicExtraParams(body, options.ExtraParams)
 	if l.userSet {
 		body["user"] = l.user
 	}

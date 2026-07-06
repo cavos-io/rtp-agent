@@ -2790,6 +2790,40 @@ func TestAnthropicChatSendsSystemMessagesAsTextBlocks(t *testing.T) {
 	assertAnthropicRequestTextBlock(t, content[1], "hello")
 }
 
+func TestAnthropicChatSystemMessagesOverrideExtraSystemLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "base"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		ctx,
+		llm.WithExtraParams(map[string]any{
+			"system": []map[string]any{{"type": "text", "text": "extra"}},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	system, ok := transport.body["system"].([]any)
+	if !ok || len(system) != 1 {
+		t.Fatalf("system = %#v, want one system text block", transport.body["system"])
+	}
+	assertAnthropicRequestTextBlock(t, system[0], "base")
+}
+
 func TestBuildAnthropicMessagesKeepsLeadingDeveloperAsUserMessage(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
