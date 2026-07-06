@@ -973,6 +973,58 @@ func TestAssemblyAISTTNextReturnsQueuedTranscriptBeforeStreamError(t *testing.T)
 	}
 }
 
+type assemblyAITimeoutError struct{}
+
+func (assemblyAITimeoutError) Error() string   { return "read timeout" }
+func (assemblyAITimeoutError) Timeout() bool   { return true }
+func (assemblyAITimeoutError) Temporary() bool { return true }
+
+func TestAssemblyAISTTReadTimeoutDoesNotAbortReferenceStream(t *testing.T) {
+	messages := [][]byte{
+		[]byte(`{"type":"Turn","transcript":"after timeout","end_of_turn":true}`),
+		[]byte(`{"type":"Termination"}`),
+	}
+	reads := 0
+	stream := &assemblyAISTTStream{
+		events: make(chan *stt.SpeechEvent, 4),
+		errCh:  make(chan error, 1),
+		state:  &assemblyAIStreamState{},
+		readMessage: func() (int, []byte, error) {
+			reads++
+			if reads == 1 {
+				return 0, nil, assemblyAITimeoutError{}
+			}
+			if reads-2 < len(messages) {
+				return websocket.TextMessage, messages[reads-2], nil
+			}
+			return 0, nil, io.EOF
+		},
+	}
+
+	stream.readLoop()
+
+	event, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v, want transcript after timeout", err)
+	}
+	if event.Type != stt.SpeechEventFinalTranscript {
+		t.Fatalf("event.Type = %s, want final transcript", event.Type)
+	}
+	if event.Alternatives[0].Text != "after timeout" {
+		t.Fatalf("text = %q, want transcript after timeout", event.Alternatives[0].Text)
+	}
+	event, err = stream.Next()
+	if err != nil {
+		t.Fatalf("end Next error = %v, want end_of_speech after final", err)
+	}
+	if event.Type != stt.SpeechEventEndOfSpeech {
+		t.Fatalf("event.Type = %s, want end_of_speech", event.Type)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("final Next error = %v, want EOF", err)
+	}
+}
+
 func TestAssemblyAISTTStreamForceEndpointSendsReferenceMessage(t *testing.T) {
 	var messages []map[string]string
 	stream := &assemblyAISTTStream{
