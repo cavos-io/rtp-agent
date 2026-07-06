@@ -2451,6 +2451,31 @@ func TestAnthropicChatForwardsConfiguredUserLikeReference(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatConfiguredUserOverridesExtraParamLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicUser("constructor-user"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"user": "extra-user"}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["user"] != "constructor-user" {
+		t.Fatalf("user = %#v, want configured user over extra param", transport.body["user"])
+	}
+}
+
 func TestAnthropicChatKeepsReferenceMaxTokensOverExtraParam(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
