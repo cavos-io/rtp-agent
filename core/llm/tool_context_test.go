@@ -27,6 +27,16 @@ type testProviderTool struct {
 
 func (t *testProviderTool) IsProviderTool() bool { return true }
 
+type closableTestTool struct {
+	testTool
+	closeCalls int
+}
+
+func (t *closableTestTool) Close() error {
+	t.closeCalls++
+	return nil
+}
+
 type testToolset struct {
 	id    string
 	tools []Tool
@@ -252,6 +262,19 @@ func TestToolContextCloseClosesToolsets(t *testing.T) {
 
 	if toolset.closeCalls != 1 {
 		t.Fatalf("toolset Close calls = %d, want 1", toolset.closeCalls)
+	}
+}
+
+func TestToolContextCloseClosesTopLevelCloseableTools(t *testing.T) {
+	tool := &closableTestTool{testTool: testTool{id: "provider", name: "provider"}}
+	ctx := NewToolContext([]interface{}{tool})
+
+	if err := ctx.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if tool.closeCalls != 1 {
+		t.Fatalf("tool Close calls = %d, want 1", tool.closeCalls)
 	}
 }
 

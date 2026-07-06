@@ -2992,6 +2992,9 @@ func closeSessionToolsets(tools []llm.Tool) error {
 func closeSessionToolsetValue(tool llm.Tool) error {
 	toolset, ok := tool.(llm.Toolset)
 	if !ok {
+		if closeable, ok := tool.(sessionToolsetCloser); ok {
+			return closeable.Close()
+		}
 		return nil
 	}
 	if closeable, ok := toolset.(sessionToolsetCloser); ok {

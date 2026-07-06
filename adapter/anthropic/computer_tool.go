@@ -323,6 +323,14 @@ func (t *computerUseTool) Name() string {
 	return "computer"
 }
 
+func (t *computerUseTool) IsProviderTool() bool {
+	return true
+}
+
+func (t *computerUseTool) Close() error {
+	return t.dispatcher.Close()
+}
+
 func (t *computerUseTool) Description() string {
 	return "Use a computer to browse the web or interact with applications"
 }

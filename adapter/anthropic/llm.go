@@ -38,6 +38,7 @@ type AnthropicLLM struct {
 	strictToolSchema     bool
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
+	httpClient           *http.Client
 }
 
 type anthropicToolSpecProvider interface {
@@ -48,10 +49,16 @@ type anthropicBetaToolProvider interface {
 	AnthropicBetaFlag() string
 }
 
+type functionToolSchemaParser interface {
+	ParseFunctionTools(format string) (map[string]interface{}, error)
+}
+
 const (
-	anthropicAPIKeyEnv   = "ANTHROPIC_API_KEY"
-	defaultAnthropicURL  = "https://api.anthropic.com"
-	defaultAnthropicMode = "claude-sonnet-4-6"
+	anthropicAPIKeyEnv             = "ANTHROPIC_API_KEY"
+	defaultAnthropicURL            = "https://api.anthropic.com"
+	defaultAnthropicMode           = "claude-sonnet-4-6"
+	defaultAnthropicConnectTimeout = 5 * time.Second
+	defaultAnthropicReadTimeout    = 30 * time.Second
 )
 
 var anthropicNoPrefillModelPrefixes = []string{
@@ -139,6 +146,7 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 		model:            model,
 		baseURL:          defaultAnthropicURL,
 		strictToolSchema: true,
+		httpClient:       newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout),
 	}
 	for _, opt := range opts {
 		opt(llm)
@@ -186,6 +194,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if err != nil {
 		return nil, err
 	}
+	connectTimeout := anthropicConnectTimeout(options.ConnectOptions)
 
 	messages, systemMessages, err := buildAnthropicMessagesE(chatCtx)
 	if err != nil {
@@ -194,7 +203,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if anthropicModelDisablesPrefill(l.model) {
 		messages = appendAnthropicTrailingUserMessage(messages)
 	}
-	cacheControl := l.anthropicEphemeralCacheControl(options.ExtraParams)
+	cacheControl := l.anthropicEphemeralCacheControl()
 	if cacheControl != nil {
 		applyAnthropicMessageCacheControl(messages, cacheControl)
 	}
@@ -216,6 +225,8 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if len(systemMessages) > 0 {
 		body["system"] = anthropicSystemBlocks(systemMessages, cacheControl)
 	}
+	applyAnthropicSystemCacheControl(body, cacheControl)
+	applyAnthropicToolsCacheControl(body, cacheControl)
 	if l.userSet {
 		body["user"] = l.user
 	}
@@ -231,14 +242,25 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if len(options.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0)
 		for _, tool := range options.Tools {
-			if providerTool, ok := tool.(anthropicToolSpecProvider); ok {
-				tools = append(tools, providerTool.AnthropicToolSpec())
-				if betaTool, ok := tool.(anthropicBetaToolProvider); ok {
-					if flag := betaTool.AnthropicBetaFlag(); flag != "" {
-						betaFlag = flag
+			if _, providerOnly := tool.(llm.ProviderTool); providerOnly {
+				if providerTool, ok := tool.(anthropicToolSpecProvider); ok {
+					tools = append(tools, providerTool.AnthropicToolSpec())
+					if betaTool, ok := tool.(anthropicBetaToolProvider); ok {
+						if flag := betaTool.AnthropicBetaFlag(); flag != "" {
+							betaFlag = flag
+						}
 					}
 				}
+				continue
 			} else {
+				if rawTool, ok := tool.(functionToolSchemaParser); ok {
+					toolSpec, err := anthropicRawFunctionToolSpec(rawTool)
+					if err != nil {
+						return nil, err
+					}
+					tools = append(tools, toolSpec)
+					continue
+				}
 				toolSpec := map[string]interface{}{
 					"name":         tool.Name(),
 					"description":  tool.Description(),
@@ -278,7 +300,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	}
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
-		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag)
+		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag, connectTimeout)
 		if err == nil {
 			return &anthropicStream{
 				llm:            l,
@@ -286,6 +308,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				jsonBody:       jsonBody,
 				betaFlag:       betaFlag,
 				connectOptions: connectOptions,
+				connectTimeout: connectTimeout,
 				retryAttempt:   attempt,
 				resp:           resp,
 				reader:         bufio.NewReader(resp.Body),
@@ -322,7 +345,7 @@ func (anthropicEOFStream) Close() error {
 	return nil
 }
 
-func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte, betaFlag string) (*http.Response, error) {
+func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte, betaFlag string, connectTimeout time.Duration) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL+"/v1/messages", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
@@ -335,7 +358,11 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 		req.Header.Set("anthropic-beta", betaFlag)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := l.httpClient
+	if connectTimeout != defaultAnthropicConnectTimeout {
+		client = newAnthropicHTTPClient(http.DefaultTransport, connectTimeout)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError("")
@@ -353,6 +380,58 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 		return nil, llm.CreateAPIErrorFromHTTP(message, resp.StatusCode, anthropicRequestID(resp.Header), body)
 	}
 	return resp, nil
+}
+
+type anthropicTimeoutRoundTripper struct {
+	*http.Transport
+	connectTimeout time.Duration
+	readTimeout    time.Duration
+}
+
+type anthropicReadTimeoutConn struct {
+	net.Conn
+	readTimeout time.Duration
+}
+
+func (c *anthropicReadTimeoutConn) Read(p []byte) (int, error) {
+	if c.readTimeout > 0 {
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.readTimeout))
+	}
+	return c.Conn.Read(p)
+}
+
+func newAnthropicHTTPClient(base http.RoundTripper, connectTimeout time.Duration) *http.Client {
+	if connectTimeout <= 0 {
+		connectTimeout = defaultAnthropicConnectTimeout
+	}
+	if transport, ok := base.(*http.Transport); ok {
+		cloned := transport.Clone()
+		dialer := &net.Dialer{
+			Timeout:   connectTimeout,
+			KeepAlive: 30 * time.Second,
+		}
+		cloned.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			return &anthropicReadTimeoutConn{Conn: conn, readTimeout: defaultAnthropicReadTimeout}, nil
+		}
+		cloned.ResponseHeaderTimeout = defaultAnthropicReadTimeout
+		return &http.Client{Transport: &anthropicTimeoutRoundTripper{
+			Transport:      cloned,
+			connectTimeout: connectTimeout,
+			readTimeout:    defaultAnthropicReadTimeout,
+		}}
+	}
+	return &http.Client{Transport: base}
+}
+
+func anthropicConnectTimeout(options *llm.APIConnectOptions) time.Duration {
+	if options == nil || options.Timeout <= 0 {
+		return defaultAnthropicConnectTimeout
+	}
+	return options.Timeout
 }
 
 func parseAnthropicErrorBody(respBody []byte) (string, any) {
@@ -404,10 +483,48 @@ func waitAnthropicRetryInterval(ctx context.Context, interval time.Duration) err
 
 func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 	for key, value := range params {
-		if key == "caching" || key == "max_tokens" {
+		if key == "max_tokens" {
 			continue
 		}
 		body[key] = value
+	}
+}
+
+func applyAnthropicSystemCacheControl(body map[string]any, cacheControl map[string]any) {
+	if cacheControl == nil {
+		return
+	}
+	switch system := body["system"].(type) {
+	case []map[string]any:
+		if len(system) > 0 {
+			system[len(system)-1]["cache_control"] = cacheControl
+		}
+	case []any:
+		if len(system) == 0 {
+			return
+		}
+		if block, ok := system[len(system)-1].(map[string]any); ok {
+			block["cache_control"] = cacheControl
+		}
+	}
+}
+
+func applyAnthropicToolsCacheControl(body map[string]any, cacheControl map[string]any) {
+	if cacheControl == nil {
+		return
+	}
+	switch tools := body["tools"].(type) {
+	case []map[string]any:
+		if len(tools) > 0 {
+			tools[len(tools)-1]["cache_control"] = cacheControl
+		}
+	case []any:
+		if len(tools) == 0 {
+			return
+		}
+		if tool, ok := tools[len(tools)-1].(map[string]any); ok {
+			tool["cache_control"] = cacheControl
+		}
 	}
 }
 
@@ -420,14 +537,11 @@ func validateAnthropicExtraParams(params map[string]any) error {
 	return nil
 }
 
-func (l *AnthropicLLM) anthropicEphemeralCacheControl(params map[string]any) map[string]any {
+func (l *AnthropicLLM) anthropicEphemeralCacheControl() map[string]any {
 	if l.cachingSet && l.caching == "ephemeral" {
 		return map[string]any{"type": "ephemeral"}
 	}
-	if params["caching"] != "ephemeral" {
-		return nil
-	}
-	return map[string]any{"type": "ephemeral"}
+	return nil
 }
 
 func anthropicRequestID(header http.Header) string {
@@ -440,6 +554,28 @@ func anthropicRequestID(header http.Header) string {
 		}
 	}
 	return ""
+}
+
+func anthropicRawFunctionToolSpec(tool functionToolSchemaParser) (map[string]interface{}, error) {
+	schema, err := tool.ParseFunctionTools("anthropic")
+	if err != nil {
+		return nil, err
+	}
+	spec := map[string]interface{}{}
+	if name, ok := schema["name"]; ok {
+		spec["name"] = name
+	}
+	if description, ok := schema["description"]; ok {
+		spec["description"] = description
+	} else {
+		spec["description"] = ""
+	}
+	if parameters, ok := schema["parameters"]; ok {
+		spec["input_schema"] = parameters
+	} else {
+		spec["input_schema"] = map[string]interface{}{}
+	}
+	return spec, nil
 }
 
 func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool, parallelToolCallsSet bool) map[string]any {
@@ -533,6 +669,7 @@ type anthropicStream struct {
 	jsonBody       []byte
 	betaFlag       string
 	connectOptions llm.APIConnectOptions
+	connectTimeout time.Duration
 	retryAttempt   int
 
 	resp   *http.Response
@@ -1253,7 +1390,7 @@ func (s *anthropicStream) retryBeforeOutput(err error) error {
 	}
 	for s.retryAttempt < s.connectOptions.MaxRetry {
 		s.retryAttempt++
-		resp, startErr := s.llm.startAnthropicStream(s.ctx, s.jsonBody, s.betaFlag)
+		resp, startErr := s.llm.startAnthropicStream(s.ctx, s.jsonBody, s.betaFlag, s.connectTimeout)
 		if startErr == nil {
 			s.resetAttempt(resp)
 			return nil

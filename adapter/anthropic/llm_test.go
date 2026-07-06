@@ -331,6 +331,7 @@ func (t anthropicProviderTool) Parameters() map[string]any {
 func (t anthropicProviderTool) Execute(context.Context, string) (string, error) {
 	return "", nil
 }
+func (t anthropicProviderTool) IsProviderTool() bool { return true }
 func (t anthropicProviderTool) AnthropicToolSpec() map[string]interface{} {
 	return map[string]interface{}{
 		"type": t.name,
@@ -338,6 +339,53 @@ func (t anthropicProviderTool) AnthropicToolSpec() map[string]interface{} {
 	}
 }
 func (t anthropicProviderTool) AnthropicBetaFlag() string { return t.betaFlag }
+
+type anthropicSpecOnlyTool struct{}
+
+func (anthropicSpecOnlyTool) ID() string          { return "lookup" }
+func (anthropicSpecOnlyTool) Name() string        { return "lookup" }
+func (anthropicSpecOnlyTool) Description() string { return "look up information" }
+func (anthropicSpecOnlyTool) Parameters() map[string]any {
+	return map[string]any{"type": "object"}
+}
+func (anthropicSpecOnlyTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (anthropicSpecOnlyTool) AnthropicToolSpec() map[string]interface{} {
+	return map[string]interface{}{
+		"type": "computer_20251124",
+		"name": "computer",
+	}
+}
+
+type anthropicRawSchemaTool struct{}
+
+func (anthropicRawSchemaTool) ID() string          { return "raw_lookup" }
+func (anthropicRawSchemaTool) Name() string        { return "raw_lookup" }
+func (anthropicRawSchemaTool) Description() string { return "fallback description" }
+func (anthropicRawSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"fallback": map[string]any{"type": "string"},
+		},
+	}
+}
+func (anthropicRawSchemaTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (anthropicRawSchemaTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_lookup",
+		"description": "raw schema description",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{"type": "string"},
+			},
+		},
+	}, nil
+}
 
 func TestAnthropicChatDoesNotApplyConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	transport := &captureRoundTripper{}
@@ -408,6 +456,75 @@ func TestAnthropicChatPreservesCallerDeadlineLikeReference(t *testing.T) {
 	}
 	if transport.remaining <= 0 || transport.remaining > time.Minute {
 		t.Fatalf("request context deadline remaining = %v, want caller deadline", transport.remaining)
+	}
+}
+
+func TestAnthropicDefaultHTTPClientUsesReferenceTimeouts(t *testing.T) {
+	client := newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout)
+	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
+	if !ok {
+		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
+	}
+	if transport.connectTimeout != 5*time.Second {
+		t.Fatalf("connect timeout = %v, want reference 5s", transport.connectTimeout)
+	}
+	if transport.readTimeout != 30*time.Second {
+		t.Fatalf("read timeout = %v, want reference 30s", transport.readTimeout)
+	}
+	if transport.ResponseHeaderTimeout != 30*time.Second {
+		t.Fatalf("ResponseHeaderTimeout = %v, want reference read timeout", transport.ResponseHeaderTimeout)
+	}
+}
+
+func TestAnthropicHTTPClientUsesConnectOptionsTimeoutLikeReference(t *testing.T) {
+	client := newAnthropicHTTPClient(http.DefaultTransport, 75*time.Millisecond)
+	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
+	if !ok {
+		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
+	}
+	if transport.connectTimeout != 75*time.Millisecond {
+		t.Fatalf("connect timeout = %v, want APIConnectOptions timeout", transport.connectTimeout)
+	}
+	if transport.readTimeout != 30*time.Second {
+		t.Fatalf("read timeout = %v, want reference 30s read stall timeout", transport.readTimeout)
+	}
+}
+
+func TestAnthropicChatUsesConnectOptionsTimeoutLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	anthropicStream, ok := stream.(*anthropicStream)
+	if !ok {
+		t.Fatalf("stream = %T, want Anthropic stream", stream)
+	}
+	if anthropicStream.connectTimeout != 75*time.Millisecond {
+		t.Fatalf("connect timeout = %v, want APIConnectOptions timeout", anthropicStream.connectTimeout)
+	}
+}
+
+func TestAnthropicConnectTimeoutUsesReferenceDefaultUnlessConfigured(t *testing.T) {
+	if got := anthropicConnectTimeout(nil); got != 5*time.Second {
+		t.Fatalf("default connect timeout = %v, want reference 5s", got)
+	}
+	if got := anthropicConnectTimeout(&llm.APIConnectOptions{Timeout: 75 * time.Millisecond}); got != 75*time.Millisecond {
+		t.Fatalf("configured connect timeout = %v, want APIConnectOptions timeout", got)
 	}
 }
 
@@ -2064,6 +2181,52 @@ func TestAnthropicChatCanDisableStrictToolSchemaLikeReference(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatUsesRawFunctionToolSchemaLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicRawSchemaTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one raw schema tool", transport.body["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want map", tools[0])
+	}
+	if tool["description"] != "raw schema description" {
+		t.Fatalf("description = %#v, want raw schema description", tool["description"])
+	}
+	if _, ok := tool["strict"]; ok {
+		t.Fatalf("tool strict = %#v, want omitted for raw schema tool", tool["strict"])
+	}
+	inputSchema, ok := tool["input_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("input_schema = %#v, want raw parameters", tool["input_schema"])
+	}
+	properties, ok := inputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want raw schema properties", inputSchema["properties"])
+	}
+	if _, ok := properties["query"]; !ok {
+		t.Fatalf("properties = %#v, want query from raw parameters", properties)
+	}
+	if _, ok := properties["fallback"]; ok {
+		t.Fatalf("properties = %#v, want raw schema instead of fallback Parameters()", properties)
+	}
+}
+
 func TestAnthropicChatUsesProviderComputerToolSpec(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
@@ -2097,6 +2260,41 @@ func TestAnthropicChatUsesProviderComputerToolSpec(t *testing.T) {
 	}
 	if _, ok := tool["input_schema"]; ok {
 		t.Fatalf("provider tool has input_schema = %#v, want provider-native schema", tool["input_schema"])
+	}
+}
+
+func TestAnthropicChatRequiresProviderToolMarkerForNativeSpec(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicSpecOnlyTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one function tool", transport.body["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want map", tools[0])
+	}
+	if tool["name"] != "lookup" {
+		t.Fatalf("tool name = %#v, want function tool name lookup", tool["name"])
+	}
+	if _, ok := tool["input_schema"]; !ok {
+		t.Fatalf("tool = %#v, want function input_schema", tool)
+	}
+	if tool["type"] == "computer_20251124" {
+		t.Fatalf("tool = %#v, want non-provider tool serialized as function schema", tool)
 	}
 }
 
@@ -2690,9 +2888,40 @@ func TestAnthropicChatForwardsReferenceExtraParams(t *testing.T) {
 	if _, ok := transport.body["metadata"]; !ok {
 		t.Fatalf("metadata missing from body: %#v", transport.body)
 	}
-	if _, ok := transport.body["caching"]; ok {
-		t.Fatalf("caching leaked to provider body: %#v", transport.body["caching"])
+	if transport.body["caching"] != "ephemeral" {
+		t.Fatalf("caching = %#v, want forwarded extra param", transport.body["caching"])
 	}
+}
+
+func TestAnthropicChatExtraCachingDoesNotApplyCacheControlLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "be fast"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		ctx,
+		llm.WithExtraParams(map[string]any{"caching": "ephemeral"}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["caching"] != "ephemeral" {
+		t.Fatalf("caching = %#v, want forwarded extra param", transport.body["caching"])
+	}
+	assertNoCacheControlBlock(t, transport.body["system"], "system")
 }
 
 func TestAnthropicChatRejectsReservedExtraParamModelLikeReference(t *testing.T) {
@@ -2858,16 +3087,11 @@ func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
 		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
 		&llm.ChatMessage{ID: "assistant", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "hi"}}},
 	}
-	model, err := NewAnthropicLLM("test-key", "claude-test")
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicCaching("ephemeral"))
 	if err != nil {
 		t.Fatalf("NewAnthropicLLM() error = %v", err)
 	}
-	stream, err := model.Chat(
-		context.Background(),
-		ctx,
-		llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}),
-		llm.WithExtraParams(map[string]any{"caching": "ephemeral"}),
-	)
+	stream, err := model.Chat(context.Background(), ctx, llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
@@ -2888,6 +3112,60 @@ func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
 	assistant := messages[1].(map[string]any)
 	assertCacheControlBlock(t, user["content"], "user content")
 	assertCacheControlBlock(t, assistant["content"], "assistant content")
+}
+
+func TestAnthropicChatCachesExtraSystemLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicCaching("ephemeral"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{
+			"system": []map[string]any{{"type": "text", "text": "extra"}},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	assertCacheControlBlock(t, transport.body["system"], "extra system")
+}
+
+func TestAnthropicChatCachesExtraToolsLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicCaching("ephemeral"))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{
+			"tools": []map[string]any{{
+				"name":         "lookup",
+				"description":  "look up information",
+				"input_schema": map[string]any{"type": "object"},
+			}},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	assertCacheControlBlock(t, transport.body["tools"], "extra tools")
 }
 
 func TestAnthropicChatUsesConfiguredEphemeralCachingLikeReference(t *testing.T) {
@@ -3059,6 +3337,21 @@ func assertCacheControlMap(t *testing.T, raw any, label string) {
 	}
 	if cacheControl["type"] != "ephemeral" {
 		t.Fatalf("%s cache_control.type = %#v, want ephemeral", label, cacheControl["type"])
+	}
+}
+
+func assertNoCacheControlBlock(t *testing.T, raw any, label string) {
+	t.Helper()
+	blocks, ok := raw.([]any)
+	if !ok || len(blocks) == 0 {
+		t.Fatalf("%s = %#v, want non-empty block list", label, raw)
+	}
+	block, ok := blocks[len(blocks)-1].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want map", label, blocks[len(blocks)-1])
+	}
+	if _, ok := block["cache_control"]; ok {
+		t.Fatalf("%s cache_control = %#v, want omitted", label, block["cache_control"])
 	}
 }
 

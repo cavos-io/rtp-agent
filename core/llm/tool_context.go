@@ -72,6 +72,9 @@ func (c *ToolContext) Close() error {
 func closeToolsetValue(tool interface{}) error {
 	toolset, ok := tool.(Toolset)
 	if !ok {
+		if closeable, ok := tool.(closeableToolset); ok {
+			return closeable.Close()
+		}
 		return nil
 	}
 	if closeable, ok := toolset.(closeableToolset); ok {
