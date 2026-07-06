@@ -285,6 +285,7 @@ type telnyxTTSStream struct {
 	decoder     codecs.AudioStreamDecoder
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 	pendingText string
 
 	writeMessage func(map[string]string) error
@@ -297,6 +298,9 @@ func (s *telnyxTTSStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return nil
+	}
 	s.pendingText += text
 	return nil
 }
@@ -307,6 +311,29 @@ func (s *telnyxTTSStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return nil
+	}
+	return s.flushPendingTextLocked()
+}
+
+func (s *telnyxTTSStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
+	}
+	if err := s.flushPendingTextLocked(); err != nil {
+		return err
+	}
+	s.inputEnded = true
+	return nil
+}
+
+func (s *telnyxTTSStream) flushPendingTextLocked() error {
 	if s.pendingText == "" {
 		return nil
 	}
@@ -329,6 +356,7 @@ func (s *telnyxTTSStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	if s.cancel != nil {
 		s.cancel()

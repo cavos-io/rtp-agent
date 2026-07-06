@@ -199,6 +199,46 @@ func TestTelnyxTTSStreamBuffersTextUntilFlushLikeReference(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
+	var writes []string
+	stream := &telnyxTTSStream{
+		writeMessage: func(message map[string]string) error {
+			writes = append(writes, message["text"])
+			return nil
+		},
+		closeConn: func() error {
+			t.Fatal("EndInput closed websocket; want output side open for audio")
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello "); err != nil {
+		t.Fatalf("PushText first error = %v", err)
+	}
+	if err := stream.PushText("world"); err != nil {
+		t.Fatalf("PushText second error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	want := []string{"hello world", ""}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after EndInput = %#v, want %#v", writes, want)
+	}
+	if err := stream.PushText("ignored"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want nil like reference closed input", err)
+	}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after closed input = %#v, want unchanged %#v", writes, want)
+	}
+}
+
 func TestTelnyxTTSStreamClosesAfterTextWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
