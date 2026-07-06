@@ -869,6 +869,48 @@ func TestSarvamTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSSynthesizeTransportFailureReturnsAPIConnectionError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial failed")
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamTTS("test-key", "", WithSarvamTTSBaseURL("https://sarvam.example/tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APIConnectionError")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Synthesize error = %T %v, want APIConnectionError", err, err)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want non-timeout APIConnectionError", err, err)
+	}
+}
+
+func TestSarvamTTSSynthesizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: sarvamRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, sarvamTimeoutError{}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewSarvamTTS("test-key", "", WithSarvamTTSBaseURL("https://sarvam.example/tts"))
+	stream, err := provider.Synthesize(context.Background(), "hello")
+	if err == nil {
+		defer stream.Close()
+		t.Fatal("Synthesize error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Synthesize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSarvamTTSAdvancedOptionsBuildReferencePayloads(t *testing.T) {
 	cacheEnabled := true
 	v2Provider := NewSarvamTTS("test-key", "",

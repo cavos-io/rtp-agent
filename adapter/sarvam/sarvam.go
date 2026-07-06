@@ -1400,7 +1400,7 @@ func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sarvamTTSTransportError(err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -1408,6 +1408,17 @@ func (t *SarvamTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStr
 		return nil, llm.NewAPIStatusError("Sarvam TTS request failed", resp.StatusCode, "", string(respBody))
 	}
 	return &sarvamTTSChunkedStream{resp: resp, sampleRate: t.sampleRate, outputAudioCodec: t.outputAudioCodec}, nil
+}
+
+func sarvamTTSTransportError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return llm.NewAPITimeoutError(err.Error())
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Sarvam TTS request failed: %v", err))
 }
 
 func buildSarvamTTSRequest(ctx context.Context, t *SarvamTTS, text string) (*http.Request, error) {
