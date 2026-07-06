@@ -532,7 +532,7 @@ func (s *telnyxSTTStream) readLoop() {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				if !s.isClosed() {
+				if !s.isClosed() && !s.isInputEnded() {
 					s.errCh <- llm.NewAPIStatusError("Telnyx STT WebSocket closed unexpectedly", 0, "", nil)
 				}
 			} else {
@@ -565,6 +565,15 @@ func (s *telnyxSTTStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *telnyxSTTStream) isInputEnded() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputEnded
 }
 
 type telnyxSTTStreamState struct {
