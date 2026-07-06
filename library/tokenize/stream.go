@@ -163,3 +163,15 @@ func (s *BufferedTokenStream) Next() (*TokenData, error) {
 	}
 	return tok, nil
 }
+
+func (s *BufferedTokenStream) TryNext() (*TokenData, bool, error) {
+	select {
+	case tok, ok := <-s.eventCh:
+		if !ok {
+			return nil, true, io.EOF
+		}
+		return tok, true, nil
+	default:
+		return nil, false, nil
+	}
+}

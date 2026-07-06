@@ -1496,6 +1496,7 @@ type rimeTTSSynthesizeStream struct {
 	responseTimeout       time.Duration
 	events                chan *tts.SynthesizedAudio
 	errCh                 chan error
+	queuedAudio           []*tts.SynthesizedAudio
 	mu                    sync.Mutex
 	closed                bool
 	started               bool
@@ -1503,6 +1504,7 @@ type rimeTTSSynthesizeStream struct {
 	pendingText           string
 	pushedText            string
 	sentenceTokenizer     tokenize.SentenceTokenizer
+	sentenceStream        tokenize.SentenceStream
 	audioSeen             bool
 	pendingPCM            []byte
 	pendingTranscriptText string
@@ -1531,7 +1533,11 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 		return nil
 	}
 	s.pendingText += text
-	if err := s.sendCompleteSentencesLocked(); err != nil {
+	if err := s.sentenceStreamLocked().PushText(text); err != nil {
+		s.closeAfterWriteFailureLocked()
+		return err
+	}
+	if err := s.drainSentenceStreamLocked(); err != nil {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
@@ -1592,15 +1598,27 @@ func (s *rimeTTSSynthesizeStream) EndInput() error {
 }
 
 func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
-	if s.pendingText != "" {
-		text := strings.Join(s.tokenizerLocked().Tokenize(s.pendingText, ""), " ")
+	hadPendingText := s.pendingText != ""
+	if s.sentenceStream != nil {
+		var err error
+		if sendProviderFlush {
+			err = s.sentenceStream.EndInput()
+		} else {
+			err = s.sentenceStream.Flush()
+		}
+		if err != nil {
+			return err
+		}
 		s.pendingText = ""
-		if err := s.sendSentenceLocked(text); err != nil {
+		if err := s.drainSentenceStreamLocked(); err != nil {
 			s.closeAfterWriteFailureLocked()
 			return err
 		}
 	}
 	if !s.started {
+		if hadPendingText && !sendProviderFlush {
+			s.segmentDone = true
+		}
 		return nil
 	}
 	if !sendProviderFlush {
@@ -1618,24 +1636,35 @@ func (s *rimeTTSSynthesizeStream) flushLocked(sendProviderFlush bool) error {
 	return nil
 }
 
-func (s *rimeTTSSynthesizeStream) sendCompleteSentencesLocked() error {
+type rimeSentenceStreamDrainer interface {
+	TryNext() (*tokenize.TokenData, bool, error)
+}
+
+func (s *rimeTTSSynthesizeStream) drainSentenceStreamLocked() error {
+	if s.sentenceStream == nil {
+		return nil
+	}
+	drainer, ok := s.sentenceStream.(rimeSentenceStreamDrainer)
+	if !ok {
+		return nil
+	}
 	for {
-		tokens := s.tokenizerLocked().Tokenize(s.pendingText, "")
-		if len(tokens) <= 1 {
+		token, ok, err := drainer.TryNext()
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
-		sentence := tokens[0]
-		if err := s.sendSentenceLocked(sentence); err != nil {
+		if err != nil {
 			return err
 		}
-		tokenIdx := strings.Index(s.pendingText, sentence)
-		if tokenIdx < 0 {
-			s.pendingText = strings.TrimSpace(strings.TrimPrefix(s.pendingText, sentence))
+		if !ok {
+			return nil
+		}
+		if token == nil {
 			continue
 		}
-		s.pendingText = strings.TrimLeftFunc(s.pendingText[tokenIdx+len(sentence):], func(r rune) bool {
-			return r == ' ' || r == '\t' || r == '\n' || r == '\r'
-		})
+		if err := s.sendSentenceLocked(token.Token); err != nil {
+			return err
+		}
 	}
 }
 
@@ -1644,6 +1673,13 @@ func (s *rimeTTSSynthesizeStream) tokenizerLocked() tokenize.SentenceTokenizer {
 		return s.sentenceTokenizer
 	}
 	return newRimeTTSSentenceTokenizer()
+}
+
+func (s *rimeTTSSynthesizeStream) sentenceStreamLocked() tokenize.SentenceStream {
+	if s.sentenceStream == nil {
+		s.sentenceStream = s.tokenizerLocked().Stream("")
+	}
+	return s.sentenceStream
 }
 
 func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
@@ -1704,7 +1740,7 @@ func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 			if closeErr := s.closeConnection(); closeErr != nil {
 				return closeErr
 			}
-			return err
+			return nil
 		}
 		s.waitForEOSAckLocked()
 	}
@@ -1797,6 +1833,9 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		if ok {
 			return audio, nil
 		}
+		if audio := s.popQueuedAudio(); audio != nil {
+			return audio, nil
+		}
 		select {
 		case err := <-s.errCh:
 			return nil, err
@@ -1805,9 +1844,15 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	default:
 	}
+	if audio := s.popQueuedAudio(); audio != nil {
+		return audio, nil
+	}
 	select {
 	case audio, ok := <-s.events:
 		if !ok {
+			if audio := s.popQueuedAudio(); audio != nil {
+				return audio, nil
+			}
 			select {
 			case err := <-s.errCh:
 				return nil, err
@@ -1817,8 +1862,14 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return audio, nil
 	case err := <-s.errCh:
+		if audio := s.popQueuedAudio(); audio != nil {
+			return audio, nil
+		}
 		return nil, err
 	case <-s.ctx.Done():
+		if audio := s.popQueuedAudio(); audio != nil {
+			return audio, nil
+		}
 		if s.isClosed() {
 			return nil, io.EOF
 		}
@@ -1912,15 +1963,59 @@ func (s *rimeTTSSynthesizeStream) sendAudio(audio *tts.SynthesizedAudio) bool {
 		return false
 	}
 	if s.ctx == nil {
-		s.events <- audio
+		if !s.enqueueAudioIfBacklogged(audio) {
+			select {
+			case s.events <- audio:
+			default:
+				s.enqueueAudio(audio)
+			}
+		}
+		return true
+	}
+	select {
+	case <-s.ctx.Done():
+		return false
+	default:
+	}
+	if s.enqueueAudioIfBacklogged(audio) {
 		return true
 	}
 	select {
 	case s.events <- audio:
 		return true
-	case <-s.ctx.Done():
+	default:
+		s.enqueueAudio(audio)
+		return true
+	}
+}
+
+func (s *rimeTTSSynthesizeStream) enqueueAudioIfBacklogged(audio *tts.SynthesizedAudio) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queuedAudio) == 0 {
 		return false
 	}
+	s.queuedAudio = append(s.queuedAudio, audio)
+	return true
+}
+
+func (s *rimeTTSSynthesizeStream) enqueueAudio(audio *tts.SynthesizedAudio) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queuedAudio = append(s.queuedAudio, audio)
+}
+
+func (s *rimeTTSSynthesizeStream) popQueuedAudio() *tts.SynthesizedAudio {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queuedAudio) == 0 {
+		return nil
+	}
+	audio := s.queuedAudio[0]
+	copy(s.queuedAudio, s.queuedAudio[1:])
+	s.queuedAudio[len(s.queuedAudio)-1] = nil
+	s.queuedAudio = s.queuedAudio[:len(s.queuedAudio)-1]
+	return audio
 }
 
 func (s *rimeTTSSynthesizeStream) dropConnectionAfterProviderError() {
@@ -2053,6 +2148,8 @@ func rimeDecodeBase64Chunk(data string) ([]byte, error) {
 	for i := 0; i < len(data); i++ {
 		b := data[i]
 		switch {
+		case b >= 0x80:
+			return nil, fmt.Errorf("string argument should contain only ASCII characters")
 		case b >= 'A' && b <= 'Z',
 			b >= 'a' && b <= 'z',
 			b >= '0' && b <= '9',
@@ -2181,12 +2278,14 @@ func rimeTTSPythonRepr(value any) string {
 	case nil:
 		return "None"
 	case string:
-		return "'" + typed + "'"
+		return rimeTTSPythonStringRepr(typed)
 	case bool:
 		if typed {
 			return "True"
 		}
 		return "False"
+	case json.Number:
+		return rimeTTSPythonNumberRepr(typed)
 	case []any:
 		parts := make([]string, 0, len(typed))
 		for _, item := range typed {
@@ -2213,6 +2312,61 @@ func rimeTTSPythonRepr(value any) string {
 	default:
 		return fmt.Sprint(value)
 	}
+}
+
+func rimeTTSPythonNumberRepr(value json.Number) string {
+	text := value.String()
+	if !strings.ContainsAny(text, ".eE") {
+		return text
+	}
+	floating, err := value.Float64()
+	if err != nil {
+		return text
+	}
+	abs := floating
+	if abs < 0 {
+		abs = -abs
+	}
+	if abs != 0 && (abs < 1e-4 || abs >= 1e16) {
+		return strconv.FormatFloat(floating, 'e', -1, 64)
+	}
+	formatted := strconv.FormatFloat(floating, 'f', -1, 64)
+	if !strings.Contains(formatted, ".") {
+		formatted += ".0"
+	}
+	return formatted
+}
+
+func rimeTTSPythonStringRepr(value string) string {
+	if strings.Contains(value, "'") && !strings.Contains(value, `"`) {
+		return strconv.Quote(value)
+	}
+	var builder strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\\':
+			builder.WriteString(`\\`)
+		case '\'':
+			builder.WriteString(`\'`)
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\t':
+			builder.WriteString(`\t`)
+		case '\b':
+			builder.WriteString(`\x08`)
+		case '\f':
+			builder.WriteString(`\x0c`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				builder.WriteString(fmt.Sprintf(`\x%02x`, r))
+				continue
+			}
+			builder.WriteRune(r)
+		}
+	}
+	return "'" + builder.String() + "'"
 }
 
 type rimeTTSWordTimestampsPayload struct {
@@ -2242,6 +2396,10 @@ func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
 	}
 	var wordText string
 	if err := json.Unmarshal(raw, &wordText); err != nil {
+		keys, keyErr := rimeTTSJSONRawObjectKeys(raw)
+		if keyErr == nil {
+			return keys, nil
+		}
 		return nil, err
 	}
 	words = make([]string, 0, len(wordText))
@@ -2249,6 +2407,37 @@ func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
 		words = append(words, string(r))
 	}
 	return words, nil
+}
+
+func rimeTTSJSONRawObjectKeys(raw json.RawMessage) ([]string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	if token != json.Delim('{') {
+		return nil, fmt.Errorf("expected JSON object")
+	}
+	var keys []string
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid JSON object key")
+		}
+		var discard any
+		if err := decoder.Decode(&discard); err != nil {
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 func rimeTTSTimestampTimes(raw json.RawMessage) ([]float64, error) {
@@ -2264,12 +2453,19 @@ func rimeTTSTimestampTimes(raw json.RawMessage) ([]float64, error) {
 
 func rimeTTSJSONNullOrFalsey(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
-	return bytes.Equal(trimmed, []byte("null")) ||
+	if bytes.Equal(trimmed, []byte("null")) ||
 		bytes.Equal(trimmed, []byte("false")) ||
-		bytes.Equal(trimmed, []byte("0")) ||
 		bytes.Equal(trimmed, []byte(`""`)) ||
 		bytes.Equal(trimmed, []byte("[]")) ||
-		bytes.Equal(trimmed, []byte("{}"))
+		bytes.Equal(trimmed, []byte("{}")) {
+		return true
+	}
+	var number json.Number
+	if err := json.Unmarshal(trimmed, &number); err == nil {
+		value, err := number.Float64()
+		return err == nil && value == 0
+	}
+	return false
 }
 
 func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
