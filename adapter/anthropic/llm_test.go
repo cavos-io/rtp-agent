@@ -1514,6 +1514,33 @@ func TestAnthropicChatForwardsReferenceExtraParams(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatRejectsReservedExtraParamModelLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"model": "claude-other"}),
+	)
+
+	if err == nil {
+		t.Fatal("Chat() error = nil, want reserved extra param error")
+	}
+	if !strings.Contains(err.Error(), `extra param "model" conflicts with reserved Anthropic request field`) {
+		t.Fatalf("Chat() error = %v, want reserved model extra param error", err)
+	}
+	if transport.reqURL != "" {
+		t.Fatalf("request URL = %q, want no HTTP request after reserved extra param error", transport.reqURL)
+	}
+}
+
 func TestAnthropicChatRejectsUnserializableRequestBody(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

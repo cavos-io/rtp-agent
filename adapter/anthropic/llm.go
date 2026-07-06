@@ -133,6 +133,12 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if cacheControl != nil {
 		applyAnthropicMessageCacheControl(messages, cacheControl)
 	}
+	if err := validateAnthropicExtraParams(options.ExtraParams); err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
 
 	body := map[string]interface{}{
 		"model":      l.model,
@@ -299,6 +305,15 @@ func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 		}
 		body[key] = value
 	}
+}
+
+func validateAnthropicExtraParams(params map[string]any) error {
+	for _, key := range []string{"model", "messages", "stream", "timeout"} {
+		if _, ok := params[key]; ok {
+			return fmt.Errorf("extra param %q conflicts with reserved Anthropic request field", key)
+		}
+	}
+	return nil
 }
 
 func anthropicEphemeralCacheControl(params map[string]any) map[string]any {
