@@ -3,6 +3,7 @@ package upliftai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -798,6 +799,60 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceULawResponse(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamDecodesReferenceOGGResponse(t *testing.T) {
+	oggData, err := base64.StdEncoding.DecodeString(upliftAITestOpusOggFixtureBase64)
+	if err != nil {
+		t.Fatalf("decode ogg fixture: %v", err)
+	}
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("OGG_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(oggData))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded OGG frame", audio)
+	}
+	if got, want := audio.Frame.SampleRate, uint32(defaultUpliftAISampleRate); got != want {
+		t.Fatalf("sample rate = %d, want %d", got, want)
+	}
+	if got, want := audio.Frame.NumChannels, uint32(1); got != want {
+		t.Fatalf("channels = %d, want mono output %d", got, want)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded OGG frame is empty")
+	}
+	if bytes.HasPrefix(audio.Frame.Data, []byte("OggS")) {
+		t.Fatal("frame data still contains OGG container bytes")
+	}
+
+	frames := 1
+	for i := 0; i < 500; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next after %d frames error = %v", frames, err)
+		}
+		if audio == nil {
+			t.Fatalf("audio after %d frames = nil", frames)
+		}
+		if audio.IsFinal {
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded OGG frames")
+			}
+			return
+		}
+		if audio.Frame != nil {
+			frames++
+		}
+	}
+	t.Fatalf("read %d decoded OGG frames without final marker", frames)
+}
+
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}
@@ -999,3 +1054,5 @@ func upliftAITestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
 	wav.Write(pcm)
 	return wav.Bytes()
 }
+
+const upliftAITestOpusOggFixtureBase64 = "T2dnUwACAAAAAAAAAACXynBsAAAAAMy/Wi4BE09wdXNIZWFkAQE4AYC7AAAAAABPZ2dTAAAAAAAAAAAAAJfKcGwBAAAAYQP1NwE+T3B1c1RhZ3MNAAAATGF2ZjU5LjI3LjEwMAEAAAAdAAAAZW5jb2Rlcj1MYXZjNTkuMzcuMTAwIGxpYm9wdXNPZ2dTAAT4BAAAAAAAAJfKcGwCAAAAdYmr1AIDA/j//vj//g=="

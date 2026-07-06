@@ -477,6 +477,9 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if strings.HasPrefix(s.currentOutputFormat(), "WAV") {
 		return s.nextDecodedWAV()
 	}
+	if strings.HasPrefix(s.currentOutputFormat(), "OGG") {
+		return s.nextDecodedOGG()
+	}
 	if s.currentOutputFormat() == "ULAW_8000_8" {
 		return s.nextDecodedULaw()
 	}
@@ -618,6 +621,51 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
 		if err != nil {
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 resample failed: %v", err))
+		}
+		frame = resampled
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if !s.started {
+		s.started = true
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", err)
+		}
+		if len(data) == 0 {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
+		s.hasAudio = true
+		decoder := codecs.NewOpusAudioStreamDecoder(defaultUpliftAISampleRate, 1)
+		s.decoder = decoder
+		go func() {
+			decoder.Push(data)
+			decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			if s.hasAudio && !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
+			return nil, io.EOF
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
+	}
+	frame = upliftAIDownmixToMono(frame)
+	if frame.SampleRate != defaultUpliftAISampleRate {
+		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG resample failed: %v", err))
 		}
 		frame = resampled
 	}
