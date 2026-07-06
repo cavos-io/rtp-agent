@@ -196,9 +196,15 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag)
 		if err == nil {
 			return &anthropicStream{
-				resp:   resp,
-				reader: bufio.NewReader(resp.Body),
-				cancel: cancel,
+				llm:            l,
+				ctx:            ctx,
+				jsonBody:       jsonBody,
+				betaFlag:       betaFlag,
+				connectOptions: connectOptions,
+				retryAttempt:   attempt,
+				resp:           resp,
+				reader:         bufio.NewReader(resp.Body),
+				cancel:         cancel,
 			}, nil
 		}
 		lastErr = err
@@ -443,6 +449,13 @@ func applyAnthropicMessageCacheControl(messages []anthropicMessage, cacheControl
 }
 
 type anthropicStream struct {
+	llm            *AnthropicLLM
+	ctx            context.Context
+	jsonBody       []byte
+	betaFlag       string
+	connectOptions llm.APIConnectOptions
+	retryAttempt   int
+
 	resp   *http.Response
 	reader *bufio.Reader
 	cancel context.CancelFunc
@@ -793,6 +806,11 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			if s.closed {
 				return nil, io.EOF
 			}
+			if retryErr := s.retryBeforeOutput(err); retryErr == nil {
+				continue
+			} else if retryErr != err {
+				return nil, retryErr
+			}
 			return nil, s.wrapReadError(err)
 		}
 
@@ -913,6 +931,61 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			return nil, llm.NewAPIError(message, body, !s.emittedChunk)
 		}
 	}
+}
+
+func (s *anthropicStream) retryBeforeOutput(err error) error {
+	if s.emittedChunk || s.llm == nil || s.retryAttempt >= s.connectOptions.MaxRetry {
+		return err
+	}
+	if s.resp != nil && s.resp.Body != nil {
+		_ = s.resp.Body.Close()
+	}
+	if waitErr := waitAnthropicRetryInterval(s.ctx, s.connectOptions.IntervalForRetry(s.retryAttempt)); waitErr != nil {
+		return waitErr
+	}
+	for s.retryAttempt < s.connectOptions.MaxRetry {
+		s.retryAttempt++
+		resp, startErr := s.llm.startAnthropicStream(s.ctx, s.jsonBody, s.betaFlag)
+		if startErr == nil {
+			s.resetAttempt(resp)
+			return nil
+		}
+		var statusErr *llm.APIStatusError
+		if errors.As(startErr, &statusErr) && statusErr.StatusCode == 499 {
+			s.closed = true
+			return io.EOF
+		}
+		if s.retryAttempt == s.connectOptions.MaxRetry || !anthropicShouldRetryError(startErr) {
+			if s.connectOptions.MaxRetry > 0 && s.retryAttempt == s.connectOptions.MaxRetry && anthropicShouldRetryError(startErr) {
+				return llm.NewAPIConnectionError(
+					fmt.Sprintf("failed to generate LLM completion after %d attempts", s.connectOptions.MaxRetry+1),
+				)
+			}
+			return startErr
+		}
+		if waitErr := waitAnthropicRetryInterval(s.ctx, s.connectOptions.IntervalForRetry(s.retryAttempt)); waitErr != nil {
+			return waitErr
+		}
+	}
+	return llm.NewAPIConnectionError(
+		fmt.Sprintf("failed to generate LLM completion after %d attempts", s.connectOptions.MaxRetry+1),
+	)
+}
+
+func (s *anthropicStream) resetAttempt(resp *http.Response) {
+	s.resp = resp
+	s.reader = bufio.NewReader(resp.Body)
+	s.toolCallActive = false
+	s.toolCallID = ""
+	s.toolName = ""
+	s.toolArgs = ""
+	s.requestID = ""
+	s.inputTokens = 0
+	s.outputTokens = 0
+	s.cacheCreationTokens = 0
+	s.cacheReadTokens = 0
+	s.ignoringCoT = false
+	s.emittedFinalUsage = false
 }
 
 func (s *anthropicStream) finalUsageChunk() *llm.ChatChunk {
