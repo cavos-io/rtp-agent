@@ -2576,6 +2576,70 @@ func TestRimeTTSExpiredPooledWebsocketCloseIsDeferredLikeReference(t *testing.T)
 	_ = provider.Close()
 }
 
+func TestRimeTTSUpdateOptionsDefersPooledWebsocketCloseLikeReference(t *testing.T) {
+	eosSeen := make(chan struct{})
+	releaseClose := make(chan struct{})
+	var releaseCloseOnce sync.Once
+	release := func() {
+		releaseCloseOnce.Do(func() { close(releaseClose) })
+	}
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go rimeTestServeReusableWebsocketBlockOnEOS(t, server, eosSeen, releaseClose)
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		release()
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSBaseURL("ws://rime.example"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	for {
+		_, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v", err)
+		}
+	}
+
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- provider.UpdateOptions(WithRimeTTSSegment("immediate"))
+	}()
+	select {
+	case err := <-updateDone:
+		if err != nil {
+			t.Fatalf("UpdateOptions error = %v", err)
+		}
+	case <-eosSeen:
+		t.Fatal("UpdateOptions started stale websocket close before returning; want reference invalidate-only behavior")
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("UpdateOptions did not return before stale websocket close")
+	}
+	release()
+	_ = provider.Close()
+}
+
 func TestRimeTTSEmptyStreamReturnsWebsocketToPoolLikeReference(t *testing.T) {
 	var connections atomic.Int32
 	oldDialer := websocket.DefaultDialer

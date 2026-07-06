@@ -690,9 +690,10 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	candidate.useWebsocket = currentUseWebsocket
 
 	t.mu.Lock()
-	var stalePrewarm *websocket.Conn
 	if currentUseWebsocket && buildRimeTTSWebsocketURL(t).String() != buildRimeTTSWebsocketURL(candidate).String() {
-		stalePrewarm = t.prewarmConn
+		if t.prewarmConn != nil {
+			t.stalePrewarmConns = append(t.stalePrewarmConns, t.prewarmConn)
+		}
 		t.prewarmConn = nil
 		t.prewarmURL = ""
 		t.prewarmRefreshedAt = time.Time{}
@@ -732,10 +733,6 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.sentenceTokenizer = candidate.sentenceTokenizer
 	t.streamResponseTimeout = candidate.streamResponseTimeout
 	t.mu.Unlock()
-
-	if stalePrewarm != nil {
-		_ = closeRimePrewarmedConn(stalePrewarm)
-	}
 	return nil
 }
 
