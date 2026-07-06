@@ -49,6 +49,15 @@ func (t *UpliftAITTS) Capabilities() tts.TTSCapabilities {
 func (t *UpliftAITTS) SampleRate() int  { return defaultUpliftAISampleRate }
 func (t *UpliftAITTS) NumChannels() int { return 1 }
 
+func (t *UpliftAITTS) UpdateOptions(voice string) {
+	if voice == "" {
+		return
+	}
+	t.mu.Lock()
+	t.voice = voice
+	t.mu.Unlock()
+}
+
 func (t *UpliftAITTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
@@ -103,6 +112,12 @@ func (t *UpliftAITTS) isClosed() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.closed
+}
+
+func (t *UpliftAITTS) voiceSnapshot() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.voice
 }
 
 func (t *UpliftAITTS) registerStream(stream *upliftAITTSChunkedStream) bool {
@@ -183,7 +198,7 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	}
 	reqBody := map[string]interface{}{
 		"text":  s.text,
-		"voice": s.owner.voice,
+		"voice": s.owner.voiceSnapshot(),
 	}
 	jsonBody, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(s.ctx, "POST", "https://api.upliftai.org/v1/tts", bytes.NewBuffer(jsonBody))

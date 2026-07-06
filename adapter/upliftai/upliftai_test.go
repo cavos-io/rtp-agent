@@ -3,6 +3,7 @@ package upliftai
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -80,6 +81,39 @@ func TestUpliftAITTSUsesEnvironmentAPIKey(t *testing.T) {
 
 	if got, want := tts.apiKey, "env-secret"; got != want {
 		t.Fatalf("apiKey = %q, want environment key %q", got, want)
+	}
+}
+
+func TestUpliftAITTSUpdateOptionsChangesReferenceVoice(t *testing.T) {
+	oldClient := http.DefaultClient
+	var gotVoice string
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		var payload map[string]string
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		gotVoice = payload["voice"]
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	tts := NewUpliftAITTS("test-key", "")
+	stream, err := tts.Synthesize(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	tts.UpdateOptions("voice-updated")
+
+	if _, err := stream.Next(); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if gotVoice != "voice-updated" {
+		t.Fatalf("request voice = %q, want updated voice", gotVoice)
 	}
 }
 
