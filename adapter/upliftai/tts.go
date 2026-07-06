@@ -597,25 +597,26 @@ func (s *upliftAITTSSynthesizeStream) Close() error {
 }
 
 type upliftAITTSChunkedStream struct {
-	owner         *UpliftAITTS
-	ctx           context.Context
-	cancel        context.CancelFunc
-	text          string
-	resp          *http.Response
-	once          sync.Once
-	err           error
-	decoder       codecs.AudioStreamDecoder
-	decodeMu      sync.Mutex
-	decodeReadErr error
-	wav           *upliftAIWAVStream
-	pcm           *coreaudio.AudioByteStream
-	pcmFrames     []*model.AudioFrame
-	outputFormat  string
-	started       bool
-	hasAudio      bool
-	pendingFinal  bool
-	finalSent     bool
-	closed        bool
+	owner          *UpliftAITTS
+	ctx            context.Context
+	cancel         context.CancelFunc
+	text           string
+	resp           *http.Response
+	once           sync.Once
+	err            error
+	decoder        codecs.AudioStreamDecoder
+	decodeMu       sync.Mutex
+	decodeReadErr  error
+	wav            *upliftAIWAVStream
+	pcm            *coreaudio.AudioByteStream
+	pcmFrames      []*model.AudioFrame
+	pendingReadErr error
+	outputFormat   string
+	started        bool
+	hasAudio       bool
+	pendingFinal   bool
+	finalSent      bool
+	closed         bool
 }
 
 func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -1507,6 +1508,12 @@ func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
 		s.pcmFrames = s.pcmFrames[1:]
 		return &tts.SynthesizedAudio{Frame: frame}, nil
 	}
+	if s.pendingReadErr != nil {
+		err := s.pendingReadErr
+		s.pendingReadErr = nil
+		s.finalSent = true
+		return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
+	}
 	if s.pcm == nil {
 		numChannels := uint32(s.currentNumChannels())
 		s.pcm = coreaudio.NewAudioByteStreamWithOptions(
@@ -1537,6 +1544,13 @@ func (s *upliftAITTSChunkedStream) nextRawPCM() (*tts.SynthesizedAudio, error) {
 				}
 				return nil, io.EOF
 			}
+			s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
+			if len(s.pcmFrames) > 0 {
+				frame := s.pcmFrames[0]
+				s.pcmFrames = s.pcmFrames[1:]
+				s.pendingReadErr = err
+				return &tts.SynthesizedAudio{Frame: frame}, nil
+			}
 			return nil, upliftAITTSReadError("UpliftAI TTS stream read failed", err)
 		}
 		if len(s.pcmFrames) > 0 {
@@ -1557,6 +1571,12 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 		frame := s.pcmFrames[0]
 		s.pcmFrames = s.pcmFrames[1:]
 		return &tts.SynthesizedAudio{Frame: frame}, nil
+	}
+	if s.pendingReadErr != nil {
+		err := s.pendingReadErr
+		s.pendingReadErr = nil
+		s.finalSent = true
+		return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
 	}
 	if s.pcm == nil {
 		s.pcm = coreaudio.NewAudioByteStreamWithOptions(
@@ -1592,6 +1612,13 @@ func (s *upliftAITTSChunkedStream) nextBufferedULaw() (*tts.SynthesizedAudio, er
 					return &tts.SynthesizedAudio{IsFinal: true}, nil
 				}
 				return nil, io.EOF
+			}
+			s.pcmFrames = append(s.pcmFrames, s.pcm.Flush()...)
+			if len(s.pcmFrames) > 0 {
+				frame := s.pcmFrames[0]
+				s.pcmFrames = s.pcmFrames[1:]
+				s.pendingReadErr = err
+				return &tts.SynthesizedAudio{Frame: frame}, nil
 			}
 			return nil, upliftAITTSReadError("UpliftAI TTS mu-law read failed", err)
 		}

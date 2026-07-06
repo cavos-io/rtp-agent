@@ -38,6 +38,22 @@ func (r *upliftAIFinalEOFReader) Read(p []byte) (int, error) {
 
 func (r *upliftAIFinalEOFReader) Close() error { return nil }
 
+type upliftAIFinalErrorReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *upliftAIFinalErrorReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, r.err
+	}
+	r.done = true
+	return copy(p, r.data), r.err
+}
+
+func (r *upliftAIFinalErrorReader) Close() error { return nil }
+
 type upliftAIErrorReader struct{}
 
 func (upliftAIErrorReader) Read([]byte) (int, error) {
@@ -2888,6 +2904,35 @@ func TestUpliftAITTSChunkedStreamKeepsAudioReturnedWithEOF(t *testing.T) {
 	}
 	if audio, err := stream.Next(); audio != nil || err != io.EOF {
 		t.Fatalf("third Next() = (%#v, %v), want EOF", audio, err)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamKeepsAudioReturnedWithReadError(t *testing.T) {
+	errRead := errors.New("upliftai read failed after audio")
+	pcm := bytes.Repeat([]byte{0x01, 0x00}, defaultUpliftAISampleRate*20/1000)
+	stream := &upliftAITTSChunkedStream{
+		resp: &http.Response{Body: &upliftAIFinalErrorReader{data: pcm, err: errRead}},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v, want audio returned before read error", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("first audio = %#v, want frame returned before read error", audio)
+	}
+	if got := audio.Frame.Data; !bytes.Equal(got, pcm) {
+		t.Fatalf("audio data = %#v, want PCM bytes returned with read error %#v", got, pcm)
+	}
+
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("second Next error = nil, want read error after returned audio")
+	}
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("second Next error = %T %v, want APIConnectionError", err, err)
 	}
 }
 
