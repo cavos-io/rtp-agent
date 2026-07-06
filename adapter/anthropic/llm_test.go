@@ -345,6 +345,38 @@ func TestAnthropicChatReturnsAPIStatusErrorOnHTTPError(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatClientClosedStatusReturnsEOF(t *testing.T) {
+	transport := &captureRoundTripper{
+		statusCode:   499,
+		responseBody: `{"error":{"message":"client closed"}}`,
+		header:       http.Header{"request-id": []string{"req_499"}},
+	}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v, want nil for client-closed status", err)
+	}
+
+	_, err = stream.Next()
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() error = %v, want EOF for client-closed status", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil", err)
+	}
+}
+
 func TestAnthropicChatReturnsParsedAPIStatusErrorBody(t *testing.T) {
 	transport := &captureRoundTripper{
 		statusCode:   http.StatusBadRequest,

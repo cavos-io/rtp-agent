@@ -202,6 +202,13 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 			}, nil
 		}
 		lastErr = err
+		var statusErr *llm.APIStatusError
+		if errors.As(lastErr, &statusErr) && statusErr.StatusCode == 499 {
+			if cancel != nil {
+				cancel()
+			}
+			return anthropicEOFStream{}, nil
+		}
 		if attempt == connectOptions.MaxRetry || !anthropicShouldRetryError(lastErr) {
 			if cancel != nil {
 				cancel()
@@ -220,6 +227,16 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		cancel()
 	}
 	return nil, lastErr
+}
+
+type anthropicEOFStream struct{}
+
+func (anthropicEOFStream) Next() (*llm.ChatChunk, error) {
+	return nil, io.EOF
+}
+
+func (anthropicEOFStream) Close() error {
+	return nil
 }
 
 func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte, betaFlag string) (*http.Response, error) {
