@@ -800,11 +800,11 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "data: ") {
+		data, ok := anthropicSSEData(line)
+		if line == "" || !ok {
 			continue
 		}
 
-		data := strings.TrimPrefix(line, "data: ")
 		data, err = s.completeAnthropicSSEData(data)
 		if err != nil {
 			if s.closed {
@@ -950,6 +950,17 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 	}
 }
 
+func anthropicSSEData(line string) (string, bool) {
+	if !strings.HasPrefix(line, "data:") {
+		return "", false
+	}
+	data := strings.TrimPrefix(line, "data:")
+	if strings.HasPrefix(data, " ") {
+		data = data[1:]
+	}
+	return data, true
+}
+
 func (s *anthropicStream) completeAnthropicSSEData(data string) (string, error) {
 	if json.Valid([]byte(data)) {
 		return data, nil
@@ -968,10 +979,11 @@ func (s *anthropicStream) completeAnthropicSSEData(data string) (string, error) 
 		if line == "" {
 			return strings.Join(parts, "\n"), nil
 		}
-		if !strings.HasPrefix(line, "data: ") {
+		dataPart, ok := anthropicSSEData(line)
+		if !ok {
 			continue
 		}
-		parts = append(parts, strings.TrimPrefix(line, "data: "))
+		parts = append(parts, dataPart)
 		joined := strings.Join(parts, "\n")
 		if json.Valid([]byte(joined)) {
 			return joined, nil
