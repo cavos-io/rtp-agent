@@ -118,7 +118,13 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
 	}
 
-	messages, system := buildAnthropicMessages(chatCtx)
+	messages, system, err := buildAnthropicMessagesE(chatCtx)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
 	if anthropicModelDisablesPrefill(l.model) {
 		messages = appendAnthropicTrailingUserMessage(messages)
 	}
@@ -413,6 +419,11 @@ type anthropicStream struct {
 }
 
 func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
+	messages, system, _ := buildAnthropicMessagesE(chatCtx)
+	return messages, system
+}
+
+func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, string, error) {
 	messages := make([]anthropicMessage, 0, len(chatCtx.Items))
 	systemMessages := make([]string, 0)
 	var currentRole string
@@ -457,7 +468,11 @@ func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, strin
 					appendBlocks(role, blocks...)
 				}
 			case *llm.FunctionCall:
-				appendBlocks("assistant", anthropicToolUseBlock(msg))
+				block, err := anthropicToolUseBlock(msg)
+				if err != nil {
+					return nil, "", err
+				}
+				appendBlocks("assistant", block)
 			case *llm.FunctionCallOutput:
 				appendBlocks("user", anthropicToolResultBlock(msg))
 			}
@@ -476,7 +491,7 @@ func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, strin
 		}, messages...)
 	}
 
-	return messages, strings.Join(systemMessages, "\n")
+	return messages, strings.Join(systemMessages, "\n"), nil
 }
 
 func anthropicMessageContentBlocks(msg *llm.ChatMessage) []anthropicContentBlock {
@@ -518,15 +533,17 @@ func anthropicImageBlock(image *llm.ImageContent) *anthropicContentBlock {
 	}
 }
 
-func anthropicToolUseBlock(fc *llm.FunctionCall) anthropicContentBlock {
+func anthropicToolUseBlock(fc *llm.FunctionCall) (anthropicContentBlock, error) {
 	input := make(map[string]any)
-	_ = json.Unmarshal([]byte(fc.Arguments), &input)
+	if err := json.Unmarshal([]byte(fc.Arguments), &input); err != nil {
+		return anthropicContentBlock{}, err
+	}
 	return anthropicContentBlock{
 		Type:  "tool_use",
 		ID:    fc.CallID,
 		Name:  fc.Name,
 		Input: input,
-	}
+	}, nil
 }
 
 func anthropicToolResultBlock(fco *llm.FunctionCallOutput) anthropicContentBlock {

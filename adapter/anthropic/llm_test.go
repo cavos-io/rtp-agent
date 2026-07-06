@@ -401,6 +401,33 @@ func TestAnthropicChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatRejectsMalformedToolCallArguments(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "lookup"}}},
+		&llm.FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":`},
+		&llm.FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "Paris"},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+
+	_, err = model.Chat(context.Background(), ctx)
+
+	if err == nil {
+		t.Fatalf("Chat() error = %v, want malformed tool arguments error", err)
+	}
+	if transport.reqURL != "" {
+		t.Fatalf("request URL = %q, want no HTTP request after malformed tool arguments", transport.reqURL)
+	}
+}
+
 func TestBuildAnthropicMessagesGroupsToolCallsWithResults(t *testing.T) {
 	ctx := llm.NewChatContext()
 	groupID := "assistant-turn"
