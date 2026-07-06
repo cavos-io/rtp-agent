@@ -460,7 +460,7 @@ func TestAnthropicChatPreservesCallerDeadlineLikeReference(t *testing.T) {
 }
 
 func TestAnthropicDefaultHTTPClientUsesReferenceTimeouts(t *testing.T) {
-	client := newAnthropicHTTPClient(http.DefaultTransport)
+	client := newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout)
 	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
 	if !ok {
 		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
@@ -473,6 +473,58 @@ func TestAnthropicDefaultHTTPClientUsesReferenceTimeouts(t *testing.T) {
 	}
 	if transport.ResponseHeaderTimeout != 30*time.Second {
 		t.Fatalf("ResponseHeaderTimeout = %v, want reference read timeout", transport.ResponseHeaderTimeout)
+	}
+}
+
+func TestAnthropicHTTPClientUsesConnectOptionsTimeoutLikeReference(t *testing.T) {
+	client := newAnthropicHTTPClient(http.DefaultTransport, 75*time.Millisecond)
+	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
+	if !ok {
+		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
+	}
+	if transport.connectTimeout != 75*time.Millisecond {
+		t.Fatalf("connect timeout = %v, want APIConnectOptions timeout", transport.connectTimeout)
+	}
+	if transport.readTimeout != 30*time.Second {
+		t.Fatalf("read timeout = %v, want reference 30s read stall timeout", transport.readTimeout)
+	}
+}
+
+func TestAnthropicChatUsesConnectOptionsTimeoutLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{Timeout: 75 * time.Millisecond}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	anthropicStream, ok := stream.(*anthropicStream)
+	if !ok {
+		t.Fatalf("stream = %T, want Anthropic stream", stream)
+	}
+	if anthropicStream.connectTimeout != 75*time.Millisecond {
+		t.Fatalf("connect timeout = %v, want APIConnectOptions timeout", anthropicStream.connectTimeout)
+	}
+}
+
+func TestAnthropicConnectTimeoutUsesReferenceDefaultUnlessConfigured(t *testing.T) {
+	if got := anthropicConnectTimeout(nil); got != 5*time.Second {
+		t.Fatalf("default connect timeout = %v, want reference 5s", got)
+	}
+	if got := anthropicConnectTimeout(&llm.APIConnectOptions{Timeout: 75 * time.Millisecond}); got != 75*time.Millisecond {
+		t.Fatalf("configured connect timeout = %v, want APIConnectOptions timeout", got)
 	}
 }
 

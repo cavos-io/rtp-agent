@@ -146,7 +146,7 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 		model:            model,
 		baseURL:          defaultAnthropicURL,
 		strictToolSchema: true,
-		httpClient:       newAnthropicHTTPClient(http.DefaultTransport),
+		httpClient:       newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout),
 	}
 	for _, opt := range opts {
 		opt(llm)
@@ -194,6 +194,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if err != nil {
 		return nil, err
 	}
+	connectTimeout := anthropicConnectTimeout(options.ConnectOptions)
 
 	messages, systemMessages, err := buildAnthropicMessagesE(chatCtx)
 	if err != nil {
@@ -299,7 +300,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	}
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
-		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag)
+		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag, connectTimeout)
 		if err == nil {
 			return &anthropicStream{
 				llm:            l,
@@ -307,6 +308,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				jsonBody:       jsonBody,
 				betaFlag:       betaFlag,
 				connectOptions: connectOptions,
+				connectTimeout: connectTimeout,
 				retryAttempt:   attempt,
 				resp:           resp,
 				reader:         bufio.NewReader(resp.Body),
@@ -343,7 +345,7 @@ func (anthropicEOFStream) Close() error {
 	return nil
 }
 
-func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte, betaFlag string) (*http.Response, error) {
+func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte, betaFlag string, connectTimeout time.Duration) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL+"/v1/messages", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
@@ -356,7 +358,11 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 		req.Header.Set("anthropic-beta", betaFlag)
 	}
 
-	resp, err := l.httpClient.Do(req)
+	client := l.httpClient
+	if connectTimeout != defaultAnthropicConnectTimeout {
+		client = newAnthropicHTTPClient(http.DefaultTransport, connectTimeout)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return nil, llm.NewAPITimeoutError("")
@@ -394,11 +400,14 @@ func (c *anthropicReadTimeoutConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-func newAnthropicHTTPClient(base http.RoundTripper) *http.Client {
+func newAnthropicHTTPClient(base http.RoundTripper, connectTimeout time.Duration) *http.Client {
+	if connectTimeout <= 0 {
+		connectTimeout = defaultAnthropicConnectTimeout
+	}
 	if transport, ok := base.(*http.Transport); ok {
 		cloned := transport.Clone()
 		dialer := &net.Dialer{
-			Timeout:   defaultAnthropicConnectTimeout,
+			Timeout:   connectTimeout,
 			KeepAlive: 30 * time.Second,
 		}
 		cloned.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -411,11 +420,18 @@ func newAnthropicHTTPClient(base http.RoundTripper) *http.Client {
 		cloned.ResponseHeaderTimeout = defaultAnthropicReadTimeout
 		return &http.Client{Transport: &anthropicTimeoutRoundTripper{
 			Transport:      cloned,
-			connectTimeout: defaultAnthropicConnectTimeout,
+			connectTimeout: connectTimeout,
 			readTimeout:    defaultAnthropicReadTimeout,
 		}}
 	}
 	return &http.Client{Transport: base}
+}
+
+func anthropicConnectTimeout(options *llm.APIConnectOptions) time.Duration {
+	if options == nil || options.Timeout <= 0 {
+		return defaultAnthropicConnectTimeout
+	}
+	return options.Timeout
 }
 
 func parseAnthropicErrorBody(respBody []byte) (string, any) {
@@ -653,6 +669,7 @@ type anthropicStream struct {
 	jsonBody       []byte
 	betaFlag       string
 	connectOptions llm.APIConnectOptions
+	connectTimeout time.Duration
 	retryAttempt   int
 
 	resp   *http.Response
@@ -1373,7 +1390,7 @@ func (s *anthropicStream) retryBeforeOutput(err error) error {
 	}
 	for s.retryAttempt < s.connectOptions.MaxRetry {
 		s.retryAttempt++
-		resp, startErr := s.llm.startAnthropicStream(s.ctx, s.jsonBody, s.betaFlag)
+		resp, startErr := s.llm.startAnthropicStream(s.ctx, s.jsonBody, s.betaFlag, s.connectTimeout)
 		if startErr == nil {
 			s.resetAttempt(resp)
 			return nil
