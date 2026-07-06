@@ -841,8 +841,11 @@ func TestFallbackAdapterReturnsAllFailedErrorWhenProvidersExhausted(t *testing.T
 	if strings.Contains(err.Error(), secondErr.Error()) {
 		t.Fatalf("Next error = %q, want public all-failed message without raw provider detail", err)
 	}
-	if primary.calls != 1 || fallback.calls != 1 {
-		t.Fatalf("provider calls before returning all-failed error = (%d, %d), want one startup attempt per provider", primary.calls, fallback.calls)
+	if primary.calls < 1 || fallback.calls < 1 {
+		t.Fatalf("provider startup calls before all-failed error = (%d, %d), want at least one attempt per provider", primary.calls, fallback.calls)
+	}
+	if primary.calls > 2 || fallback.calls > 2 {
+		t.Fatalf("provider calls including async recovery = (%d, %d), want startup plus at most one recovery probe", primary.calls, fallback.calls)
 	}
 }
 
