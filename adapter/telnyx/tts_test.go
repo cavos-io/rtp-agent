@@ -470,6 +470,29 @@ func TestTelnyxTTSAudioFromMessageReturnsAPIConnectionErrorOnMalformedAudio(t *t
 	}
 }
 
+func TestTelnyxTTSAudioFromMessageIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"audio":"!!!!"}`),
+		[]byte(`{"audio":"==="}`),
+	} {
+		audioBytes, done, err := telnyxTTSAudioBytesFromMessage(payload)
+		if err != nil {
+			t.Fatalf("audio bytes from noise %s: %v", payload, err)
+		}
+		if audioBytes != nil || done {
+			t.Fatalf("noise %s = audio=%v done=%v, want ignored empty chunk", payload, audioBytes, done)
+		}
+
+		audio, done, err := telnyxTTSAudioFromMessage(payload, 16000)
+		if err != nil {
+			t.Fatalf("audio frame from noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("noise %s = audio=%+v done=%v, want ignored empty frame", payload, audio, done)
+		}
+	}
+}
+
 func TestTelnyxTTSStreamDecodesReferenceMP3Audio(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
