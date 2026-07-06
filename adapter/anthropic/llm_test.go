@@ -2035,6 +2035,35 @@ func TestAnthropicChatUsesStrictToolInputSchema(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatCanDisableStrictToolSchemaLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicStrictToolSchema(false))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicRequestTestTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one tool", transport.body["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want map", tools[0])
+	}
+	if _, ok := tool["strict"]; ok {
+		t.Fatalf("tool strict = %#v, want omitted", tool["strict"])
+	}
+}
+
 func TestAnthropicChatUsesProviderComputerToolSpec(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

@@ -35,6 +35,7 @@ type AnthropicLLM struct {
 	cachingSet           bool
 	toolChoice           llm.ToolChoice
 	toolChoiceSet        bool
+	strictToolSchema     bool
 	parallelToolCalls    bool
 	parallelToolCallsSet bool
 }
@@ -110,6 +111,12 @@ func WithAnthropicToolChoice(choice llm.ToolChoice) AnthropicOption {
 	}
 }
 
+func WithAnthropicStrictToolSchema(strict bool) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.strictToolSchema = strict
+	}
+}
+
 func WithAnthropicParallelToolCalls(parallel bool) AnthropicOption {
 	return func(l *AnthropicLLM) {
 		l.parallelToolCalls = parallel
@@ -128,9 +135,10 @@ func NewAnthropicLLM(apiKey string, model string, opts ...AnthropicOption) (*Ant
 		return nil, errors.New("anthropic API key is required, either as argument or set ANTHROPIC_API_KEY environment variable")
 	}
 	llm := &AnthropicLLM{
-		apiKey:  apiKey,
-		model:   model,
-		baseURL: defaultAnthropicURL,
+		apiKey:           apiKey,
+		model:            model,
+		baseURL:          defaultAnthropicURL,
+		strictToolSchema: true,
 	}
 	for _, opt := range opts {
 		opt(llm)
@@ -231,12 +239,15 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 					}
 				}
 			} else {
-				tools = append(tools, map[string]interface{}{
+				toolSpec := map[string]interface{}{
 					"name":         tool.Name(),
 					"description":  tool.Description(),
 					"input_schema": llm.ToolParameters(tool),
-					"strict":       true,
-				})
+				}
+				if l.strictToolSchema {
+					toolSpec["strict"] = true
+				}
+				tools = append(tools, toolSpec)
 			}
 		}
 		if cacheControl != nil && len(tools) > 0 {
