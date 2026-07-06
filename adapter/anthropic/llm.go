@@ -98,7 +98,7 @@ type anthropicContentBlock struct {
 	Source       map[string]any `json:"source,omitempty"`
 	ID           string         `json:"id,omitempty"`
 	Name         string         `json:"name,omitempty"`
-	Input        map[string]any `json:"input,omitempty"`
+	Input        any            `json:"input,omitempty"`
 	ToolUseID    string         `json:"tool_use_id,omitempty"`
 	Content      any            `json:"content,omitempty"`
 	IsError      *bool          `json:"is_error,omitempty"`
@@ -604,11 +604,11 @@ func anthropicImageBlock(image *llm.ImageContent) (anthropicContentBlock, error)
 }
 
 func anthropicToolUseBlock(fc *llm.FunctionCall) (anthropicContentBlock, error) {
-	input := make(map[string]any)
 	arguments := fc.Arguments
 	if arguments == "" {
 		arguments = "{}"
 	}
+	var input any
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return anthropicContentBlock{}, err
 	}

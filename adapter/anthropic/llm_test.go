@@ -652,8 +652,41 @@ func TestBuildAnthropicMessagesMapsEmptyToolArgumentsToObject(t *testing.T) {
 	if toolUse.Type != "tool_use" || toolUse.Name != "lookup" || toolUse.ID != "call_lookup" {
 		t.Fatalf("tool use = %#v, want lookup call", toolUse)
 	}
-	if len(toolUse.Input) != 0 {
+	inputMap, ok := toolUse.Input.(map[string]any)
+	if !ok {
 		t.Fatalf("tool input = %#v, want empty object", toolUse.Input)
+	}
+	if len(inputMap) != 0 {
+		t.Fatalf("tool input = %#v, want empty object", toolUse.Input)
+	}
+}
+
+func TestBuildAnthropicMessagesKeepsNonObjectToolArgumentsLikeReference(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "lookup"}}},
+		&llm.FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `["Paris"]`},
+		&llm.FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+	}
+
+	messages, _, err := buildAnthropicMessagesE(ctx)
+	if err != nil {
+		t.Fatalf("buildAnthropicMessagesE() error = %v, want nil for JSON array tool arguments", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want user, assistant tool, user result: %#v", len(messages), messages)
+	}
+	raw, err := json.Marshal(messages[1].Content[0])
+	if err != nil {
+		t.Fatalf("Marshal tool use block error = %v", err)
+	}
+	var block map[string]any
+	if err := json.Unmarshal(raw, &block); err != nil {
+		t.Fatalf("Unmarshal tool use block error = %v", err)
+	}
+	input, ok := block["input"].([]any)
+	if !ok || len(input) != 1 || input[0] != "Paris" {
+		t.Fatalf("tool input = %#v, want JSON array argument preserved", block["input"])
 	}
 }
 
