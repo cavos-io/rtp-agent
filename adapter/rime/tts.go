@@ -231,6 +231,14 @@ func WithRimeTTSSegment(segment string) RimeTTSOption {
 	}
 }
 
+func WithRimeTTSSentenceTokenizer(tokenizer tokenize.SentenceTokenizer) RimeTTSOption {
+	return func(t *RimeTTS) {
+		if tokenizer != nil {
+			t.sentenceTokenizer = tokenizer
+		}
+	}
+}
+
 func WithRimeTTSStreamResponseTimeout(timeout time.Duration) RimeTTSOption {
 	return func(t *RimeTTS) {
 		if timeout >= 0 {

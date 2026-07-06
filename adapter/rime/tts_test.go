@@ -22,8 +22,21 @@ import (
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 	"github.com/gorilla/websocket"
 )
+
+type rimeFixedSentenceTokenizer struct {
+	tokens []string
+}
+
+func (t rimeFixedSentenceTokenizer) Tokenize(string, string) []string {
+	return append([]string(nil), t.tokens...)
+}
+
+func (t rimeFixedSentenceTokenizer) Stream(string) tokenize.SentenceStream {
+	return tokenize.NewBasicSentenceTokenizer().Stream("")
+}
 
 func TestRimeTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewRimeTTS("test-key", "")
@@ -2941,6 +2954,37 @@ func TestRimeTTSStreamUsesReferenceBlingfireTokenizerForBlankLines(t *testing.T)
 		t.Fatalf("writes after Flush = %d, want one normalized text packet", len(writes))
 	}
 	assertRimePayload(t, writes[0], "text", "First paragraph without punctuation Second paragraph without punctuation ")
+}
+
+func TestRimeTTSStreamUsesConfiguredReferenceTokenizer(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeFixedSentenceTokenizer{tokens: []string{"custom packet"}}))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text ignored by tokenizer"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes after PushText = %d, want custom tokenizer tail buffered until Flush", len(writes))
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want one custom tokenizer packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "custom packet ")
 }
 
 func TestRimeTTSStreamEndInputFlushesReferenceTailAndClosesInput(t *testing.T) {
