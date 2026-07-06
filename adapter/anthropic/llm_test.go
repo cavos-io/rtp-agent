@@ -443,6 +443,37 @@ func TestAnthropicChatRetriesRetryableSetupAPIError(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatReportsExhaustedRetryAsConnectionErrorLikeReference(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusTooManyRequests, "rate limit"),
+		anthropicTestResponse(http.StatusTooManyRequests, "still limited"),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Chat error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "failed to generate LLM completion after 2 attempts" {
+		t.Fatalf("Message = %q, want exhausted retry message", connectionErr.Message)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial failure plus final retry", transport.calls)
+	}
+}
+
 func TestAnthropicChatDoesNotRetryNonRetryableSetupAPIError(t *testing.T) {
 	transport := &sequenceRoundTripper{responses: []*http.Response{
 		anthropicTestResponse(http.StatusBadRequest, "bad request"),

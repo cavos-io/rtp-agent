@@ -213,6 +213,11 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 			if cancel != nil {
 				cancel()
 			}
+			if connectOptions.MaxRetry > 0 && attempt == connectOptions.MaxRetry && anthropicShouldRetryError(lastErr) {
+				return nil, llm.NewAPIConnectionError(
+					fmt.Sprintf("failed to generate LLM completion after %d attempts", connectOptions.MaxRetry+1),
+				)
+			}
 			return nil, lastErr
 		}
 		if err := waitAnthropicRetryInterval(ctx, connectOptions.IntervalForRetry(attempt)); err != nil {
