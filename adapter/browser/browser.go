@@ -100,14 +100,14 @@ func (p *PageActions) Scroll(x, y int, direction string, amount int) {
 	pixels := amount * 120
 	deltaX, deltaY := 0, 0
 	switch direction {
+	case "", "down":
+		deltaY = -pixels
 	case "up":
 		deltaY = pixels
 	case "left":
 		deltaX = pixels
 	case "right":
 		deltaX = -pixels
-	default:
-		deltaY = -pixels
 	}
 	p.mouseMove(x, y)
 	p.record(PageActionEvent{Type: "mouse_wheel", X: x, Y: y, DeltaX: deltaX, DeltaY: deltaY})
