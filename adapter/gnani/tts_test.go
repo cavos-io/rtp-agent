@@ -254,6 +254,30 @@ func TestGnaniTTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestGnaniTTSSynthesizeReturnsAPITimeoutErrorOnTransportTimeout(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: gnaniTTSRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, gnaniTTSTimeoutError{}
+	})}
+
+	provider := NewTTS("test-key")
+
+	stream, err := provider.Synthesize(context.Background(), "namaste")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	if err == nil {
+		t.Fatal("Next error = nil, want APITimeoutError")
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestGnaniTTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	requests := 0
 	originalClient := http.DefaultClient

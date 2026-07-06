@@ -255,6 +255,13 @@ func (s *ttsChunkedStream) ensureResponse() error {
 	if err != nil {
 		s.closed = true
 		s.finalSent = true
+		if errors.Is(err, context.DeadlineExceeded) {
+			return llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return llm.NewAPITimeoutError(err.Error())
+		}
 		return err
 	}
 	if resp.StatusCode != http.StatusOK {
