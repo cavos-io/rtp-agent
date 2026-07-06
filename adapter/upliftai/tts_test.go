@@ -53,6 +53,32 @@ type upliftAIReadErrorBody struct {
 func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b upliftAIReadErrorBody) Close() error             { return nil }
 
+type upliftAIBlockingEOFBody struct {
+	data   []byte
+	offset int
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newUpliftAIBlockingEOFBody(data []byte) *upliftAIBlockingEOFBody {
+	return &upliftAIBlockingEOFBody{data: data, closed: make(chan struct{})}
+}
+
+func (b *upliftAIBlockingEOFBody) Read(p []byte) (int, error) {
+	if b.offset < len(b.data) {
+		n := copy(p, b.data[b.offset:])
+		b.offset += n
+		return n, nil
+	}
+	<-b.closed
+	return 0, io.EOF
+}
+
+func (b *upliftAIBlockingEOFBody) Close() error {
+	b.once.Do(func() { close(b.closed) })
+	return nil
+}
+
 func newUpliftAITestHTTPProvider(apiKey string, voice string, opts ...UpliftAITTSOption) *UpliftAITTS {
 	baseOpts := []UpliftAITTSOption{WithUpliftAIBaseURL("https://upliftai.example/v1/tts")}
 	baseOpts = append(baseOpts, opts...)
@@ -2055,6 +2081,48 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
 	prefixLen := min(len(audio.Frame.Data), len(mp3Data))
 	if bytes.Equal(audio.Frame.Data[:prefixLen], mp3Data[:prefixLen]) {
 		t.Fatal("frame data still contains compressed MP3 bytes")
+	}
+}
+
+func TestUpliftAITTSChunkedStreamStreamsReferenceMP3BeforeEOF(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	body := newUpliftAIBlockingEOFBody(mp3Data)
+	provider := newUpliftAITestHTTPProvider("test-key", "")
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: body},
+	}
+	defer stream.Close()
+
+	type result struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}
+	resultCh := make(chan result, 1)
+	go func() {
+		audio, err := stream.Next()
+		resultCh <- result{audio: audio, err: err}
+	}()
+
+	select {
+	case got := <-resultCh:
+		if got.err != nil {
+			t.Fatalf("Next error = %v", got.err)
+		}
+		if got.audio == nil || got.audio.Frame == nil {
+			t.Fatalf("audio = %#v, want decoded MP3 frame before response EOF", got.audio)
+		}
+	case <-time.After(500 * time.Millisecond):
+		_ = stream.Close()
+		select {
+		case <-resultCh:
+		case <-time.After(time.Second):
+		}
+		t.Fatal("timed out waiting for decoded MP3 frame before response EOF")
 	}
 }
 

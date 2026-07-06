@@ -597,20 +597,22 @@ func (s *upliftAITTSSynthesizeStream) Close() error {
 }
 
 type upliftAITTSChunkedStream struct {
-	owner        *UpliftAITTS
-	ctx          context.Context
-	cancel       context.CancelFunc
-	text         string
-	resp         *http.Response
-	once         sync.Once
-	err          error
-	decoder      codecs.AudioStreamDecoder
-	outputFormat string
-	started      bool
-	hasAudio     bool
-	pendingFinal bool
-	finalSent    bool
-	closed       bool
+	owner         *UpliftAITTS
+	ctx           context.Context
+	cancel        context.CancelFunc
+	text          string
+	resp          *http.Response
+	once          sync.Once
+	err           error
+	decoder       codecs.AudioStreamDecoder
+	decodeMu      sync.Mutex
+	decodeReadErr error
+	outputFormat  string
+	started       bool
+	hasAudio      bool
+	pendingFinal  bool
+	finalSent     bool
+	closed        bool
 }
 
 func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -1164,31 +1166,27 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 	}
 	if !s.started {
 		s.started = true
-		data, err := io.ReadAll(s.resp.Body)
-		if err != nil {
-			return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", err)
-		}
-		if len(data) == 0 {
-			s.finalSent = true
-			return &tts.SynthesizedAudio{IsFinal: true}, nil
-		}
-		s.hasAudio = true
 		decoder := codecs.NewMP3AudioStreamDecoder()
 		s.decoder = decoder
-		go func() {
-			decoder.Push(data)
-			decoder.EndInput()
-		}()
+		if audio, done, err := s.startCompressedDecoder(decoder, "UpliftAI TTS MP3 read failed"); done {
+			return audio, err
+		}
 	}
 
 	frame, err := s.decoder.Next()
 	if err != nil {
 		if strings.Contains(err.Error(), "decoder closed") {
+			if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
+				return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", readErr)
+			}
 			if s.hasAudio && !s.finalSent {
 				s.finalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
 			return nil, io.EOF
+		}
+		if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
+			return nil, upliftAITTSReadError("UpliftAI TTS MP3 read failed", readErr)
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
 	}
@@ -1200,6 +1198,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, erro
 		}
 		frame = resampled
 	}
+	s.hasAudio = true
 	return &tts.SynthesizedAudio{Frame: frame}, nil
 }
 
@@ -1209,31 +1208,27 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 	}
 	if !s.started {
 		s.started = true
-		data, err := io.ReadAll(s.resp.Body)
-		if err != nil {
-			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", err)
-		}
-		if len(data) == 0 {
-			s.finalSent = true
-			return &tts.SynthesizedAudio{IsFinal: true}, nil
-		}
-		s.hasAudio = true
 		decoder := codecs.NewOpusAudioStreamDecoder(defaultUpliftAISampleRate, 1)
 		s.decoder = decoder
-		go func() {
-			decoder.Push(data)
-			decoder.EndInput()
-		}()
+		if audio, done, err := s.startCompressedDecoder(decoder, "UpliftAI TTS OGG read failed"); done {
+			return audio, err
+		}
 	}
 
 	frame, err := s.decoder.Next()
 	if err != nil {
 		if strings.Contains(err.Error(), "decoder closed") {
+			if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
+				return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
+			}
 			if s.hasAudio && !s.finalSent {
 				s.finalSent = true
 				return &tts.SynthesizedAudio{IsFinal: true}, nil
 			}
 			return nil, io.EOF
+		}
+		if readErr := s.compressedReadError(); readErr != nil && !s.hasAudio {
+			return nil, upliftAITTSReadError("UpliftAI TTS OGG read failed", readErr)
 		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS OGG decode failed: %v", err))
 	}
@@ -1245,7 +1240,74 @@ func (s *upliftAITTSChunkedStream) nextDecodedOGG() (*tts.SynthesizedAudio, erro
 		}
 		frame = resampled
 	}
+	s.hasAudio = true
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func (s *upliftAITTSChunkedStream) startCompressedDecoder(decoder codecs.AudioStreamDecoder, readErrorPrefix string) (*tts.SynthesizedAudio, bool, error) {
+	buf := make([]byte, 8192)
+	n, err := s.resp.Body.Read(buf)
+	if n == 0 {
+		if err == io.EOF {
+			s.finalSent = true
+			_ = decoder.Close()
+			return &tts.SynthesizedAudio{IsFinal: true}, true, nil
+		}
+		if err != nil {
+			_ = decoder.Close()
+			return nil, true, upliftAITTSReadError(readErrorPrefix, err)
+		}
+	}
+	first := make([]byte, n)
+	copy(first, buf[:n])
+	go s.streamCompressedResponse(decoder, first, err)
+	return nil, false, nil
+}
+
+func (s *upliftAITTSChunkedStream) streamCompressedResponse(decoder codecs.AudioStreamDecoder, first []byte, firstErr error) {
+	if len(first) > 0 {
+		decoder.Push(first)
+	}
+	if firstErr != nil {
+		if firstErr == io.EOF {
+			decoder.EndInput()
+			return
+		}
+		s.setCompressedReadError(firstErr)
+		_ = decoder.Close()
+		return
+	}
+	buf := make([]byte, 8192)
+	for {
+		n, err := s.resp.Body.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			decoder.Push(chunk)
+		}
+		if err == nil {
+			continue
+		}
+		if err == io.EOF {
+			decoder.EndInput()
+			return
+		}
+		s.setCompressedReadError(err)
+		_ = decoder.Close()
+		return
+	}
+}
+
+func (s *upliftAITTSChunkedStream) setCompressedReadError(err error) {
+	s.decodeMu.Lock()
+	defer s.decodeMu.Unlock()
+	s.decodeReadErr = err
+}
+
+func (s *upliftAITTSChunkedStream) compressedReadError() error {
+	s.decodeMu.Lock()
+	defer s.decodeMu.Unlock()
+	return s.decodeReadErr
 }
 
 func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, error) {
