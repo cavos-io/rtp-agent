@@ -117,6 +117,22 @@ func (b *anthropicReadErrorBody) Close() error {
 	return nil
 }
 
+type anthropicSingleCloseBody struct {
+	closed bool
+}
+
+func (b *anthropicSingleCloseBody) Read(_ []byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (b *anthropicSingleCloseBody) Close() error {
+	if b.closed {
+		return errors.New("closed twice")
+	}
+	b.closed = true
+	return nil
+}
+
 func TestAnthropicLLMMetadataMatchesReference(t *testing.T) {
 	model, err := NewAnthropicLLM("test-key", "")
 	if err != nil {
@@ -965,6 +981,21 @@ func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+}
+
+func TestAnthropicStreamCloseIsIdempotent(t *testing.T) {
+	body := &anthropicSingleCloseBody{}
+	stream := &anthropicStream{
+		resp:   &http.Response{Body: body},
+		reader: bufio.NewReader(body),
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("second Close() error = %v, want nil", err)
 	}
 }
 

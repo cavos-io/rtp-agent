@@ -920,8 +920,14 @@ func (s *anthropicStream) visibleAnthropicTextDelta(text string) string {
 }
 
 func (s *anthropicStream) Close() error {
+	if s.closed {
+		return nil
+	}
 	s.closed = true
-	err := s.resp.Body.Close()
+	var err error
+	if s.resp != nil && s.resp.Body != nil {
+		err = s.resp.Body.Close()
+	}
 	if s.cancel != nil {
 		s.cancel()
 		s.cancel = nil
