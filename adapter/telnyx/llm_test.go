@@ -1,10 +1,14 @@
 package telnyx
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
+	adapteropenai "github.com/cavos-io/rtp-agent/adapter/openai"
 	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
@@ -49,4 +53,94 @@ func TestTelnyxLLMRequiresAPIKeyBeforeRequest(t *testing.T) {
 	if !strings.Contains(err.Error(), "TELNYX_API_KEY") {
 		t.Fatalf("Chat error = %q, want TELNYX_API_KEY guidance", err)
 	}
+}
+
+func TestTelnyxLLMForwardsReferenceConstructorOptions(t *testing.T) {
+	capture := &captureTelnyxLLMHTTPClient{
+		statusCode:   http.StatusBadRequest,
+		responseBody: `{"error":{"message":"bad request"}}`,
+	}
+	provider := NewTelnyxLLM("test-key", "telnyx-chat",
+		WithTelnyxLLMBaseURL("https://telnyx.example/v2/ai"),
+		WithTelnyxLLMHTTPClient(capture),
+		WithTelnyxLLMOptions(
+			adapteropenai.WithOpenAILLMUser("caller-1"),
+			adapteropenai.WithOpenAILLMTemperature(0.4),
+			adapteropenai.WithOpenAILLMTopP(0.7),
+			adapteropenai.WithOpenAILLMParallelToolCalls(false),
+			adapteropenai.WithOpenAILLMToolChoice("required"),
+		),
+	)
+	chatCtx := llm.NewChatContext()
+	chatCtx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	stream, err := provider.Chat(context.Background(), chatCtx,
+		llm.WithTools([]llm.Tool{telnyxLLMTestTool{}}),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+	_, _ = stream.Next()
+
+	if !strings.Contains(capture.requestURL, "https://telnyx.example/v2/ai/chat/completions") {
+		t.Fatalf("request URL = %q, want configured Telnyx base URL", capture.requestURL)
+	}
+	for _, want := range []string{
+		`"user":"caller-1"`,
+		`"temperature":0.4`,
+		`"top_p":0.7`,
+		`"parallel_tool_calls":false`,
+		`"tool_choice":"required"`,
+	} {
+		if !strings.Contains(capture.requestBody, want) {
+			t.Fatalf("request body = %s, missing %s", capture.requestBody, want)
+		}
+	}
+}
+
+type telnyxLLMTestTool struct{}
+
+func (telnyxLLMTestTool) ID() string          { return "lookup" }
+func (telnyxLLMTestTool) Name() string        { return "lookup" }
+func (telnyxLLMTestTool) Description() string { return "look up information" }
+func (telnyxLLMTestTool) Parameters() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"query": map[string]any{"type": "string"},
+		},
+		"required": []string{"query"},
+	}
+}
+func (telnyxLLMTestTool) Execute(context.Context, string) (string, error) { return "", nil }
+
+type captureTelnyxLLMHTTPClient struct {
+	requestURL   string
+	requestBody  string
+	statusCode   int
+	responseBody string
+}
+
+func (c *captureTelnyxLLMHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	c.requestURL = req.URL.String()
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+	c.requestBody = string(body)
+	statusCode := c.statusCode
+	if statusCode == 0 {
+		statusCode = http.StatusBadRequest
+	}
+	return &http.Response{
+		StatusCode: statusCode,
+		Status:     http.StatusText(statusCode),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewBufferString(c.responseBody)),
+		Request:    req,
+	}, nil
 }

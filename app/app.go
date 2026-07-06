@@ -2807,7 +2807,7 @@ func fallbackLLMFromProvider(cfg AppConfig, provider string) (llm.LLM, error) {
 		}
 		return provider, nil
 	case providerTelnyx:
-		return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel), nil
+		return telnyxLLMFromConfig(cfg), nil
 	case providerGroq:
 		return groqLLMFromConfig(cfg), nil
 	case providerXAI:
@@ -4116,6 +4116,17 @@ func groqLLMFromConfig(cfg AppConfig) *groq.GroqLLM {
 	return groq.NewGroqLLM(cfg.GroqAPIKey, cfg.LLMModel, llmOpts...)
 }
 
+func telnyxLLMFromConfig(cfg AppConfig) *telnyx.TelnyxLLM {
+	llmOpts := []telnyx.TelnyxLLMOption{}
+	if cfg.LLMBaseURL != "" {
+		llmOpts = append(llmOpts, telnyx.WithTelnyxLLMBaseURL(cfg.LLMBaseURL))
+	}
+	if openAIOpts := telnyxOpenAILLMOptionsFromConfig(cfg); len(openAIOpts) > 0 {
+		llmOpts = append(llmOpts, telnyx.WithTelnyxLLMOptions(openAIOpts...))
+	}
+	return telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel, llmOpts...)
+}
+
 func groqOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
 	opts := []openai.OpenAILLMOption{}
 	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
@@ -4147,6 +4158,35 @@ func groqOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
 	}
 	if serviceTier := modelOptionString(cfg.LLMModelOptions, "service_tier"); serviceTier != "" {
 		opts = append(opts, openai.WithOpenAILLMServiceTier(serviceTier))
+	}
+	if user := modelOptionString(cfg.LLMModelOptions, "user"); user != "" {
+		opts = append(opts, openai.WithOpenAILLMUser(user))
+	}
+	if safetyIdentifier := modelOptionString(cfg.LLMModelOptions, "safety_identifier"); safetyIdentifier != "" {
+		opts = append(opts, openai.WithOpenAILLMSafetyIdentifier(safetyIdentifier))
+	}
+	return opts
+}
+
+func telnyxOpenAILLMOptionsFromConfig(cfg AppConfig) []openai.OpenAILLMOption {
+	opts := []openai.OpenAILLMOption{}
+	if temperature := modelOptionFloat(cfg.LLMModelOptions, "temperature"); temperature != nil {
+		opts = append(opts, openai.WithOpenAILLMTemperature(*temperature))
+	}
+	if topP := modelOptionFloat(cfg.LLMModelOptions, "top_p"); topP != nil {
+		opts = append(opts, openai.WithOpenAILLMTopP(*topP))
+	}
+	if parallelToolCalls := modelOptionBool(cfg.LLMModelOptions, "parallel_tool_calls"); parallelToolCalls != nil {
+		opts = append(opts, openai.WithOpenAILLMParallelToolCalls(*parallelToolCalls))
+	}
+	if toolChoice := modelOptionString(cfg.LLMModelOptions, "tool_choice"); toolChoice != "" {
+		opts = append(opts, openai.WithOpenAILLMToolChoice(llm.ToolChoice(toolChoice)))
+	}
+	if promptCacheKey := modelOptionString(cfg.LLMModelOptions, "prompt_cache_key"); promptCacheKey != "" {
+		opts = append(opts, openai.WithOpenAILLMPromptCacheKey(promptCacheKey))
+	}
+	if reasoningEffort := modelOptionString(cfg.LLMModelOptions, "reasoning_effort"); reasoningEffort != "" {
+		opts = append(opts, openai.WithOpenAILLMReasoningEffort(reasoningEffort))
 	}
 	if user := modelOptionString(cfg.LLMModelOptions, "user"); user != "" {
 		opts = append(opts, openai.WithOpenAILLMUser(user))
@@ -5648,7 +5688,7 @@ func configureProviders(cfg AppConfig, a *agent.Agent) (llm.RealtimeModel, error
 		}
 		a.LLM = provider
 	case providerTelnyx:
-		a.LLM = telnyx.NewTelnyxLLM(cfg.TelnyxAPIKey, cfg.LLMModel)
+		a.LLM = telnyxLLMFromConfig(cfg)
 	case providerXAI:
 		a.LLM = xai.NewXaiLLM(cfg.XAIAPIKey, cfg.LLMModel)
 	case providerCerebras:
