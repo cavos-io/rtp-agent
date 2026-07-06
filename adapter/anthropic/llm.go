@@ -928,7 +928,13 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "error":
 			message, body := parseAnthropicErrorBody([]byte(data))
-			return nil, llm.NewAPIError(message, body, !s.emittedChunk)
+			apiErr := llm.NewAPIError(message, body, !s.emittedChunk)
+			if retryErr := s.retryBeforeOutput(apiErr); retryErr == nil {
+				continue
+			} else if retryErr != apiErr {
+				return nil, retryErr
+			}
+			return nil, apiErr
 		}
 	}
 }

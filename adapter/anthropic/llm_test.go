@@ -885,6 +885,46 @@ func TestAnthropicStreamErrorAfterChunkIsNotRetryable(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatRetriesErrorEventBeforeChunkLikeReference(t *testing.T) {
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		anthropicTestResponse(http.StatusOK, `data: {"type":"error","error":{"type":"overloaded_error","message":"server overloaded"}}`+"\n\n"),
+		anthropicTestResponse(http.StatusOK, strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"retry ok"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n")),
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want retry success", err)
+	}
+	if chunk.Delta == nil || chunk.Delta.Content != "retry ok" {
+		t.Fatalf("chunk = %#v, want retried visible text", chunk)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial stream plus retry", transport.calls)
+	}
+}
+
 func TestAnthropicStreamMalformedEventReturnsConnectionError(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
