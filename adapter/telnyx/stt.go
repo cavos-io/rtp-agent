@@ -531,7 +531,8 @@ func (s *telnyxSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) || err == io.EOF {
 				if !s.isClosed() && !s.isInputEnded() {
 					s.errCh <- llm.NewAPIStatusError("Telnyx STT WebSocket closed unexpectedly", 0, "", nil)
 				}
