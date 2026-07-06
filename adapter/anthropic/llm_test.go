@@ -877,6 +877,25 @@ func TestBuildAnthropicMessagesParsesJSONListToolResultContent(t *testing.T) {
 	}
 }
 
+func TestBuildAnthropicMessagesKeepsJSONNullToolResultTextLikeReference(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "look"}}},
+		&llm.FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{}`},
+		&llm.FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "null"},
+	}
+
+	messages, _ := buildAnthropicMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want user, assistant tool, user result: %#v", len(messages), messages)
+	}
+	result := messages[2].Content[0]
+	if result.Content != "null" {
+		t.Fatalf("tool result content = %#v, want string null", result.Content)
+	}
+}
+
 func TestBuildAnthropicMessagesFiltersUnmatchedToolItems(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{

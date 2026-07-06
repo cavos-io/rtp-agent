@@ -631,9 +631,11 @@ func anthropicToolResultBlock(fco *llm.FunctionCallOutput) anthropicContentBlock
 }
 
 func anthropicToolResultContent(output string) any {
-	var parsed []any
+	var parsed any
 	if err := json.Unmarshal([]byte(output), &parsed); err == nil {
-		return parsed
+		if list, ok := parsed.([]any); ok {
+			return list
+		}
 	}
 	return output
 }
