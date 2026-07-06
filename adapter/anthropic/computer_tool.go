@@ -58,7 +58,14 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 		if err != nil {
 			return nil, err
 		}
-		modifiers, _ := args["text"].(string)
+		var modifiers string
+		if rawModifiers, ok := args["text"]; ok {
+			var ok bool
+			modifiers, ok = rawModifiers.(string)
+			if !ok {
+				return nil, fmt.Errorf("text must be a string")
+			}
+		}
 		c.actions.LeftClick(x, y, modifiers)
 	case "right_click":
 		x, y, err := requireCoordinate(args, "coordinate")

@@ -176,6 +176,22 @@ func TestComputerToolValidatesRequiredArguments(t *testing.T) {
 	}
 }
 
+func TestComputerToolNonStringLeftClickTextErrorsBeforeAction(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "left_click", map[string]interface{}{
+		"coordinate": []interface{}{float64(10), float64(20)},
+		"text":       float64(1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "text must be a string") {
+		t.Fatalf("Execute error = %v, want text type error", err)
+	}
+	if events := actions.Events(); len(events) != 0 {
+		t.Fatalf("events = %#v, want no mouse actions before modifier parse succeeds", events)
+	}
+}
+
 func TestComputerToolUsesReferenceErrorText(t *testing.T) {
 	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
 
