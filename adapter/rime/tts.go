@@ -2225,14 +2225,32 @@ func rimeTTSPythonStringRepr(value string) string {
 	if strings.Contains(value, "'") && !strings.Contains(value, `"`) {
 		return strconv.Quote(value)
 	}
-	replacer := strings.NewReplacer(
-		`\`, `\\`,
-		`'`, `\'`,
-		"\n", `\n`,
-		"\r", `\r`,
-		"\t", `\t`,
-	)
-	return "'" + replacer.Replace(value) + "'"
+	var builder strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\\':
+			builder.WriteString(`\\`)
+		case '\'':
+			builder.WriteString(`\'`)
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\t':
+			builder.WriteString(`\t`)
+		case '\b':
+			builder.WriteString(`\x08`)
+		case '\f':
+			builder.WriteString(`\x0c`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				builder.WriteString(fmt.Sprintf(`\x%02x`, r))
+				continue
+			}
+			builder.WriteRune(r)
+		}
+	}
+	return "'" + builder.String() + "'"
 }
 
 type rimeTTSWordTimestampsPayload struct {
