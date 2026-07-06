@@ -2092,7 +2092,7 @@ func rimeTTSWebsocketErrorMessage(raw json.RawMessage) string {
 }
 
 func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	if len(raw) == 0 || rimeTTSJSONNullOrFalsey(raw) {
 		return nil, nil
 	}
 	var words []string
@@ -2108,6 +2108,13 @@ func rimeTTSTimestampWords(raw json.RawMessage) ([]string, error) {
 		words = append(words, string(r))
 	}
 	return words, nil
+}
+
+func rimeTTSJSONNullOrFalsey(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return bytes.Equal(trimmed, []byte("null")) ||
+		bytes.Equal(trimmed, []byte("false")) ||
+		bytes.Equal(trimmed, []byte("0"))
 }
 
 func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
