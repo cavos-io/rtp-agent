@@ -419,7 +419,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		if encoded == "" {
 			return nil, false, nil
 		}
-		data, err := base64.StdEncoding.DecodeString(encoded)
+		data, err := slngDecodeBase64Audio(encoded)
 		if err != nil {
 			return nil, false, nil
 		}
@@ -437,7 +437,7 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		return nil, false, llm.NewAPIStatusError("SLNG TTS error: "+extractSLNGError(message), -1, "", message)
 	case "":
 		if encoded := slngString(message["audio"]); encoded != "" {
-			data, err := base64.StdEncoding.DecodeString(encoded)
+			data, err := slngDecodeBase64Audio(encoded)
 			if err != nil {
 				if slngBool(message["isFinal"]) {
 					return slngTTSFinalMarker(), true, nil
@@ -462,6 +462,23 @@ func ttsAudioFromMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio,
 		}
 	}
 	return nil, false, nil
+}
+
+func slngDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/',
+			b == '=':
+			clean = append(clean, b)
+		}
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func slngTTSFinalMarker() *tts.SynthesizedAudio {
