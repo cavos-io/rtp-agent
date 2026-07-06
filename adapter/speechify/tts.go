@@ -39,6 +39,8 @@ type SpeechifyTTS struct {
 
 type SpeechifyTTSOption func(*SpeechifyTTS)
 
+type SpeechifyTTSUpdateOption func(*SpeechifyTTS)
+
 func WithSpeechifyTTSBaseURL(baseURL string) SpeechifyTTSOption {
 	return func(t *SpeechifyTTS) {
 		if baseURL != "" {
@@ -88,6 +90,36 @@ func WithSpeechifyTTSTextNormalization(enabled bool) SpeechifyTTSOption {
 	}
 }
 
+func WithSpeechifyTTSUpdateVoice(voice string) SpeechifyTTSUpdateOption {
+	return func(t *SpeechifyTTS) {
+		t.voice = voice
+	}
+}
+
+func WithSpeechifyTTSUpdateModel(model string) SpeechifyTTSUpdateOption {
+	return func(t *SpeechifyTTS) {
+		t.model = model
+	}
+}
+
+func WithSpeechifyTTSUpdateLanguage(language string) SpeechifyTTSUpdateOption {
+	return func(t *SpeechifyTTS) {
+		t.language = language
+	}
+}
+
+func WithSpeechifyTTSUpdateLoudnessNormalization(enabled bool) SpeechifyTTSUpdateOption {
+	return func(t *SpeechifyTTS) {
+		t.loudnessNormalization = &enabled
+	}
+}
+
+func WithSpeechifyTTSUpdateTextNormalization(enabled bool) SpeechifyTTSUpdateOption {
+	return func(t *SpeechifyTTS) {
+		t.textNormalization = &enabled
+	}
+}
+
 func NewSpeechifyTTS(apiKey string, voice string, opts ...SpeechifyTTSOption) *SpeechifyTTS {
 	if apiKey == "" {
 		apiKey = os.Getenv(speechifyAPIKeyEnv)
@@ -121,6 +153,12 @@ func (t *SpeechifyTTS) Model() string {
 	return t.model
 }
 func (t *SpeechifyTTS) Provider() string { return "Speechify" }
+
+func (t *SpeechifyTTS) UpdateOptions(opts ...SpeechifyTTSUpdateOption) {
+	for _, opt := range opts {
+		opt(t)
+	}
+}
 
 func (t *SpeechifyTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedStream, error) {
 	if err := validateSpeechifyAPIKey(t.apiKey); err != nil {

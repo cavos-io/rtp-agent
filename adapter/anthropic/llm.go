@@ -98,10 +98,10 @@ type anthropicContentBlock struct {
 	Source       map[string]any `json:"source,omitempty"`
 	ID           string         `json:"id,omitempty"`
 	Name         string         `json:"name,omitempty"`
-	Input        map[string]any `json:"input,omitempty"`
+	Input        any            `json:"input,omitempty"`
 	ToolUseID    string         `json:"tool_use_id,omitempty"`
 	Content      any            `json:"content,omitempty"`
-	IsError      bool           `json:"is_error,omitempty"`
+	IsError      *bool          `json:"is_error,omitempty"`
 	CacheControl map[string]any `json:"cache_control,omitempty"`
 }
 
@@ -115,16 +115,9 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	if err != nil {
 		return nil, err
 	}
-	var cancel context.CancelFunc
-	if connectOptions.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
-	}
 
 	messages, systemMessages, err := buildAnthropicMessagesE(chatCtx)
 	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
 		return nil, err
 	}
 	if anthropicModelDisablesPrefill(l.model) {
@@ -135,9 +128,6 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		applyAnthropicMessageCacheControl(messages, cacheControl)
 	}
 	if err := validateAnthropicExtraParams(options.ExtraParams); err != nil {
-		if cancel != nil {
-			cancel()
-		}
 		return nil, err
 	}
 
@@ -187,9 +177,6 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		if cancel != nil {
-			cancel()
-		}
 		return nil, err
 	}
 	var lastErr error
@@ -205,21 +192,14 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				retryAttempt:   attempt,
 				resp:           resp,
 				reader:         bufio.NewReader(resp.Body),
-				cancel:         cancel,
 			}, nil
 		}
 		lastErr = err
 		var statusErr *llm.APIStatusError
 		if errors.As(lastErr, &statusErr) && statusErr.StatusCode == 499 {
-			if cancel != nil {
-				cancel()
-			}
 			return anthropicEOFStream{}, nil
 		}
 		if attempt == connectOptions.MaxRetry || !anthropicShouldRetryError(lastErr) {
-			if cancel != nil {
-				cancel()
-			}
 			if connectOptions.MaxRetry > 0 && attempt == connectOptions.MaxRetry && anthropicShouldRetryError(lastErr) {
 				return nil, llm.NewAPIConnectionError(
 					fmt.Sprintf("failed to generate LLM completion after %d attempts", connectOptions.MaxRetry+1),
@@ -228,16 +208,10 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 			return nil, lastErr
 		}
 		if err := waitAnthropicRetryInterval(ctx, connectOptions.IntervalForRetry(attempt)); err != nil {
-			if cancel != nil {
-				cancel()
-			}
 			return nil, err
 		}
 	}
 
-	if cancel != nil {
-		cancel()
-	}
 	return nil, lastErr
 }
 
@@ -630,11 +604,11 @@ func anthropicImageBlock(image *llm.ImageContent) (anthropicContentBlock, error)
 }
 
 func anthropicToolUseBlock(fc *llm.FunctionCall) (anthropicContentBlock, error) {
-	input := make(map[string]any)
 	arguments := fc.Arguments
 	if arguments == "" {
 		arguments = "{}"
 	}
+	var input any
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return anthropicContentBlock{}, err
 	}
@@ -647,18 +621,21 @@ func anthropicToolUseBlock(fc *llm.FunctionCall) (anthropicContentBlock, error) 
 }
 
 func anthropicToolResultBlock(fco *llm.FunctionCallOutput) anthropicContentBlock {
+	isError := fco.IsError
 	return anthropicContentBlock{
 		Type:      "tool_result",
 		ToolUseID: fco.CallID,
 		Content:   anthropicToolResultContent(fco.Output),
-		IsError:   fco.IsError,
+		IsError:   &isError,
 	}
 }
 
 func anthropicToolResultContent(output string) any {
-	var parsed []any
+	var parsed any
 	if err := json.Unmarshal([]byte(output), &parsed); err == nil {
-		return parsed
+		if list, ok := parsed.([]any); ok {
+			return list
+		}
 	}
 	return output
 }
@@ -804,8 +781,10 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		if err != nil {
 			if err == io.EOF {
 				if chunk := s.finalUsageChunk(); chunk != nil && !s.closed {
+					s.closeResponseBody()
 					return markAnthropicStreamChunk(s, chunk), nil
 				}
+				s.closeResponseBody()
 				return nil, io.EOF
 			}
 			if s.closed {
@@ -821,11 +800,24 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "data: ") {
+		data, ok := anthropicSSEData(line)
+		if line == "" || !ok {
 			continue
 		}
 
-		data := strings.TrimPrefix(line, "data: ")
+		data, err = s.completeAnthropicSSEData(data)
+		if err != nil {
+			if s.closed {
+				return nil, io.EOF
+			}
+			wrappedErr := s.wrapReadError(err)
+			if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+				continue
+			} else if retryErr != wrappedErr {
+				return nil, retryErr
+			}
+			return nil, wrappedErr
+		}
 
 		var event struct {
 			Type string `json:"type"`
@@ -941,6 +933,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "message_stop":
 			if chunk := s.finalUsageChunk(); chunk != nil {
+				s.closeResponseBody()
 				return markAnthropicStreamChunk(s, chunk), nil
 			}
 
@@ -953,6 +946,47 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				return nil, retryErr
 			}
 			return nil, apiErr
+		}
+	}
+}
+
+func anthropicSSEData(line string) (string, bool) {
+	if !strings.HasPrefix(line, "data:") {
+		return "", false
+	}
+	data := strings.TrimPrefix(line, "data:")
+	if strings.HasPrefix(data, " ") {
+		data = data[1:]
+	}
+	return data, true
+}
+
+func (s *anthropicStream) completeAnthropicSSEData(data string) (string, error) {
+	if json.Valid([]byte(data)) {
+		return data, nil
+	}
+
+	parts := []string{data}
+	for {
+		line, err := s.reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				return strings.Join(parts, "\n"), nil
+			}
+			return "", err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return strings.Join(parts, "\n"), nil
+		}
+		dataPart, ok := anthropicSSEData(line)
+		if !ok {
+			continue
+		}
+		parts = append(parts, dataPart)
+		joined := strings.Join(parts, "\n")
+		if json.Valid([]byte(joined)) {
+			return joined, nil
 		}
 	}
 }
@@ -1088,4 +1122,18 @@ func (s *anthropicStream) Close() error {
 		s.cancel = nil
 	}
 	return err
+}
+
+func (s *anthropicStream) closeResponseBody() {
+	if s.closed {
+		return
+	}
+	s.closed = true
+	if s.resp != nil && s.resp.Body != nil {
+		_ = s.resp.Body.Close()
+	}
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
 }

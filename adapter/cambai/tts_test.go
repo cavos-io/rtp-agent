@@ -198,6 +198,64 @@ func TestCambaiTTSOptionsMatchReference(t *testing.T) {
 	assertCambaiPayload(t, outputConfig, "format", "wav")
 }
 
+func TestCambaiTTSUpdateOptionsAffectsFutureRequestsLikeReference(t *testing.T) {
+	provider, err := NewCambaiTTS("test-key", "",
+		WithCambaiTTSBaseURL("https://cambai.example/apis/"),
+		WithCambaiTTSOutputFormat("wav"),
+	)
+	if err != nil {
+		t.Fatalf("NewCambaiTTS error = %v", err)
+	}
+
+	beforeUpdate, err := provider.Synthesize(context.Background(), "old")
+	if err != nil {
+		t.Fatalf("Synthesize before update error = %v", err)
+	}
+	oldStream, ok := beforeUpdate.(*cambaiTTSChunkedStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *cambaiTTSChunkedStream", beforeUpdate)
+	}
+	defer oldStream.Close()
+
+	provider.UpdateOptions(
+		WithCambaiTTSUpdateVoiceID(42),
+		WithCambaiTTSUpdateLanguage("fr-fr"),
+		WithCambaiTTSUpdateModel("mars-pro"),
+		WithCambaiTTSUpdateUserInstructions("warm and concise"),
+	)
+
+	if oldStream.opts.voiceID != defaultCambaiVoiceID || oldStream.opts.language != defaultCambaiLanguage || oldStream.opts.model != defaultCambaiModel || oldStream.opts.userInstructions != "" {
+		t.Fatalf("pre-update stream options = voice=%d language=%q model=%q instructions=%q, want original snapshot", oldStream.opts.voiceID, oldStream.opts.language, oldStream.opts.model, oldStream.opts.userInstructions)
+	}
+	if oldStream.sampleRate != cambaiSampleRateForModel(defaultCambaiModel) || oldStream.outputFormat != "wav" {
+		t.Fatalf("pre-update stream audio route = rate=%d format=%q, want original route snapshot", oldStream.sampleRate, oldStream.outputFormat)
+	}
+
+	req, err := buildCambaiTTSRequest(context.Background(), provider, "new")
+	if err != nil {
+		t.Fatalf("build request after update: %v", err)
+	}
+	if req.URL.String() != "https://cambai.example/apis/tts-stream" {
+		t.Fatalf("updated request URL = %q, want base URL unchanged", req.URL.String())
+	}
+	if provider.SampleRate() != 48000 {
+		t.Fatalf("sample rate = %d, want mars-pro sample rate", provider.SampleRate())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated body: %v", err)
+	}
+	if payload["voice_id"] != float64(42) {
+		t.Fatalf("voice_id = %#v, want updated voice", payload["voice_id"])
+	}
+	assertCambaiPayload(t, payload, "language", "fr-fr")
+	assertCambaiPayload(t, payload, "speech_model", "mars-pro")
+	assertCambaiPayload(t, payload, "user_instructions", "warm and concise")
+	outputConfig := payload["output_configuration"].(map[string]any)
+	assertCambaiPayload(t, outputConfig, "format", "wav")
+}
+
 func TestCambaiTTSSynthesizeUsesConfiguredClient(t *testing.T) {
 	provider, err := NewCambaiTTS("test-key", "", WithCambaiTTSModel("mars-pro"))
 	if err != nil {

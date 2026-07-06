@@ -220,6 +220,56 @@ func TestLMNTTTSOptionsMatchReference(t *testing.T) {
 	}
 }
 
+func TestLMNTTTSUpdateOptionsAffectsFutureRequestsLikeReference(t *testing.T) {
+	provider := NewLMNTTTS("test-key", "")
+
+	beforeUpdate, err := provider.Synthesize(context.Background(), "old")
+	if err != nil {
+		t.Fatalf("Synthesize before update error = %v", err)
+	}
+	oldStream, ok := beforeUpdate.(*lmntTTSChunkedStream)
+	if !ok {
+		t.Fatalf("stream type = %T, want *lmntTTSChunkedStream", beforeUpdate)
+	}
+	defer oldStream.Close()
+
+	provider.UpdateOptions(
+		WithLMNTTTSModel("aurora"),
+		WithLMNTTTSVoice("ava"),
+		WithLMNTTTSLanguage("en"),
+		WithLMNTTTSFormat("raw"),
+		WithLMNTTTSSampleRate(16000),
+		WithLMNTTTSTemperature(0.4),
+		WithLMNTTTSTopP(0.6),
+	)
+
+	if oldStream.model != "blizzard" || oldStream.voice != "leah" || oldStream.language != "auto" || oldStream.format != "mp3" || oldStream.sampleRate != 24000 {
+		t.Fatalf("pre-update stream options = model=%q voice=%q language=%q format=%q sample_rate=%d, want original snapshot", oldStream.model, oldStream.voice, oldStream.language, oldStream.format, oldStream.sampleRate)
+	}
+
+	req, err := buildLMNTTTSRequest(context.Background(), provider, "new")
+	if err != nil {
+		t.Fatalf("build request after update: %v", err)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode updated body: %v", err)
+	}
+	assertLMNTPayload(t, payload, "voice", "ava")
+	assertLMNTPayload(t, payload, "language", "en")
+	assertLMNTPayload(t, payload, "model", "aurora")
+	assertLMNTPayload(t, payload, "format", "raw")
+	if got := payload["sample_rate"]; got != float64(16000) {
+		t.Fatalf("sample_rate = %#v, want 16000", got)
+	}
+	if got := payload["temperature"]; got != 0.4 {
+		t.Fatalf("temperature = %#v, want 0.4", got)
+	}
+	if got := payload["top_p"]; got != 0.6 {
+		t.Fatalf("top_p = %#v, want 0.6", got)
+	}
+}
+
 func TestLMNTTTSDefaultsLanguageToEnglishForNonBlizzard(t *testing.T) {
 	provider := NewLMNTTTS("test-key", "", WithLMNTTTSModel("aurora"))
 

@@ -168,6 +168,27 @@ func (b *anthropicSingleCloseBody) Close() error {
 	return nil
 }
 
+type anthropicTrackedBody struct {
+	reader strings.Reader
+	closed bool
+}
+
+func newAnthropicTrackedBody(payload string) *anthropicTrackedBody {
+	return &anthropicTrackedBody{reader: *strings.NewReader(payload)}
+}
+
+func (b *anthropicTrackedBody) Read(p []byte) (int, error) {
+	return b.reader.Read(p)
+}
+
+func (b *anthropicTrackedBody) Close() error {
+	if b.closed {
+		return errors.New("closed twice")
+	}
+	b.closed = true
+	return nil
+}
+
 func TestAnthropicLLMMetadataMatchesReference(t *testing.T) {
 	model, err := NewAnthropicLLM("test-key", "")
 	if err != nil {
@@ -318,7 +339,7 @@ func (t anthropicProviderTool) AnthropicToolSpec() map[string]interface{} {
 }
 func (t anthropicProviderTool) AnthropicBetaFlag() string { return t.betaFlag }
 
-func TestAnthropicChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T) {
+func TestAnthropicChatDoesNotApplyConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = transport
@@ -338,15 +359,12 @@ func TestAnthropicChatAppliesConnectOptionsTimeoutToRequestContext(t *testing.T)
 	}
 	_ = stream.Close()
 
-	if !transport.hasDeadline {
-		t.Fatal("request context has no deadline, want connect options timeout deadline")
-	}
-	if transport.remaining <= 0 || transport.remaining > 75*time.Millisecond {
-		t.Fatalf("request context deadline remaining = %v, want bounded by connect timeout", transport.remaining)
+	if transport.hasDeadline {
+		t.Fatalf("request context deadline remaining = %v, want no whole-stream deadline from connect timeout", transport.remaining)
 	}
 }
 
-func TestAnthropicChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *testing.T) {
+func TestAnthropicChatDoesNotApplyDefaultConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
 	http.DefaultTransport = transport
@@ -362,11 +380,34 @@ func TestAnthropicChatAppliesDefaultConnectOptionsTimeoutToRequestContext(t *tes
 	}
 	_ = stream.Close()
 
-	if !transport.hasDeadline {
-		t.Fatal("request context has no deadline, want default connect timeout deadline")
+	if transport.hasDeadline {
+		t.Fatalf("request context deadline remaining = %v, want no whole-stream deadline from default connect timeout", transport.remaining)
 	}
-	if transport.remaining <= 0 || transport.remaining > llm.DefaultAPIConnectOptions().Timeout {
-		t.Fatalf("request context deadline remaining = %v, want bounded by default connect timeout", transport.remaining)
+}
+
+func TestAnthropicChatPreservesCallerDeadlineLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	stream, err := model.Chat(ctx, llm.NewChatContext())
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if !transport.hasDeadline {
+		t.Fatal("request context has no deadline, want caller deadline preserved")
+	}
+	if transport.remaining <= 0 || transport.remaining > time.Minute {
+		t.Fatalf("request context deadline remaining = %v, want caller deadline", transport.remaining)
 	}
 }
 
@@ -611,8 +652,41 @@ func TestBuildAnthropicMessagesMapsEmptyToolArgumentsToObject(t *testing.T) {
 	if toolUse.Type != "tool_use" || toolUse.Name != "lookup" || toolUse.ID != "call_lookup" {
 		t.Fatalf("tool use = %#v, want lookup call", toolUse)
 	}
-	if len(toolUse.Input) != 0 {
+	inputMap, ok := toolUse.Input.(map[string]any)
+	if !ok {
 		t.Fatalf("tool input = %#v, want empty object", toolUse.Input)
+	}
+	if len(inputMap) != 0 {
+		t.Fatalf("tool input = %#v, want empty object", toolUse.Input)
+	}
+}
+
+func TestBuildAnthropicMessagesKeepsNonObjectToolArgumentsLikeReference(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "lookup"}}},
+		&llm.FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `["Paris"]`},
+		&llm.FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+	}
+
+	messages, _, err := buildAnthropicMessagesE(ctx)
+	if err != nil {
+		t.Fatalf("buildAnthropicMessagesE() error = %v, want nil for JSON array tool arguments", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want user, assistant tool, user result: %#v", len(messages), messages)
+	}
+	raw, err := json.Marshal(messages[1].Content[0])
+	if err != nil {
+		t.Fatalf("Marshal tool use block error = %v", err)
+	}
+	var block map[string]any
+	if err := json.Unmarshal(raw, &block); err != nil {
+		t.Fatalf("Unmarshal tool use block error = %v", err)
+	}
+	input, ok := block["input"].([]any)
+	if !ok || len(input) != 1 || input[0] != "Paris" {
+		t.Fatalf("tool input = %#v, want JSON array argument preserved", block["input"])
 	}
 }
 
@@ -724,6 +798,53 @@ func TestBuildAnthropicMessagesKeepsDuplicateMatchingToolOutputs(t *testing.T) {
 	assertAnthropicToolResultBlock(t, messages[2].Content, 1, "call_lookup", "second", false)
 }
 
+func TestAnthropicChatSendsToolResultIsErrorFalseLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "assistant-turn", Role: llm.ChatRoleAssistant, Content: []llm.ChatContent{{Text: "checking"}}},
+		&llm.FunctionCall{ID: "assistant-turn/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{"city":"Paris"}`},
+		&llm.FunctionCallOutput{ID: "lookup-output", CallID: "call_lookup", Name: "lookup", Output: "Paris", IsError: false},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	messages, ok := transport.body["messages"].([]any)
+	if !ok || len(messages) != 3 {
+		t.Fatalf("messages = %#v, want dummy user, assistant tool, user result", transport.body["messages"])
+	}
+	userResult, ok := messages[2].(map[string]any)
+	if !ok {
+		t.Fatalf("messages[2] = %#v, want map", messages[2])
+	}
+	content, ok := userResult["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("tool result content = %#v, want one block", userResult["content"])
+	}
+	block, ok := content[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool result block = %#v, want map", content[0])
+	}
+	value, ok := block["is_error"]
+	if !ok {
+		t.Fatalf("tool result block = %#v, want explicit is_error false", block)
+	}
+	if value != false {
+		t.Fatalf("is_error = %#v, want false", value)
+	}
+}
+
 func TestBuildAnthropicMessagesParsesJSONListToolResultContent(t *testing.T) {
 	ctx := llm.NewChatContext()
 	ctx.Items = []llm.ChatItem{
@@ -753,6 +874,25 @@ func TestBuildAnthropicMessagesParsesJSONListToolResultContent(t *testing.T) {
 	}
 	if block["type"] != "image" {
 		t.Fatalf("tool result block = %#v, want image block", block)
+	}
+}
+
+func TestBuildAnthropicMessagesKeepsJSONNullToolResultTextLikeReference(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "look"}}},
+		&llm.FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: `{}`},
+		&llm.FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "null"},
+	}
+
+	messages, _ := buildAnthropicMessages(ctx)
+
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want user, assistant tool, user result: %#v", len(messages), messages)
+	}
+	result := messages[2].Content[0]
+	if result.Content != "null" {
+		t.Fatalf("tool result content = %#v, want string null", result.Content)
 	}
 }
 
@@ -1411,6 +1551,45 @@ func TestAnthropicStreamTextChunkCarriesReferenceRequestID(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamParsesSplitSSEDataLikeReference(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			``,
+			`data: {"type":"content_block_delta",`,
+			`data: "delta":{"type":"text_delta","text":"hello"}}`,
+			``,
+		}, "\n"))),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want split SSE text delta", err)
+	}
+	if chunk.ID != "msg_1" || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("chunk = %#v, want hello text delta with request ID", chunk)
+	}
+}
+
+func TestAnthropicStreamParsesSSEDataWithoutSpaceLikeReference(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data:{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			``,
+			`data:{"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			``,
+		}, "\n"))),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want no-space SSE text delta", err)
+	}
+	if chunk.ID != "msg_1" || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("chunk = %#v, want hello text delta with request ID", chunk)
+	}
+}
+
 func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &anthropicCloseErrorBody{}
 	stream := &anthropicStream{
@@ -1426,6 +1605,41 @@ func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("Next() error = %v, want io.EOF", err)
+	}
+}
+
+func TestAnthropicStreamClosesBodyBeforeFinalUsageLikeReference(t *testing.T) {
+	body := newAnthropicTrackedBody(strings.Join([]string{
+		`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+		`data: {"type":"message_stop"}`,
+		``,
+	}, "\n"))
+	stream := &anthropicStream{
+		resp:   &http.Response{Body: body},
+		reader: bufio.NewReader(body),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	if chunk.Usage == nil {
+		t.Fatalf("chunk = %#v, want final usage before EOF", chunk)
+	}
+	if !body.closed {
+		t.Fatal("body closed = false, want provider stream body closed before final usage")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() after final usage error = %v, want nil", err)
+	}
+
+	_, err = stream.Next()
+
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("EOF Next() error = %v, want io.EOF", err)
+	}
+	if !body.closed {
+		t.Fatal("body closed = false, want provider stream body closed at EOF")
 	}
 }
 
@@ -2274,7 +2488,8 @@ func assertAnthropicToolResultBlock(t *testing.T, blocks []anthropicContentBlock
 	if len(blocks) <= index {
 		t.Fatalf("len(blocks) = %d, want index %d", len(blocks), index)
 	}
-	if blocks[index].Type != "tool_result" || blocks[index].ToolUseID != wantID || blocks[index].Content != wantContent || blocks[index].IsError != wantError {
+	gotError := blocks[index].IsError != nil && *blocks[index].IsError
+	if blocks[index].Type != "tool_result" || blocks[index].ToolUseID != wantID || blocks[index].Content != wantContent || gotError != wantError {
 		t.Fatalf("tool result block[%d] = %#v", index, blocks[index])
 	}
 }

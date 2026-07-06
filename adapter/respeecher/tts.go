@@ -298,7 +298,7 @@ func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.decoded = true
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("Respeecher TTS response read failed: %v", err))
+			return nil, respeecherTTSHTTPReadError(err)
 		}
 		if len(data) > 0 {
 			frame, err := decodeRespeecherWAVPCM16(data)
@@ -315,6 +315,18 @@ func (s *respeecherTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		}, nil
 	}
 	return s.emitFinal()
+}
+
+func respeecherTTSHTTPReadError(err error) error {
+	msg := fmt.Sprintf("Respeecher TTS response read failed: %v", err)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError(msg)
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return llm.NewAPITimeoutError(msg)
+	}
+	return llm.NewAPIConnectionError(msg)
 }
 
 func (s *respeecherTTSChunkedStream) ensureResponse() error {

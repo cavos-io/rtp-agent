@@ -51,6 +51,30 @@ func (b *respeecherCloseErrorBody) Close() error {
 	return nil
 }
 
+type respeecherTimeoutBody struct{}
+
+func (respeecherTimeoutBody) Read([]byte) (int, error) {
+	return 0, respeecherTimeoutError{}
+}
+
+func (respeecherTimeoutBody) Close() error {
+	return nil
+}
+
+type respeecherTimeoutError struct{}
+
+func (respeecherTimeoutError) Error() string {
+	return "respeecher timeout"
+}
+
+func (respeecherTimeoutError) Timeout() bool {
+	return true
+}
+
+func (respeecherTimeoutError) Temporary() bool {
+	return true
+}
+
 func TestRespeecherTTSDefaultsMatchReference(t *testing.T) {
 	provider := NewRespeecherTTS("test-key", "")
 
@@ -319,6 +343,24 @@ func TestRespeecherTTSChunkedStreamEmitsReferenceFinalMarker(t *testing.T) {
 	}
 	if _, err := stream.Next(); err != io.EOF {
 		t.Fatalf("third Next error = %v, want EOF", err)
+	}
+}
+
+func TestRespeecherTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &respeecherTTSChunkedStream{
+		resp:       &http.Response{Body: respeecherTimeoutBody{}},
+		sampleRate: 48000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil on provider read timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
 	}
 }
 
