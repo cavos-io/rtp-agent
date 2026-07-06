@@ -1196,6 +1196,36 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatSendsSystemMessagesAsTextBlocks(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "system", Role: llm.ChatRoleSystem, Content: []llm.ChatContent{{Text: "base"}}},
+		&llm.ChatMessage{ID: "developer", Role: llm.ChatRoleDeveloper, Content: []llm.ChatContent{{Text: "dev"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), ctx)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	system, ok := transport.body["system"].([]any)
+	if !ok || len(system) != 2 {
+		t.Fatalf("system = %#v, want two text blocks", transport.body["system"])
+	}
+	assertAnthropicRequestTextBlock(t, system[0], "base")
+	assertAnthropicRequestTextBlock(t, system[1], "dev")
+}
+
 func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
@@ -1332,6 +1362,17 @@ func assertCacheControlMap(t *testing.T, raw any, label string) {
 	}
 	if cacheControl["type"] != "ephemeral" {
 		t.Fatalf("%s cache_control.type = %#v, want ephemeral", label, cacheControl["type"])
+	}
+}
+
+func assertAnthropicRequestTextBlock(t *testing.T, raw any, want string) {
+	t.Helper()
+	block, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("system block = %#v, want map", raw)
+	}
+	if block["type"] != "text" || block["text"] != want {
+		t.Fatalf("system block = %#v, want text %q", block, want)
 	}
 }
 

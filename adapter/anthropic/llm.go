@@ -118,7 +118,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		ctx, cancel = context.WithTimeout(ctx, connectOptions.Timeout)
 	}
 
-	messages, system, err := buildAnthropicMessagesE(chatCtx)
+	messages, systemMessages, err := buildAnthropicMessagesE(chatCtx)
 	if err != nil {
 		if cancel != nil {
 			cancel()
@@ -139,12 +139,8 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		"max_tokens": 1024,
 		"stream":     true,
 	}
-	if system != "" {
-		if cacheControl != nil {
-			body["system"] = []anthropicContentBlock{{Type: "text", Text: system, CacheControl: cacheControl}}
-		} else {
-			body["system"] = system
-		}
+	if len(systemMessages) > 0 {
+		body["system"] = anthropicSystemBlocks(systemMessages, cacheControl)
 	}
 	applyAnthropicExtraParams(body, options.ExtraParams)
 
@@ -420,11 +416,11 @@ type anthropicStream struct {
 }
 
 func buildAnthropicMessages(chatCtx *llm.ChatContext) ([]anthropicMessage, string) {
-	messages, system, _ := buildAnthropicMessagesE(chatCtx)
-	return messages, system
+	messages, systemMessages, _ := buildAnthropicMessagesE(chatCtx)
+	return messages, strings.Join(systemMessages, "\n")
 }
 
-func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, string, error) {
+func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, []string, error) {
 	messages := make([]anthropicMessage, 0, len(chatCtx.Items))
 	systemMessages := make([]string, 0)
 	var currentRole string
@@ -466,7 +462,7 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, stri
 				}
 				blocks, err := anthropicMessageContentBlocks(msg)
 				if err != nil {
-					return nil, "", err
+					return nil, nil, err
 				}
 				if len(blocks) > 0 {
 					appendBlocks(role, blocks...)
@@ -474,7 +470,7 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, stri
 			case *llm.FunctionCall:
 				block, err := anthropicToolUseBlock(msg)
 				if err != nil {
-					return nil, "", err
+					return nil, nil, err
 				}
 				appendBlocks("assistant", block)
 			case *llm.FunctionCallOutput:
@@ -495,7 +491,18 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, stri
 		}, messages...)
 	}
 
-	return messages, strings.Join(systemMessages, "\n"), nil
+	return messages, systemMessages, nil
+}
+
+func anthropicSystemBlocks(systemMessages []string, cacheControl map[string]any) []anthropicContentBlock {
+	blocks := make([]anthropicContentBlock, 0, len(systemMessages))
+	for _, text := range systemMessages {
+		blocks = append(blocks, anthropicContentBlock{Type: "text", Text: text})
+	}
+	if cacheControl != nil && len(blocks) > 0 {
+		blocks[len(blocks)-1].CacheControl = cacheControl
+	}
+	return blocks
 }
 
 func anthropicMessageContentBlocks(msg *llm.ChatMessage) ([]anthropicContentBlock, error) {
