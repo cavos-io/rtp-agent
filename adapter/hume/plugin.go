@@ -2,6 +2,6 @@ package hume
 
 const (
 	PluginTitle   = "rtp-agent.plugins.hume"
-	PluginVersion = "v0.1.4"
+	PluginVersion = "v0.1.5"
 	PluginPackage = "rtp-agent.plugins.hume"
 )
