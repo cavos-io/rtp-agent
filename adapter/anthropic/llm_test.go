@@ -428,6 +428,30 @@ func TestAnthropicChatRejectsMalformedToolCallArguments(t *testing.T) {
 	}
 }
 
+func TestBuildAnthropicMessagesMapsEmptyToolArgumentsToObject(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "lookup"}}},
+		&llm.FunctionCall{ID: "assistant/tool", CallID: "call_lookup", Name: "lookup", Arguments: ""},
+		&llm.FunctionCallOutput{ID: "output", CallID: "call_lookup", Name: "lookup", Output: "ok"},
+	}
+
+	messages, _, err := buildAnthropicMessagesE(ctx)
+	if err != nil {
+		t.Fatalf("buildAnthropicMessagesE() error = %v, want nil for empty tool arguments", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("len(messages) = %d, want user, assistant tool, user result: %#v", len(messages), messages)
+	}
+	toolUse := messages[1].Content[0]
+	if toolUse.Type != "tool_use" || toolUse.Name != "lookup" || toolUse.ID != "call_lookup" {
+		t.Fatalf("tool use = %#v, want lookup call", toolUse)
+	}
+	if len(toolUse.Input) != 0 {
+		t.Fatalf("tool input = %#v, want empty object", toolUse.Input)
+	}
+}
+
 func TestAnthropicChatRejectsMalformedImageContent(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

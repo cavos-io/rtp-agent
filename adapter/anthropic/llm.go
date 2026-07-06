@@ -567,7 +567,11 @@ func anthropicImageBlock(image *llm.ImageContent) (anthropicContentBlock, error)
 
 func anthropicToolUseBlock(fc *llm.FunctionCall) (anthropicContentBlock, error) {
 	input := make(map[string]any)
-	if err := json.Unmarshal([]byte(fc.Arguments), &input); err != nil {
+	arguments := fc.Arguments
+	if arguments == "" {
+		arguments = "{}"
+	}
+	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return anthropicContentBlock{}, err
 	}
 	return anthropicContentBlock{
