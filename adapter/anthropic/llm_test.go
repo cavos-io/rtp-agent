@@ -1236,6 +1236,41 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatForwardsReferenceExtraParams(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{
+			"stop_sequences": []string{"END"},
+			"metadata":       map[string]any{"trace_id": "turn-1"},
+			"caching":        "ephemeral",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if _, ok := transport.body["stop_sequences"]; !ok {
+		t.Fatalf("stop_sequences missing from body: %#v", transport.body)
+	}
+	if _, ok := transport.body["metadata"]; !ok {
+		t.Fatalf("metadata missing from body: %#v", transport.body)
+	}
+	if _, ok := transport.body["caching"]; ok {
+		t.Fatalf("caching leaked to provider body: %#v", transport.body["caching"])
+	}
+}
+
 func TestAnthropicChatRejectsUnserializableRequestBody(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
