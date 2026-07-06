@@ -45,6 +45,7 @@ type UpliftAITTS struct {
 	outputFormat              string
 	numChannels               int
 	baseURL                   string
+	sentenceTokenizer         tokenize.SentenceTokenizer
 	phraseReplacementConfigID string
 	mu                        sync.Mutex
 	closed                    bool
@@ -93,6 +94,12 @@ func WithUpliftAIOutputFormat(outputFormat string) UpliftAITTSOption {
 func WithUpliftAINumChannels(numChannels int) UpliftAITTSOption {
 	return func(t *UpliftAITTS) {
 		t.numChannels = numChannels
+	}
+}
+
+func WithUpliftAISentenceTokenizer(tokenizer tokenize.SentenceTokenizer) UpliftAITTSOption {
+	return func(t *UpliftAITTS) {
+		t.sentenceTokenizer = tokenizer
 	}
 }
 
@@ -265,6 +272,12 @@ func (t *UpliftAITTS) outputNumChannels() int {
 	return t.numChannels
 }
 
+func (t *UpliftAITTS) streamSentenceTokenizer() tokenize.SentenceTokenizer {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.sentenceTokenizer
+}
+
 func (t *UpliftAITTS) socketIOSynthesis(ctx context.Context, baseURL string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) (io.ReadCloser, error) {
 	t.mu.Lock()
 	if t.closed {
@@ -392,6 +405,18 @@ func (s *upliftAITTSSynthesizeStream) EndInput() error {
 }
 
 func (s *upliftAITTSSynthesizeStream) formatSegmentText(text string) string {
+	if s.owner != nil {
+		if tokenizer := s.owner.streamSentenceTokenizer(); tokenizer != nil {
+			sentences := tokenizer.Tokenize(text, "")
+			parts := make([]string, 0, len(sentences))
+			for _, sentence := range sentences {
+				if sentence = strings.TrimSpace(sentence); sentence != "" {
+					parts = append(parts, sentence)
+				}
+			}
+			return strings.Join(parts, " ")
+		}
+	}
 	wordTokens := tokenize.SplitWords(text, false, false, false)
 	words := make([]string, 0, len(wordTokens))
 	for _, word := range wordTokens {

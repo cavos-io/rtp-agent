@@ -20,6 +20,7 @@ import (
 
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
+	"github.com/cavos-io/rtp-agent/library/tokenize"
 )
 
 type upliftAIFinalEOFReader struct {
@@ -682,6 +683,46 @@ func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
 	}
 	if got, want := requestBody["text"], "hello, world"; got != want {
 		t.Fatalf("request text = %q, want reference formatted text %q", got, want)
+	}
+}
+
+func TestUpliftAITTSStreamUsesReferenceSentenceTokenizer(t *testing.T) {
+	var requestBody map[string]string
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("\x01\x02")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := newUpliftAITestHTTPProvider(
+		"test-key",
+		"",
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+		WithUpliftAISentenceTokenizer(upliftAIFixedSentenceTokenizer{tokens: []string{"custom sentence"}}),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushText("raw text ignored by tokenizer"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if audio, err := stream.Next(); err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("Next = (%#v, %v), want audio frame", audio, err)
+	}
+	if got, want := requestBody["text"], "custom sentence"; got != want {
+		t.Fatalf("request text = %q, want custom reference tokenizer output %q", got, want)
 	}
 }
 
@@ -1362,6 +1403,20 @@ type upliftAITestTimeoutError struct{}
 func (upliftAITestTimeoutError) Error() string   { return "fake socket.io read timeout" }
 func (upliftAITestTimeoutError) Timeout() bool   { return true }
 func (upliftAITestTimeoutError) Temporary() bool { return true }
+
+type upliftAIFixedSentenceTokenizer struct {
+	tokens []string
+}
+
+func (t upliftAIFixedSentenceTokenizer) Tokenize(string, string) []string {
+	return append([]string(nil), t.tokens...)
+}
+
+func (t upliftAIFixedSentenceTokenizer) Stream(string) tokenize.SentenceStream {
+	return tokenize.NewBufferedTokenStream(func(string) []string {
+		return append([]string(nil), t.tokens...)
+	}, 1, 1)
+}
 
 func (c *upliftAITestSocketIOConn) WriteMessage(_ int, data []byte) error {
 	c.deadlineMu.Lock()
