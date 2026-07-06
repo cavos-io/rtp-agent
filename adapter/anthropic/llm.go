@@ -872,7 +872,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 			// content_block_delta fields
 			Delta *struct {
-				Type        string `json:"type"`
+				Type        *string `json:"type"`
 				Text        *string `json:"text"`
 				PartialJson *string `json:"partial_json"`
 			} `json:"delta"`
@@ -968,7 +968,16 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				}
 				return nil, wrappedErr
 			}
-			if event.Delta.Type == "text_delta" {
+			if event.Delta.Type == nil {
+				wrappedErr := s.wrapReadError(errors.New("content_block_delta missing delta type"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
+			if *event.Delta.Type == "text_delta" {
 				if event.Delta.Text == nil {
 					wrappedErr := s.wrapReadError(errors.New("text_delta missing text"))
 					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
@@ -989,7 +998,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 						Content: text,
 					},
 				}), nil
-			} else if event.Delta.Type == "input_json_delta" {
+			} else if *event.Delta.Type == "input_json_delta" {
 				if !s.toolCallActive {
 					wrappedErr := s.wrapReadError(errors.New("input_json_delta without tool_use content block"))
 					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
