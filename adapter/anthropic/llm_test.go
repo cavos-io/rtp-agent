@@ -2476,6 +2476,31 @@ func TestAnthropicChatConfiguredUserOverridesExtraParamLikeReference(t *testing.
 	}
 }
 
+func TestAnthropicChatUsesConfiguredTemperatureLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicTemperature(0.2))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"temperature": 0.9}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["temperature"] != 0.2 {
+		t.Fatalf("temperature = %#v, want configured temperature over extra param", transport.body["temperature"])
+	}
+}
+
 func TestAnthropicChatKeepsReferenceMaxTokensOverExtraParam(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

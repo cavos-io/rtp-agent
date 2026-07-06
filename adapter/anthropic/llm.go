@@ -27,6 +27,8 @@ type AnthropicLLM struct {
 	userSet      bool
 	maxTokens    int
 	maxTokensSet bool
+	temperature  float64
+	tempSet      bool
 }
 
 type anthropicToolSpecProvider interface {
@@ -69,6 +71,13 @@ func WithAnthropicMaxTokens(maxTokens int) AnthropicOption {
 	return func(l *AnthropicLLM) {
 		l.maxTokens = maxTokens
 		l.maxTokensSet = true
+	}
+}
+
+func WithAnthropicTemperature(temperature float64) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.temperature = temperature
+		l.tempSet = true
 	}
 }
 
@@ -165,6 +174,9 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	applyAnthropicExtraParams(body, options.ExtraParams)
 	if l.userSet {
 		body["user"] = l.user
+	}
+	if l.tempSet {
+		body["temperature"] = l.temperature
 	}
 
 	var betaFlag string
