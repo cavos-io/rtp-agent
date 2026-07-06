@@ -289,6 +289,22 @@ func TestComputerToolHoldKeyUsesReferenceDuration(t *testing.T) {
 	}
 }
 
+func TestComputerToolTypeTextUsesReferenceCharacterDelay(t *testing.T) {
+	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
+
+	start := time.Now()
+	_, err := toolset.Execute(context.Background(), "type", map[string]interface{}{
+		"text": "abcdefghijklmnopqrst",
+	})
+
+	if err != nil {
+		t.Fatalf("Execute error = %v, want nil", err)
+	}
+	if elapsed := time.Since(start); elapsed < 450*time.Millisecond {
+		t.Fatalf("Execute elapsed = %v, want reference per-character type delay before screenshot", elapsed)
+	}
+}
+
 func TestComputerToolCloseClosesPageActions(t *testing.T) {
 	actions := browser.NewPageActions()
 	toolset := NewComputerTool(actions, 1024, 768)

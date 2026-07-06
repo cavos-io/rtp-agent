@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	postActionDelay = 300 * time.Millisecond
-	waitActionDelay = time.Second
+	postActionDelay    = 300 * time.Millisecond
+	typeCharacterDelay = 10 * time.Millisecond
+	waitActionDelay    = time.Second
 )
 
 type ComputerTool struct {
@@ -129,6 +130,9 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			return nil, fmt.Errorf("Missing required argument: 'text'")
 		}
 		c.actions.TypeText(text)
+		if err := waitComputerToolDelay(ctx, time.Duration(len([]rune(text)))*typeCharacterDelay); err != nil {
+			return nil, err
+		}
 	case "key":
 		text, ok := args["text"].(string)
 		if !ok {
