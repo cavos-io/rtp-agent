@@ -686,6 +686,7 @@ func (c *upliftAISocketIOClient) Synthesize(ctx context.Context, text string, vo
 
 	if err := writeUpliftAISocketIOSynthesize(conn, requestID, text, voiceID, outputFormat, phraseReplacementConfigID); err != nil {
 		c.finishRequest(requestID, err)
+		c.closeConn(conn, nil)
 		_ = pr.Close()
 		return nil, err
 	}

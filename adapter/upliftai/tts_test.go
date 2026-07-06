@@ -1039,6 +1039,80 @@ func TestUpliftAITTSChunkedStreamSocketIOAudioWaitEmitsFinalMarker(t *testing.T)
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIOWriteFailureReconnectsNextRequest(t *testing.T) {
+	firstConn := newUpliftAITestSocketIOConn()
+	firstConn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	firstConn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	firstConn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	firstConn.writeErrAfter = 1
+	firstConn.writeErr = io.ErrClosedPipe
+
+	secondConn := newUpliftAITestSocketIOConn()
+	secondConn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	secondConn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	secondConn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-2"}]`
+
+	oldDial := upliftAISocketIODialContext
+	dials := 0
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		dials++
+		switch dials {
+		case 1:
+			return firstConn, nil
+		case 2:
+			return secondConn, nil
+		default:
+			return nil, fmt.Errorf("socket.io dial count = %d, want reconnect once", dials)
+		}
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+
+	firstStream, err := provider.Synthesize(context.Background(), "first")
+	if err != nil {
+		t.Fatalf("first Synthesize error = %v", err)
+	}
+	defer firstStream.Close()
+	if _, err := firstStream.Next(); err == nil {
+		t.Fatal("first Next error = nil, want synthesize write failure")
+	}
+
+	secondStream, err := provider.Synthesize(context.Background(), "second")
+	if err != nil {
+		t.Fatalf("second Synthesize error = %v", err)
+	}
+	defer secondStream.Close()
+	secondResultCh := make(chan struct {
+		audio *tts.SynthesizedAudio
+		err   error
+	}, 1)
+	go func() {
+		audio, err := secondStream.Next()
+		secondResultCh <- struct {
+			audio *tts.SynthesizedAudio
+			err   error
+		}{audio: audio, err: err}
+	}()
+	_ = receiveUpliftAITestString(t, secondConn.writes, "second namespace connect packet")
+	secondSynthesize := receiveUpliftAITestString(t, secondConn.writes, "second synthesize packet after reconnect")
+	secondRequestID := upliftAITestSocketIORequestID(t, secondSynthesize)
+	secondConn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + secondRequestID + `"}]`
+	result := receiveUpliftAITestSocketIOResult(t, secondResultCh)
+	if result.err != nil || result.audio == nil || !result.audio.IsFinal {
+		t.Fatalf("second Next = (%#v, %v), want final marker after reconnect", result.audio, result.err)
+	}
+	if got, want := dials, 2; got != want {
+		t.Fatalf("socket.io dial count = %d, want reconnect after write failure", got)
+	}
+}
+
 func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -1118,15 +1192,18 @@ func upliftAITestSocketIORequestID(t *testing.T, packet string) string {
 }
 
 type upliftAITestSocketIOConn struct {
-	reads        chan string
-	readErrs     chan error
-	writes       chan string
-	closed       chan struct{}
-	deadlineCh   chan time.Time
-	deadlineMu   sync.Mutex
-	readDeadline time.Time
-	readTimeout  time.Duration
-	once         sync.Once
+	reads         chan string
+	readErrs      chan error
+	writes        chan string
+	closed        chan struct{}
+	deadlineCh    chan time.Time
+	deadlineMu    sync.Mutex
+	readDeadline  time.Time
+	readTimeout   time.Duration
+	writeErr      error
+	writeErrAfter int
+	writeCount    int
+	once          sync.Once
 }
 
 func newUpliftAITestSocketIOConn() *upliftAITestSocketIOConn {
@@ -1200,6 +1277,18 @@ func (upliftAITestTimeoutError) Timeout() bool   { return true }
 func (upliftAITestTimeoutError) Temporary() bool { return true }
 
 func (c *upliftAITestSocketIOConn) WriteMessage(_ int, data []byte) error {
+	c.deadlineMu.Lock()
+	c.writeCount++
+	writeCount := c.writeCount
+	writeErrAfter := c.writeErrAfter
+	writeErr := c.writeErr
+	c.deadlineMu.Unlock()
+	if writeErrAfter > 0 && writeCount > writeErrAfter {
+		if writeErr != nil {
+			return writeErr
+		}
+		return errors.New("fake socket.io write failed")
+	}
 	select {
 	case c.writes <- string(data):
 		return nil
