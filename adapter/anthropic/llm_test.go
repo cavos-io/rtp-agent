@@ -670,6 +670,35 @@ func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamErrorAfterChunkIsNotRetryable(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hello"}}`,
+			`data: {"type":"error","error":{"type":"overloaded_error","message":"server overloaded"}}`,
+			``,
+		}, "\n"))),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text Next() error = %v", err)
+	}
+	if chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("first chunk = %#v, want text delta", chunk)
+	}
+
+	_, err = stream.Next()
+
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if apiErr.Retryable {
+		t.Fatal("Retryable = true after visible output, want false")
+	}
+}
+
 func TestAnthropicStreamReadErrorBeforeChunkReturnsAPIConnectionError(t *testing.T) {
 	body := &anthropicReadErrorBody{
 		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",

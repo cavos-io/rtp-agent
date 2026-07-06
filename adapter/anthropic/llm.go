@@ -811,7 +811,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		case "error":
 			message, body := parseAnthropicErrorBody([]byte(data))
-			return nil, llm.NewAPIError(message, body, true)
+			return nil, llm.NewAPIError(message, body, !s.emittedChunk)
 		}
 	}
 }
