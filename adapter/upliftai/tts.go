@@ -1395,8 +1395,15 @@ func (w *upliftAIWAVStream) nextFrame() (*model.AudioFrame, bool, error) {
 		w.parsed = true
 	}
 	if w.dataRemaining == 0 {
-		w.done = true
-		return nil, true, nil
+		w.resetSegment()
+		if err := w.parseHeader(); err != nil {
+			if errors.Is(err, io.EOF) {
+				w.done = true
+				return nil, true, nil
+			}
+			return nil, false, err
+		}
+		w.parsed = true
 	}
 	bytesPerInputSample := int(w.bitsPerSample / 8)
 	blockAlign := int(w.channels) * bytesPerInputSample
@@ -1489,6 +1496,14 @@ func (w *upliftAIWAVStream) parseHeader() error {
 			}
 		}
 	}
+}
+
+func (w *upliftAIWAVStream) resetSegment() {
+	w.parsed = false
+	w.sampleRate = 0
+	w.channels = 0
+	w.bitsPerSample = 0
+	w.dataRemaining = 0
 }
 
 func discardUpliftAIWAVBytes(r io.Reader, n int64) error {

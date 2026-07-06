@@ -2348,6 +2348,40 @@ func TestUpliftAITTSChunkedStreamStreamsReferenceWAVBeforeEOF(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamDecodesReferenceConcatenatedWAVSegments(t *testing.T) {
+	firstPCM := []byte{0x01, 0x00, 0x03, 0x00}
+	secondPCM := []byte{0x05, 0x00, 0x07, 0x00}
+	body := append(upliftAITestWAV(firstPCM, 22050, 1), upliftAITestWAV(secondPCM, 22050, 1)...)
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("WAV_22050_16"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(body))},
+	}
+	defer stream.Close()
+
+	first, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if first == nil || first.Frame == nil {
+		t.Fatalf("first audio = %#v, want decoded first WAV segment", first)
+	}
+	if !bytes.Equal(first.Frame.Data, firstPCM) {
+		t.Fatalf("first audio data = %#v, want %#v", first.Frame.Data, firstPCM)
+	}
+
+	second, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if second == nil || second.Frame == nil {
+		t.Fatalf("second audio = %#v, want decoded second WAV segment before final", second)
+	}
+	if !bytes.Equal(second.Frame.Data, secondPCM) {
+		t.Fatalf("second audio data = %#v, want %#v", second.Frame.Data, secondPCM)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamDecodesReferenceWAV32Response(t *testing.T) {
 	pcm32 := []byte{
 		0x00, 0x00, 0x00, 0x40,
