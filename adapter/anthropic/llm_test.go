@@ -358,6 +358,35 @@ func (anthropicSpecOnlyTool) AnthropicToolSpec() map[string]interface{} {
 	}
 }
 
+type anthropicRawSchemaTool struct{}
+
+func (anthropicRawSchemaTool) ID() string          { return "raw_lookup" }
+func (anthropicRawSchemaTool) Name() string        { return "raw_lookup" }
+func (anthropicRawSchemaTool) Description() string { return "fallback description" }
+func (anthropicRawSchemaTool) Parameters() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"fallback": map[string]any{"type": "string"},
+		},
+	}
+}
+func (anthropicRawSchemaTool) Execute(context.Context, string) (string, error) {
+	return "", nil
+}
+func (anthropicRawSchemaTool) ParseFunctionTools(string) (map[string]interface{}, error) {
+	return map[string]interface{}{
+		"name":        "raw_lookup",
+		"description": "raw schema description",
+		"parameters": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{"type": "string"},
+			},
+		},
+	}, nil
+}
+
 func TestAnthropicChatDoesNotApplyConnectOptionsTimeoutToRequestContext(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
@@ -2080,6 +2109,52 @@ func TestAnthropicChatCanDisableStrictToolSchemaLikeReference(t *testing.T) {
 	}
 	if _, ok := tool["strict"]; ok {
 		t.Fatalf("tool strict = %#v, want omitted", tool["strict"])
+	}
+}
+
+func TestAnthropicChatUsesRawFunctionToolSchemaLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools([]llm.Tool{anthropicRawSchemaTool{}}))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	tools, ok := transport.body["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("tools = %#v, want one raw schema tool", transport.body["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("tool = %#v, want map", tools[0])
+	}
+	if tool["description"] != "raw schema description" {
+		t.Fatalf("description = %#v, want raw schema description", tool["description"])
+	}
+	if _, ok := tool["strict"]; ok {
+		t.Fatalf("tool strict = %#v, want omitted for raw schema tool", tool["strict"])
+	}
+	inputSchema, ok := tool["input_schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("input_schema = %#v, want raw parameters", tool["input_schema"])
+	}
+	properties, ok := inputSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %#v, want raw schema properties", inputSchema["properties"])
+	}
+	if _, ok := properties["query"]; !ok {
+		t.Fatalf("properties = %#v, want query from raw parameters", properties)
+	}
+	if _, ok := properties["fallback"]; ok {
+		t.Fatalf("properties = %#v, want raw schema instead of fallback Parameters()", properties)
 	}
 }
 

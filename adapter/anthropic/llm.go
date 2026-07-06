@@ -48,6 +48,10 @@ type anthropicBetaToolProvider interface {
 	AnthropicBetaFlag() string
 }
 
+type functionToolSchemaParser interface {
+	ParseFunctionTools(format string) (map[string]interface{}, error)
+}
+
 const (
 	anthropicAPIKeyEnv   = "ANTHROPIC_API_KEY"
 	defaultAnthropicURL  = "https://api.anthropic.com"
@@ -244,6 +248,14 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 				}
 				continue
 			} else {
+				if rawTool, ok := tool.(functionToolSchemaParser); ok {
+					toolSpec, err := anthropicRawFunctionToolSpec(rawTool)
+					if err != nil {
+						return nil, err
+					}
+					tools = append(tools, toolSpec)
+					continue
+				}
 				toolSpec := map[string]interface{}{
 					"name":         tool.Name(),
 					"description":  tool.Description(),
@@ -480,6 +492,28 @@ func anthropicRequestID(header http.Header) string {
 		}
 	}
 	return ""
+}
+
+func anthropicRawFunctionToolSpec(tool functionToolSchemaParser) (map[string]interface{}, error) {
+	schema, err := tool.ParseFunctionTools("anthropic")
+	if err != nil {
+		return nil, err
+	}
+	spec := map[string]interface{}{}
+	if name, ok := schema["name"]; ok {
+		spec["name"] = name
+	}
+	if description, ok := schema["description"]; ok {
+		spec["description"] = description
+	} else {
+		spec["description"] = ""
+	}
+	if parameters, ok := schema["parameters"]; ok {
+		spec["input_schema"] = parameters
+	} else {
+		spec["input_schema"] = map[string]interface{}{}
+	}
+	return spec, nil
 }
 
 func buildAnthropicToolChoice(choice llm.ToolChoice, parallelToolCalls bool, parallelToolCallsSet bool) map[string]any {
