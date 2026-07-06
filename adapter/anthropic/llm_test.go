@@ -787,6 +787,27 @@ func TestAnthropicStreamMalformedEventReturnsConnectionError(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamInputDeltaWithoutToolStartReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"city\""}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
 func TestAnthropicStreamReadErrorBeforeChunkReturnsAPIConnectionError(t *testing.T) {
 	body := &anthropicReadErrorBody{
 		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",

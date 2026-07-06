@@ -812,6 +812,9 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					},
 				}), nil
 			} else if event.Delta.Type == "input_json_delta" {
+				if s.toolCallID == "" {
+					return nil, s.wrapReadError(errors.New("input_json_delta without tool_use content block"))
+				}
 				s.toolArgs += event.Delta.PartialJson
 			}
 
