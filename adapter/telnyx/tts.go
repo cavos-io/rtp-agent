@@ -502,7 +502,7 @@ func telnyxTTSAudioBytesFromMessage(payload []byte) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 	if message.Audio == "" {
-		return nil, true, nil
+		return nil, false, nil
 	}
 	data, err := telnyxDecodeBase64Audio(message.Audio)
 	if err != nil {
@@ -519,7 +519,7 @@ func telnyxTTSAudioFromMessage(payload []byte, sampleRate int) (*tts.Synthesized
 		return nil, false, err
 	}
 	if message.Audio == "" {
-		return nil, true, nil
+		return nil, false, nil
 	}
 	data, err := telnyxDecodeBase64Audio(message.Audio)
 	if err != nil {
