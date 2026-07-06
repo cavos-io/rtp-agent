@@ -656,10 +656,31 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 			}
 			continue
 		}
-		if strings.HasPrefix(packet, "40"+upliftAISocketIONamespace) {
-			return nil
+		if strings.HasPrefix(packet, "42"+upliftAISocketIONamespace+",") {
+			payload := strings.TrimPrefix(packet, "42"+upliftAISocketIONamespace+",")
+			if upliftAISocketIOMessageType(payload) == "ready" {
+				return nil
+			}
+			continue
 		}
 	}
+}
+
+func upliftAISocketIOMessageType(payload string) string {
+	var event []json.RawMessage
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return ""
+	}
+	if len(event) != 2 || string(event[0]) != `"message"` {
+		return ""
+	}
+	var message struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(event[1], &message); err != nil {
+		return ""
+	}
+	return message.Type
 }
 
 func writeUpliftAISocketIOSynthesize(conn upliftAISocketIOConn, requestID string, text string, voiceID string, outputFormat string, phraseReplacementConfigID string) error {

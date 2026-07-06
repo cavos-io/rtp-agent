@@ -651,6 +651,7 @@ func TestUpliftAITTSChunkedStreamUsesReferenceSocketIOTransport(t *testing.T) {
 	conn := newUpliftAITestSocketIOConn()
 	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
 	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
 	oldDial := upliftAISocketIODialContext
 	upliftAISocketIODialContext = func(ctx context.Context, endpoint string) (upliftAISocketIOConn, error) {
 		parsed, err := url.Parse(endpoint)
@@ -742,6 +743,54 @@ func TestUpliftAITTSChunkedStreamUsesReferenceSocketIOTransport(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamWaitsForSocketIOReadyBeforeSynthesize(t *testing.T) {
+	conn := newUpliftAITestSocketIOConn()
+	conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+	conn.reads <- `40/text-to-speech/multi-stream,{"sid":"namespace"}`
+	oldDial := upliftAISocketIODialContext
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		return conn, nil
+	}
+	t.Cleanup(func() { upliftAISocketIODialContext = oldDial })
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	stream, err := provider.Synthesize(context.Background(), "ready first")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := stream.Next()
+		resultCh <- err
+	}()
+
+	if connect := receiveUpliftAITestString(t, conn.writes, "namespace connect packet"); connect != `40/text-to-speech/multi-stream,{"token":"test-key"}` {
+		t.Fatalf("connect packet = %q, want reference namespace auth packet", connect)
+	}
+	select {
+	case packet := <-conn.writes:
+		t.Fatalf("socket.io wrote %q before ready message", packet)
+	case <-time.After(50 * time.Millisecond):
+	}
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"ready","sessionId":"session-1"}]`
+	synthesize := receiveUpliftAITestString(t, conn.writes, "synthesize packet after ready")
+	if !strings.HasPrefix(synthesize, `42/text-to-speech/multi-stream,`) {
+		t.Fatalf("synthesize packet = %q, want namespace event after ready", synthesize)
+	}
+	requestID := upliftAITestSocketIORequestID(t, synthesize)
+	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio_end","requestId":"` + requestID + `"}]`
+	if err := receiveUpliftAITestError(t, resultCh, "stream Next completion"); err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+}
+
 func upliftAIWaitForCondition(t *testing.T, condition func() bool, name string) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -762,6 +811,17 @@ func receiveUpliftAITestString(t *testing.T, ch <-chan string, name string) stri
 	case <-time.After(2 * time.Second):
 		t.Fatalf("timed out waiting for %s", name)
 		return ""
+	}
+}
+
+func receiveUpliftAITestError(t *testing.T, ch <-chan error, name string) error {
+	t.Helper()
+	select {
+	case err := <-ch:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for %s", name)
+		return nil
 	}
 }
 
