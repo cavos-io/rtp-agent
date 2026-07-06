@@ -1418,6 +1418,40 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamDecodesReferenceWAV32Response(t *testing.T) {
+	pcm32 := []byte{
+		0x00, 0x00, 0x00, 0x40,
+		0x00, 0x00, 0x00, 0xc0,
+	}
+	wantPCM16 := []byte{0x00, 0x40, 0x00, 0xc0}
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("WAV_22050_32"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(upliftAITestWAVBits(pcm32, 22050, 1, 32)))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded WAV_22050_32 frame", audio)
+	}
+	if audio.Frame.SampleRate != defaultUpliftAISampleRate {
+		t.Fatalf("sample rate = %d, want %d", audio.Frame.SampleRate, defaultUpliftAISampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want mono output", audio.Frame.NumChannels)
+	}
+	if bytes.HasPrefix(audio.Frame.Data, []byte("RIFF")) {
+		t.Fatal("frame data still contains WAV header")
+	}
+	if !bytes.Equal(audio.Frame.Data, wantPCM16) {
+		t.Fatalf("audio data = %#v, want decoded wav32 pcm16 %#v", audio.Frame.Data, wantPCM16)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamDecodesReferenceULawResponse(t *testing.T) {
 	encoded := []byte{0x00, 0xff}
 	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("ULAW_8000_8"))
@@ -1693,8 +1727,12 @@ func (b *upliftAICloseCountBody) Close() error {
 }
 
 func upliftAITestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
+	return upliftAITestWAVBits(pcm, sampleRate, channels, 16)
+}
+
+func upliftAITestWAVBits(pcm []byte, sampleRate uint32, channels uint16, bitsPerSample uint16) []byte {
 	var wav bytes.Buffer
-	blockAlign := uint16(channels * 2)
+	blockAlign := uint16(channels * bitsPerSample / 8)
 	byteRate := sampleRate * uint32(blockAlign)
 	wav.WriteString("RIFF")
 	_ = binary.Write(&wav, binary.LittleEndian, uint32(36+len(pcm)))
@@ -1706,7 +1744,7 @@ func upliftAITestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
 	_ = binary.Write(&wav, binary.LittleEndian, sampleRate)
 	_ = binary.Write(&wav, binary.LittleEndian, byteRate)
 	_ = binary.Write(&wav, binary.LittleEndian, blockAlign)
-	_ = binary.Write(&wav, binary.LittleEndian, uint16(16))
+	_ = binary.Write(&wav, binary.LittleEndian, bitsPerSample)
 	wav.WriteString("data")
 	_ = binary.Write(&wav, binary.LittleEndian, uint32(len(pcm)))
 	wav.Write(pcm)

@@ -1131,7 +1131,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 			s.finalSent = true
 			return &tts.SynthesizedAudio{IsFinal: true}, nil
 		}
-		frame, err := decodeUpliftAIWAVPCM16(data)
+		frame, err := decodeUpliftAIWAVPCM(data)
 		if err != nil {
 			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS WAV decode failed: %v", err))
 		}
@@ -1155,7 +1155,7 @@ func (s *upliftAITTSChunkedStream) nextDecodedWAV() (*tts.SynthesizedAudio, erro
 	return nil, io.EOF
 }
 
-func decodeUpliftAIWAVPCM16(data []byte) (*model.AudioFrame, error) {
+func decodeUpliftAIWAVPCM(data []byte) (*model.AudioFrame, error) {
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
 		return nil, fmt.Errorf("invalid upliftai wav data")
 	}
@@ -1180,7 +1180,7 @@ func decodeUpliftAIWAVPCM16(data []byte) (*model.AudioFrame, error) {
 			channels = binary.LittleEndian.Uint16(data[offset+2 : offset+4])
 			sampleRate = binary.LittleEndian.Uint32(data[offset+4 : offset+8])
 			bitsPerSample = binary.LittleEndian.Uint16(data[offset+14 : offset+16])
-			if audioFormat != 1 || bitsPerSample != 16 {
+			if audioFormat != 1 || (bitsPerSample != 16 && bitsPerSample != 32) {
 				return nil, fmt.Errorf("unsupported upliftai wav format: audio_format=%d bits_per_sample=%d", audioFormat, bitsPerSample)
 			}
 		case "data":
@@ -1197,11 +1197,25 @@ func decodeUpliftAIWAVPCM16(data []byte) (*model.AudioFrame, error) {
 	if pcm == nil {
 		return nil, fmt.Errorf("missing upliftai wav data chunk")
 	}
+	bytesPerSample := int(bitsPerSample / 8)
+	blockAlign := int(channels) * bytesPerSample
+	if blockAlign == 0 || len(pcm)%blockAlign != 0 {
+		return nil, fmt.Errorf("invalid upliftai wav data size")
+	}
+	if bitsPerSample == 32 {
+		pcm16 := make([]byte, len(pcm)/2)
+		for in, out := 0, 0; in+4 <= len(pcm); in, out = in+4, out+2 {
+			sample := int32(binary.LittleEndian.Uint32(pcm[in : in+4]))
+			binary.LittleEndian.PutUint16(pcm16[out:out+2], uint16(int16(sample>>16)))
+		}
+		pcm = pcm16
+		bytesPerSample = 2
+	}
 	return &model.AudioFrame{
 		Data:              pcm,
 		SampleRate:        sampleRate,
 		NumChannels:       uint32(channels),
-		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
+		SamplesPerChannel: uint32(len(pcm) / int(channels) / bytesPerSample),
 	}, nil
 }
 
