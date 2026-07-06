@@ -35,9 +35,13 @@ const (
 	upliftAISocketIONamespace = "/text-to-speech/multi-stream"
 	upliftAISocketIOReadyWait = 5 * time.Second
 	upliftAISocketIODialWait  = 10 * time.Second
+	upliftAISocketIOAttempts  = 3
 )
 
-var upliftAISocketIOAudioWait = 30 * time.Second
+var (
+	upliftAISocketIOAudioWait      = 30 * time.Second
+	upliftAISocketIOReconnectDelay = time.Second
+)
 
 type UpliftAITTS struct {
 	apiKey                    string
@@ -790,26 +794,42 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 		c.mu.Unlock()
 		return err
 	}
-	conn, err := upliftAISocketIODialContext(ctx, socketURL)
-	if err != nil {
-		c.mu.Unlock()
-		return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
-	}
-	if err := upliftAISocketIOConnect(ctx, conn, c.apiKey); err != nil {
-		c.mu.Unlock()
-		_ = conn.Close()
-		return err
-	}
-	if c.closed {
-		c.mu.Unlock()
-		_ = conn.Close()
-		return io.ErrClosedPipe
-	}
-	c.conn = conn
-	c.mu.Unlock()
+	var lastErr error
+	for attempt := 1; attempt <= upliftAISocketIOAttempts; attempt++ {
+		conn, err := upliftAISocketIODialContext(ctx, socketURL)
+		if err != nil {
+			lastErr = llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io dial failed: %v", err))
+		} else if err := upliftAISocketIOConnect(ctx, conn, c.apiKey); err != nil {
+			_ = conn.Close()
+			lastErr = err
+		} else {
+			if c.closed {
+				c.mu.Unlock()
+				_ = conn.Close()
+				return io.ErrClosedPipe
+			}
+			c.conn = conn
+			c.mu.Unlock()
 
-	go c.readLoop(conn)
-	return nil
+			go c.readLoop(conn)
+			return nil
+		}
+		if attempt < upliftAISocketIOAttempts && upliftAISocketIOReconnectDelay > 0 {
+			timer := time.NewTimer(upliftAISocketIOReconnectDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				c.mu.Unlock()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	c.mu.Unlock()
+	if lastErr != nil {
+		return lastErr
+	}
+	return llm.NewAPIConnectionError("UpliftAI TTS socket.io dial failed")
 }
 
 func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
