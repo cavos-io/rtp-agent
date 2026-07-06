@@ -1522,6 +1522,58 @@ func TestRimeTTSStreamHandshakeStatusReturnsReferenceAPIStatusError(t *testing.T
 	}
 }
 
+func TestRimeTTSStreamHandshakeStatus499EndsLikeReferenceClientClose(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go func() {
+				defer server.Close()
+				reader := bufio.NewReader(server)
+				for {
+					line, err := reader.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if line == "\r\n" {
+						break
+					}
+				}
+				_, _ = io.WriteString(server, "HTTP/1.1 499 Client Closed Request\r\nContent-Length: 0\r\n\r\n")
+			}()
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSBaseURL("ws://rime.example"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v, want nil for reference 499 client close", err)
+	}
+	if stream == nil {
+		t.Fatal("Stream = nil, want closed stream for reference 499 client close")
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText after 499 error = %v, want nil", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after 499 error = %v, want nil", err)
+	}
+	if ending, ok := any(stream).(interface{ EndInput() error }); ok {
+		if err := ending.EndInput(); err != nil {
+			t.Fatalf("EndInput after 499 error = %v, want nil", err)
+		}
+	} else {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	audio, err := stream.Next()
+	if audio != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after 499 = (%#v, %v), want nil EOF", audio, err)
+	}
+}
+
 func TestRimeTTSStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{
@@ -1835,6 +1887,27 @@ func TestRimeTTSChunkedStreamCloseIsIdempotent(t *testing.T) {
 	}
 	if body.closeCount != 1 {
 		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+}
+
+func TestRimeTTSChunkedStreamCloseSuppressesBodyCloseError(t *testing.T) {
+	body := &rimeCloseErrorBody{
+		Reader: bytes.NewReader([]byte{0x01, 0x02}),
+		err:    errors.New("response body close failed"),
+	}
+	stream := &rimeTTSChunkedStream{
+		resp:       &http.Response{Body: body},
+		sampleRate: 24000,
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v, want nil like reference ChunkedStream.aclose", err)
+	}
+	if body.closeCount != 1 {
+		t.Fatalf("body Close() calls = %d, want 1", body.closeCount)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next() after Close error = %T %v, want EOF", err, err)
 	}
 }
 
@@ -2401,6 +2474,172 @@ func TestRimeTTSExpiredPooledWebsocketReconnectsLikeReference(t *testing.T) {
 	_ = provider.Close()
 }
 
+func TestRimeTTSExpiredPooledWebsocketCloseIsDeferredLikeReference(t *testing.T) {
+	var dials atomic.Int32
+	firstEOS := make(chan struct{})
+	releaseFirstClose := make(chan struct{})
+	var releaseFirstCloseOnce sync.Once
+	releaseFirst := func() {
+		releaseFirstCloseOnce.Do(func() { close(releaseFirstClose) })
+	}
+	secondDialStarted := make(chan struct{})
+	secondAccepted := make(chan struct{})
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			switch dials.Add(1) {
+			case 1:
+				go rimeTestServeReusableWebsocketBlockOnEOS(t, server, firstEOS, releaseFirstClose)
+			case 2:
+				close(secondDialStarted)
+				go func() {
+					defer server.Close()
+					if err := rimeTestWebsocketHandshake(server); err != nil {
+						t.Errorf("second websocket handshake: %v", err)
+						return
+					}
+					close(secondAccepted)
+					<-releaseFirstClose
+				}()
+			default:
+				server.Close()
+			}
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		releaseFirst()
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSBaseURL("ws://rime.example"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("first Stream error = %v", err)
+	}
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("first PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("first EndInput error = %v", err)
+	}
+	for {
+		_, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("first Next error = %v", err)
+		}
+	}
+	provider.mu.Lock()
+	provider.prewarmRefreshedAt = time.Now().Add(-301 * time.Second)
+	provider.mu.Unlock()
+
+	type streamResult struct {
+		stream tts.SynthesizeStream
+		err    error
+	}
+	resultCh := make(chan streamResult, 1)
+	go func() {
+		stream, err := provider.Stream(context.Background())
+		resultCh <- streamResult{stream: stream, err: err}
+	}()
+
+	select {
+	case <-secondDialStarted:
+	case <-firstEOS:
+		t.Fatal("expired pooled websocket close started before fresh dial; want deferred reference close")
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("fresh websocket dial did not start before expired close blocked")
+	}
+	releaseFirst()
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("second Stream error = %v", result.err)
+		}
+		if result.stream == nil {
+			t.Fatal("second Stream = nil, want fresh stream")
+		}
+		_ = result.stream.Close()
+	case <-time.After(time.Second):
+		t.Fatal("second Stream did not finish after deferred close release")
+	}
+	<-secondAccepted
+	_ = provider.Close()
+}
+
+func TestRimeTTSUpdateOptionsDefersPooledWebsocketCloseLikeReference(t *testing.T) {
+	eosSeen := make(chan struct{})
+	releaseClose := make(chan struct{})
+	var releaseCloseOnce sync.Once
+	release := func() {
+		releaseCloseOnce.Do(func() { close(releaseClose) })
+	}
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go rimeTestServeReusableWebsocketBlockOnEOS(t, server, eosSeen, releaseClose)
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		release()
+		websocket.DefaultDialer = oldDialer
+	})
+
+	provider := NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true), WithRimeTTSBaseURL("ws://rime.example"))
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	for {
+		_, err := stream.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("Next error = %v", err)
+		}
+	}
+
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- provider.UpdateOptions(WithRimeTTSSegment("immediate"))
+	}()
+	select {
+	case err := <-updateDone:
+		if err != nil {
+			t.Fatalf("UpdateOptions error = %v", err)
+		}
+	case <-eosSeen:
+		t.Fatal("UpdateOptions started stale websocket close before returning; want reference invalidate-only behavior")
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("UpdateOptions did not return before stale websocket close")
+	}
+	release()
+	_ = provider.Close()
+}
+
 func TestRimeTTSEmptyStreamReturnsWebsocketToPoolLikeReference(t *testing.T) {
 	var connections atomic.Int32
 	oldDialer := websocket.DefaultDialer
@@ -2534,6 +2773,82 @@ func TestRimeTTSActiveWebsocketInvalidatedByReferenceUpdateIsNotReused(t *testin
 	_ = provider.Close()
 }
 
+func TestRimeTTSInvalidatedActiveWebsocketCloseDoesNotBlockFinalEOFLikeReference(t *testing.T) {
+	releaseDone := make(chan struct{})
+	eosSeen := make(chan struct{})
+	releaseEOS := make(chan struct{})
+	var releaseEOSOnce sync.Once
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			client, server := net.Pipe()
+			go rimeTestServeReusableWebsocketReleaseThenBlockOnEOS(t, server, releaseDone, eosSeen, releaseEOS)
+			return client, nil
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() {
+		websocket.DefaultDialer = oldDialer
+		releaseEOSOnce.Do(func() { close(releaseEOS) })
+	})
+
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSBaseURL("ws://rime.example"),
+	)
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("Hello there."); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	ending, ok := any(stream).(interface{ EndInput() error })
+	if !ok {
+		t.Fatal("Rime stream does not implement EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if err := provider.UpdateOptions(WithRimeTTSVoice("lyra")); err != nil {
+		t.Fatalf("UpdateOptions error = %v", err)
+	}
+	close(releaseDone)
+
+	audio, err := stream.Next()
+	if err != nil || audio == nil || audio.Frame == nil {
+		t.Fatalf("Next audio = (%+v, %v), want provider audio before final", audio, err)
+	}
+	final, err := stream.Next()
+	if err != nil || final == nil || !final.IsFinal {
+		t.Fatalf("Next final = (%+v, %v), want reference final marker", final, err)
+	}
+
+	eof := make(chan error, 1)
+	go func() {
+		audio, err := stream.Next()
+		if audio != nil {
+			eof <- fmt.Errorf("Next after final audio = %+v, want nil", audio)
+			return
+		}
+		eof <- err
+	}()
+	select {
+	case err := <-eof:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Next after final error = %v, want EOF", err)
+		}
+	case <-eosSeen:
+		t.Fatal("stale websocket close started before final EOF; want reference put/drop behavior")
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for final EOF")
+	}
+	releaseEOSOnce.Do(func() { close(releaseEOS) })
+	_ = provider.Close()
+}
+
 func TestRimeTTSInflightPrewarmInvalidatedByReferenceUpdateIsNotReused(t *testing.T) {
 	var dials atomic.Int32
 	dialStarted := make(chan struct{})
@@ -2645,6 +2960,125 @@ func rimeTestServeReusableWebsocket(t *testing.T, conn net.Conn, connections *at
 			t.Errorf("second stream message = %v, want flush", message)
 			return
 		}
+		chunk, err := json.Marshal(map[string]any{
+			"type": "chunk",
+			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		})
+		if err != nil {
+			t.Errorf("marshal chunk: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, chunk); err != nil {
+			t.Errorf("write chunk message: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+			return
+		}
+	}
+}
+
+func rimeTestServeReusableWebsocketBlockOnEOS(t *testing.T, conn net.Conn, eosSeen chan<- struct{}, release <-chan struct{}) {
+	t.Helper()
+	defer conn.Close()
+	if err := rimeTestWebsocketHandshake(conn); err != nil {
+		t.Errorf("websocket handshake: %v", err)
+		return
+	}
+	for {
+		payload, err := rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode text message: %v", err)
+			return
+		}
+		if message["operation"] == "eos" {
+			close(eosSeen)
+			<-release
+			return
+		}
+		if _, ok := message["text"]; !ok {
+			t.Errorf("first stream message = %v, want text", message)
+			return
+		}
+		payload, err = rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			t.Errorf("read flush message: %v", err)
+			return
+		}
+		message = map[string]any{}
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode flush message: %v", err)
+			return
+		}
+		if message["operation"] != "flush" {
+			t.Errorf("second stream message = %v, want flush", message)
+			return
+		}
+		chunk, err := json.Marshal(map[string]any{
+			"type": "chunk",
+			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
+		})
+		if err != nil {
+			t.Errorf("marshal chunk: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, chunk); err != nil {
+			t.Errorf("write chunk message: %v", err)
+			return
+		}
+		if err := rimeTestWriteServerTextFrame(conn, []byte(`{"type":"done"}`)); err != nil {
+			t.Errorf("write done message: %v", err)
+			return
+		}
+	}
+}
+
+func rimeTestServeReusableWebsocketReleaseThenBlockOnEOS(t *testing.T, conn net.Conn, releaseDone <-chan struct{}, eosSeen chan<- struct{}, releaseEOS <-chan struct{}) {
+	t.Helper()
+	defer conn.Close()
+	if err := rimeTestWebsocketHandshake(conn); err != nil {
+		t.Errorf("websocket handshake: %v", err)
+		return
+	}
+	for {
+		payload, err := rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			return
+		}
+		var message map[string]any
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode text message: %v", err)
+			return
+		}
+		if message["operation"] == "eos" {
+			close(eosSeen)
+			<-releaseEOS
+			return
+		}
+		if _, ok := message["text"]; !ok {
+			t.Errorf("first stream message = %v, want text", message)
+			return
+		}
+		payload, err = rimeTestReadClientTextFrame(conn)
+		if err != nil {
+			t.Errorf("read flush message: %v", err)
+			return
+		}
+		message = map[string]any{}
+		if err := json.Unmarshal(payload, &message); err != nil {
+			t.Errorf("decode flush message: %v", err)
+			return
+		}
+		if message["operation"] != "flush" {
+			t.Errorf("second stream message = %v, want flush", message)
+			return
+		}
+		<-releaseDone
 		chunk, err := json.Marshal(map[string]any{
 			"type": "chunk",
 			"data": base64.StdEncoding.EncodeToString([]byte{0x01, 0x02}),
@@ -3235,11 +3669,14 @@ func TestRimeTTSProviderCloseClosesActiveStreams(t *testing.T) {
 	if closeCalls != 1 {
 		t.Fatalf("close calls = %d, want 1", closeCalls)
 	}
-	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.PushText("again"); err != nil {
+		t.Errorf("PushText after provider Close error = %v, want nil like reference closed input", err)
 	}
-	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
-		t.Errorf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
+	if err := stream.Flush(); err != nil {
+		t.Errorf("Flush after provider Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Errorf("EndInput after provider Close error = %v, want nil like reference closed input", err)
 	}
 }
 
@@ -3465,6 +3902,26 @@ func TestRimeTTSStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamIgnoresInputAfterCloseLikeReference(t *testing.T) {
+	stream := &rimeTTSSynthesizeStream{
+		cancel:    func() {},
+		closeConn: func() error { return nil },
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := stream.PushText("late"); err != nil {
+		t.Fatalf("PushText after Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after Close error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput after Close error = %v, want nil like reference closed input", err)
+	}
+}
+
 func TestRimeTTSStreamEmptyFlushIsReferenceNoop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -3619,6 +4076,57 @@ func TestRimeTTSStreamDoneWithoutAudioReportsReferenceNoAudio(t *testing.T) {
 	var apiErr *llm.APIError
 	if !errors.As(err, &apiErr) || !strings.Contains(err.Error(), "no audio frames were pushed for text: Hello there.") {
 		t.Fatalf("Next error = %T %v, want reference no-audio APIError", err, err)
+	}
+}
+
+func TestRimeTTSStreamNoAudioErrorUsesReferencePushedText(t *testing.T) {
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSSentenceTokenizer(rimeFixedSentenceTokenizer{tokens: []string{"normalized packet"}}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	stream := &rimeTTSSynthesizeStream{
+		conn:              &websocket.Conn{},
+		ctx:               ctx,
+		cancel:            cancel,
+		provider:          provider,
+		requestID:         "req-1",
+		contextID:         "ctx-1",
+		events:            make(chan *tts.SynthesizedAudio, 1),
+		errCh:             make(chan error, 1),
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage:      func(int, []byte) error { return nil },
+		readMessage: func() (int, []byte, error) {
+			<-done
+			return websocket.TextMessage, []byte(`{"type":"done"}`), nil
+		},
+		closeConn: func() error { return nil },
+	}
+
+	const pushedText = "raw\nassistant text"
+	if err := stream.PushText(pushedText); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	stream.mu.Lock()
+	stream.conn = nil
+	stream.mu.Unlock()
+	close(done)
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: "+pushedText) {
+		t.Fatalf("Next error = %T %q, want reference pushed text in no-audio error", err, err)
+	}
+	if strings.Contains(err.Error(), "normalized packet") {
+		t.Fatalf("Next error = %q, want original pushed text not tokenizer packet", err)
 	}
 }
 
@@ -4627,6 +5135,17 @@ func (b *rimeCloseCountBody) Close() error {
 		return errors.New("closed twice")
 	}
 	return nil
+}
+
+type rimeCloseErrorBody struct {
+	*bytes.Reader
+	err        error
+	closeCount int
+}
+
+func (b *rimeCloseErrorBody) Close() error {
+	b.closeCount++
+	return b.err
 }
 
 type rimeBlockingCancelBody struct {

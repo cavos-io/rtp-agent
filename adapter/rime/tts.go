@@ -42,6 +42,8 @@ const (
 	rimeWebsocketMaxAge      = 300 * time.Second
 )
 
+var errRimeTTSClientClosed = errors.New("rime tts client closed")
+
 type RimeTTS struct {
 	mu                       sync.Mutex
 	streams                  map[*rimeTTSSynthesizeStream]struct{}
@@ -53,6 +55,7 @@ type RimeTTS struct {
 	prewarmDone              chan struct{}
 	prewarmSeq               uint64
 	poolGeneration           uint64
+	stalePrewarmConns        []*websocket.Conn
 	apiKey                   string
 	baseURL                  string
 	model                    string
@@ -687,9 +690,10 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	candidate.useWebsocket = currentUseWebsocket
 
 	t.mu.Lock()
-	var stalePrewarm *websocket.Conn
 	if currentUseWebsocket && buildRimeTTSWebsocketURL(t).String() != buildRimeTTSWebsocketURL(candidate).String() {
-		stalePrewarm = t.prewarmConn
+		if t.prewarmConn != nil {
+			t.stalePrewarmConns = append(t.stalePrewarmConns, t.prewarmConn)
+		}
 		t.prewarmConn = nil
 		t.prewarmURL = ""
 		t.prewarmRefreshedAt = time.Time{}
@@ -729,10 +733,6 @@ func (t *RimeTTS) UpdateOptions(opts ...RimeTTSOption) error {
 	t.sentenceTokenizer = candidate.sentenceTokenizer
 	t.streamResponseTimeout = candidate.streamResponseTimeout
 	t.mu.Unlock()
-
-	if stalePrewarm != nil {
-		_ = closeRimePrewarmedConn(stalePrewarm)
-	}
 	return nil
 }
 
@@ -817,6 +817,19 @@ func (t *RimeTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 		var err error
 		conn, err = t.dialWebsocket(ctx)
 		if err != nil {
+			if errors.Is(err, errRimeTTSClientClosed) {
+				streamCtx, cancel := context.WithCancel(ctx)
+				cancel()
+				return &rimeTTSSynthesizeStream{
+					ctx:         streamCtx,
+					cancel:      func() {},
+					provider:    t,
+					requestID:   cavosmath.ShortUUID(""),
+					contextID:   cavosmath.ShortUUID(""),
+					closed:      true,
+					inputClosed: true,
+				}, nil
+			}
 			return nil, err
 		}
 	}
@@ -902,20 +915,24 @@ func (t *RimeTTS) takePrewarmedConn() *websocket.Conn {
 		return nil
 	}
 	t.mu.Lock()
+	staleConns := t.stalePrewarmConns
+	t.stalePrewarmConns = nil
 	conn := t.prewarmConn
 	expired := conn != nil && time.Since(t.prewarmRefreshedAt) > rimeWebsocketMaxAge
 	if conn != nil && (expired || t.prewarmURL != buildRimeTTSWebsocketURL(t).String()) {
 		t.prewarmConn = nil
 		t.prewarmURL = ""
 		t.prewarmRefreshedAt = time.Time{}
+		t.stalePrewarmConns = append(t.stalePrewarmConns, conn)
 		t.mu.Unlock()
-		_ = closeRimePrewarmedConn(conn)
+		closeRimePrewarmedConnsAsync(staleConns)
 		return nil
 	}
 	t.prewarmConn = nil
 	t.prewarmURL = ""
 	t.prewarmRefreshedAt = time.Time{}
 	t.mu.Unlock()
+	closeRimePrewarmedConnsAsync(staleConns)
 	return conn
 }
 
@@ -934,9 +951,14 @@ func (t *RimeTTS) cachePrewarmedConn(conn *websocket.Conn, websocketURL string, 
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 	t.mu.Lock()
-	if t.closed || !t.useWebsocket || t.prewarmConn != nil || t.poolGeneration != poolGeneration || buildRimeTTSWebsocketURL(t).String() != websocketURL {
+	if t.closed {
 		t.mu.Unlock()
 		_ = closeRimePrewarmedConn(conn)
+		return
+	}
+	if !t.useWebsocket || t.prewarmConn != nil || t.poolGeneration != poolGeneration || buildRimeTTSWebsocketURL(t).String() != websocketURL {
+		t.stalePrewarmConns = append(t.stalePrewarmConns, conn)
+		t.mu.Unlock()
 		return
 	}
 	t.prewarmConn = conn
@@ -957,6 +979,9 @@ func (t *RimeTTS) dialWebsocket(ctx context.Context) (*websocket.Conn, error) {
 		if resp != nil && resp.StatusCode > 0 {
 			if resp.Body != nil {
 				_ = resp.Body.Close()
+			}
+			if resp.StatusCode == 499 {
+				return nil, errRimeTTSClientClosed
 			}
 			return nil, llm.NewAPIStatusError(rimeHTTPStatusReason(resp.StatusCode, resp.Status), resp.StatusCode, "", nil)
 		}
@@ -988,12 +1013,14 @@ func (t *RimeTTS) Close() error {
 	prewarmConn := t.prewarmConn
 	prewarmCancel := t.prewarmCancel
 	prewarmDone := t.prewarmDone
+	stalePrewarmConns := t.stalePrewarmConns
 	t.prewarmConn = nil
 	t.prewarmURL = ""
 	t.prewarmRefreshedAt = time.Time{}
 	t.prewarmInFlight = false
 	t.prewarmCancel = nil
 	t.prewarmDone = nil
+	t.stalePrewarmConns = nil
 	t.prewarmSeq++
 	streams := make([]*rimeTTSSynthesizeStream, 0, len(t.streams))
 	for stream := range t.streams {
@@ -1019,7 +1046,23 @@ func (t *RimeTTS) Close() error {
 			closeErr = err
 		}
 	}
+	for _, conn := range stalePrewarmConns {
+		if err := closeRimePrewarmedConn(conn); err != nil && closeErr == nil {
+			closeErr = err
+		}
+	}
 	return closeErr
+}
+
+func closeRimePrewarmedConnsAsync(conns []*websocket.Conn) {
+	if len(conns) == 0 {
+		return
+	}
+	go func() {
+		for _, conn := range conns {
+			_ = closeRimePrewarmedConn(conn)
+		}
+	}()
 }
 
 func closeRimePrewarmedConn(conn *websocket.Conn) error {
@@ -1474,7 +1517,8 @@ func (s *rimeTTSChunkedStream) Close() error {
 	}
 	body := s.resp.Body
 	s.resp = nil
-	return body.Close()
+	_ = body.Close()
+	return nil
 }
 
 func rimeTTSTotalTimeout(model string) time.Duration {
@@ -1511,6 +1555,7 @@ type rimeTTSSynthesizeStream struct {
 	pendingTranscript     []tts.TimedString
 	segmentDone           bool
 	inputEnded            bool
+	inputClosed           bool
 
 	writeMessage func(int, []byte) error
 	readMessage  func() (int, []byte, error)
@@ -1523,12 +1568,13 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.inputEnded {
+	if s.inputEnded || s.inputClosed {
 		return nil
 	}
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	s.pushedText += text
 	if s.segmentDone {
 		return nil
 	}
@@ -1547,7 +1593,7 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 func (s *rimeTTSSynthesizeStream) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.inputEnded {
+	if s.inputEnded || s.inputClosed {
 		return nil
 	}
 	if s.closed {
@@ -1558,7 +1604,7 @@ func (s *rimeTTSSynthesizeStream) Flush() error {
 
 func (s *rimeTTSSynthesizeStream) EndInput() error {
 	s.mu.Lock()
-	if s.inputEnded {
+	if s.inputEnded || s.inputClosed {
 		s.mu.Unlock()
 		return nil
 	}
@@ -1693,10 +1739,6 @@ func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
 	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
 		return err
 	}
-	if s.pushedText != "" {
-		s.pushedText += " "
-	}
-	s.pushedText += text
 	s.started = true
 	s.startReadLoopLocked()
 	return nil
@@ -1725,6 +1767,7 @@ func (s *rimeTTSSynthesizeStream) close(sendEOS bool) error {
 		return nil
 	}
 	s.closed = true
+	s.inputClosed = true
 	s.cancel()
 	defer func() {
 		if s.provider != nil {
