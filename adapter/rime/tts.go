@@ -2151,7 +2151,9 @@ func rimeTTSJSONNullOrFalsey(raw json.RawMessage) bool {
 	return bytes.Equal(trimmed, []byte("null")) ||
 		bytes.Equal(trimmed, []byte("false")) ||
 		bytes.Equal(trimmed, []byte("0")) ||
-		bytes.Equal(trimmed, []byte(`""`))
+		bytes.Equal(trimmed, []byte(`""`)) ||
+		bytes.Equal(trimmed, []byte("[]")) ||
+		bytes.Equal(trimmed, []byte("{}"))
 }
 
 func rimeTTSTimedTranscript(words []string, starts []float64, ends []float64) []tts.TimedString {
