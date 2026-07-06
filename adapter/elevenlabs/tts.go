@@ -1324,7 +1324,7 @@ func (s *elevenLabsStream) pushMP3Audio(encoded string, deltaText string, timedT
 }
 
 func (s *elevenLabsStream) pushCompressedAudio(encoded string, deltaText string, timedTranscript []tts.TimedString) error {
-	data, err := base64.StdEncoding.DecodeString(encoded)
+	data, err := decodeElevenLabsBase64Audio(encoded)
 	if err != nil {
 		return err
 	}
@@ -1478,7 +1478,7 @@ func elevenLabsTTSUnexpectedCloseError(err error) error {
 }
 
 func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding string) (*tts.SynthesizedAudio, error) {
-	data, err := base64.StdEncoding.DecodeString(resp.Audio)
+	data, err := decodeElevenLabsBase64Audio(resp.Audio)
 	if err != nil {
 		return nil, err
 	}
@@ -1526,6 +1526,33 @@ func elevenLabsSynthesizedAudio(resp elWSResponse, sampleRate int, encoding stri
 		DeltaText:       deltaText,
 		TimedTranscript: timedTranscript,
 	}, nil
+}
+
+func decodeElevenLabsBase64Audio(value string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(value)
+	if err == nil {
+		return data, nil
+	}
+	filtered := make([]byte, 0, len(value))
+	hasData := false
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		switch {
+		case c >= 'A' && c <= 'Z',
+			c >= 'a' && c <= 'z',
+			c >= '0' && c <= '9',
+			c == '+',
+			c == '/':
+			filtered = append(filtered, c)
+			hasData = true
+		case c == '=':
+			filtered = append(filtered, c)
+		}
+	}
+	if !hasData {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(filtered))
 }
 
 func elevenLabsDeltaText(resp elWSResponse) string {
