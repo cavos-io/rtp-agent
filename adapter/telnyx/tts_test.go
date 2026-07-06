@@ -298,6 +298,38 @@ func TestTelnyxTTSStreamSegmentWriteFailureClosesStream(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamSegmentNextFailureClosesStream(t *testing.T) {
+	nextErr := errors.New("segment next failed")
+	segment := &fakeTelnyxEndInputTTSStream{nextErr: nextErr}
+	provider := NewTelnyxTTS("test-key", "")
+	provider.openSegment = func(context.Context) (tts.SynthesizeStream, error) {
+		return segment, nil
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	if _, err := stream.Next(); !errors.Is(err, nextErr) {
+		t.Fatalf("Next error = %v, want segment next failure", err)
+	}
+	if !segment.closed {
+		t.Fatal("failed segment was not closed")
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after segment next failure error = %v, want io.ErrClosedPipe", err)
+	}
+	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after segment failure error = %v, want EOF", err)
+	}
+}
+
 func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	var writes []string
 	stream := &telnyxTTSStream{
@@ -817,6 +849,7 @@ type fakeTelnyxEndInputTTSStream struct {
 	calls   []string
 	pushErr error
 	endErr  error
+	nextErr error
 	closed  bool
 }
 
@@ -842,5 +875,8 @@ func (f *fakeTelnyxEndInputTTSStream) Close() error {
 }
 
 func (f *fakeTelnyxEndInputTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	if f.nextErr != nil {
+		return nil, f.nextErr
+	}
 	return nil, io.EOF
 }

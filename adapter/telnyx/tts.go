@@ -390,6 +390,7 @@ func (s *telnyxTTSSegmentedStream) Close() error {
 	s.closed = true
 	s.inputEnded = true
 	current := s.current
+	s.current = nil
 	s.closeSegments()
 	s.mu.Unlock()
 	if current != nil {
@@ -418,6 +419,9 @@ func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
 			_ = s.current.Close()
 			s.current = nil
 			continue
+		}
+		if err != nil {
+			_ = s.Close()
 		}
 		return audio, err
 	}
