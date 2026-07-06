@@ -3943,6 +3943,57 @@ func TestRimeTTSStreamDoneWithoutAudioReportsReferenceNoAudio(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamNoAudioErrorUsesReferencePushedText(t *testing.T) {
+	provider := NewRimeTTS(
+		"test-key",
+		"",
+		WithRimeTTSWebsocket(true),
+		WithRimeTTSSentenceTokenizer(rimeFixedSentenceTokenizer{tokens: []string{"normalized packet"}}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	stream := &rimeTTSSynthesizeStream{
+		conn:              &websocket.Conn{},
+		ctx:               ctx,
+		cancel:            cancel,
+		provider:          provider,
+		requestID:         "req-1",
+		contextID:         "ctx-1",
+		events:            make(chan *tts.SynthesizedAudio, 1),
+		errCh:             make(chan error, 1),
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage:      func(int, []byte) error { return nil },
+		readMessage: func() (int, []byte, error) {
+			<-done
+			return websocket.TextMessage, []byte(`{"type":"done"}`), nil
+		},
+		closeConn: func() error { return nil },
+	}
+
+	const pushedText = "raw\nassistant text"
+	if err := stream.PushText(pushedText); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	stream.mu.Lock()
+	stream.conn = nil
+	stream.mu.Unlock()
+	close(done)
+	audio, err := stream.Next()
+	if audio != nil {
+		t.Fatalf("Next audio = %+v, want nil on no-audio error", audio)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: "+pushedText) {
+		t.Fatalf("Next error = %T %q, want reference pushed text in no-audio error", err, err)
+	}
+	if strings.Contains(err.Error(), "normalized packet") {
+		t.Fatalf("Next error = %q, want original pushed text not tokenizer packet", err)
+	}
+}
+
 func TestRimeTTSStreamPreservesReferencePCMSampleBoundaries(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	want := []byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66}

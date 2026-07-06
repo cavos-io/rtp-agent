@@ -1569,6 +1569,7 @@ func (s *rimeTTSSynthesizeStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	s.pushedText += text
 	if s.segmentDone {
 		return nil
 	}
@@ -1733,10 +1734,6 @@ func (s *rimeTTSSynthesizeStream) sendSentenceLocked(text string) error {
 	if err := s.writeMessageData(websocket.TextMessage, message); err != nil {
 		return err
 	}
-	if s.pushedText != "" {
-		s.pushedText += " "
-	}
-	s.pushedText += text
 	s.started = true
 	s.startReadLoopLocked()
 	return nil
