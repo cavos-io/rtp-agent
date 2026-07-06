@@ -221,12 +221,14 @@ func writeTelnyxTTSMessage(conn *websocket.Conn, message map[string]string) erro
 }
 
 type telnyxTTSChunkedStream struct {
-	provider *TelnyxTTS
-	ctx      context.Context
-	text     string
-	stream   tts.SynthesizeStream
-	closed   bool
-	started  bool
+	provider interface {
+		Stream(context.Context) (tts.SynthesizeStream, error)
+	}
+	ctx     context.Context
+	text    string
+	stream  tts.SynthesizeStream
+	closed  bool
+	started bool
 }
 
 func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -257,7 +259,7 @@ func (s *telnyxTTSChunkedStream) ensureStream() error {
 		s.closed = true
 		return err
 	}
-	if err := stream.Flush(); err != nil {
+	if err := tts.EndSynthesizeStreamInput(stream); err != nil {
 		_ = stream.Close()
 		s.closed = true
 		return err

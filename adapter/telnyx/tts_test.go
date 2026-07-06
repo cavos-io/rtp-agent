@@ -141,6 +141,23 @@ func TestTelnyxTTSSynthesizeDefersReferenceConnectUntilNext(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSSynthesizeUsesReferenceEndInput(t *testing.T) {
+	fakeStream := &fakeTelnyxEndInputTTSStream{}
+	stream := &telnyxTTSChunkedStream{
+		provider: &fakeTelnyxChunkedTTSProvider{stream: fakeStream},
+		ctx:      context.Background(),
+		text:     "hello",
+	}
+	if err := stream.ensureStream(); err != nil {
+		t.Fatalf("ensureStream error = %v", err)
+	}
+
+	want := []string{"PushText:hello", "EndInput"}
+	if !reflect.DeepEqual(fakeStream.calls, want) {
+		t.Fatalf("stream calls = %#v, want %#v", fakeStream.calls, want)
+	}
+}
+
 func TestTelnyxTTSStreamURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewTelnyxTTS("test-key", "voice-1", WithTelnyxTTSBaseURL("wss://telnyx.example/speech"))
 
@@ -681,4 +698,40 @@ func assertTelnyxTextPayload(t *testing.T, message map[string]string, want strin
 
 func TestTelnyxTTSStillImplementsInterface(t *testing.T) {
 	var _ tts.TTS = NewTelnyxTTS("test-key", "")
+}
+
+type fakeTelnyxChunkedTTSProvider struct {
+	stream tts.SynthesizeStream
+}
+
+func (f *fakeTelnyxChunkedTTSProvider) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return f.stream, nil
+}
+
+type fakeTelnyxEndInputTTSStream struct {
+	calls []string
+}
+
+func (f *fakeTelnyxEndInputTTSStream) PushText(text string) error {
+	f.calls = append(f.calls, "PushText:"+text)
+	return nil
+}
+
+func (f *fakeTelnyxEndInputTTSStream) Flush() error {
+	f.calls = append(f.calls, "Flush")
+	return nil
+}
+
+func (f *fakeTelnyxEndInputTTSStream) EndInput() error {
+	f.calls = append(f.calls, "EndInput")
+	return nil
+}
+
+func (f *fakeTelnyxEndInputTTSStream) Close() error {
+	f.calls = append(f.calls, "Close")
+	return nil
+}
+
+func (f *fakeTelnyxEndInputTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	return nil, io.EOF
 }
