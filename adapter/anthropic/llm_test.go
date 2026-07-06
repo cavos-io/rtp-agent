@@ -2916,6 +2916,36 @@ func TestAnthropicChatCachesExtraSystemLikeReference(t *testing.T) {
 	assertCacheControlBlock(t, transport.body["system"], "extra system")
 }
 
+func TestAnthropicChatCachesExtraToolsLikeReference(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{
+			"caching": "ephemeral",
+			"tools": []map[string]any{{
+				"name":         "lookup",
+				"description":  "look up information",
+				"input_schema": map[string]any{"type": "object"},
+			}},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	assertCacheControlBlock(t, transport.body["tools"], "extra tools")
+}
+
 func TestAnthropicChatUsesConfiguredEphemeralCachingLikeReference(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

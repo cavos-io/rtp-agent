@@ -217,6 +217,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		body["system"] = anthropicSystemBlocks(systemMessages, cacheControl)
 	}
 	applyAnthropicSystemCacheControl(body, cacheControl)
+	applyAnthropicToolsCacheControl(body, cacheControl)
 	if l.userSet {
 		body["user"] = l.user
 	}
@@ -427,6 +428,25 @@ func applyAnthropicSystemCacheControl(body map[string]any, cacheControl map[stri
 		}
 		if block, ok := system[len(system)-1].(map[string]any); ok {
 			block["cache_control"] = cacheControl
+		}
+	}
+}
+
+func applyAnthropicToolsCacheControl(body map[string]any, cacheControl map[string]any) {
+	if cacheControl == nil {
+		return
+	}
+	switch tools := body["tools"].(type) {
+	case []map[string]any:
+		if len(tools) > 0 {
+			tools[len(tools)-1]["cache_control"] = cacheControl
+		}
+	case []any:
+		if len(tools) == 0 {
+			return
+		}
+		if tool, ok := tools[len(tools)-1].(map[string]any); ok {
+			tool["cache_control"] = cacheControl
 		}
 	}
 }
