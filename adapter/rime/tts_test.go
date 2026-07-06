@@ -4329,6 +4329,18 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 			t.Fatalf("object APIError message = %q, want Python-style empty dict", apiErr.Message)
 		}
 	}
+
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":["bad",1]}`), 24000); err == nil {
+		t.Fatal("array error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("array error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Rime ws error: ['bad', 1]" {
+			t.Fatalf("array APIError message = %q, want Python-style list", apiErr.Message)
+		}
+	}
 }
 
 func TestRimeTTSAudioFromWebsocketIgnoresReferenceEmptyBase64Noise(t *testing.T) {

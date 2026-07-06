@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -2104,19 +2105,42 @@ func rimeTTSWebsocketErrorMessage(raw json.RawMessage) string {
 	}
 	var value any
 	if err := json.Unmarshal(raw, &value); err == nil {
-		switch typed := value.(type) {
-		case map[string]any:
-			if len(typed) == 0 {
-				return "{}"
-			}
-		case []any:
-			if len(typed) == 0 {
-				return "[]"
-			}
-		}
-		return fmt.Sprint(value)
+		return rimeTTSPythonRepr(value)
 	}
 	return string(raw)
+}
+
+func rimeTTSPythonRepr(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return "None"
+	case string:
+		return "'" + typed + "'"
+	case bool:
+		if typed {
+			return "True"
+		}
+		return "False"
+	case []any:
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			parts = append(parts, rimeTTSPythonRepr(item))
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, rimeTTSPythonRepr(key)+": "+rimeTTSPythonRepr(typed[key]))
+		}
+		return "{" + strings.Join(parts, ", ") + "}"
+	default:
+		return fmt.Sprint(value)
+	}
 }
 
 type rimeTTSWordTimestampsPayload struct {
