@@ -288,6 +288,50 @@ func TestNeuphonicTTSUpdateOptionsAffectsFutureRequests(t *testing.T) {
 	}
 }
 
+func TestNeuphonicTTSUpdateOptionsKeepsReferenceAudioAndRouteConfig(t *testing.T) {
+	provider := NewNeuphonicTTS("test-key", "voice-1",
+		WithNeuphonicTTSBaseURL("https://neuphonic.example"),
+		WithNeuphonicTTSEncoding("pcm_mulaw"),
+		WithNeuphonicTTSSampleRate(16000),
+	)
+
+	provider.UpdateOptions(
+		WithNeuphonicTTSBaseURL("https://changed.example"),
+		WithNeuphonicTTSEncoding("pcm_linear"),
+		WithNeuphonicTTSSampleRate(48000),
+		WithNeuphonicTTSLangCode("es"),
+		WithNeuphonicTTSVoice("voice-2"),
+		WithNeuphonicTTSSpeed(0.75),
+	)
+
+	if provider.baseURL != "https://neuphonic.example" {
+		t.Fatalf("base URL = %q, want constructor value like reference", provider.baseURL)
+	}
+	if provider.encoding != "pcm_mulaw" || provider.sampleRate != 16000 {
+		t.Fatalf("audio config = %s/%d, want constructor values", provider.encoding, provider.sampleRate)
+	}
+	req, err := buildNeuphonicTTSRequest(context.Background(), provider, "hola")
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if req.URL.Host != "neuphonic.example" {
+		t.Fatalf("request host = %q, want constructor route", req.URL.Host)
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	assertNeuphonicPayload(t, payload, "encoding", "pcm_mulaw")
+	if got := payload["sampling_rate"]; got != float64(16000) {
+		t.Fatalf("sampling_rate = %#v, want constructor value 16000", got)
+	}
+	assertNeuphonicPayload(t, payload, "voice_id", "voice-2")
+	assertNeuphonicPayload(t, payload, "lang_code", "es")
+	if got := payload["speed"]; got != 0.75 {
+		t.Fatalf("speed = %#v, want 0.75", got)
+	}
+}
+
 func TestNeuphonicTTSChunkedStreamDecodesSSEAudio(t *testing.T) {
 	stream := &neuphonicTTSChunkedStream{
 		resp: &http.Response{Body: io.NopCloser(bytes.NewReader([]byte(
