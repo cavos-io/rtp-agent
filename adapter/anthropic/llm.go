@@ -806,12 +806,13 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			if s.closed {
 				return nil, io.EOF
 			}
-			if retryErr := s.retryBeforeOutput(err); retryErr == nil {
+			wrappedErr := s.wrapReadError(err)
+			if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
 				continue
-			} else if retryErr != err {
+			} else if retryErr != wrappedErr {
 				return nil, retryErr
 			}
-			return nil, s.wrapReadError(err)
+			return nil, wrappedErr
 		}
 
 		line = strings.TrimSpace(line)
@@ -953,6 +954,11 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 func (s *anthropicStream) retryBeforeOutput(err error) error {
 	if s.emittedChunk || s.llm == nil || s.retryAttempt >= s.connectOptions.MaxRetry {
+		if !s.emittedChunk && s.connectOptions.MaxRetry > 0 && s.retryAttempt >= s.connectOptions.MaxRetry && anthropicShouldRetryError(err) {
+			return llm.NewAPIConnectionError(
+				fmt.Sprintf("failed to generate LLM completion after %d attempts", s.connectOptions.MaxRetry+1),
+			)
+		}
 		return err
 	}
 	if s.resp != nil && s.resp.Body != nil {

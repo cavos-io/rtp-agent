@@ -1147,6 +1147,51 @@ func TestAnthropicChatRetriesStreamReadErrorBeforeChunkLikeReference(t *testing.
 	}
 }
 
+func TestAnthropicChatReportsExhaustedStreamRetryAsConnectionErrorLikeReference(t *testing.T) {
+	firstBody := &anthropicReadErrorBody{
+		payload: `data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}` + "\n",
+		err:     errors.New("stream reset"),
+	}
+	secondBody := &anthropicReadErrorBody{
+		payload: `data: {"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3}}}` + "\n",
+		err:     errors.New("stream reset again"),
+	}
+	transport := &sequenceRoundTripper{responses: []*http.Response{
+		{StatusCode: http.StatusOK, Body: firstBody, Header: make(http.Header)},
+		{StatusCode: http.StatusOK, Body: secondBody, Header: make(http.Header)},
+	}}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 1}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if connectionErr.Message != "failed to generate LLM completion after 2 attempts" {
+		t.Fatalf("Message = %q, want exhausted retry message", connectionErr.Message)
+	}
+	if transport.calls != 2 {
+		t.Fatalf("HTTP calls = %d, want initial stream plus final retry", transport.calls)
+	}
+}
+
 func TestAnthropicStreamSuppressesReferenceThinkingText(t *testing.T) {
 	transport := &captureRoundTripper{
 		responseBody: strings.Join([]string{
