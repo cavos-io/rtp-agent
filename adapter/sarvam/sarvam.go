@@ -1659,6 +1659,9 @@ func (s *sarvamTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 		s.loaded = true
 		s.requestID = result.RequestID
 		s.audios = result.Audios
+		if len(s.audios) == 0 {
+			return nil, llm.NewAPIConnectionError("Sarvam TTS API response invalid: no audio data")
+		}
 	}
 	if s.nextAudio < len(s.audios) {
 		data, err := decodeSarvamTTSBase64Audio(s.audios[s.nextAudio])

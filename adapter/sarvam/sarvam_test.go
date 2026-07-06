@@ -1011,6 +1011,28 @@ func TestSarvamTTSChunkedStreamEmitsAllReferenceAudioChunks(t *testing.T) {
 	}
 }
 
+func TestSarvamTTSChunkedStreamEmptyAudiosReturnsAPIConnectionError(t *testing.T) {
+	stream := &sarvamTTSChunkedStream{
+		resp: &http.Response{Body: io.NopCloser(strings.NewReader(`{
+			"request_id":"req-empty",
+			"audios":[]
+		}`))},
+		sampleRate:       22050,
+		outputAudioCodec: "linear16",
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	var apiConnErr *llm.APIConnectionError
+	if audio != nil || !errors.As(err, &apiConnErr) {
+		t.Fatalf("Next = (%#v, %T %v), want nil APIConnectionError", audio, err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio data") {
+		t.Fatalf("Next error = %q, want no audio data context", err)
+	}
+}
+
 func TestSarvamTTSChunkedStreamDecodesReferenceNoisyBase64(t *testing.T) {
 	stream := &sarvamTTSChunkedStream{
 		resp: &http.Response{Body: io.NopCloser(strings.NewReader(`{
