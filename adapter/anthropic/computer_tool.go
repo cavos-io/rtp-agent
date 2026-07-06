@@ -36,6 +36,10 @@ func NewComputerTool(actions *browser.PageActions, width int, height int) *Compu
 	return toolset
 }
 
+func (c *ComputerTool) ID() string {
+	return "computer"
+}
+
 func (c *ComputerTool) Tools() []llm.Tool {
 	return []llm.Tool{c.tool}
 }

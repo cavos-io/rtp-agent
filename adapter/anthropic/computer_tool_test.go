@@ -71,6 +71,43 @@ func TestComputerToolProviderNameExecutesReferenceToolCall(t *testing.T) {
 	}
 }
 
+func TestComputerToolRegistersAsReferenceToolset(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	var toolCtx *llm.ToolContext
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("NewToolContext panic = %v, want Anthropic ComputerTool accepted as Toolset", r)
+			}
+		}()
+		toolCtx = llm.NewToolContext([]interface{}{toolset})
+	}()
+
+	toolsets := toolCtx.Toolsets()
+	if len(toolsets) != 1 || toolsets[0].ID() != "computer" {
+		t.Fatalf("Toolsets() = %#v, want Anthropic computer toolset", toolsets)
+	}
+
+	result := llm.ExecuteFunctionCall(context.Background(), &llm.FunctionToolCall{
+		Name:      "computer",
+		CallID:    "call_computer",
+		Arguments: `{"action":"left_click","coordinate":[10,20]}`,
+	}, toolCtx)
+
+	if result.RawError != nil {
+		t.Fatalf("ExecuteFunctionCall RawError = %v, want nil", result.RawError)
+	}
+	if result.FncCallOut == nil || result.FncCallOut.IsError {
+		t.Fatalf("FncCallOut = %#v, want successful computer output", result.FncCallOut)
+	}
+	events := actions.Events()
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want mouse move/down/up", len(events))
+	}
+}
+
 func TestComputerToolDispatchesReferenceActionsWithoutFrame(t *testing.T) {
 	toolset := NewComputerTool(browser.NewPageActions(), 1024, 768)
 
