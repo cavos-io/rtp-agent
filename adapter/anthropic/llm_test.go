@@ -677,6 +677,28 @@ func TestAnthropicChatUsesProviderComputerToolSpec(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatAddsComputerToolBetaHeader(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	computerTool := NewComputerTool(browser.NewPageActions(), 1440, 900)
+	stream, err := model.Chat(context.Background(), llm.NewChatContext(), llm.WithTools(computerTool.Tools()))
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if got := transport.headers.Get("anthropic-beta"); got != "computer-use-2025-11-24" {
+		t.Fatalf("anthropic-beta = %q, want computer-use-2025-11-24", got)
+	}
+}
+
 func TestAnthropicChatMapsNamedToolChoice(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

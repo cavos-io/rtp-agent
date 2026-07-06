@@ -243,6 +243,10 @@ func (t *computerUseTool) AnthropicToolSpec() map[string]interface{} {
 	}
 }
 
+func (t *computerUseTool) AnthropicBetaFlag() string {
+	return "computer-use-2025-11-24"
+}
+
 func (t *computerUseTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",

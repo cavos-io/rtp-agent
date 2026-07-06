@@ -27,6 +27,10 @@ type anthropicToolSpecProvider interface {
 	AnthropicToolSpec() map[string]interface{}
 }
 
+type anthropicBetaToolProvider interface {
+	AnthropicBetaFlag() string
+}
+
 const (
 	anthropicAPIKeyEnv   = "ANTHROPIC_API_KEY"
 	defaultAnthropicURL  = "https://api.anthropic.com"
@@ -138,12 +142,16 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	}
 	applyAnthropicExtraParams(body, options.ExtraParams)
 
+	var betaFlag string
 	// Tool support
 	if len(options.Tools) > 0 {
 		tools := make([]map[string]interface{}, 0)
 		for _, tool := range options.Tools {
 			if providerTool, ok := tool.(anthropicToolSpecProvider); ok {
 				tools = append(tools, providerTool.AnthropicToolSpec())
+				if betaTool, ok := tool.(anthropicBetaToolProvider); ok && betaFlag == "" {
+					betaFlag = betaTool.AnthropicBetaFlag()
+				}
 			} else {
 				tools = append(tools, map[string]interface{}{
 					"name":         tool.Name(),
@@ -168,7 +176,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	jsonBody, _ := json.Marshal(body)
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
-		resp, err := l.startAnthropicStream(ctx, jsonBody)
+		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag)
 		if err == nil {
 			return &anthropicStream{
 				resp:     resp,
@@ -198,7 +206,7 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 	return nil, lastErr
 }
 
-func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte) (*http.Response, error) {
+func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte, betaFlag string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", l.baseURL+"/v1/messages", bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return nil, err
@@ -207,6 +215,9 @@ func (l *AnthropicLLM) startAnthropicStream(ctx context.Context, jsonBody []byte
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", l.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
+	if betaFlag != "" {
+		req.Header.Set("anthropic-beta", betaFlag)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
