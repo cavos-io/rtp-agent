@@ -841,7 +841,10 @@ func (c *upliftAISocketIOClient) readLoop(conn upliftAISocketIOConn) {
 		}
 		packet := string(msg)
 		if packet == "2" {
-			_ = conn.WriteMessage(websocket.TextMessage, []byte("3"))
+			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
+				c.closeConn(conn, nil)
+				return
+			}
 			continue
 		}
 		payload, ok := strings.CutPrefix(packet, "42"+upliftAISocketIONamespace+",")
