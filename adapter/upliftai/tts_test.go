@@ -714,6 +714,45 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	}
 }
 
+func TestUpliftAITTSChunkedStreamDecodesReferenceULawResponse(t *testing.T) {
+	encoded := []byte{0x00, 0xff}
+	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("ULAW_8000_8"))
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(encoded))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded mu-law frame", audio)
+	}
+	if got, want := audio.Frame.SampleRate, uint32(8000); got != want {
+		t.Fatalf("sample rate = %d, want ULAW_8000_8 rate %d", got, want)
+	}
+	if got, want := audio.Frame.NumChannels, uint32(1); got != want {
+		t.Fatalf("channels = %d, want mono output %d", got, want)
+	}
+	if got, want := audio.Frame.SamplesPerChannel, uint32(2); got != want {
+		t.Fatalf("samples per channel = %d, want one PCM16 sample per mu-law byte", got)
+	}
+	wantPCM := []byte{0x84, 0x82, 0x00, 0x00}
+	if !bytes.Equal(audio.Frame.Data, wantPCM) {
+		t.Fatalf("audio data = %#v, want decoded mu-law PCM %#v", audio.Frame.Data, wantPCM)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {
 	body := io.NopCloser(strings.NewReader("\x01\x02\x03\x04"))
 	stream := &upliftAITTSChunkedStream{resp: &http.Response{Body: body}}

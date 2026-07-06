@@ -476,6 +476,9 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if strings.HasPrefix(s.currentOutputFormat(), "WAV") {
 		return s.nextDecodedWAV()
 	}
+	if s.currentOutputFormat() == "ULAW_8000_8" {
+		return s.nextDecodedULaw()
+	}
 	if s.pendingFinal {
 		s.pendingFinal = false
 		s.finalSent = true
@@ -686,6 +689,60 @@ func decodeUpliftAIWAVPCM16(data []byte) (*model.AudioFrame, error) {
 		NumChannels:       uint32(channels),
 		SamplesPerChannel: uint32(len(pcm) / int(channels) / 2),
 	}, nil
+}
+
+func (s *upliftAITTSChunkedStream) nextDecodedULaw() (*tts.SynthesizedAudio, error) {
+	if s.pendingFinal {
+		s.pendingFinal = false
+		s.finalSent = true
+		return &tts.SynthesizedAudio{IsFinal: true}, nil
+	}
+	buf := make([]byte, 4096)
+	for {
+		n, err := s.resp.Body.Read(buf)
+		if n > 0 {
+			if err == io.EOF {
+				s.pendingFinal = true
+			}
+			data := decodeUpliftAIMuLaw(buf[:n])
+			return &tts.SynthesizedAudio{
+				Frame: &model.AudioFrame{
+					Data:              data,
+					SampleRate:        8000,
+					NumChannels:       1,
+					SamplesPerChannel: uint32(len(data) / 2),
+				},
+			}, nil
+		}
+		if err != nil {
+			if err == io.EOF {
+				if !s.finalSent {
+					s.finalSent = true
+					return &tts.SynthesizedAudio{IsFinal: true}, nil
+				}
+				return nil, io.EOF
+			}
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS mu-law read failed: %v", err))
+		}
+	}
+}
+
+func decodeUpliftAIMuLaw(data []byte) []byte {
+	pcm := make([]byte, len(data)*2)
+	for i, encoded := range data {
+		u := ^encoded
+		sign := 1
+		if u&0x80 != 0 {
+			sign = -1
+		}
+		exponent := int((u >> 4) & 0x07)
+		mantissa := int(u & 0x0f)
+		sample := ((mantissa << 3) + 0x84) << exponent
+		value := int16(sign * (sample - 0x84))
+		pcm[i*2] = byte(value)
+		pcm[i*2+1] = byte(value >> 8)
+	}
+	return pcm
 }
 
 func upliftAIDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
