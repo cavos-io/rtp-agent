@@ -261,6 +261,47 @@ func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamEndInputFlushesAndRejectsMoreInput(t *testing.T) {
+	var writes [][]byte
+	stream := &telnyxSTTStream{
+		writeBinary: func(data []byte) error {
+			writes = append(writes, append([]byte(nil), data...))
+			return nil
+		},
+		closeConn: func() error {
+			t.Fatal("EndInput closed websocket; want output side open for final transcripts")
+			return nil
+		},
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	if len(writes) != 0 {
+		t.Fatalf("writes before EndInput = %s, want none", telnyxWriteSizes(writes))
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	if len(writes) != 1 || len(writes[0]) != 800 {
+		t.Fatalf("writes after EndInput = %s, want flushed 800-byte tail", telnyxWriteSizes(writes))
+	}
+	if err := stream.PushFrame(&model.AudioFrame{Data: []byte{0x01, 0x02}}); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("PushFrame after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.Flush(); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("Flush after EndInput error = %v, want stream input ended", err)
+	}
+	if err := stream.EndInput(); err == nil || err.Error() != "stream input ended" {
+		t.Fatalf("second EndInput error = %v, want stream input ended", err)
+	}
+}
+
 func TestTelnyxSTTProviderCloseClosesActiveStreams(t *testing.T) {
 	provider := NewTelnyxSTT("test-key")
 	closeCalls := 0

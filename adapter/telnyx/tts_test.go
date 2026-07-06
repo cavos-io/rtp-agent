@@ -96,6 +96,18 @@ func TestTelnyxTTSStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamDialHTTPStatusReturnsAPIStatusError(t *testing.T) {
+	err := telnyxTTSDialError(errors.New("websocket: bad handshake"), &http.Response{StatusCode: http.StatusTooManyRequests})
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("dial error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
 func TestTelnyxTTSSynthesizeDefersReferenceConnectUntilNext(t *testing.T) {
 	dials := 0
 	oldDialer := websocket.DefaultDialer
@@ -138,6 +150,23 @@ func TestTelnyxTTSSynthesizeDefersReferenceConnectUntilNext(t *testing.T) {
 	}
 	if dials != 1 {
 		t.Fatalf("dials after close-before-Next = %d, want 1", dials)
+	}
+}
+
+func TestTelnyxTTSSynthesizeUsesReferenceEndInput(t *testing.T) {
+	fakeStream := &fakeTelnyxEndInputTTSStream{}
+	stream := &telnyxTTSChunkedStream{
+		provider: &fakeTelnyxChunkedTTSProvider{stream: fakeStream},
+		ctx:      context.Background(),
+		text:     "hello",
+	}
+	if err := stream.ensureStream(); err != nil {
+		t.Fatalf("ensureStream error = %v", err)
+	}
+
+	want := []string{"PushText:hello", "EndInput"}
+	if !reflect.DeepEqual(fakeStream.calls, want) {
+		t.Fatalf("stream calls = %#v, want %#v", fakeStream.calls, want)
 	}
 }
 
@@ -196,6 +225,46 @@ func TestTelnyxTTSStreamBuffersTextUntilFlushLikeReference(t *testing.T) {
 	want := []string{"hello world", ""}
 	if !reflect.DeepEqual(writes, want) {
 		t.Fatalf("writes after Flush = %#v, want %#v", writes, want)
+	}
+}
+
+func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
+	var writes []string
+	stream := &telnyxTTSStream{
+		writeMessage: func(message map[string]string) error {
+			writes = append(writes, message["text"])
+			return nil
+		},
+		closeConn: func() error {
+			t.Fatal("EndInput closed websocket; want output side open for audio")
+			return nil
+		},
+	}
+
+	if err := stream.PushText("hello "); err != nil {
+		t.Fatalf("PushText first error = %v", err)
+	}
+	if err := stream.PushText("world"); err != nil {
+		t.Fatalf("PushText second error = %v", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+	want := []string{"hello world", ""}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after EndInput = %#v, want %#v", writes, want)
+	}
+	if err := stream.PushText("ignored"); err != nil {
+		t.Fatalf("PushText after EndInput error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush after EndInput error = %v, want nil like reference closed input", err)
+	}
+	if err := stream.EndInput(); err != nil {
+		t.Fatalf("second EndInput error = %v, want nil like reference closed input", err)
+	}
+	if !reflect.DeepEqual(writes, want) {
+		t.Fatalf("writes after closed input = %#v, want unchanged %#v", writes, want)
 	}
 }
 
@@ -641,4 +710,40 @@ func assertTelnyxTextPayload(t *testing.T, message map[string]string, want strin
 
 func TestTelnyxTTSStillImplementsInterface(t *testing.T) {
 	var _ tts.TTS = NewTelnyxTTS("test-key", "")
+}
+
+type fakeTelnyxChunkedTTSProvider struct {
+	stream tts.SynthesizeStream
+}
+
+func (f *fakeTelnyxChunkedTTSProvider) Stream(context.Context) (tts.SynthesizeStream, error) {
+	return f.stream, nil
+}
+
+type fakeTelnyxEndInputTTSStream struct {
+	calls []string
+}
+
+func (f *fakeTelnyxEndInputTTSStream) PushText(text string) error {
+	f.calls = append(f.calls, "PushText:"+text)
+	return nil
+}
+
+func (f *fakeTelnyxEndInputTTSStream) Flush() error {
+	f.calls = append(f.calls, "Flush")
+	return nil
+}
+
+func (f *fakeTelnyxEndInputTTSStream) EndInput() error {
+	f.calls = append(f.calls, "EndInput")
+	return nil
+}
+
+func (f *fakeTelnyxEndInputTTSStream) Close() error {
+	f.calls = append(f.calls, "Close")
+	return nil
+}
+
+func (f *fakeTelnyxEndInputTTSStream) Next() (*tts.SynthesizedAudio, error) {
+	return nil, io.EOF
 }

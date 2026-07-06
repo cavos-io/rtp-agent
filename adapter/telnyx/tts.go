@@ -151,12 +151,9 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	if err := validateTelnyxAPIKey(t.apiKey); err != nil {
 		return nil, err
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxTTSStreamURL(t), buildTelnyxTTSHeaders(t))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxTTSStreamURL(t), buildTelnyxTTSHeaders(t))
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx tts websocket: %v", err))
+		return nil, telnyxTTSDialError(err, resp)
 	}
 	if t.isClosed() {
 		_ = conn.Close()
@@ -208,6 +205,19 @@ func buildTelnyxTTSHeaders(t *TelnyxTTS) http.Header {
 	return headers
 }
 
+func telnyxTTSDialError(err error, resp *http.Response) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError("Telnyx TTS websocket connect timed out")
+	}
+	if resp != nil && resp.StatusCode > 0 {
+		return llm.NewAPIStatusError("Telnyx TTS websocket handshake failed", resp.StatusCode, "", nil)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx tts websocket: %v", err))
+}
+
 func buildTelnyxTTSTextMessage(text string) map[string]string {
 	return map[string]string{"text": text}
 }
@@ -221,12 +231,14 @@ func writeTelnyxTTSMessage(conn *websocket.Conn, message map[string]string) erro
 }
 
 type telnyxTTSChunkedStream struct {
-	provider *TelnyxTTS
-	ctx      context.Context
-	text     string
-	stream   tts.SynthesizeStream
-	closed   bool
-	started  bool
+	provider interface {
+		Stream(context.Context) (tts.SynthesizeStream, error)
+	}
+	ctx     context.Context
+	text    string
+	stream  tts.SynthesizeStream
+	closed  bool
+	started bool
 }
 
 func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -257,7 +269,7 @@ func (s *telnyxTTSChunkedStream) ensureStream() error {
 		s.closed = true
 		return err
 	}
-	if err := stream.Flush(); err != nil {
+	if err := tts.EndSynthesizeStreamInput(stream); err != nil {
 		_ = stream.Close()
 		s.closed = true
 		return err
@@ -285,6 +297,7 @@ type telnyxTTSStream struct {
 	decoder     codecs.AudioStreamDecoder
 	mu          sync.Mutex
 	closed      bool
+	inputEnded  bool
 	pendingText string
 
 	writeMessage func(map[string]string) error
@@ -297,6 +310,9 @@ func (s *telnyxTTSStream) PushText(text string) error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return nil
+	}
 	s.pendingText += text
 	return nil
 }
@@ -307,6 +323,29 @@ func (s *telnyxTTSStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return nil
+	}
+	return s.flushPendingTextLocked()
+}
+
+func (s *telnyxTTSStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return nil
+	}
+	if err := s.flushPendingTextLocked(); err != nil {
+		return err
+	}
+	s.inputEnded = true
+	return nil
+}
+
+func (s *telnyxTTSStream) flushPendingTextLocked() error {
 	if s.pendingText == "" {
 		return nil
 	}
@@ -329,6 +368,7 @@ func (s *telnyxTTSStream) Close() error {
 	if s.closed {
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	if s.cancel != nil {
 		s.cancel()

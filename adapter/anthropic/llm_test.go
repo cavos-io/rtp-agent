@@ -460,7 +460,7 @@ func TestAnthropicChatPreservesCallerDeadlineLikeReference(t *testing.T) {
 }
 
 func TestAnthropicDefaultHTTPClientUsesReferenceTimeouts(t *testing.T) {
-	client := newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout)
+	client := newAnthropicHTTPClient(http.DefaultTransport, defaultAnthropicConnectTimeout, defaultAnthropicReadTimeout)
 	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
 	if !ok {
 		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
@@ -476,8 +476,28 @@ func TestAnthropicDefaultHTTPClientUsesReferenceTimeouts(t *testing.T) {
 	}
 }
 
+func TestAnthropicLLMUsesConfiguredReadTimeoutLikeReference(t *testing.T) {
+	model, err := NewAnthropicLLM("test-key", "claude-test", WithAnthropicReadTimeout(60*time.Second))
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	transport, ok := model.httpClient.Transport.(*anthropicTimeoutRoundTripper)
+	if !ok {
+		t.Fatalf("Transport = %T, want Anthropic timeout transport", model.httpClient.Transport)
+	}
+	if transport.connectTimeout != 5*time.Second {
+		t.Fatalf("connect timeout = %v, want reference default 5s", transport.connectTimeout)
+	}
+	if transport.readTimeout != 60*time.Second {
+		t.Fatalf("read timeout = %v, want configured reference read timeout", transport.readTimeout)
+	}
+	if transport.ResponseHeaderTimeout != 60*time.Second {
+		t.Fatalf("ResponseHeaderTimeout = %v, want configured read timeout", transport.ResponseHeaderTimeout)
+	}
+}
+
 func TestAnthropicHTTPClientUsesConnectOptionsTimeoutLikeReference(t *testing.T) {
-	client := newAnthropicHTTPClient(http.DefaultTransport, 75*time.Millisecond)
+	client := newAnthropicHTTPClient(http.DefaultTransport, 75*time.Millisecond, defaultAnthropicReadTimeout)
 	transport, ok := client.Transport.(*anthropicTimeoutRoundTripper)
 	if !ok {
 		t.Fatalf("Transport = %T, want Anthropic timeout transport", client.Transport)
@@ -1114,6 +1134,37 @@ func TestAnthropicStreamEmitsFinalUsageAfterText(t *testing.T) {
 
 	if _, err := stream.Next(); !errors.Is(err, io.EOF) {
 		t.Fatalf("final Next() error = %v, want EOF", err)
+	}
+}
+
+func TestAnthropicStreamUsesCumulativeMessageDeltaTokensLikeReference(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"output_tokens":2}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Okay"}}`,
+			`data: {"type":"message_delta","usage":{"output_tokens":15}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	text, err := stream.Next()
+	if err != nil {
+		t.Fatalf("text Next() error = %v", err)
+	}
+	if text.Delta == nil || text.Delta.Content != "Okay" {
+		t.Fatalf("text chunk = %#v, want Okay delta", text)
+	}
+
+	usage, err := stream.Next()
+	if err != nil {
+		t.Fatalf("usage Next() error = %v", err)
+	}
+	if usage.Usage == nil {
+		t.Fatal("Usage = nil, want final usage metadata")
+	}
+	if usage.Usage.CompletionTokens != 15 || usage.Usage.TotalTokens != 40 {
+		t.Fatalf("Usage = %#v, want cumulative output_tokens from message_delta", usage.Usage)
 	}
 }
 

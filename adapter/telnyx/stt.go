@@ -234,7 +234,11 @@ func (s *TelnyxSTT) Recognize(ctx context.Context, frames []*model.AudioFrame, l
 			return nil, err
 		}
 	}
-	if err := stream.Flush(); err != nil {
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		return nil, fmt.Errorf("telnyx stt stream does not support EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
 		return nil, err
 	}
 	resolvedLanguage := resolveTelnyxSTTLanguage(s, language)
@@ -323,15 +327,16 @@ func createTelnyxStreamingWAVHeader(sampleRate int, numChannels int) []byte {
 }
 
 type telnyxSTTStream struct {
-	provider *TelnyxSTT
-	conn     *websocket.Conn
-	events   chan *stt.SpeechEvent
-	errCh    chan error
-	mu       sync.Mutex
-	closed   bool
-	ctx      context.Context
-	cancel   context.CancelFunc
-	state    *telnyxSTTStreamState
+	provider   *TelnyxSTT
+	conn       *websocket.Conn
+	events     chan *stt.SpeechEvent
+	errCh      chan error
+	mu         sync.Mutex
+	closed     bool
+	inputEnded bool
+	ctx        context.Context
+	cancel     context.CancelFunc
+	state      *telnyxSTTStreamState
 
 	audioBStream *audio.AudioByteStream
 	writeBinary  func([]byte) error
@@ -346,6 +351,9 @@ func (s *telnyxSTTStream) PushFrame(frame *model.AudioFrame) error {
 	defer s.mu.Unlock()
 	if s.closed {
 		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
 	}
 	if s.audioBStream == nil {
 		s.audioBStream = newTelnyxSTTAudioByteStream(frame)
@@ -365,6 +373,9 @@ func (s *telnyxSTTStream) Flush() error {
 	if s.closed {
 		return io.ErrClosedPipe
 	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
 	if s.audioBStream == nil {
 		return nil
 	}
@@ -377,12 +388,34 @@ func (s *telnyxSTTStream) Flush() error {
 	return nil
 }
 
+func (s *telnyxSTTStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputEnded {
+		return fmt.Errorf("stream input ended")
+	}
+	if s.audioBStream != nil {
+		for _, chunk := range s.audioBStream.Flush() {
+			if err := s.writeBinaryData(chunk.Data); err != nil {
+				s.closeAfterWriteFailureLocked()
+				return err
+			}
+		}
+	}
+	s.inputEnded = true
+	return nil
+}
+
 func (s *telnyxSTTStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return nil
 	}
+	s.inputEnded = true
 	s.closed = true
 	if s.cancel != nil {
 		s.cancel()
