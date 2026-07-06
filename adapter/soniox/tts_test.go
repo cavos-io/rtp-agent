@@ -538,6 +538,24 @@ func TestSonioxTTSAudioFromMessageDecodesAudioAndTermination(t *testing.T) {
 	}
 }
 
+func TestSonioxTTSAudioFromMessageIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"stream_id":"stream-1","audio":"!!!!","audio_end":true}`),
+		[]byte(`{"stream_id":"stream-1","audio":"===","terminated":true}`),
+	} {
+		audio, audioEnd, done, err := sonioxTTSAudioFromMessage(payload, "stream-1", 24000)
+		if err != nil {
+			t.Fatalf("audio from noise %s: %v", payload, err)
+		}
+		if audio != nil {
+			t.Fatalf("noise %s audio = %+v, want ignored empty chunk", payload, audio)
+		}
+		if !audioEnd && !done {
+			t.Fatalf("noise %s lost control flags: audioEnd=%v done=%v", payload, audioEnd, done)
+		}
+	}
+}
+
 func TestSonioxTTSAudioFromMessageIgnoresOtherStreams(t *testing.T) {
 	audio, audioEnd, done, err := sonioxTTSAudioFromMessage([]byte(`{"stream_id":"other","audio":"AQI="}`), "stream-1", 24000)
 	if err != nil {
