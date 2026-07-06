@@ -360,6 +360,21 @@ func TestGradiumTTSWebsocketMessageMapsAudioAndEnd(t *testing.T) {
 	}
 }
 
+func TestGradiumTTSWebsocketMessageIgnoresReferenceEmptyBase64Noise(t *testing.T) {
+	for _, payload := range [][]byte{
+		[]byte(`{"type":"audio","audio":"!!!!"}`),
+		[]byte(`{"type":"audio","audio":"==="}`),
+	} {
+		audio, done, err := gradiumTTSAudioFromMessage(payload, 48000)
+		if err != nil {
+			t.Fatalf("audio from noise %s: %v", payload, err)
+		}
+		if audio != nil || done {
+			t.Fatalf("noise %s = audio:%+v done:%v, want ignored empty chunk", payload, audio, done)
+		}
+	}
+}
+
 func TestGradiumTTSWebsocketCloseEmitsReferenceFinalMarker(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
