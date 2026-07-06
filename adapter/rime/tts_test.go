@@ -3818,6 +3818,54 @@ func TestRimeTTSNextReturnsQueuedAudioBeforeStreamError(t *testing.T) {
 	}
 }
 
+func TestRimeTTSStreamPreservesReferenceAudioBurstQueue(t *testing.T) {
+	const frames = 150
+	readCalls := 0
+	stream := &rimeTTSSynthesizeStream{
+		ctx:      context.Background(),
+		provider: NewRimeTTS("test-key", "", WithRimeTTSWebsocket(true)),
+		events:   make(chan *tts.SynthesizedAudio, 100),
+		errCh:    make(chan error, 1),
+		readMessage: func() (int, []byte, error) {
+			if readCalls >= frames {
+				return websocket.TextMessage, []byte(`{"type":"done"}`), nil
+			}
+			readCalls++
+			payload := fmt.Sprintf(`{"type":"chunk","data":"%s"}`, base64.StdEncoding.EncodeToString([]byte{byte(readCalls), 0x00}))
+			return websocket.TextMessage, []byte(payload), nil
+		},
+		closeConn: func() error { return nil },
+	}
+
+	done := make(chan struct{})
+	go func() {
+		stream.readLoop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("readLoop blocked behind fixed audio queue; want reference-style unbounded delivery")
+	}
+	for i := 1; i <= frames; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next audio %d error = %v", i, err)
+		}
+		if audio == nil || audio.Frame == nil || len(audio.Frame.Data) != 2 || audio.Frame.Data[0] != byte(i) {
+			t.Fatalf("Next audio %d = %+v, want queued frame byte %d", i, audio, i)
+		}
+	}
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next final error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("Next final = %+v, want final marker after queued burst", final)
+	}
+}
+
 func TestRimeTTSStreamProviderErrorUnregistersLikeReference(t *testing.T) {
 	oldDialer := websocket.DefaultDialer
 	websocket.DefaultDialer = &websocket.Dialer{

@@ -1496,6 +1496,7 @@ type rimeTTSSynthesizeStream struct {
 	responseTimeout       time.Duration
 	events                chan *tts.SynthesizedAudio
 	errCh                 chan error
+	queuedAudio           []*tts.SynthesizedAudio
 	mu                    sync.Mutex
 	closed                bool
 	started               bool
@@ -1832,6 +1833,9 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		if ok {
 			return audio, nil
 		}
+		if audio := s.popQueuedAudio(); audio != nil {
+			return audio, nil
+		}
 		select {
 		case err := <-s.errCh:
 			return nil, err
@@ -1840,9 +1844,15 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 	default:
 	}
+	if audio := s.popQueuedAudio(); audio != nil {
+		return audio, nil
+	}
 	select {
 	case audio, ok := <-s.events:
 		if !ok {
+			if audio := s.popQueuedAudio(); audio != nil {
+				return audio, nil
+			}
 			select {
 			case err := <-s.errCh:
 				return nil, err
@@ -1852,8 +1862,14 @@ func (s *rimeTTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return audio, nil
 	case err := <-s.errCh:
+		if audio := s.popQueuedAudio(); audio != nil {
+			return audio, nil
+		}
 		return nil, err
 	case <-s.ctx.Done():
+		if audio := s.popQueuedAudio(); audio != nil {
+			return audio, nil
+		}
 		if s.isClosed() {
 			return nil, io.EOF
 		}
@@ -1947,15 +1963,59 @@ func (s *rimeTTSSynthesizeStream) sendAudio(audio *tts.SynthesizedAudio) bool {
 		return false
 	}
 	if s.ctx == nil {
-		s.events <- audio
+		if !s.enqueueAudioIfBacklogged(audio) {
+			select {
+			case s.events <- audio:
+			default:
+				s.enqueueAudio(audio)
+			}
+		}
+		return true
+	}
+	select {
+	case <-s.ctx.Done():
+		return false
+	default:
+	}
+	if s.enqueueAudioIfBacklogged(audio) {
 		return true
 	}
 	select {
 	case s.events <- audio:
 		return true
-	case <-s.ctx.Done():
+	default:
+		s.enqueueAudio(audio)
+		return true
+	}
+}
+
+func (s *rimeTTSSynthesizeStream) enqueueAudioIfBacklogged(audio *tts.SynthesizedAudio) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queuedAudio) == 0 {
 		return false
 	}
+	s.queuedAudio = append(s.queuedAudio, audio)
+	return true
+}
+
+func (s *rimeTTSSynthesizeStream) enqueueAudio(audio *tts.SynthesizedAudio) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.queuedAudio = append(s.queuedAudio, audio)
+}
+
+func (s *rimeTTSSynthesizeStream) popQueuedAudio() *tts.SynthesizedAudio {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queuedAudio) == 0 {
+		return nil
+	}
+	audio := s.queuedAudio[0]
+	copy(s.queuedAudio, s.queuedAudio[1:])
+	s.queuedAudio[len(s.queuedAudio)-1] = nil
+	s.queuedAudio = s.queuedAudio[:len(s.queuedAudio)-1]
+	return audio
 }
 
 func (s *rimeTTSSynthesizeStream) dropConnectionAfterProviderError() {
