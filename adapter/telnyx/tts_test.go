@@ -175,6 +175,27 @@ func TestTelnyxTTSSynthesizeUsesReferenceEndInput(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSSynthesizeNoAudioReturnsReferenceError(t *testing.T) {
+	stream := &telnyxTTSChunkedStream{
+		provider: &fakeTelnyxChunkedTTSProvider{stream: &fakeTelnyxEndInputTTSStream{}},
+		ctx:      context.Background(),
+		text:     "hello",
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("audio = %+v, want nil", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %q, want reference no-audio error", err)
+	}
+}
+
 func TestTelnyxTTSStreamURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewTelnyxTTS("test-key", "voice-1", WithTelnyxTTSBaseURL("wss://telnyx.example/speech"))
 

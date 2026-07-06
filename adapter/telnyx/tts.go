@@ -253,6 +253,7 @@ type telnyxTTSChunkedStream struct {
 	stream  tts.SynthesizeStream
 	closed  bool
 	started bool
+	emitted bool
 }
 
 func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -265,7 +266,20 @@ func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.stream == nil {
 		return nil, io.EOF
 	}
-	return s.stream.Next()
+	audio, err := s.stream.Next()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			s.closed = true
+			if strings.TrimSpace(s.text) != "" && !s.emitted {
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+			}
+		}
+		return nil, err
+	}
+	if audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0 {
+		s.emitted = true
+	}
+	return audio, nil
 }
 
 func (s *telnyxTTSChunkedStream) ensureStream() error {
