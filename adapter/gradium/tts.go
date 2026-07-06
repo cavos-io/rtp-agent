@@ -101,31 +101,14 @@ func (t *GradiumTTS) Synthesize(ctx context.Context, text string) (tts.ChunkedSt
 		return nil, err
 	}
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, t.modelEndpoint, buildGradiumTTSHeaders(t))
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gradium tts websocket: %v", err))
-	}
-	setup, err := json.Marshal(mustBuildGradiumTTSSetup(t))
-	if err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, setup); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := writeGradiumTTSMessage(conn, buildGradiumTTSTextMessage(text)); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	if err := writeGradiumTTSMessage(conn, buildGradiumTTSEndMessage()); err != nil {
-		conn.Close()
-		return nil, err
-	}
-	return &gradiumTTSWebsocketChunkedStream{conn: conn, sampleRate: t.SampleRate()}, nil
+	return &gradiumTTSWebsocketChunkedStream{
+		ctx:           ctx,
+		modelEndpoint: t.modelEndpoint,
+		headers:       buildGradiumTTSHeaders(t),
+		setup:         mustBuildGradiumTTSSetup(t),
+		text:          text,
+		sampleRate:    t.SampleRate(),
+	}, nil
 }
 
 func buildGradiumTTSHeaders(t *GradiumTTS) http.Header {
@@ -217,14 +200,27 @@ func validateGradiumAPIKey(apiKey string) error {
 }
 
 type gradiumTTSWebsocketChunkedStream struct {
-	conn       *websocket.Conn
-	sampleRate int
-	completed  bool
+	ctx           context.Context
+	modelEndpoint string
+	headers       http.Header
+	setup         map[string]any
+	text          string
+	conn          *websocket.Conn
+	sampleRate    int
+	completed     bool
+	started       bool
+	closed        bool
 }
 
 func (s *gradiumTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.completed {
 		return nil, io.EOF
+	}
+	if s.closed {
+		return nil, io.EOF
+	}
+	if err := s.ensureConnected(); err != nil {
+		return nil, err
 	}
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
@@ -260,7 +256,49 @@ func (s *gradiumTTSWebsocketChunkedStream) Next() (*tts.SynthesizedAudio, error)
 	}
 }
 
+func (s *gradiumTTSWebsocketChunkedStream) ensureConnected() error {
+	if s.started {
+		return nil
+	}
+	s.started = true
+	conn, _, err := websocket.DefaultDialer.DialContext(s.ctx, s.modelEndpoint, s.headers)
+	if err != nil {
+		s.closed = true
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gradium tts websocket: %v", err))
+	}
+	setup, err := json.Marshal(s.setup)
+	if err != nil {
+		_ = conn.Close()
+		s.closed = true
+		return err
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, setup); err != nil {
+		_ = conn.Close()
+		s.closed = true
+		return err
+	}
+	if err := writeGradiumTTSMessage(conn, buildGradiumTTSTextMessage(s.text)); err != nil {
+		_ = conn.Close()
+		s.closed = true
+		return err
+	}
+	if err := writeGradiumTTSMessage(conn, buildGradiumTTSEndMessage()); err != nil {
+		_ = conn.Close()
+		s.closed = true
+		return err
+	}
+	s.conn = conn
+	return nil
+}
+
 func (s *gradiumTTSWebsocketChunkedStream) Close() error {
+	s.closed = true
+	if s.conn == nil {
+		return nil
+	}
 	_ = s.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second))
 	return s.conn.Close()
 }
