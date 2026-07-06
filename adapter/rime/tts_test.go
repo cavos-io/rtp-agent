@@ -3435,6 +3435,34 @@ func TestRimeTTSStreamUsesConfiguredReferenceTokenizer(t *testing.T) {
 	assertRimePayload(t, writes[0], "text", "custom packet ")
 }
 
+func TestRimeTTSStreamAppendsReferencePacketSpace(t *testing.T) {
+	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeFixedSentenceTokenizer{tokens: []string{"custom packet "}}))
+	var writes []map[string]any
+	stream := &rimeTTSSynthesizeStream{
+		contextID:         "ctx-1",
+		sentenceTokenizer: provider.sentenceTokenizer,
+		writeMessage: func(_ int, payload []byte) error {
+			var message map[string]any
+			if err := json.Unmarshal(payload, &message); err != nil {
+				t.Fatalf("decode write payload: %v", err)
+			}
+			writes = append(writes, message)
+			return nil
+		},
+	}
+
+	if err := stream.PushText("raw text ignored by tokenizer"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if len(writes) != 1 {
+		t.Fatalf("writes after Flush = %d, want one custom tokenizer packet", len(writes))
+	}
+	assertRimePayload(t, writes[0], "text", "custom packet  ")
+}
+
 func TestRimeTTSStreamUsesReferenceTokenizerStream(t *testing.T) {
 	provider := NewRimeTTS("test-key", "", WithRimeTTSSentenceTokenizer(rimeDivergentSentenceTokenizer{}))
 	var writes []map[string]any

@@ -1215,9 +1215,7 @@ func buildRimeTTSWebsocketHeaders(t *RimeTTS) http.Header {
 }
 
 func buildRimeTTSTextMessage(contextID string, text string) ([]byte, error) {
-	if !strings.HasSuffix(text, " ") {
-		text += " "
-	}
+	text += " "
 	return json.Marshal(map[string]interface{}{
 		"text":      text,
 		"contextId": contextID,
