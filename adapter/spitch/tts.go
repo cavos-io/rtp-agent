@@ -287,7 +287,7 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 
 func spitchTTSReadError(err error) error {
 	msg := fmt.Sprintf("Spitch TTS response read failed: %v", err)
-	if spitchTTSIsTimeout(err) {
+	if spitchIsTimeout(err) {
 		return llm.NewAPITimeoutError(msg)
 	}
 	return llm.NewAPIConnectionError(msg)
@@ -295,13 +295,13 @@ func spitchTTSReadError(err error) error {
 
 func spitchTTSTransportError(err error) error {
 	msg := err.Error()
-	if spitchTTSIsTimeout(err) {
+	if spitchIsTimeout(err) {
 		return llm.NewAPITimeoutError(msg)
 	}
 	return llm.NewAPIConnectionError(msg)
 }
 
-func spitchTTSIsTimeout(err error) bool {
+func spitchIsTimeout(err error) bool {
 	var timeout interface{ Timeout() bool }
 	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout())
 }

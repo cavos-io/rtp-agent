@@ -268,6 +268,27 @@ func TestSpitchSTTRecognizeReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestSpitchSTTRecognizeTransportTimeoutReturnsAPITimeoutError(t *testing.T) {
+	originalClient := http.DefaultClient
+	t.Cleanup(func() { http.DefaultClient = originalClient })
+	http.DefaultClient = &http.Client{Transport: spitchRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, spitchTimeoutError{}
+	})}
+
+	provider := NewSpitchSTT("test-key")
+	_, err := provider.Recognize(context.Background(), []*model.AudioFrame{{
+		Data:              []byte{0x01, 0x00},
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 1,
+	}}, "en")
+
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Recognize error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpitchSTTRecognizeDecodeFailureReturnsAPIConnectionError(t *testing.T) {
 	originalClient := http.DefaultClient
 	t.Cleanup(func() { http.DefaultClient = originalClient })
