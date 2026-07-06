@@ -1551,6 +1551,26 @@ func TestAnthropicStreamTextChunkCarriesReferenceRequestID(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamParsesSplitSSEDataLikeReference(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			``,
+			`data: {"type":"content_block_delta",`,
+			`data: "delta":{"type":"text_delta","text":"hello"}}`,
+			``,
+		}, "\n"))),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want split SSE text delta", err)
+	}
+	if chunk.ID != "msg_1" || chunk.Delta == nil || chunk.Delta.Content != "hello" {
+		t.Fatalf("chunk = %#v, want hello text delta with request ID", chunk)
+	}
+}
+
 func TestAnthropicStreamNextAfterCloseReturnsEOF(t *testing.T) {
 	body := &anthropicCloseErrorBody{}
 	stream := &anthropicStream{

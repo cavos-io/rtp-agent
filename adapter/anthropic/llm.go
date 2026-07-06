@@ -805,6 +805,19 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 		}
 
 		data := strings.TrimPrefix(line, "data: ")
+		data, err = s.completeAnthropicSSEData(data)
+		if err != nil {
+			if s.closed {
+				return nil, io.EOF
+			}
+			wrappedErr := s.wrapReadError(err)
+			if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+				continue
+			} else if retryErr != wrappedErr {
+				return nil, retryErr
+			}
+			return nil, wrappedErr
+		}
 
 		var event struct {
 			Type string `json:"type"`
@@ -933,6 +946,35 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 				return nil, retryErr
 			}
 			return nil, apiErr
+		}
+	}
+}
+
+func (s *anthropicStream) completeAnthropicSSEData(data string) (string, error) {
+	if json.Valid([]byte(data)) {
+		return data, nil
+	}
+
+	parts := []string{data}
+	for {
+		line, err := s.reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				return strings.Join(parts, "\n"), nil
+			}
+			return "", err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return strings.Join(parts, "\n"), nil
+		}
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		parts = append(parts, strings.TrimPrefix(line, "data: "))
+		joined := strings.Join(parts, "\n")
+		if json.Valid([]byte(joined)) {
+			return joined, nil
 		}
 	}
 }
