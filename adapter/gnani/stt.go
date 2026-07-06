@@ -114,6 +114,13 @@ func (s *STT) Stream(ctx context.Context, language string) (stt.RecognizeStream,
 		if errors.Is(err, context.Canceled) {
 			return nil, context.Canceled
 		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
+		var timeoutErr interface{ Timeout() bool }
+		if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+			return nil, llm.NewAPITimeoutError(err.Error())
+		}
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial gnani stt websocket: %v", err))
 	}
 	streamCtx, cancel := context.WithCancel(ctx)

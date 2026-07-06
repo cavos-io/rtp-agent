@@ -115,6 +115,28 @@ func TestGnaniSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestGnaniSTTStreamDialTimeoutReturnsAPITimeoutError(t *testing.T) {
+	oldDialer := websocket.DefaultDialer
+	websocket.DefaultDialer = &websocket.Dialer{
+		NetDialContext: func(context.Context, string, string) (net.Conn, error) {
+			return nil, gnaniSTTTimeoutError{}
+		},
+		Proxy: nil,
+	}
+	t.Cleanup(func() { websocket.DefaultDialer = oldDialer })
+
+	provider := NewSTT("test-key")
+
+	stream, err := provider.Stream(context.Background(), "")
+	if stream != nil {
+		t.Fatalf("Stream = %#v, want nil on dial timeout", stream)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Stream error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestGnaniSTTRecognizeRequestUsesReferenceMultipart(t *testing.T) {
 	provider := NewSTT("test-key")
 
