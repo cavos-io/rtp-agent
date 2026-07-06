@@ -3,6 +3,7 @@ package telnyx
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -20,6 +21,9 @@ func TestNewTelnyxLLMDefaultsMatchReference(t *testing.T) {
 	}
 	if provider.BaseURL() != "https://api.telnyx.com/v2/ai" {
 		t.Fatalf("base URL = %q, want reference base URL", provider.BaseURL())
+	}
+	if got := llm.Provider(provider); got != "telnyx" {
+		t.Fatalf("provider metadata = %q, want telnyx", got)
 	}
 }
 
@@ -98,6 +102,32 @@ func TestTelnyxLLMForwardsReferenceConstructorOptions(t *testing.T) {
 		if !strings.Contains(capture.requestBody, want) {
 			t.Fatalf("request body = %s, missing %s", capture.requestBody, want)
 		}
+	}
+}
+
+func TestTelnyxLLMCloseForwardsToOpenAIProvider(t *testing.T) {
+	capture := &captureTelnyxLLMHTTPClient{
+		statusCode:   http.StatusOK,
+		responseBody: "data: [DONE]\n\n",
+	}
+	provider := NewTelnyxLLM("test-key", "telnyx-chat", WithTelnyxLLMHTTPClient(capture))
+
+	if err := llm.Close(provider); err != nil {
+		t.Fatalf("llm.Close error = %v", err)
+	}
+	stream, err := provider.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithConnectOptions(llm.APIConnectOptions{MaxRetry: 0}),
+	)
+	if stream != nil {
+		t.Fatalf("Chat stream after Close = %#v, want nil", stream)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Chat after Close error = %T %v, want io.ErrClosedPipe", err, err)
+	}
+	if capture.requestURL != "" {
+		t.Fatalf("request URL after Close = %q, want no HTTP request", capture.requestURL)
 	}
 }
 

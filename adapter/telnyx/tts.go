@@ -157,7 +157,7 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	stream := &telnyxTTSSegmentedStream{
 		provider: t,
 		ctx:      ctx,
-		segments: make(chan tts.SynthesizeStream, 100),
+		segments: make(chan telnyxTTSSegment, 100),
 	}
 	if !t.registerStream(stream) {
 		return nil, io.ErrClosedPipe
@@ -189,7 +189,7 @@ func (t *TelnyxTTS) openSegmentStream(ctx context.Context) (tts.SynthesizeStream
 	if err := writeTelnyxTTSMessage(conn, buildTelnyxTTSTextMessage(" ")); err != nil {
 		conn.Close()
 		cancel()
-		return nil, err
+		return nil, telnyxTTSWarmupWriteError(err)
 	}
 	if t.isClosed() {
 		conn.Close()
@@ -253,6 +253,7 @@ type telnyxTTSChunkedStream struct {
 	stream  tts.SynthesizeStream
 	closed  bool
 	started bool
+	emitted bool
 }
 
 func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
@@ -265,7 +266,20 @@ func (s *telnyxTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	if s.stream == nil {
 		return nil, io.EOF
 	}
-	return s.stream.Next()
+	audio, err := s.stream.Next()
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			s.closed = true
+			if strings.TrimSpace(s.text) != "" && !s.emitted {
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", s.text), nil, true)
+			}
+		}
+		return nil, err
+	}
+	if audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0 {
+		s.emitted = true
+	}
+	return audio, nil
 }
 
 func (s *telnyxTTSChunkedStream) ensureStream() error {
@@ -303,13 +317,20 @@ func (s *telnyxTTSChunkedStream) Close() error {
 type telnyxTTSSegmentedStream struct {
 	provider    *TelnyxTTS
 	ctx         context.Context
-	segments    chan tts.SynthesizeStream
-	current     tts.SynthesizeStream
+	segments    chan telnyxTTSSegment
+	current     *telnyxTTSSegment
 	mu          sync.Mutex
 	closed      bool
 	inputEnded  bool
 	pendingText string
 	closeOnce   sync.Once
+}
+
+type telnyxTTSSegment struct {
+	stream    tts.SynthesizeStream
+	text      string
+	emitted   bool
+	finalized bool
 }
 
 func (s *telnyxTTSSegmentedStream) PushText(text string) error {
@@ -341,14 +362,17 @@ func (s *telnyxTTSSegmentedStream) Flush() error {
 
 	segment, err := s.provider.openSegmentStream(s.ctx)
 	if err != nil {
+		_ = s.Close()
 		return err
 	}
 	if err := segment.PushText(text); err != nil {
 		_ = segment.Close()
+		_ = s.Close()
 		return err
 	}
 	if err := tts.EndSynthesizeStreamInput(segment); err != nil {
 		_ = segment.Close()
+		_ = s.Close()
 		return err
 	}
 	s.mu.Lock()
@@ -360,7 +384,7 @@ func (s *telnyxTTSSegmentedStream) Flush() error {
 		}
 		return nil
 	}
-	s.segments <- segment
+	s.segments <- telnyxTTSSegment{stream: segment, text: text}
 	return nil
 }
 
@@ -387,13 +411,14 @@ func (s *telnyxTTSSegmentedStream) Close() error {
 	s.closed = true
 	s.inputEnded = true
 	current := s.current
+	s.current = nil
 	s.closeSegments()
 	s.mu.Unlock()
 	if current != nil {
-		_ = current.Close()
+		_ = current.stream.Close()
 	}
 	for segment := range s.segments {
-		_ = segment.Close()
+		_ = segment.stream.Close()
 	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
@@ -408,13 +433,37 @@ func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
 			if !ok {
 				return nil, io.EOF
 			}
-			s.current = segment
+			s.current = &segment
 		}
-		audio, err := s.current.Next()
+		audio, err := s.current.stream.Next()
 		if errors.Is(err, io.EOF) {
-			_ = s.current.Close()
+			current := s.current
+			_ = current.stream.Close()
+			text := current.text
 			s.current = nil
+			if strings.TrimSpace(text) != "" && !current.emitted {
+				_ = s.Close()
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
+			}
+			if current.emitted && !current.finalized {
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
 			continue
+		}
+		if err != nil {
+			_ = s.Close()
+			return nil, err
+		}
+		if audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0 {
+			s.current.emitted = true
+		}
+		if audio != nil && audio.IsFinal {
+			s.current.finalized = true
+		}
+		text := s.current.text
+		if audio != nil && audio.IsFinal && strings.TrimSpace(text) != "" && !s.current.emitted {
+			_ = s.Close()
+			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
 		}
 		return audio, err
 	}
@@ -508,6 +557,10 @@ func telnyxTTSWriteError(err error) error {
 		return nil
 	}
 	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS websocket write failed: %v", err))
+}
+
+func telnyxTTSWarmupWriteError(err error) error {
+	return telnyxTTSWriteError(err)
 }
 
 func (s *telnyxTTSStream) Close() error {
@@ -677,7 +730,7 @@ func (s *telnyxTTSStream) decodeLoop() {
 				s.events <- &tts.SynthesizedAudio{IsFinal: true}
 				return
 			}
-			s.errCh <- err
+			s.errCh <- llm.NewAPIConnectionError(fmt.Sprintf("Telnyx TTS audio decode failed: %v", err))
 			return
 		}
 		s.events <- &tts.SynthesizedAudio{Frame: frame}

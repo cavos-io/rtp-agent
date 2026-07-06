@@ -129,12 +129,9 @@ func (s *TelnyxSTT) Stream(ctx context.Context, language string) (stt.RecognizeS
 	if err := validateTelnyxAPIKey(s.apiKey); err != nil {
 		return nil, err
 	}
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxSTTStreamURL(s, language), buildTelnyxSTTHeaders(s))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, buildTelnyxSTTStreamURL(s, language), buildTelnyxSTTHeaders(s))
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, context.Canceled
-		}
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx stt websocket: %v", err))
+		return nil, telnyxSTTDialError(err, resp)
 	}
 	if s.isClosed() {
 		_ = conn.Close()
@@ -295,6 +292,19 @@ func buildTelnyxSTTHeaders(s *TelnyxSTT) http.Header {
 	return headers
 }
 
+func telnyxSTTDialError(err error, resp *http.Response) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return llm.NewAPITimeoutError("Telnyx STT websocket connect timed out")
+	}
+	if resp != nil && resp.StatusCode > 0 {
+		return llm.NewAPIStatusError("Telnyx STT websocket handshake failed", resp.StatusCode, "", nil)
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("failed to dial telnyx stt websocket: %v", err))
+}
+
 func resolveTelnyxSTTLanguage(s *TelnyxSTT, language string) string {
 	if language != "" {
 		return language
@@ -339,6 +349,7 @@ type telnyxSTTStream struct {
 	state      *telnyxSTTStreamState
 
 	audioBStream *audio.AudioByteStream
+	pushedRate   uint32
 	writeBinary  func([]byte) error
 	closeConn    func() error
 }
@@ -355,13 +366,19 @@ func (s *telnyxSTTStream) PushFrame(frame *model.AudioFrame) error {
 	if s.inputEnded {
 		return fmt.Errorf("stream input ended")
 	}
+	if s.pushedRate != 0 && frame.SampleRate != 0 && s.pushedRate != frame.SampleRate {
+		return fmt.Errorf("the sample rate of the input frames must be consistent")
+	}
+	if frame.SampleRate != 0 {
+		s.pushedRate = frame.SampleRate
+	}
 	if s.audioBStream == nil {
 		s.audioBStream = s.newAudioByteStream()
 	}
 	for _, chunk := range s.audioBStream.Write(frame.Data) {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closeAfterWriteFailureLocked()
-			return err
+			return telnyxSTTWriteError(err)
 		}
 	}
 	return nil
@@ -382,7 +399,7 @@ func (s *telnyxSTTStream) Flush() error {
 	for _, chunk := range s.audioBStream.Flush() {
 		if err := s.writeBinaryData(chunk.Data); err != nil {
 			s.closeAfterWriteFailureLocked()
-			return err
+			return telnyxSTTWriteError(err)
 		}
 	}
 	return nil
@@ -401,7 +418,7 @@ func (s *telnyxSTTStream) EndInput() error {
 		for _, chunk := range s.audioBStream.Flush() {
 			if err := s.writeBinaryData(chunk.Data); err != nil {
 				s.closeAfterWriteFailureLocked()
-				return err
+				return telnyxSTTWriteError(err)
 			}
 		}
 	}
@@ -452,6 +469,13 @@ func (s *telnyxSTTStream) writeBinaryData(data []byte) error {
 		return s.writeBinary(data)
 	}
 	return s.writeBinaryMessage(data)
+}
+
+func telnyxSTTWriteError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx STT websocket write failed: %v", err))
 }
 
 func (s *telnyxSTTStream) writeBinaryMessage(data []byte) error {
@@ -524,12 +548,13 @@ func (s *telnyxSTTStream) readLoop() {
 	for {
 		msgType, payload, err := s.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) || err == io.EOF {
-				if !s.isClosed() {
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) || err == io.EOF {
+				if !s.isClosed() && !s.isInputEnded() {
 					s.errCh <- llm.NewAPIStatusError("Telnyx STT WebSocket closed unexpectedly", 0, "", nil)
 				}
 			} else {
-				s.errCh <- err
+				s.errCh <- telnyxSTTReadError(err)
 			}
 			return
 		}
@@ -551,6 +576,13 @@ func (s *telnyxSTTStream) readLoop() {
 	}
 }
 
+func telnyxSTTReadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx STT websocket read failed: %v", err))
+}
+
 func (s *telnyxSTTStream) isClosed() bool {
 	if s == nil {
 		return true
@@ -558,6 +590,15 @@ func (s *telnyxSTTStream) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *telnyxSTTStream) isInputEnded() bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inputEnded
 }
 
 type telnyxSTTStreamState struct {

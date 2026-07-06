@@ -117,6 +117,18 @@ func TestTelnyxSTTStreamDialFailureReturnsAPIConnectionError(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamDialHTTPStatusReturnsAPIStatusError(t *testing.T) {
+	err := telnyxSTTDialError(errors.New("websocket: bad handshake"), &http.Response{StatusCode: http.StatusTooManyRequests})
+
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("dial error = %T %v, want APIStatusError", err, err)
+	}
+	if statusErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusTooManyRequests)
+	}
+}
+
 func TestTelnyxSTTStreamURLAndHeadersMatchReference(t *testing.T) {
 	provider := NewTelnyxSTT("test-key",
 		WithTelnyxSTTBaseURL("wss://telnyx.example/transcription"),
@@ -236,6 +248,33 @@ func TestTelnyxSTTStreamChunksWithConfiguredSampleRate(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTStreamRejectsMixedInputSampleRates(t *testing.T) {
+	stream := &telnyxSTTStream{
+		writeBinary: func([]byte) error { return nil },
+	}
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame first error = %v", err)
+	}
+	err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 800),
+		SampleRate:        8000,
+		NumChannels:       1,
+		SamplesPerChannel: 400,
+	})
+	if err == nil {
+		t.Fatal("PushFrame mixed sample rate error = nil, want reference mismatch error")
+	}
+	if !strings.Contains(err.Error(), "sample rate of the input frames must be consistent") {
+		t.Fatalf("PushFrame mixed sample rate error = %q, want reference mismatch message", err)
+	}
+}
+
 func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 	writeErr := errors.New("write failed")
 	cancelled := false
@@ -257,8 +296,12 @@ func TestTelnyxSTTStreamClosesAfterAudioWriteFailure(t *testing.T) {
 		NumChannels:       1,
 		SamplesPerChannel: 800,
 	})
-	if !errors.Is(err, writeErr) {
-		t.Fatalf("PushFrame error = %v, want write error", err)
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("PushFrame error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), writeErr.Error()) {
+		t.Fatalf("PushFrame error = %q, want write failure context", err)
 	}
 	if !cancelled {
 		t.Fatal("cancel not called after write failure")
@@ -530,6 +573,111 @@ func TestTelnyxSTTUnexpectedNormalCloseReturnsReferenceError(t *testing.T) {
 	}
 	if err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("Next error = %v, want reference provider close error", err)
+	}
+}
+
+func TestTelnyxSTTUnexpectedAbnormalCloseReturnsAPIStatusError(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read wav header: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "policy"), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	event, err := stream.Next()
+	if event != nil {
+		t.Fatalf("Next event = %#v, want nil on provider close", event)
+	}
+	var statusErr *llm.APIStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("Next error = %T %v, want APIStatusError", err, err)
+	}
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		t.Fatalf("Next error leaked websocket CloseError: %v", err)
+	}
+}
+
+func TestTelnyxSTTReadFailureReturnsAPIConnectionError(t *testing.T) {
+	readErr := errors.New("read failed")
+	err := telnyxSTTReadError(readErr)
+
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("read error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), readErr.Error()) {
+		t.Fatalf("read error = %q, want read failure context", err)
+	}
+}
+
+func TestTelnyxSTTEndInputNormalCloseReturnsEOF(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read wav header: %v", err)
+			return
+		}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read flushed audio: %v", err)
+			return
+		}
+		if err := conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)); err != nil {
+			t.Errorf("write close: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewTelnyxSTT("test-key", WithTelnyxSTTBaseURL("ws"+strings.TrimPrefix(server.URL, "http")))
+	stream, err := provider.Stream(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+
+	if err := stream.PushFrame(&model.AudioFrame{
+		Data:              make([]byte, 1600),
+		SampleRate:        16000,
+		NumChannels:       1,
+		SamplesPerChannel: 800,
+	}); err != nil {
+		t.Fatalf("PushFrame error = %v", err)
+	}
+	ending, ok := stream.(stt.InputEnding)
+	if !ok {
+		t.Fatal("stream does not support EndInput")
+	}
+	if err := ending.EndInput(); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	event, err := stream.Next()
+	if event != nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after EndInput normal close = (%#v, %v), want EOF", event, err)
 	}
 }
 
