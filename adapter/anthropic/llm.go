@@ -23,6 +23,8 @@ type AnthropicLLM struct {
 	apiKey  string
 	model   string
 	baseURL string
+	user    string
+	userSet bool
 }
 
 type anthropicToolSpecProvider interface {
@@ -51,6 +53,13 @@ func WithAnthropicBaseURL(baseURL string) AnthropicOption {
 		if baseURL != "" {
 			l.baseURL = strings.TrimRight(baseURL, "/")
 		}
+	}
+}
+
+func WithAnthropicUser(user string) AnthropicOption {
+	return func(l *AnthropicLLM) {
+		l.user = user
+		l.userSet = true
 	}
 }
 
@@ -136,6 +145,9 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		"messages":   messages,
 		"max_tokens": 1024,
 		"stream":     true,
+	}
+	if l.userSet {
+		body["user"] = l.user
 	}
 	if len(systemMessages) > 0 {
 		body["system"] = anthropicSystemBlocks(systemMessages, cacheControl)
