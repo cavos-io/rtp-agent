@@ -469,7 +469,30 @@ func neuphonicAudioFromSSEData(data string) ([]byte, error) {
 	if parsed.Data.Audio == "" {
 		return nil, nil
 	}
-	return base64.StdEncoding.DecodeString(parsed.Data.Audio)
+	return neuphonicDecodeBase64Audio(parsed.Data.Audio)
+}
+
+func neuphonicDecodeBase64Audio(data string) ([]byte, error) {
+	clean := make([]byte, 0, len(data))
+	dataChars := 0
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		switch {
+		case b >= 'A' && b <= 'Z',
+			b >= 'a' && b <= 'z',
+			b >= '0' && b <= '9',
+			b == '+',
+			b == '/':
+			clean = append(clean, b)
+			dataChars++
+		case b == '=':
+			clean = append(clean, b)
+		}
+	}
+	if dataChars == 0 {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(string(clean))
 }
 
 func neuphonicTTSConnectionError(message string, err error) error {
