@@ -644,6 +644,26 @@ func TestAnthropicStreamEmitsFinalUsageOnEOFWithoutMessageStop(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamEmitsZeroUsageOnEmptyEOF(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader("")),
+	}
+
+	chunk, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v, want final usage chunk", err)
+	}
+	if chunk.ID != "" {
+		t.Fatalf("chunk ID = %q, want empty request ID", chunk.ID)
+	}
+	if chunk.Usage == nil {
+		t.Fatal("Usage = nil, want zero final usage")
+	}
+	if chunk.Usage.PromptTokens != 0 || chunk.Usage.CompletionTokens != 0 || chunk.Usage.TotalTokens != 0 {
+		t.Fatalf("Usage = %#v, want zero usage", chunk.Usage)
+	}
+}
+
 func TestAnthropicStreamReturnsAPIErrorOnErrorEvent(t *testing.T) {
 	stream := &anthropicStream{
 		reader: bufio.NewReader(strings.NewReader(`data: {"type":"error","error":{"type":"overloaded_error","message":"server overloaded"}}` + "\n\n")),

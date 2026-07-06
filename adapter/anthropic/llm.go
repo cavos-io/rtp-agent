@@ -830,7 +830,7 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 }
 
 func (s *anthropicStream) finalUsageChunk() *llm.ChatChunk {
-	if s.emittedFinalUsage || s.requestID == "" {
+	if s.emittedFinalUsage {
 		return nil
 	}
 	s.emittedFinalUsage = true
