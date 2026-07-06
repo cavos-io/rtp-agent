@@ -1196,6 +1196,31 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 	}
 }
 
+func TestAnthropicChatRejectsUnserializableRequestBody(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+
+	_, err = model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"temperature": func() {}}),
+	)
+
+	if err == nil {
+		t.Fatal("Chat() error = nil, want request serialization error")
+	}
+	if transport.reqURL != "" {
+		t.Fatalf("request URL = %q, want no HTTP request after serialization error", transport.reqURL)
+	}
+}
+
 func TestAnthropicChatSendsSystemMessagesAsTextBlocks(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport

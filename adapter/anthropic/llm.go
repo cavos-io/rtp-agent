@@ -175,7 +175,13 @@ func (l *AnthropicLLM) Chat(ctx context.Context, chatCtx *llm.ChatContext, opts 
 		}
 	}
 
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		if cancel != nil {
+			cancel()
+		}
+		return nil, err
+	}
 	var lastErr error
 	for attempt := 0; attempt <= connectOptions.MaxRetry; attempt++ {
 		resp, err := l.startAnthropicStream(ctx, jsonBody, betaFlag)
