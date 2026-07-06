@@ -28,7 +28,7 @@ const (
 	defaultUpliftAIVoiceID    = "v_meklc281"
 	defaultUpliftAISampleRate = 22050
 	defaultUpliftAIFormat     = "MP3_22050_32"
-	defaultUpliftAIBaseURL    = "https://api.upliftai.org/v1/tts"
+	defaultUpliftAIBaseURL    = "wss://api.upliftai.org"
 	upliftAISocketIONamespace = "/text-to-speech/multi-stream"
 )
 

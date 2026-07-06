@@ -52,6 +52,12 @@ type upliftAIReadErrorBody struct {
 func (b upliftAIReadErrorBody) Read([]byte) (int, error) { return 0, b.err }
 func (b upliftAIReadErrorBody) Close() error             { return nil }
 
+func newUpliftAITestHTTPProvider(apiKey string, voice string, opts ...UpliftAITTSOption) *UpliftAITTS {
+	baseOpts := []UpliftAITTSOption{WithUpliftAIBaseURL("https://upliftai.example/v1/tts")}
+	baseOpts = append(baseOpts, opts...)
+	return NewUpliftAITTS(apiKey, voice, baseOpts...)
+}
+
 func TestUpliftAIPluginMetadataUsesRTPAgentNamespace(t *testing.T) {
 	if PluginTitle != "rtp-agent.plugins.upliftai" {
 		t.Fatalf("PluginTitle = %q, want rtp-agent.plugins.upliftai", PluginTitle)
@@ -74,6 +80,9 @@ func TestUpliftAITTSReferenceDefaultsAndCapabilities(t *testing.T) {
 	}
 	if got, want := tts.outputFormat, "MP3_22050_32"; got != want {
 		t.Fatalf("outputFormat = %q, want reference default output format %q", got, want)
+	}
+	if got, want := tts.baseURL, "wss://api.upliftai.org"; got != want {
+		t.Fatalf("baseURL = %q, want reference websocket base URL %q", got, want)
 	}
 	if got, want := tts.Label(), "upliftai.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
@@ -181,7 +190,7 @@ func TestUpliftAITTSProviderCloseClosesActiveStreams(t *testing.T) {
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize error = %v", err)
@@ -219,7 +228,7 @@ func TestUpliftAITTSSynthesizeAfterCloseIsRejected(t *testing.T) {
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -243,7 +252,7 @@ func TestUpliftAITTSSynthesizeReturnsAPIConnectionError(t *testing.T) {
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize error before stream consumption = %v", err)
@@ -270,7 +279,7 @@ func TestUpliftAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	stream, err := provider.Synthesize(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Synthesize error before stream consumption = %v", err)
@@ -309,7 +318,7 @@ func TestUpliftAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	provider.outputFormat = "PCM_22050_16"
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
@@ -462,7 +471,7 @@ func TestUpliftAITTSRejectsUnsupportedReferenceOutputFormatBeforeRequest(t *test
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("BAD_FORMAT"))
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("BAD_FORMAT"))
 	stream, err := provider.Synthesize(context.Background(), "bad format")
 	if err != nil {
 		t.Fatalf("Synthesize error = %v", err)
@@ -489,7 +498,7 @@ func TestUpliftAITTSRejectsUnsupportedReferenceOutputFormatBeforeRequest(t *test
 }
 
 func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	if err := provider.Close(); err != nil {
 		t.Fatalf("Close error = %v", err)
 	}
@@ -504,7 +513,7 @@ func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
 }
 
 func TestUpliftAITTSProviderCloseClosesActiveSynthesizeStreams(t *testing.T) {
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream error = %v", err)
@@ -543,7 +552,7 @@ func TestUpliftAITTSStreamFlushSynthesizesReferenceSegment(t *testing.T) {
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream error = %v", err)
@@ -614,7 +623,7 @@ func TestUpliftAITTSStreamFormatsPushedWordsLikeReference(t *testing.T) {
 	})}
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
-	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("PCM_22050_16"))
 	stream, err := provider.Stream(context.Background())
 	if err != nil {
 		t.Fatalf("Stream error = %v", err)
@@ -843,7 +852,7 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
 
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	stream := &upliftAITTSChunkedStream{
 		owner: provider,
 		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(mp3Data))},
@@ -878,7 +887,7 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 		t.Fatalf("read mp3 fixture: %v", err)
 	}
 
-	provider := NewUpliftAITTS("test-key", "")
+	provider := newUpliftAITestHTTPProvider("test-key", "")
 	stream := &upliftAITTSChunkedStream{
 		owner: provider,
 		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(mp3Data))},
@@ -912,7 +921,7 @@ func TestUpliftAITTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
 
 func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 	pcm := []byte{0x01, 0x00, 0x03, 0x00, 0x05, 0x00, 0x07, 0x00}
-	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("WAV_22050_16"))
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("WAV_22050_16"))
 	stream := &upliftAITTSChunkedStream{
 		owner: provider,
 		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(upliftAITestWAV(pcm, 22050, 1)))},
@@ -953,7 +962,7 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceWAVResponse(t *testing.T) {
 
 func TestUpliftAITTSChunkedStreamDecodesReferenceULawResponse(t *testing.T) {
 	encoded := []byte{0x00, 0xff}
-	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("ULAW_8000_8"))
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("ULAW_8000_8"))
 	stream := &upliftAITTSChunkedStream{
 		owner: provider,
 		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(encoded))},
@@ -995,7 +1004,7 @@ func TestUpliftAITTSChunkedStreamDecodesReferenceOGGResponse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode ogg fixture: %v", err)
 	}
-	provider := NewUpliftAITTS("test-key", "", WithUpliftAIOutputFormat("OGG_22050_16"))
+	provider := newUpliftAITestHTTPProvider("test-key", "", WithUpliftAIOutputFormat("OGG_22050_16"))
 	stream := &upliftAITTSChunkedStream{
 		owner: provider,
 		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(oggData))},
