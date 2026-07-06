@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cavos-io/rtp-agent/adapter/browser"
+	"github.com/cavos-io/rtp-agent/core/llm"
 )
 
 func TestComputerToolExposesComputerUseTool(t *testing.T) {
@@ -20,8 +21,8 @@ func TestComputerToolExposesComputerUseTool(t *testing.T) {
 		t.Fatalf("Tools length = %d, want 1", len(tools))
 	}
 	tool := tools[0]
-	if tool.ID() != "computer" || tool.Name() != "computer_use" {
-		t.Fatalf("tool identity = %q/%q, want computer/computer_use", tool.ID(), tool.Name())
+	if tool.ID() != "computer" || tool.Name() != "computer" {
+		t.Fatalf("tool identity = %q/%q, want computer/computer", tool.ID(), tool.Name())
 	}
 	if tool.Description() == "" {
 		t.Fatal("tool description is empty")
@@ -43,6 +44,67 @@ func TestComputerToolExposesComputerUseTool(t *testing.T) {
 	}
 	if events[0].Type != "mouse_move" || events[0].X != 10 || events[0].Y != 20 {
 		t.Fatalf("event[0] = %#v, want mouse_move at 10,20", events[0])
+	}
+}
+
+func TestComputerToolProviderNameExecutesReferenceToolCall(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+	tools := toolset.Tools()
+	toolCtx := llm.NewToolContext([]interface{}{tools[0]})
+
+	result := llm.ExecuteFunctionCall(context.Background(), &llm.FunctionToolCall{
+		Name:      "computer",
+		CallID:    "call_computer",
+		Arguments: `{"action":"left_click","coordinate":[10,20]}`,
+	}, toolCtx)
+
+	if result.RawError != nil {
+		t.Fatalf("ExecuteFunctionCall RawError = %v, want nil", result.RawError)
+	}
+	if result.FncCallOut == nil || result.FncCallOut.IsError {
+		t.Fatalf("FncCallOut = %#v, want successful computer output", result.FncCallOut)
+	}
+	events := actions.Events()
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want mouse move/down/up", len(events))
+	}
+}
+
+func TestComputerToolRegistersAsReferenceToolset(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	var toolCtx *llm.ToolContext
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("NewToolContext panic = %v, want Anthropic ComputerTool accepted as Toolset", r)
+			}
+		}()
+		toolCtx = llm.NewToolContext([]interface{}{toolset})
+	}()
+
+	toolsets := toolCtx.Toolsets()
+	if len(toolsets) != 1 || toolsets[0].ID() != "computer" {
+		t.Fatalf("Toolsets() = %#v, want Anthropic computer toolset", toolsets)
+	}
+
+	result := llm.ExecuteFunctionCall(context.Background(), &llm.FunctionToolCall{
+		Name:      "computer",
+		CallID:    "call_computer",
+		Arguments: `{"action":"left_click","coordinate":[10,20]}`,
+	}, toolCtx)
+
+	if result.RawError != nil {
+		t.Fatalf("ExecuteFunctionCall RawError = %v, want nil", result.RawError)
+	}
+	if result.FncCallOut == nil || result.FncCallOut.IsError {
+		t.Fatalf("FncCallOut = %#v, want successful computer output", result.FncCallOut)
+	}
+	events := actions.Events()
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want mouse move/down/up", len(events))
 	}
 }
 
@@ -111,6 +173,22 @@ func TestComputerToolValidatesRequiredArguments(t *testing.T) {
 				t.Fatalf("Execute error = %v, want containing %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestComputerToolNonStringLeftClickTextErrorsBeforeAction(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "left_click", map[string]interface{}{
+		"coordinate": []interface{}{float64(10), float64(20)},
+		"text":       float64(1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "text must be a string") {
+		t.Fatalf("Execute error = %v, want text type error", err)
+	}
+	if events := actions.Events(); len(events) != 0 {
+		t.Fatalf("events = %#v, want no mouse actions before modifier parse succeeds", events)
 	}
 }
 
@@ -210,6 +288,50 @@ func TestComputerToolUnknownScrollDirectionMatchesReferenceNoopWheel(t *testing.
 	}
 	if events[1].Type != "mouse_wheel" || events[1].DeltaX != 0 || events[1].DeltaY != 0 {
 		t.Fatalf("wheel event = %#v, want zero delta for unknown scroll direction", events[1])
+	}
+}
+
+func TestComputerToolNonStringScrollDirectionMatchesReferenceNoopWheel(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "scroll", map[string]interface{}{
+		"coordinate":       []interface{}{float64(10), float64(20)},
+		"scroll_amount":    float64(4),
+		"scroll_direction": nil,
+	})
+	if err != nil {
+		t.Fatalf("scroll Execute error = %v, want nil for non-string scroll direction", err)
+	}
+
+	events := actions.Events()
+	if len(events) < 2 {
+		t.Fatalf("events = %#v, want mouse move and wheel", events)
+	}
+	if events[1].Type != "mouse_wheel" || events[1].DeltaX != 0 || events[1].DeltaY != 0 {
+		t.Fatalf("wheel event = %#v, want zero delta for non-string scroll direction", events[1])
+	}
+}
+
+func TestComputerToolZeroScrollAmountMatchesReferenceNoopWheel(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+
+	_, err := toolset.Execute(context.Background(), "scroll", map[string]interface{}{
+		"coordinate":       []interface{}{float64(10), float64(20)},
+		"scroll_amount":    float64(0),
+		"scroll_direction": "down",
+	})
+	if err != nil {
+		t.Fatalf("scroll Execute error = %v, want nil for zero scroll amount", err)
+	}
+
+	events := actions.Events()
+	if len(events) < 2 {
+		t.Fatalf("events = %#v, want mouse move and wheel", events)
+	}
+	if events[1].Type != "mouse_wheel" || events[1].DeltaX != 0 || events[1].DeltaY != 0 {
+		t.Fatalf("wheel event = %#v, want zero delta for explicit zero scroll amount", events[1])
 	}
 }
 
@@ -329,6 +451,22 @@ func TestComputerToolCloseClosesPageActions(t *testing.T) {
 	toolset.Close()
 	actions.TypeText("ignored")
 
+	events := actions.Events()
+	if len(events) != 1 || events[0].Type != "close" {
+		t.Fatalf("events = %#v, want only close", events)
+	}
+}
+
+func TestComputerToolToolContextCloseClosesReferenceToolset(t *testing.T) {
+	actions := browser.NewPageActions()
+	toolset := NewComputerTool(actions, 1024, 768)
+	toolCtx := llm.NewToolContext([]interface{}{toolset})
+
+	if err := toolCtx.Close(); err != nil {
+		t.Fatalf("ToolContext.Close error = %v, want nil", err)
+	}
+
+	actions.TypeText("ignored")
 	events := actions.Events()
 	if len(events) != 1 || events[0].Type != "close" {
 		t.Fatalf("events = %#v, want only close", events)

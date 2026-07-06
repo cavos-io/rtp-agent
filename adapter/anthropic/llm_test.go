@@ -798,6 +798,26 @@ func TestBuildAnthropicMessagesKeepsDuplicateMatchingToolOutputs(t *testing.T) {
 	assertAnthropicToolResultBlock(t, messages[2].Content, 1, "call_lookup", "second", false)
 }
 
+func TestBuildAnthropicMessagesReplacesDuplicateUserIDsLikeReference(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "turn", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "old"}}},
+		&llm.ChatMessage{ID: "turn", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "new"}}},
+	}
+
+	messages, _, err := buildAnthropicMessagesE(ctx)
+	if err != nil {
+		t.Fatalf("buildAnthropicMessagesE() error = %v, want nil for duplicate user IDs", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want one replaced user message: %#v", len(messages), messages)
+	}
+	if messages[0].Role != "user" {
+		t.Fatalf("role = %q, want user", messages[0].Role)
+	}
+	assertAnthropicTextBlock(t, messages[0].Content, 0, "new")
+}
+
 func TestAnthropicChatSendsToolResultIsErrorFalseLikeReference(t *testing.T) {
 	transport := &captureRoundTripper{}
 	originalTransport := http.DefaultTransport
@@ -1197,6 +1217,154 @@ func TestAnthropicStreamInputDeltaWithoutToolStartReturnsConnectionError(t *test
 		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
 			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
 			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\"city\""}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamMessageDeltaMissingUsageReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"message_delta"}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamMessageStartMissingMessageReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start"}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamContentBlockStartMissingBlockReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start"}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamContentBlockStartMissingTypeReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start","content_block":{"id":"tool_1","name":"lookup"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamContentBlockDeltaMissingDeltaReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta"}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamTextDeltaMissingTextReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"text_delta"}}`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))),
+	}
+
+	_, err := stream.Next()
+
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next() error = %T %v, want APIConnectionError", err, err)
+	}
+	if !connectionErr.Retryable {
+		t.Fatal("Retryable = false before visible output, want true")
+	}
+}
+
+func TestAnthropicStreamInputJSONDeltaMissingPartialJSONReturnsConnectionError(t *testing.T) {
+	stream := &anthropicStream{
+		reader: bufio.NewReader(strings.NewReader(strings.Join([]string{
+			`data: {"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3}}}`,
+			`data: {"type":"content_block_start","content_block":{"type":"tool_use","id":"tool_1","name":"lookup"}}`,
+			`data: {"type":"content_block_delta","delta":{"type":"input_json_delta"}}`,
+			`data: {"type":"content_block_stop"}`,
 			`data: {"type":"message_stop"}`,
 			``,
 		}, "\n"))),
@@ -2114,7 +2282,6 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 			"user":        "participant-1",
 			"temperature": 0.7,
 			"top_k":       40,
-			"max_tokens":  2048,
 		}),
 	)
 	if err != nil {
@@ -2131,8 +2298,30 @@ func TestAnthropicChatAppliesExtraParams(t *testing.T) {
 	if transport.body["top_k"] != float64(40) {
 		t.Fatalf("top_k = %#v, want 40", transport.body["top_k"])
 	}
-	if transport.body["max_tokens"] != float64(2048) {
-		t.Fatalf("max_tokens = %#v, want 2048", transport.body["max_tokens"])
+}
+
+func TestAnthropicChatKeepsReferenceMaxTokensOverExtraParam(t *testing.T) {
+	transport := &captureRoundTripper{}
+	originalTransport := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+
+	model, err := NewAnthropicLLM("test-key", "claude-test")
+	if err != nil {
+		t.Fatalf("NewAnthropicLLM() error = %v", err)
+	}
+	stream, err := model.Chat(
+		context.Background(),
+		llm.NewChatContext(),
+		llm.WithExtraParams(map[string]any{"max_tokens": 2048}),
+	)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	_ = stream.Close()
+
+	if transport.body["max_tokens"] != float64(1024) {
+		t.Fatalf("max_tokens = %#v, want reference default 1024 over extra param", transport.body["max_tokens"])
 	}
 }
 
@@ -2264,6 +2453,28 @@ func TestAnthropicChatSendsSystemMessagesAsTextBlocks(t *testing.T) {
 	}
 	assertAnthropicRequestTextBlock(t, content[0], "<instructions>\ndev\n</instructions>")
 	assertAnthropicRequestTextBlock(t, content[1], "hello")
+}
+
+func TestBuildAnthropicMessagesKeepsLeadingDeveloperAsUserMessage(t *testing.T) {
+	ctx := llm.NewChatContext()
+	ctx.Items = []llm.ChatItem{
+		&llm.ChatMessage{ID: "developer", Role: llm.ChatRoleDeveloper, Content: []llm.ChatContent{{Text: "speak tersely"}}},
+		&llm.ChatMessage{ID: "user", Role: llm.ChatRoleUser, Content: []llm.ChatContent{{Text: "hello"}}},
+	}
+
+	messages, system := buildAnthropicMessages(ctx)
+
+	if system != "" {
+		t.Fatalf("system = %q, want no system blocks for leading developer role", system)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("len(messages) = %d, want one merged user message: %#v", len(messages), messages)
+	}
+	if messages[0].Role != "user" {
+		t.Fatalf("messages[0].Role = %q, want user", messages[0].Role)
+	}
+	assertAnthropicTextBlock(t, messages[0].Content, 0, "speak tersely")
+	assertAnthropicTextBlock(t, messages[0].Content, 1, "hello")
 }
 
 func TestAnthropicChatAppliesEphemeralCacheControl(t *testing.T) {

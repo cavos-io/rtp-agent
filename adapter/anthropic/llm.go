@@ -307,7 +307,7 @@ func waitAnthropicRetryInterval(ctx context.Context, interval time.Duration) err
 
 func applyAnthropicExtraParams(body map[string]any, params map[string]any) {
 	for key, value := range params {
-		if key == "caching" {
+		if key == "caching" || key == "max_tokens" {
 			continue
 		}
 		body[key] = value
@@ -497,17 +497,23 @@ func buildAnthropicMessagesE(chatCtx *llm.ChatContext) ([]anthropicMessage, []st
 			case *llm.ChatMessage:
 				if msg.Role == llm.ChatRoleSystem || msg.Role == llm.ChatRoleDeveloper {
 					if text := msg.TextContent(); text != "" {
-						if !instructionSeen {
+						if msg.Role == llm.ChatRoleSystem && !instructionSeen {
 							systemMessages = append(systemMessages, text)
-						} else {
+							instructionSeen = true
+							continue
+						}
+						if instructionSeen {
 							appendBlocks("user", anthropicContentBlock{
 								Type: "text",
 								Text: inlineAnthropicInstructions(text),
 							})
+							continue
 						}
 					}
 					instructionSeen = true
-					continue
+					if msg.Role == llm.ChatRoleSystem {
+						continue
+					}
 				}
 				role := "user"
 				if msg.Role == llm.ChatRoleAssistant {
@@ -661,6 +667,25 @@ func groupAnthropicChatItems(items []llm.ChatItem) ([]*anthropicChatItemGroup, e
 		return group.add(item)
 	}
 
+	replaceGroup := func(groupID string, item llm.ChatItem) error {
+		group := &anthropicChatItemGroup{}
+		if err := group.add(item); err != nil {
+			return err
+		}
+		if existing := groupsByID[groupID]; existing != nil {
+			for i, candidate := range groups {
+				if candidate == existing {
+					groups[i] = group
+					break
+				}
+			}
+		} else {
+			groups = append(groups, group)
+		}
+		groupsByID[groupID] = group
+		return nil
+	}
+
 	for _, item := range items {
 		switch it := item.(type) {
 		case *llm.ChatMessage:
@@ -669,7 +694,7 @@ func groupAnthropicChatItems(items []llm.ChatItem) ([]*anthropicChatItemGroup, e
 					return nil, err
 				}
 			} else {
-				if err := addToGroup(it.ID, it); err != nil {
+				if err := replaceGroup(it.ID, it); err != nil {
 					return nil, err
 				}
 			}
@@ -823,9 +848,9 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			Type string `json:"type"`
 
 			// message_start fields
-			Message struct {
+			Message *struct {
 				ID    string `json:"id"`
-				Usage struct {
+				Usage *struct {
 					InputTokens              int `json:"input_tokens"`
 					OutputTokens             int `json:"output_tokens"`
 					CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
@@ -834,22 +859,22 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			} `json:"message"`
 
 			// message_delta fields
-			Usage struct {
+			Usage *struct {
 				OutputTokens int `json:"output_tokens"`
 			} `json:"usage"`
 
 			// content_block_start fields
-			ContentBlock struct {
-				Type string `json:"type"`
+			ContentBlock *struct {
+				Type *string `json:"type"`
 				ID   string `json:"id"`
 				Name string `json:"name"`
 			} `json:"content_block"`
 
 			// content_block_delta fields
-			Delta struct {
+			Delta *struct {
 				Type        string `json:"type"`
-				Text        string `json:"text"`
-				PartialJson string `json:"partial_json"`
+				Text        *string `json:"text"`
+				PartialJson *string `json:"partial_json"`
 			} `json:"delta"`
 		}
 
@@ -865,6 +890,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 
 		switch event.Type {
 		case "message_start":
+			if event.Message == nil || event.Message.Usage == nil {
+				wrappedErr := s.wrapReadError(errors.New("message_start missing message usage"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
 			s.requestID = event.Message.ID
 			s.inputTokens = event.Message.Usage.InputTokens
 			s.outputTokens = event.Message.Usage.OutputTokens
@@ -872,7 +906,25 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			s.cacheReadTokens = event.Message.Usage.CacheReadInputTokens
 
 		case "content_block_start":
-			if event.ContentBlock.Type == "tool_use" {
+			if event.ContentBlock == nil {
+				wrappedErr := s.wrapReadError(errors.New("content_block_start missing content_block"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
+			if event.ContentBlock.Type == nil {
+				wrappedErr := s.wrapReadError(errors.New("content_block_start missing content_block type"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
+			if *event.ContentBlock.Type == "tool_use" {
 				s.toolCallActive = true
 				s.toolCallID = event.ContentBlock.ID
 				s.toolName = event.ContentBlock.Name
@@ -880,8 +932,26 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			}
 
 		case "content_block_delta":
+			if event.Delta == nil {
+				wrappedErr := s.wrapReadError(errors.New("content_block_delta missing delta"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
 			if event.Delta.Type == "text_delta" {
-				text, emit := s.visibleAnthropicTextDelta(event.Delta.Text)
+				if event.Delta.Text == nil {
+					wrappedErr := s.wrapReadError(errors.New("text_delta missing text"))
+					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+						continue
+					} else if retryErr != wrappedErr {
+						return nil, retryErr
+					}
+					return nil, wrappedErr
+				}
+				text, emit := s.visibleAnthropicTextDelta(*event.Delta.Text)
 				if !emit {
 					continue
 				}
@@ -902,7 +972,16 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 					}
 					return nil, wrappedErr
 				}
-				s.toolArgs += event.Delta.PartialJson
+				if event.Delta.PartialJson == nil {
+					wrappedErr := s.wrapReadError(errors.New("input_json_delta missing partial_json"))
+					if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+						continue
+					} else if retryErr != wrappedErr {
+						return nil, retryErr
+					}
+					return nil, wrappedErr
+				}
+				s.toolArgs += *event.Delta.PartialJson
 			}
 
 		case "content_block_stop":
@@ -929,6 +1008,15 @@ func (s *anthropicStream) Next() (*llm.ChatChunk, error) {
 			}
 
 		case "message_delta":
+			if event.Usage == nil {
+				wrappedErr := s.wrapReadError(errors.New("message_delta missing usage"))
+				if retryErr := s.retryBeforeOutput(wrappedErr); retryErr == nil {
+					continue
+				} else if retryErr != wrappedErr {
+					return nil, retryErr
+				}
+				return nil, wrappedErr
+			}
 			s.outputTokens += event.Usage.OutputTokens
 
 		case "message_stop":

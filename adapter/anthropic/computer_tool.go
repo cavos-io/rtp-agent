@@ -36,12 +36,17 @@ func NewComputerTool(actions *browser.PageActions, width int, height int) *Compu
 	return toolset
 }
 
+func (c *ComputerTool) ID() string {
+	return "computer"
+}
+
 func (c *ComputerTool) Tools() []llm.Tool {
 	return []llm.Tool{c.tool}
 }
 
-func (c *ComputerTool) Close() {
+func (c *ComputerTool) Close() error {
 	c.actions.Close()
+	return nil
 }
 
 func (c *ComputerTool) Execute(ctx context.Context, action string, args map[string]interface{}) ([]map[string]interface{}, error) {
@@ -53,7 +58,14 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 		if err != nil {
 			return nil, err
 		}
-		modifiers, _ := args["text"].(string)
+		var modifiers string
+		if rawModifiers, ok := args["text"]; ok {
+			var ok bool
+			modifiers, ok = rawModifiers.(string)
+			if !ok {
+				return nil, fmt.Errorf("text must be a string")
+			}
+		}
 		c.actions.LeftClick(x, y, modifiers)
 	case "right_click":
 		x, y, err := requireCoordinate(args, "coordinate")
@@ -116,7 +128,7 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			return nil, err
 		}
 		direction, _ := args["scroll_direction"].(string)
-		if direction == "" {
+		if _, ok := args["scroll_direction"]; !ok {
 			direction = "down"
 		}
 		amount := 3
@@ -308,7 +320,7 @@ func (t *computerUseTool) ID() string {
 }
 
 func (t *computerUseTool) Name() string {
-	return "computer_use"
+	return "computer"
 }
 
 func (t *computerUseTool) Description() string {

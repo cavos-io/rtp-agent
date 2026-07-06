@@ -12944,13 +12944,16 @@ func TestDefaultConfigFromEnvAddsAnthropicComputerTool(t *testing.T) {
 		t.Fatalf("len(Agent.Tools) = %d, want 1", len(app.Agent.Tools))
 	}
 	tool := app.Agent.Tools[0]
-	if tool.ID() != "computer" || tool.Name() != "computer_use" {
-		t.Fatalf("tool identity = %q/%q, want computer/computer_use", tool.ID(), tool.Name())
+	if tool.ID() != "computer" || tool.Name() != "computer" {
+		t.Fatalf("tool identity = %q/%q, want computer/computer", tool.ID(), tool.Name())
 	}
 	if specProvider, ok := tool.(interface {
 		AnthropicToolSpec() map[string]interface{}
 	}); ok {
 		spec := specProvider.AnthropicToolSpec()
+		if spec["name"] != tool.Name() {
+			t.Fatalf("computer spec name = %#v, want tool name %q", spec["name"], tool.Name())
+		}
 		if spec["display_width_px"] != 1280 || spec["display_height_px"] != 720 {
 			t.Fatalf("computer display spec = %#v, want 1280x720", spec)
 		}
