@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -203,7 +204,7 @@ func (s *spitchTTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 
 	data, err := io.ReadAll(s.resp.Body)
 	if err != nil {
-		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response read failed: %v", err))
+		return nil, spitchTTSReadError(err)
 	}
 	if len(data) == 0 {
 		s.finalSent = true
@@ -257,7 +258,7 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 		s.decoder = codecs.NewMP3AudioStreamDecoder()
 		data, err := io.ReadAll(s.resp.Body)
 		if err != nil {
-			return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response read failed: %v", err))
+			return nil, spitchTTSReadError(err)
 		}
 		if len(data) == 0 {
 			s.finalSent = true
@@ -282,6 +283,15 @@ func (s *spitchTTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error)
 		return nil, llm.NewAPIConnectionError(fmt.Sprintf("Spitch TTS response decode failed: %v", err))
 	}
 	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func spitchTTSReadError(err error) error {
+	msg := fmt.Sprintf("Spitch TTS response read failed: %v", err)
+	var timeout interface{ Timeout() bool }
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &timeout) && timeout.Timeout()) {
+		return llm.NewAPITimeoutError(msg)
+	}
+	return llm.NewAPIConnectionError(msg)
 }
 
 func (s *spitchTTSChunkedStream) Close() error {

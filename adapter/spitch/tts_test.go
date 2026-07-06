@@ -509,6 +509,25 @@ func TestSpitchTTSChunkedStreamDecodeFailureReturnsAPIConnectionError(t *testing
 	}
 }
 
+func TestSpitchTTSChunkedStreamReadTimeoutReturnsAPITimeoutError(t *testing.T) {
+	stream := &spitchTTSChunkedStream{
+		resp:         &http.Response{Body: spitchTimeoutBody{}},
+		outputFormat: "mp3",
+		sampleRate:   24000,
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("Next audio = %#v, want nil on provider read timeout", audio)
+	}
+	var timeoutErr *llm.APITimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("Next error = %T %v, want APITimeoutError", err, err)
+	}
+}
+
 func TestSpitchTTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
 	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
 	if err != nil {
@@ -701,6 +720,26 @@ func (b *spitchCloseErrorBody) Close() error {
 		return errors.New("already closed")
 	}
 	return nil
+}
+
+type spitchTimeoutBody struct{}
+
+func (spitchTimeoutBody) Read([]byte) (int, error) {
+	return 0, spitchTimeoutError{}
+}
+
+func (spitchTimeoutBody) Close() error {
+	return nil
+}
+
+type spitchTimeoutError struct{}
+
+func (spitchTimeoutError) Error() string {
+	return "spitch timeout"
+}
+
+func (spitchTimeoutError) Timeout() bool {
+	return true
 }
 
 func spitchTestWAV(pcm []byte, sampleRate uint32, channels uint16) []byte {
