@@ -2193,6 +2193,8 @@ func rimeTTSPythonRepr(value any) string {
 			return "True"
 		}
 		return "False"
+	case json.Number:
+		return rimeTTSPythonNumberRepr(typed)
 	case []any:
 		parts := make([]string, 0, len(typed))
 		for _, item := range typed {
@@ -2219,6 +2221,29 @@ func rimeTTSPythonRepr(value any) string {
 	default:
 		return fmt.Sprint(value)
 	}
+}
+
+func rimeTTSPythonNumberRepr(value json.Number) string {
+	text := value.String()
+	if !strings.ContainsAny(text, ".eE") {
+		return text
+	}
+	floating, err := value.Float64()
+	if err != nil {
+		return text
+	}
+	abs := floating
+	if abs < 0 {
+		abs = -abs
+	}
+	if abs != 0 && (abs < 1e-4 || abs >= 1e16) {
+		return strconv.FormatFloat(floating, 'e', -1, 64)
+	}
+	formatted := strconv.FormatFloat(floating, 'f', -1, 64)
+	if !strings.Contains(formatted, ".") {
+		formatted += ".0"
+	}
+	return formatted
 }
 
 func rimeTTSPythonStringRepr(value string) string {

@@ -4366,6 +4366,18 @@ func TestRimeTTSAudioFromWebsocketMessage(t *testing.T) {
 		}
 	}
 
+	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":1e6}`), 24000); err == nil {
+		t.Fatal("exponent numeric error message returned nil error, want stream error")
+	} else {
+		var apiErr *llm.APIError
+		if !errors.As(err, &apiErr) {
+			t.Fatalf("exponent numeric error message error = %T %v, want APIError", err, err)
+		}
+		if apiErr.Message != "Rime ws error: 1000000.0" {
+			t.Fatalf("exponent numeric APIError message = %q, want Python-style float", apiErr.Message)
+		}
+	}
+
 	if _, _, _, err := rimeTTSAudioFromWebsocketMessage([]byte(`{"type":"error","message":{}}`), 24000); err == nil {
 		t.Fatal("object error message returned nil error, want stream error")
 	} else {
