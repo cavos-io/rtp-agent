@@ -1577,6 +1577,45 @@ func TestUpliftAITTSChunkedStreamSocketIOConnectPingWriteFailureIsAPIConnectionE
 	}
 }
 
+func TestUpliftAITTSChunkedStreamSocketIOReconnectDeadlineIsAPIConnectionError(t *testing.T) {
+	oldDial := upliftAISocketIODialContext
+	oldDelay := upliftAISocketIOReconnectDelay
+	var dials int
+	upliftAISocketIOReconnectDelay = time.Second
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		dials++
+		return nil, errors.New("temporary socket.io dial failure")
+	}
+	t.Cleanup(func() {
+		upliftAISocketIODialContext = oldDial
+		upliftAISocketIOReconnectDelay = oldDelay
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+
+	stream, err := provider.Synthesize(ctx, "connect timeout")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T(%v), want reference APIConnectionError for reconnect deadline", err, err)
+	}
+	if got, want := dials, 1; got != want {
+		t.Fatalf("socket.io dial count = %d, want one attempt before caller deadline", got)
+	}
+}
+
 func TestUpliftAITTSChunkedStreamSocketIOReadErrorEndsRequestAndReconnects(t *testing.T) {
 	firstConn := newUpliftAITestSocketIOConn()
 	firstConn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`

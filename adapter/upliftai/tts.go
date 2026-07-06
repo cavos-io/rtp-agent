@@ -831,7 +831,7 @@ func (c *upliftAISocketIOClient) ensureConnected(ctx context.Context) error {
 			case <-ctx.Done():
 				timer.Stop()
 				c.mu.Unlock()
-				return ctx.Err()
+				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io reconnect failed: %v", ctx.Err()))
 			case <-timer.C:
 			}
 		}
