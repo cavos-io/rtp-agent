@@ -100,7 +100,7 @@ func (p *PageActions) Scroll(x, y int, direction string, amount int) {
 	pixels := amount * 120
 	deltaX, deltaY := 0, 0
 	switch direction {
-	case "", "down":
+	case "down":
 		deltaY = -pixels
 	case "up":
 		deltaY = pixels

@@ -116,7 +116,7 @@ func (c *ComputerTool) Execute(ctx context.Context, action string, args map[stri
 			return nil, err
 		}
 		direction, _ := args["scroll_direction"].(string)
-		if direction == "" {
+		if _, ok := args["scroll_direction"]; !ok {
 			direction = "down"
 		}
 		amount := 3
