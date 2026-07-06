@@ -1958,6 +1958,9 @@ func rimeTTSReadErrorWithRequestID(err error, requestID string) error {
 }
 
 func rimeTTSAudioFromWebsocketMessage(payload []byte, sampleRate int) (*tts.SynthesizedAudio, bool, string, error) {
+	if bytes.Equal(bytes.TrimSpace(payload), []byte("null")) {
+		return nil, false, "", rimeTTSConnectionError("Rime websocket payload decode failed", fmt.Errorf("expected JSON object, got null"))
+	}
 	var message struct {
 		Type           string  `json:"type"`
 		Data           *string `json:"data"`
