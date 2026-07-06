@@ -616,6 +616,19 @@ func TestTelnyxSTTUnexpectedAbnormalCloseReturnsAPIStatusError(t *testing.T) {
 	}
 }
 
+func TestTelnyxSTTReadFailureReturnsAPIConnectionError(t *testing.T) {
+	readErr := errors.New("read failed")
+	err := telnyxSTTReadError(readErr)
+
+	var connErr *llm.APIConnectionError
+	if !errors.As(err, &connErr) {
+		t.Fatalf("read error = %T %v, want APIConnectionError", err, err)
+	}
+	if !strings.Contains(err.Error(), readErr.Error()) {
+		t.Fatalf("read error = %q, want read failure context", err)
+	}
+}
+
 func TestTelnyxSTTEndInputNormalCloseReturnsEOF(t *testing.T) {
 	upgrader := websocket.Upgrader{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

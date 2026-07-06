@@ -554,7 +554,7 @@ func (s *telnyxSTTStream) readLoop() {
 					s.errCh <- llm.NewAPIStatusError("Telnyx STT WebSocket closed unexpectedly", 0, "", nil)
 				}
 			} else {
-				s.errCh <- err
+				s.errCh <- telnyxSTTReadError(err)
 			}
 			return
 		}
@@ -574,6 +574,13 @@ func (s *telnyxSTTStream) readLoop() {
 			s.events <- event
 		}
 	}
+}
+
+func telnyxSTTReadError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return llm.NewAPIConnectionError(fmt.Sprintf("Telnyx STT websocket read failed: %v", err))
 }
 
 func (s *telnyxSTTStream) isClosed() bool {
