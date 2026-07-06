@@ -352,6 +352,39 @@ func TestTelnyxTTSStreamSegmentNextFailureClosesStream(t *testing.T) {
 	}
 }
 
+func TestTelnyxTTSStreamNoAudioSegmentReturnsReferenceError(t *testing.T) {
+	provider := NewTelnyxTTS("test-key", "")
+	provider.openSegment = func(context.Context) (tts.SynthesizeStream, error) {
+		return &fakeTelnyxEndInputTTSStream{}, nil
+	}
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText error = %v", err)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+	if err := tts.EndSynthesizeStreamInput(stream); err != nil {
+		t.Fatalf("EndInput error = %v", err)
+	}
+
+	audio, err := stream.Next()
+
+	if audio != nil {
+		t.Fatalf("audio = %+v, want nil", audio)
+	}
+	var apiErr *llm.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("Next error = %T %v, want APIError", err, err)
+	}
+	if !strings.Contains(err.Error(), "no audio frames were pushed for text: hello") {
+		t.Fatalf("Next error = %q, want reference no-audio error", err)
+	}
+}
+
 func TestTelnyxTTSStreamEndInputFlushesReferenceSegment(t *testing.T) {
 	var writes []string
 	stream := &telnyxTTSStream{

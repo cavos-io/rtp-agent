@@ -157,7 +157,7 @@ func (t *TelnyxTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) {
 	stream := &telnyxTTSSegmentedStream{
 		provider: t,
 		ctx:      ctx,
-		segments: make(chan tts.SynthesizeStream, 100),
+		segments: make(chan telnyxTTSSegment, 100),
 	}
 	if !t.registerStream(stream) {
 		return nil, io.ErrClosedPipe
@@ -317,13 +317,19 @@ func (s *telnyxTTSChunkedStream) Close() error {
 type telnyxTTSSegmentedStream struct {
 	provider    *TelnyxTTS
 	ctx         context.Context
-	segments    chan tts.SynthesizeStream
-	current     tts.SynthesizeStream
+	segments    chan telnyxTTSSegment
+	current     *telnyxTTSSegment
 	mu          sync.Mutex
 	closed      bool
 	inputEnded  bool
 	pendingText string
 	closeOnce   sync.Once
+}
+
+type telnyxTTSSegment struct {
+	stream  tts.SynthesizeStream
+	text    string
+	emitted bool
 }
 
 func (s *telnyxTTSSegmentedStream) PushText(text string) error {
@@ -377,7 +383,7 @@ func (s *telnyxTTSSegmentedStream) Flush() error {
 		}
 		return nil
 	}
-	s.segments <- segment
+	s.segments <- telnyxTTSSegment{stream: segment, text: text}
 	return nil
 }
 
@@ -408,10 +414,10 @@ func (s *telnyxTTSSegmentedStream) Close() error {
 	s.closeSegments()
 	s.mu.Unlock()
 	if current != nil {
-		_ = current.Close()
+		_ = current.stream.Close()
 	}
 	for segment := range s.segments {
-		_ = segment.Close()
+		_ = segment.stream.Close()
 	}
 	if s.provider != nil {
 		s.provider.unregisterStream(s)
@@ -426,16 +432,30 @@ func (s *telnyxTTSSegmentedStream) Next() (*tts.SynthesizedAudio, error) {
 			if !ok {
 				return nil, io.EOF
 			}
-			s.current = segment
+			s.current = &segment
 		}
-		audio, err := s.current.Next()
+		audio, err := s.current.stream.Next()
 		if errors.Is(err, io.EOF) {
-			_ = s.current.Close()
+			_ = s.current.stream.Close()
+			text := s.current.text
+			if strings.TrimSpace(text) != "" && !s.current.emitted {
+				_ = s.Close()
+				return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
+			}
 			s.current = nil
 			continue
 		}
 		if err != nil {
 			_ = s.Close()
+			return nil, err
+		}
+		if audio != nil && audio.Frame != nil && len(audio.Frame.Data) > 0 {
+			s.current.emitted = true
+		}
+		text := s.current.text
+		if audio != nil && audio.IsFinal && strings.TrimSpace(text) != "" && !s.current.emitted {
+			_ = s.Close()
+			return nil, llm.NewAPIError(fmt.Sprintf("no audio frames were pushed for text: %s", text), nil, true)
 		}
 		return audio, err
 	}
