@@ -1220,7 +1220,6 @@ func TestUpliftAITTSChunkedStreamSocketIODisconnectEmitsFinalMarker(t *testing.T
 	requestID := upliftAITestSocketIORequestID(t, synthesize)
 	audioPayload := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02})
 	conn.reads <- `42/text-to-speech/multi-stream,["message",{"type":"audio","requestId":"` + requestID + `","audio":"` + audioPayload + `"}]`
-	conn.readErrs <- io.EOF
 
 	result := receiveUpliftAITestSocketIOResult(t, resultCh)
 	if result.err != nil {
@@ -1229,6 +1228,7 @@ func TestUpliftAITTSChunkedStreamSocketIODisconnectEmitsFinalMarker(t *testing.T
 	if result.audio == nil || result.audio.Frame == nil {
 		t.Fatalf("first audio = %#v, want audio before disconnect", result.audio)
 	}
+	conn.readErrs <- io.EOF
 	final, err := stream.Next()
 	if err != nil {
 		t.Fatalf("second Next error = %v, want final marker after disconnect", err)
@@ -1521,6 +1521,56 @@ func TestUpliftAITTSChunkedStreamSocketIODialRetriesReferenceReconnect(t *testin
 	}
 	if got, want := dials, 2; got != want {
 		t.Fatalf("socket.io dial count = %d, want reference retry count %d", got, want)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamSocketIOConnectPingWriteFailureIsAPIConnectionError(t *testing.T) {
+	conns := make([]*upliftAITestSocketIOConn, upliftAISocketIOAttempts)
+	for i := range conns {
+		conn := newUpliftAITestSocketIOConn()
+		conn.reads <- `0{"sid":"engine","upgrades":[],"pingInterval":25000,"pingTimeout":20000}`
+		conn.reads <- "2"
+		conn.writeErrAfter = 1
+		conn.writeErr = io.ErrClosedPipe
+		conns[i] = conn
+	}
+
+	oldDial := upliftAISocketIODialContext
+	oldDelay := upliftAISocketIOReconnectDelay
+	dials := 0
+	upliftAISocketIOReconnectDelay = time.Millisecond
+	upliftAISocketIODialContext = func(context.Context, string) (upliftAISocketIOConn, error) {
+		dials++
+		if dials > len(conns) {
+			return nil, fmt.Errorf("socket.io dial count = %d, want %d attempts", dials, len(conns))
+		}
+		return conns[dials-1], nil
+	}
+	t.Cleanup(func() {
+		upliftAISocketIODialContext = oldDial
+		upliftAISocketIOReconnectDelay = oldDelay
+	})
+
+	provider := NewUpliftAITTS(
+		"test-key",
+		"voice-1",
+		WithUpliftAIBaseURL("ws://upliftai.example"),
+		WithUpliftAIOutputFormat("PCM_22050_16"),
+	)
+	defer provider.Close()
+
+	stream, err := provider.Synthesize(context.Background(), "connect fail")
+	if err != nil {
+		t.Fatalf("Synthesize error = %v", err)
+	}
+	defer stream.Close()
+	_, err = stream.Next()
+	var connectionErr *llm.APIConnectionError
+	if !errors.As(err, &connectionErr) {
+		t.Fatalf("Next error = %T(%v), want reference APIConnectionError for connect ping write failure", err, err)
+	}
+	if got, want := dials, upliftAISocketIOAttempts; got != want {
+		t.Fatalf("socket.io dial count = %d, want reference reconnect attempts %d", got, want)
 	}
 }
 

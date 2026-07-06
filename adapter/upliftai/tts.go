@@ -1003,7 +1003,7 @@ func upliftAISocketIOConnect(ctx context.Context, conn upliftAISocketIOConn, api
 		packet := string(msg)
 		if packet == "2" {
 			if err := conn.WriteMessage(websocket.TextMessage, []byte("3")); err != nil {
-				return err
+				return llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS socket.io ping failed: %v", err))
 			}
 			continue
 		}
