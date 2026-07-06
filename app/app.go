@@ -2694,6 +2694,7 @@ func configureTurnDetector(cfg AppConfig, a *agent.Agent) error {
 			return err
 		}
 		a.AudioTurnDetector = detector
+		a.InterruptionGate = cavos.NewInterruptionGate()
 		return nil
 	case providerLiveKit:
 		if remoteEOTURL := os.Getenv("LIVEKIT_REMOTE_EOT_URL"); remoteEOTURL != "" {
