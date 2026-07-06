@@ -452,11 +452,12 @@ func (t *CartesiaTTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	}
 
 	stream := &cartesiaTTSStream{
-		provider:   t,
-		conn:       conn,
-		audio:      make(chan *tts.SynthesizedAudio, 10),
-		errCh:      make(chan error, 1),
-		sampleRate: t.sampleRate,
+		provider:      t,
+		conn:          conn,
+		audio:         make(chan *tts.SynthesizedAudio, 10),
+		errCh:         make(chan error, 1),
+		sampleRate:    t.sampleRate,
+		streamOptions: cartesiaTTSStreamOptions(t),
 	}
 	stream.writeJSON = stream.writeJSONMessage
 	if !t.registerStream(stream) {
@@ -537,6 +538,7 @@ type cartesiaTTSStream struct {
 	sentTokens    []string
 	skipAlignment bool
 	pendingText   string
+	streamOptions map[string]interface{}
 }
 
 type cartesiaWSResponse struct {
@@ -729,13 +731,26 @@ func (s *cartesiaTTSStream) sendCompleteSentencesLocked() error {
 }
 
 func (s *cartesiaTTSStream) sendTranscriptLocked(text string) error {
-	msg := map[string]interface{}{
-		"context_id": "default",
-		"transcript": text + " ",
-		"continue":   true,
-	}
+	msg := s.streamPacketLocked()
+	msg["context_id"] = "default"
+	msg["transcript"] = text + " "
+	msg["continue"] = true
 	s.sentTokens = append(s.sentTokens, text+" ")
 	return s.writeJSONData(msg)
+}
+
+func (s *cartesiaTTSStream) streamPacketLocked() map[string]interface{} {
+	msg := make(map[string]interface{}, len(s.streamOptions)+3)
+	for key, value := range s.streamOptions {
+		msg[key] = value
+	}
+	return msg
+}
+
+func cartesiaTTSStreamOptions(t *CartesiaTTS) map[string]interface{} {
+	options := buildCartesiaOptions(t, true)
+	options["max_buffer_delay_ms"] = 0
+	return options
 }
 
 func (s *cartesiaTTSStream) Flush() error {
@@ -761,11 +776,10 @@ func (s *cartesiaTTSStream) EndInput() error {
 		s.closeAfterWriteFailureLocked()
 		return err
 	}
-	msg := map[string]interface{}{
-		"context_id": "default",
-		"transcript": " ",
-		"continue":   false,
-	}
+	msg := s.streamPacketLocked()
+	msg["context_id"] = "default"
+	msg["transcript"] = " "
+	msg["continue"] = false
 	s.flushed = true
 	s.sentTokens = append(s.sentTokens, " ")
 	if err := s.writeJSONData(msg); err != nil {
@@ -846,6 +860,13 @@ func (s *cartesiaTTSStream) Next() (*tts.SynthesizedAudio, error) {
 		}
 		return audio, nil
 	case err := <-s.errCh:
+		select {
+		case audio, ok := <-s.audio:
+			if ok {
+				return audio, nil
+			}
+		default:
+		}
 		return nil, err
 	}
 }

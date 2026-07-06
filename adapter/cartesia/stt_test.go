@@ -548,17 +548,26 @@ func TestCartesiaSTTPushFrameBuffersReferenceAudioChunks(t *testing.T) {
 	if len(writes) != 0 {
 		t.Fatalf("writes after first half = %d, want 0", len(writes))
 	}
+	if stream.state.speechDuration != 0 {
+		t.Fatalf("speech duration after buffered half = %v, want 0 before websocket write", stream.state.speechDuration)
+	}
 	if err := stream.PushFrame(frame(1280)); err != nil {
 		t.Fatalf("PushFrame second half error = %v", err)
 	}
 	if len(writes) != 1 || len(writes[0]) != 5120 {
 		t.Fatalf("writes = %s, want one 160ms PCM chunk", cartesiaWriteSizes(writes))
 	}
+	if stream.state.speechDuration != 0.16 {
+		t.Fatalf("speech duration after first write = %v, want 0.16", stream.state.speechDuration)
+	}
 	if err := stream.PushFrame(frame(2560)); err != nil {
 		t.Fatalf("PushFrame full chunk error = %v", err)
 	}
 	if len(writes) != 2 || len(writes[1]) != 5120 {
 		t.Fatalf("writes = %s, want two 160ms PCM chunks", cartesiaWriteSizes(writes))
+	}
+	if stream.state.speechDuration != 0.32 {
+		t.Fatalf("speech duration after second write = %v, want 0.32", stream.state.speechDuration)
 	}
 }
 
@@ -618,6 +627,9 @@ func TestCartesiaSTTCloseFlushesBufferedAudioBeforeClose(t *testing.T) {
 	}
 	if len(writes) != 1 || len(writes[0]) != 2560 {
 		t.Fatalf("writes after close = %s, want buffered 80ms chunk", cartesiaWriteSizes(writes))
+	}
+	if stream.state.speechDuration != 0.08 {
+		t.Fatalf("speech duration after close flush = %v, want 0.08", stream.state.speechDuration)
 	}
 	if len(textMessages) != 1 || textMessages[0] != `{"type":"close"}` {
 		t.Fatalf("text messages = %#v, want close message after buffered audio", textMessages)
@@ -806,6 +818,9 @@ func TestCartesiaSTTLegacyFlushFlushesBufferedAudioBeforeFinalize(t *testing.T) 
 	}
 	if len(writes) != 1 || len(writes[0]) != 2560 {
 		t.Fatalf("writes after flush = %s, want buffered 80ms chunk", cartesiaWriteSizes(writes))
+	}
+	if stream.state.speechDuration != 0.08 {
+		t.Fatalf("speech duration after legacy flush = %v, want 0.08", stream.state.speechDuration)
 	}
 	if len(textMessages) != 1 || textMessages[0] != "finalize" {
 		t.Fatalf("text messages = %#v, want finalize after buffered audio", textMessages)

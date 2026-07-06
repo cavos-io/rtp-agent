@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -56,6 +58,9 @@ func TestUpliftAITTSReferenceDefaultsAndCapabilities(t *testing.T) {
 	if got, want := tts.voice, "v_meklc281"; got != want {
 		t.Fatalf("voice = %q, want reference default voice %q", got, want)
 	}
+	if got, want := tts.outputFormat, "MP3_22050_32"; got != want {
+		t.Fatalf("outputFormat = %q, want reference default output format %q", got, want)
+	}
 	if got, want := tts.Label(), "upliftai.TTS"; got != want {
 		t.Fatalf("Label() = %q, want %q", got, want)
 	}
@@ -69,8 +74,15 @@ func TestUpliftAITTSReferenceDefaultsAndCapabilities(t *testing.T) {
 		t.Fatalf("NumChannels() = %d, want %d", got, want)
 	}
 
-	if _, err := tts.Stream(context.Background()); err == nil || !strings.Contains(err.Error(), "streaming tts not natively supported") {
-		t.Fatalf("Stream() error = %v, want explicit unsupported streaming error", err)
+	stream, err := tts.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream() error = %v, want stream adapter", err)
+	}
+	if stream == nil {
+		t.Fatal("Stream() = nil, want stream adapter")
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Stream Close error = %v", err)
 	}
 }
 
@@ -259,9 +271,13 @@ func TestUpliftAITTSSynthesizeReturnsAPIStatusError(t *testing.T) {
 
 func TestUpliftAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	var httpCalls int
+	var requestBody map[string]string
 	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(*http.Request) (*http.Response, error) {
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		httpCalls++
+		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+			return nil, err
+		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader("audio")),
@@ -270,6 +286,7 @@ func TestUpliftAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	t.Cleanup(func() { http.DefaultClient = oldClient })
 
 	provider := NewUpliftAITTS("test-key", "")
+	provider.outputFormat = "PCM_22050_16"
 
 	stream, err := provider.Synthesize(context.Background(), "hello")
 	if err != nil {
@@ -290,6 +307,15 @@ func TestUpliftAITTSSynthesizeDefersReferenceRequestUntilNext(t *testing.T) {
 	if httpCalls != 1 {
 		t.Fatalf("HTTP calls after Next = %d, want 1", httpCalls)
 	}
+	if got, want := requestBody["text"], "hello"; got != want {
+		t.Fatalf("request text = %q, want %q", got, want)
+	}
+	if got, want := requestBody["voiceId"], defaultUpliftAIVoiceID; got != want {
+		t.Fatalf("request voiceId = %q, want %q", got, want)
+	}
+	if got, want := requestBody["outputFormat"], "PCM_22050_16"; got != want {
+		t.Fatalf("request outputFormat = %q, want %q", got, want)
+	}
 }
 
 func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
@@ -305,6 +331,175 @@ func TestUpliftAITTSStreamAfterCloseIsRejected(t *testing.T) {
 	if !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("Stream after Close error = %v, want io.ErrClosedPipe", err)
 	}
+}
+
+func TestUpliftAITTSProviderCloseClosesActiveSynthesizeStreams(t *testing.T) {
+	provider := NewUpliftAITTS("test-key", "")
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	if err := stream.PushText("hello"); err != nil {
+		t.Fatalf("PushText before provider Close error = %v", err)
+	}
+
+	if err := provider.Close(); err != nil {
+		t.Fatalf("provider Close error = %v", err)
+	}
+	if err := stream.PushText("again"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("PushText after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if err := stream.Flush(); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Flush after provider Close error = %v, want io.ErrClosedPipe", err)
+	}
+	if audio, err := stream.Next(); audio != nil || err != io.EOF {
+		t.Fatalf("Next after provider Close = (%#v, %v), want EOF", audio, err)
+	}
+}
+
+func TestUpliftAITTSStreamFlushSynthesizesReferenceSegment(t *testing.T) {
+	var httpCalls int
+	var requestBody map[string]string
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: upliftAIRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		httpCalls++
+		if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
+			return nil, err
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("\x01\x02\x03\x04")),
+		}, nil
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+
+	provider := NewUpliftAITTS("test-key", "")
+	stream, err := provider.Stream(context.Background())
+	if err != nil {
+		t.Fatalf("Stream error = %v", err)
+	}
+	defer stream.Close()
+	provider.outputFormat = "PCM_22050_16"
+
+	if err := stream.PushText("hello "); err != nil {
+		t.Fatalf("PushText(first) error = %v", err)
+	}
+	if err := stream.PushText("world"); err != nil {
+		t.Fatalf("PushText(second) error = %v", err)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls before Flush = %d, want 0", httpCalls)
+	}
+	if err := stream.Flush(); err != nil {
+		t.Fatalf("Flush error = %v", err)
+	}
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("first Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil || audio.IsFinal {
+		t.Fatalf("first audio = %#v, want non-final frame", audio)
+	}
+	if got, want := audio.Frame.SampleRate, uint32(22050); got != want {
+		t.Fatalf("SampleRate = %d, want %d", got, want)
+	}
+	if got, want := audio.Frame.NumChannels, uint32(1); got != want {
+		t.Fatalf("NumChannels = %d, want %d", got, want)
+	}
+
+	final, err := stream.Next()
+	if err != nil {
+		t.Fatalf("second Next error = %v", err)
+	}
+	if final == nil || !final.IsFinal {
+		t.Fatalf("second audio = %#v, want final marker", final)
+	}
+	if got, want := httpCalls, 1; got != want {
+		t.Fatalf("HTTP calls after stream Flush = %d, want %d", got, want)
+	}
+	if got, want := requestBody["text"], "hello world"; got != want {
+		t.Fatalf("request text = %q, want %q", got, want)
+	}
+	if got, want := requestBody["voiceId"], defaultUpliftAIVoiceID; got != want {
+		t.Fatalf("request voiceId = %q, want %q", got, want)
+	}
+	if got, want := requestBody["outputFormat"], "PCM_22050_16"; got != want {
+		t.Fatalf("request outputFormat = %q, want %q", got, want)
+	}
+}
+
+func TestUpliftAITTSChunkedStreamDecodesReferenceMP3Response(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	provider := NewUpliftAITTS("test-key", "")
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(mp3Data))},
+	}
+	defer stream.Close()
+
+	audio, err := stream.Next()
+	if err != nil {
+		t.Fatalf("Next error = %v", err)
+	}
+	if audio == nil || audio.Frame == nil {
+		t.Fatalf("audio = %#v, want decoded MP3 frame", audio)
+	}
+	if audio.Frame.SampleRate != defaultUpliftAISampleRate {
+		t.Fatalf("sample rate = %d, want %d", audio.Frame.SampleRate, defaultUpliftAISampleRate)
+	}
+	if audio.Frame.NumChannels != 1 {
+		t.Fatalf("channels = %d, want mono output", audio.Frame.NumChannels)
+	}
+	if len(audio.Frame.Data) == 0 {
+		t.Fatal("decoded frame is empty")
+	}
+	prefixLen := min(len(audio.Frame.Data), len(mp3Data))
+	if bytes.Equal(audio.Frame.Data[:prefixLen], mp3Data[:prefixLen]) {
+		t.Fatal("frame data still contains compressed MP3 bytes")
+	}
+}
+
+func TestUpliftAITTSChunkedStreamEmitsReferenceMP3FinalMarker(t *testing.T) {
+	mp3Data, err := os.ReadFile(filepath.Join("..", "..", "refs", "agents", "tests", "long.mp3"))
+	if err != nil {
+		t.Fatalf("read mp3 fixture: %v", err)
+	}
+
+	provider := NewUpliftAITTS("test-key", "")
+	stream := &upliftAITTSChunkedStream{
+		owner: provider,
+		resp:  &http.Response{Body: io.NopCloser(bytes.NewReader(mp3Data))},
+	}
+	defer stream.Close()
+
+	frames := 0
+	for i := 0; i < 5000; i++ {
+		audio, err := stream.Next()
+		if err != nil {
+			t.Fatalf("Next error after %d decoded frames = %v", frames, err)
+		}
+		if audio == nil {
+			t.Fatalf("audio after %d decoded frames = nil", frames)
+		}
+		if audio.IsFinal {
+			if frames == 0 {
+				t.Fatal("final marker arrived before decoded MP3 frames")
+			}
+			if audio, err := stream.Next(); audio != nil || err != io.EOF {
+				t.Fatalf("Next after final = (%#v, %v), want EOF", audio, err)
+			}
+			return
+		}
+		if audio.Frame != nil {
+			frames++
+		}
+	}
+	t.Fatalf("read %d decoded MP3 frames without final marker", frames)
 }
 
 func TestUpliftAITTSChunkedStreamFramesAudio(t *testing.T) {

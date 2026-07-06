@@ -3,13 +3,17 @@ package upliftai
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
+	coreaudio "github.com/cavos-io/rtp-agent/core/audio"
+	"github.com/cavos-io/rtp-agent/core/audio/codecs"
 	"github.com/cavos-io/rtp-agent/core/audio/model"
 	"github.com/cavos-io/rtp-agent/core/llm"
 	"github.com/cavos-io/rtp-agent/core/tts"
@@ -18,14 +22,16 @@ import (
 const (
 	defaultUpliftAIVoiceID    = "v_meklc281"
 	defaultUpliftAISampleRate = 22050
+	defaultUpliftAIFormat     = "MP3_22050_32"
 )
 
 type UpliftAITTS struct {
-	apiKey  string
-	voice   string
-	mu      sync.Mutex
-	closed  bool
-	streams map[*upliftAITTSChunkedStream]struct{}
+	apiKey       string
+	voice        string
+	outputFormat string
+	mu           sync.Mutex
+	closed       bool
+	streams      map[io.Closer]struct{}
 }
 
 func NewUpliftAITTS(apiKey string, voice string) *UpliftAITTS {
@@ -36,9 +42,10 @@ func NewUpliftAITTS(apiKey string, voice string) *UpliftAITTS {
 		voice = defaultUpliftAIVoiceID
 	}
 	return &UpliftAITTS{
-		apiKey:  apiKey,
-		voice:   voice,
-		streams: make(map[*upliftAITTSChunkedStream]struct{}),
+		apiKey:       apiKey,
+		voice:        voice,
+		outputFormat: defaultUpliftAIFormat,
+		streams:      make(map[io.Closer]struct{}),
 	}
 }
 
@@ -82,7 +89,12 @@ func (t *UpliftAITTS) Stream(ctx context.Context) (tts.SynthesizeStream, error) 
 	if t.isClosed() {
 		return nil, io.ErrClosedPipe
 	}
-	return nil, fmt.Errorf("upliftai streaming tts not natively supported by basic rest api")
+	stream := newUpliftAITTSSynthesizeStream(t, ctx)
+	if !t.registerStream(stream) {
+		_ = stream.Close()
+		return nil, io.ErrClosedPipe
+	}
+	return stream, nil
 }
 
 func (t *UpliftAITTS) Close() error {
@@ -92,11 +104,11 @@ func (t *UpliftAITTS) Close() error {
 		return nil
 	}
 	t.closed = true
-	streams := make([]*upliftAITTSChunkedStream, 0, len(t.streams))
+	streams := make([]io.Closer, 0, len(t.streams))
 	for stream := range t.streams {
 		streams = append(streams, stream)
 	}
-	t.streams = make(map[*upliftAITTSChunkedStream]struct{})
+	t.streams = make(map[io.Closer]struct{})
 	t.mu.Unlock()
 
 	var closeErr error
@@ -120,7 +132,7 @@ func (t *UpliftAITTS) voiceSnapshot() string {
 	return t.voice
 }
 
-func (t *UpliftAITTS) registerStream(stream *upliftAITTSChunkedStream) bool {
+func (t *UpliftAITTS) registerStream(stream io.Closer) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
@@ -130,10 +142,168 @@ func (t *UpliftAITTS) registerStream(stream *upliftAITTSChunkedStream) bool {
 	return true
 }
 
-func (t *UpliftAITTS) unregisterStream(stream *upliftAITTSChunkedStream) {
+func (t *UpliftAITTS) unregisterStream(stream io.Closer) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.streams, stream)
+}
+
+type upliftAITTSSynthesizeStream struct {
+	owner *UpliftAITTS
+	ctx   context.Context
+
+	mu        sync.Mutex
+	buf       strings.Builder
+	inputCh   chan string
+	doneCh    chan struct{}
+	active    tts.ChunkedStream
+	closed    bool
+	inputDone bool
+	once      sync.Once
+}
+
+func newUpliftAITTSSynthesizeStream(owner *UpliftAITTS, ctx context.Context) *upliftAITTSSynthesizeStream {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &upliftAITTSSynthesizeStream{
+		owner:   owner,
+		ctx:     ctx,
+		inputCh: make(chan string, 100),
+		doneCh:  make(chan struct{}),
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) PushText(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputDone {
+		return io.ErrClosedPipe
+	}
+	s.buf.WriteString(text)
+	return nil
+}
+
+func (s *upliftAITTSSynthesizeStream) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+	if s.inputDone {
+		return nil
+	}
+	text := s.buf.String()
+	if text == "" {
+		return nil
+	}
+	s.buf.Reset()
+	select {
+	case s.inputCh <- text:
+		return nil
+	case <-s.doneCh:
+		return io.ErrClosedPipe
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) EndInput() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.inputDone {
+		return nil
+	}
+	text := s.buf.String()
+	s.buf.Reset()
+	if text != "" {
+		select {
+		case s.inputCh <- text:
+		case <-s.doneCh:
+			return io.ErrClosedPipe
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		}
+	}
+	s.inputDone = true
+	close(s.inputCh)
+	return nil
+}
+
+func (s *upliftAITTSSynthesizeStream) Next() (*tts.SynthesizedAudio, error) {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return nil, io.EOF
+		}
+		active := s.active
+		s.mu.Unlock()
+
+		if active != nil {
+			audio, err := active.Next()
+			if err == io.EOF {
+				_ = active.Close()
+				s.mu.Lock()
+				if s.active == active {
+					s.active = nil
+				}
+				s.mu.Unlock()
+				continue
+			}
+			return audio, err
+		}
+
+		select {
+		case text, ok := <-s.inputCh:
+			if !ok {
+				return nil, io.EOF
+			}
+			stream, err := s.owner.Synthesize(s.ctx, text)
+			if err != nil {
+				return nil, err
+			}
+			s.mu.Lock()
+			if s.closed {
+				s.mu.Unlock()
+				_ = stream.Close()
+				return nil, io.EOF
+			}
+			s.active = stream
+			s.mu.Unlock()
+		case <-s.doneCh:
+			return nil, io.EOF
+		case <-s.ctx.Done():
+			return nil, s.ctx.Err()
+		}
+	}
+}
+
+func (s *upliftAITTSSynthesizeStream) Close() error {
+	var closeErr error
+	s.once.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		if !s.inputDone {
+			s.inputDone = true
+			close(s.inputCh)
+		}
+		close(s.doneCh)
+		active := s.active
+		s.active = nil
+		s.mu.Unlock()
+
+		if s.owner != nil {
+			s.owner.unregisterStream(s)
+		}
+		if active != nil {
+			closeErr = active.Close()
+		}
+	})
+	return closeErr
 }
 
 type upliftAITTSChunkedStream struct {
@@ -143,6 +313,9 @@ type upliftAITTSChunkedStream struct {
 	resp         *http.Response
 	once         sync.Once
 	err          error
+	decoder      codecs.AudioStreamDecoder
+	started      bool
+	hasAudio     bool
 	pendingFinal bool
 	finalSent    bool
 	closed       bool
@@ -157,6 +330,9 @@ func (s *upliftAITTSChunkedStream) Next() (*tts.SynthesizedAudio, error) {
 	}
 	if s.resp == nil || s.resp.Body == nil {
 		return nil, io.EOF
+	}
+	if s.owner != nil && strings.HasPrefix(s.owner.outputFormat, "MP3") {
+		return s.nextDecodedMP3()
 	}
 	if s.pendingFinal {
 		s.pendingFinal = false
@@ -197,8 +373,9 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 		return nil
 	}
 	reqBody := map[string]interface{}{
-		"text":  s.text,
-		"voice": s.owner.voiceSnapshot(),
+		"text":         s.text,
+		"voiceId":      s.owner.voiceSnapshot(),
+		"outputFormat": s.owner.outputFormat,
 	}
 	jsonBody, _ := json.Marshal(reqBody)
 	req, err := http.NewRequestWithContext(s.ctx, "POST", "https://api.upliftai.org/v1/tts", bytes.NewBuffer(jsonBody))
@@ -220,6 +397,73 @@ func (s *upliftAITTSChunkedStream) ensureResponse() error {
 	return nil
 }
 
+func (s *upliftAITTSChunkedStream) nextDecodedMP3() (*tts.SynthesizedAudio, error) {
+	if s.finalSent {
+		return nil, io.EOF
+	}
+	if !s.started {
+		s.started = true
+		data, err := io.ReadAll(s.resp.Body)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 read failed: %v", err))
+		}
+		if len(data) == 0 {
+			s.finalSent = true
+			return &tts.SynthesizedAudio{IsFinal: true}, nil
+		}
+		s.hasAudio = true
+		decoder := codecs.NewMP3AudioStreamDecoder()
+		s.decoder = decoder
+		go func() {
+			decoder.Push(data)
+			decoder.EndInput()
+		}()
+	}
+
+	frame, err := s.decoder.Next()
+	if err != nil {
+		if strings.Contains(err.Error(), "decoder closed") {
+			if s.hasAudio && !s.finalSent {
+				s.finalSent = true
+				return &tts.SynthesizedAudio{IsFinal: true}, nil
+			}
+			return nil, io.EOF
+		}
+		return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 decode failed: %v", err))
+	}
+	frame = upliftAIDownmixToMono(frame)
+	if frame.SampleRate != defaultUpliftAISampleRate {
+		resampled, err := coreaudio.ResampleAudioFrame(frame, defaultUpliftAISampleRate)
+		if err != nil {
+			return nil, llm.NewAPIConnectionError(fmt.Sprintf("UpliftAI TTS MP3 resample failed: %v", err))
+		}
+		frame = resampled
+	}
+	return &tts.SynthesizedAudio{Frame: frame}, nil
+}
+
+func upliftAIDownmixToMono(frame *model.AudioFrame) *model.AudioFrame {
+	if frame == nil || frame.NumChannels <= 1 {
+		return frame
+	}
+	channels := int(frame.NumChannels)
+	sampleCount := len(frame.Data) / (2 * channels)
+	data := make([]byte, sampleCount*2)
+	for i := 0; i < sampleCount; i++ {
+		sum := 0
+		for ch := 0; ch < channels; ch++ {
+			offset := (i*channels + ch) * 2
+			sum += int(int16(binary.LittleEndian.Uint16(frame.Data[offset:])))
+		}
+		binary.LittleEndian.PutUint16(data[i*2:], uint16(int16(sum/channels)))
+	}
+	clone := *frame
+	clone.Data = data
+	clone.NumChannels = 1
+	clone.SamplesPerChannel = uint32(sampleCount)
+	return &clone
+}
+
 func (s *upliftAITTSChunkedStream) Close() error {
 	s.once.Do(func() {
 		s.closed = true
@@ -228,6 +472,9 @@ func (s *upliftAITTSChunkedStream) Close() error {
 		}
 		if s.resp != nil && s.resp.Body != nil {
 			s.err = s.resp.Body.Close()
+		}
+		if s.decoder != nil {
+			_ = s.decoder.Close()
 		}
 	})
 	return s.err
