@@ -47,6 +47,7 @@ type UpliftAITTS struct {
 	baseURL                   string
 	wordTokenizer             tokenize.WordTokenizer
 	sentenceTokenizer         tokenize.SentenceTokenizer
+	tokenizerKind             string
 	phraseReplacementConfigID string
 	mu                        sync.Mutex
 	closed                    bool
@@ -100,13 +101,23 @@ func WithUpliftAINumChannels(numChannels int) UpliftAITTSOption {
 
 func WithUpliftAISentenceTokenizer(tokenizer tokenize.SentenceTokenizer) UpliftAITTSOption {
 	return func(t *UpliftAITTS) {
+		if tokenizer == nil {
+			return
+		}
 		t.sentenceTokenizer = tokenizer
+		t.wordTokenizer = nil
+		t.tokenizerKind = "sentence"
 	}
 }
 
 func WithUpliftAIWordTokenizer(tokenizer tokenize.WordTokenizer) UpliftAITTSOption {
 	return func(t *UpliftAITTS) {
+		if tokenizer == nil {
+			return
+		}
 		t.wordTokenizer = tokenizer
+		t.sentenceTokenizer = nil
+		t.tokenizerKind = "word"
 	}
 }
 
@@ -282,12 +293,18 @@ func (t *UpliftAITTS) outputNumChannels() int {
 func (t *UpliftAITTS) streamSentenceTokenizer() tokenize.SentenceTokenizer {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.tokenizerKind != "sentence" {
+		return nil
+	}
 	return t.sentenceTokenizer
 }
 
 func (t *UpliftAITTS) streamWordTokenizer() tokenize.WordTokenizer {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.tokenizerKind != "word" {
+		return nil
+	}
 	return t.wordTokenizer
 }
 
